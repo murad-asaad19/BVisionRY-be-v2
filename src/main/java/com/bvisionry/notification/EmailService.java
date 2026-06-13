@@ -1,0 +1,239 @@
+package com.bvisionry.notification;
+
+import com.bvisionry.notification.entity.EmailTemplateKey;
+import com.bvisionry.notification.transport.MailTransport;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.stereotype.Service;
+
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class EmailService {
+
+    private final MailTransport mailTransport;
+    private final EmailTemplateRenderer templateRenderer;
+
+    public void sendInvitationEmail(String toEmail, String organizationName, String acceptUrl, Instant expiresAt, String inviterName) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("organizationName", organizationName);
+        vars.put("acceptUrl", acceptUrl);
+        vars.put("expiresAt", expiresAt.toString());
+        vars.put("inviterName", inviterName);
+
+        send(toEmail, EmailTemplateKey.INVITATION, vars);
+    }
+
+    /**
+     * Fire-and-forget variant used by the bulk-invite flow. A 50-recipient invite
+     * with a slow Resend endpoint would otherwise hold row locks for the duration
+     * of the surrounding {@code @Transactional} method. Failures are logged and
+     * swallowed so one bad address doesn't poison the rest of the batch.
+     */
+    @Async("emailExecutor")
+    public void sendInvitationEmailAsync(String toEmail, String organizationName, String acceptUrl,
+                                          Instant expiresAt, String inviterName) {
+        try {
+            sendInvitationEmail(toEmail, organizationName, acceptUrl, expiresAt, inviterName);
+        } catch (Exception e) {
+            log.warn("Async invitation email to {} failed: {}", toEmail, e.getMessage());
+        }
+    }
+
+    /**
+     * Send notification when a new assessment is assigned.
+     */
+    public void sendAssessmentAssigned(String email, String memberName,
+                                        String pipelineName, Instant deadline,
+                                        String assessmentUrl) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("memberName", memberName);
+        vars.put("pipelineName", pipelineName);
+        vars.put("deadline", deadline);
+        vars.put("assessmentUrl", assessmentUrl);
+
+        send(email, EmailTemplateKey.ASSESSMENT_ASSIGNED, vars);
+    }
+
+    /**
+     * Fire-and-forget variant used by the assignment flow. Email delivery runs on
+     * the async executor so a slow/unreachable SMTP server cannot block the HTTP
+     * response. Failures are logged, not surfaced to the caller.
+     */
+    @Async("emailExecutor")
+    public void sendAssessmentAssignedAsync(String email, String memberName,
+                                             String pipelineName, Instant deadline,
+                                             String assessmentUrl) {
+        try {
+            sendAssessmentAssigned(email, memberName, pipelineName, deadline, assessmentUrl);
+        } catch (Exception e) {
+            log.warn("Async assignment email to {} failed: {}", email, e.getMessage());
+        }
+    }
+
+    /**
+     * Send reminder for incomplete assessment.
+     */
+    public void sendAssessmentReminder(String email, String memberName,
+                                        String pipelineName, Instant deadline, String assessmentUrl) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("memberName", memberName);
+        vars.put("pipelineName", pipelineName);
+        vars.put("deadline", deadline);
+        vars.put("assessmentUrl", assessmentUrl);
+
+        send(email, EmailTemplateKey.ASSESSMENT_REMINDER, vars);
+    }
+
+    /**
+     * Send notification when assessment results are ready.
+     *
+     * postCompletionUrl / postCompletionLabel are the pipeline's configured
+     * follow-up link (typically a survey). Both may be null when the pipeline
+     * has no post-completion action configured.
+     */
+    public void sendResultsReady(String email, String memberName, String pipelineName,
+                                  String resultsUrl,
+                                  String postCompletionUrl, String postCompletionLabel) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("memberName", memberName);
+        vars.put("pipelineName", pipelineName);
+        vars.put("resultsUrl", resultsUrl);
+        vars.put("postCompletionUrl", postCompletionUrl);
+        vars.put("postCompletionLabel", postCompletionLabel);
+
+        send(email, EmailTemplateKey.RESULTS_READY, vars);
+    }
+
+    /**
+     * Send the dedicated post-assessment survey invitation. Fired alongside
+     * RESULTS_READY when the pipeline has a published survey paired to it,
+     * so the survey CTA gets its own first-class, admin-editable email.
+     */
+    public void sendPostAssessmentSurveyInvite(String email, String memberName,
+                                                 String pipelineName, String surveyName,
+                                                 String surveyUrl, String resultsUrl) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("memberName", memberName);
+        vars.put("pipelineName", pipelineName);
+        vars.put("surveyName", surveyName);
+        vars.put("surveyUrl", surveyUrl);
+        vars.put("resultsUrl", resultsUrl);
+
+        send(email, EmailTemplateKey.POST_ASSESSMENT_SURVEY_INVITE, vars);
+    }
+
+    /**
+     * Send the heads-up email when an org's Premium trial is approaching its end.
+     * Recipients are typically ORG_ADMINs of the org (resolved by the caller).
+     */
+    public void sendTrialEndingSoon(String email, String organizationName, int daysLeft,
+                                     Instant trialEndsAt, String dashboardUrl) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("organizationName", organizationName);
+        vars.put("daysLeft", daysLeft);
+        vars.put("trialEndsAt", trialEndsAt == null ? "" : trialEndsAt.toString());
+        vars.put("dashboardUrl", dashboardUrl);
+
+        send(email, EmailTemplateKey.TRIAL_ENDING_SOON, vars);
+    }
+
+    /**
+     * Fire-and-forget variant for the heads-up email. Used by the trial scheduler so a
+     * flaky SMTP server cannot roll back the audit-log idempotency write.
+     */
+    @Async("emailExecutor")
+    public void sendTrialEndingSoonAsync(String email, String organizationName, int daysLeft,
+                                          Instant trialEndsAt, String dashboardUrl) {
+        try {
+            sendTrialEndingSoon(email, organizationName, daysLeft, trialEndsAt, dashboardUrl);
+        } catch (Exception e) {
+            log.warn("Async trial-ending-soon email to {} failed: {}", email, e.getMessage());
+        }
+    }
+
+    /**
+     * Send the confirmation email when an org's Premium trial has just lapsed.
+     */
+    public void sendTrialExpired(String email, String organizationName,
+                                  Instant expiredAt, String dashboardUrl) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("organizationName", organizationName);
+        vars.put("expiredAt", expiredAt == null ? "" : expiredAt.toString());
+        vars.put("dashboardUrl", dashboardUrl);
+
+        send(email, EmailTemplateKey.TRIAL_EXPIRED, vars);
+    }
+
+    /**
+     * Fire-and-forget variant. Called from {@code TrialService.expireLapsed()} so SMTP
+     * failures don't roll back the trial-expiry transaction.
+     */
+    @Async("emailExecutor")
+    public void sendTrialExpiredAsync(String email, String organizationName,
+                                       Instant expiredAt, String dashboardUrl) {
+        try {
+            sendTrialExpired(email, organizationName, expiredAt, dashboardUrl);
+        } catch (Exception e) {
+            log.warn("Async trial-expired email to {} failed: {}", email, e.getMessage());
+        }
+    }
+
+    /**
+     * Send the platform-side notification when a Free-tier user clicks
+     * "Request upgrade". Recipients are resolved upstream — typically every
+     * SUPER_ADMIN, or a custom address list configured in platform settings.
+     */
+    public void sendUpgradeRequested(String email, String organizationName,
+                                      String memberName, String memberEmail,
+                                      String featureContext, String note,
+                                      String dashboardUrl) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("organizationName", organizationName);
+        vars.put("memberName", memberName);
+        vars.put("memberEmail", memberEmail);
+        vars.put("featureContext", featureContext);
+        // Mustache hides the {{#note}}…{{/note}} block when the value is null
+        // or empty, so falsy values produce a clean email rather than an empty
+        // grey box.
+        vars.put("note", note == null || note.isBlank() ? null : note);
+        vars.put("dashboardUrl", dashboardUrl);
+
+        send(email, EmailTemplateKey.UPGRADE_REQUESTED, vars);
+    }
+
+    /**
+     * Fire-and-forget variant. Called from the upgrade-request flow so SMTP
+     * latency or failure can't block the HTTP response or roll back the row.
+     */
+    @Async("emailExecutor")
+    public void sendUpgradeRequestedAsync(String email, String organizationName,
+                                           String memberName, String memberEmail,
+                                           String featureContext, String note,
+                                           String dashboardUrl) {
+        try {
+            sendUpgradeRequested(email, organizationName, memberName, memberEmail,
+                    featureContext, note, dashboardUrl);
+        } catch (Exception e) {
+            log.warn("Async upgrade-requested email to {} failed: {}", email, e.getMessage());
+        }
+    }
+
+    /**
+     * Send arbitrary pre-rendered content. Used by the admin "send test email"
+     * flow so admins can preview their draft in their own inbox before saving.
+     */
+    public void sendRaw(String to, String subject, String htmlBody) {
+        mailTransport.send(to, subject, htmlBody);
+    }
+
+    private void send(String to, EmailTemplateKey key, Map<String, Object> vars) {
+        EmailTemplateRenderer.Rendered rendered = templateRenderer.render(key, vars);
+        mailTransport.send(to, rendered.subject(), rendered.body());
+    }
+}

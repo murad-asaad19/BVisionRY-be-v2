@@ -1,0 +1,152 @@
+package com.bvisionry.organization;
+
+import com.bvisionry.audit.AuditService;
+import com.bvisionry.auth.AuthService;
+import com.bvisionry.auth.UserRepository;
+import com.bvisionry.auth.dto.AuthResponse;
+import com.bvisionry.auth.entity.User;
+import com.bvisionry.common.enums.UserRole;
+import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.organization.dto.AcceptJoinLinkRequest;
+import com.bvisionry.organization.dto.JoinLinkInfoResponse;
+import com.bvisionry.organization.dto.JoinLinkResponse;
+import com.bvisionry.organization.entity.JoinLink;
+import com.bvisionry.organization.entity.Organization;
+import com.bvisionry.organization.event.MemberJoinedEvent;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+@Service
+@RequiredArgsConstructor
+public class JoinLinkService {
+
+    private final JoinLinkRepository joinLinkRepository;
+    private final OrganizationService organizationService;
+    private final UserRepository userRepository;
+    private final AuditService auditService;
+    private final PasswordEncoder passwordEncoder;
+    private final AuthService authService;
+    private final ApplicationEventPublisher eventPublisher;
+
+    @Value("${bvisionry.frontend.base-url:http://localhost:5173}")
+    private String frontendBaseUrl;
+
+    @Transactional
+    public JoinLinkResponse generate(UUID orgId, int expiryDays, UUID createdBy) {
+        Organization org = organizationService.findActiveOrThrow(orgId);
+
+        // Deactivate any existing active link. Must FLUSH the deactivation before
+        // inserting the new link: within one transaction Hibernate orders INSERTs
+        // before UPDATEs, so a plain save() would insert the new active row while
+        // the old one is still active and violate the `uq_join_links_active_org`
+        // partial unique constraint (one active link per org). saveAndFlush forces
+        // the UPDATE to hit the DB first.
+        joinLinkRepository.findByOrganizationIdAndActiveTrue(orgId)
+                .ifPresent(existing -> {
+                    existing.setActive(false);
+                    joinLinkRepository.saveAndFlush(existing);
+                });
+
+        JoinLink link = new JoinLink();
+        link.setOrganization(org);
+        link.setExpiresAt(Instant.now().plus(expiryDays, ChronoUnit.DAYS));
+        link.setCreatedBy(createdBy);
+        JoinLink saved = joinLinkRepository.save(link);
+
+        auditService.log(createdBy, orgId, "LINK_GENERATED", "JoinLink", saved.getId(),
+                Map.of("expiryDays", String.valueOf(expiryDays)));
+
+        return JoinLinkResponse.from(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<JoinLinkResponse> getActive(UUID orgId) {
+        return joinLinkRepository.findByOrganizationIdAndActiveTrue(orgId)
+                .filter(link -> !link.isExpired())
+                .map(JoinLinkResponse::from);
+    }
+
+    @Transactional
+    public void revoke(UUID orgId, UUID actorId) {
+        JoinLink link = joinLinkRepository.findByOrganizationIdAndActiveTrue(orgId)
+                .orElseThrow(() -> new ResourceNotFoundException("JoinLink", "active link for org " + orgId));
+        link.setActive(false);
+        joinLinkRepository.save(link);
+
+        auditService.log(actorId, orgId, "LINK_REVOKED", "JoinLink", link.getId(), Map.of());
+    }
+
+    @Transactional(readOnly = true)
+    public JoinLinkInfoResponse getJoinLinkInfo(UUID token) {
+        JoinLink link = joinLinkRepository.findByTokenAndActiveTrue(token)
+                .orElseThrow(() -> new ResourceNotFoundException("JoinLink", token.toString()));
+        return new JoinLinkInfoResponse(
+                link.getOrganization().getName(),
+                link.isUsable(),
+                link.isExpired(),
+                link.getExpiresAt());
+    }
+
+    @Transactional
+    public AuthResponse acceptJoinLink(UUID token, AcceptJoinLinkRequest request) {
+        JoinLink link = joinLinkRepository.findByTokenAndActiveTrue(token)
+                .orElseThrow(() -> new ResourceNotFoundException("JoinLink", token.toString()));
+
+        if (!link.isUsable()) {
+            throw new BadRequestException("This join link is expired or no longer active");
+        }
+
+        Organization org = link.getOrganization();
+        if (!org.isActive()) {
+            throw new BadRequestException("This organization is no longer active");
+        }
+
+        String normalizedEmail = request.email().toLowerCase().trim();
+
+        // Account-takeover gate: this endpoint is unauthenticated, so we only
+        // ever provision a brand-new user from a join link. Reusing an existing
+        // user record (different org or otherwise) here would let anyone with a
+        // valid join token + a known email overwrite that user's password,
+        // organization, and role. Existing users must instead log in and be
+        // added to the new org through an authenticated flow.
+        if (userRepository.findByEmail(normalizedEmail).isPresent()) {
+            throw new BadRequestException(
+                    "An account with this email already exists. Please sign in instead.");
+        }
+
+        User user = new User();
+        user.setEmail(normalizedEmail);
+        user.setName(request.name() != null && !request.name().isBlank()
+                ? request.name()
+                : normalizedEmail.split("@")[0]);
+        user.setPasswordHash(passwordEncoder.encode(request.password()));
+        user.setOrganization(org);
+        user.setRole(UserRole.MEMBER);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setActivatedAt(Instant.now());
+        User savedUser = userRepository.save(user);
+
+        auditService.log(savedUser.getId(), org.getId(), OrgAuditActions.JOIN_LINK_USED,
+                OrgAuditActions.ENTITY_JOIN_LINK, link.getId(),
+                Map.of("email", normalizedEmail));
+
+        eventPublisher.publishEvent(new MemberJoinedEvent(
+                org.getId(), savedUser.getId(), savedUser.getUserType()));
+
+        // Mint a session and persist the refresh-token row, enabling rotation
+        // and revocation on subsequent /refresh calls.
+        return authService.issueSession(savedUser, null);
+    }
+}

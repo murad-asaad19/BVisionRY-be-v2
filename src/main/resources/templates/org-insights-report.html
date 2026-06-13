@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <style>
+        @page { size: A4; margin: 40px 50px; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Dosis', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 11pt; color: #212529; line-height: 1.6; }
+        .page { page-break-after: always; min-height: 100%; position: relative; }
+        .page:last-child { page-break-after: avoid; }
+        h1 { font-family: 'Dosis', sans-serif; font-size: 28pt; color: #0F3460; font-weight: 700; }
+        h2 { font-family: 'Dosis', sans-serif; font-size: 20pt; color: #0F3460; margin-bottom: 8px; font-weight: 700; }
+        h3 { font-family: 'Dosis', sans-serif; font-size: 14pt; color: #0F3460; margin-bottom: 6px; font-weight: 600; }
+        .gold { color: #FFC107; }
+        .navy { color: #0F3460; }
+        .muted { color: #94A3B8; font-size: 10pt; }
+        .bg-navy { background-color: #0F3460; color: #ffffff; padding: 24px; border-radius: 12px; }
+        .section { margin-top: 24px; }
+        .card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-top: 16px; }
+        .strength-card { background: #f0fdf4; border: 1px solid #bbf7d0; }
+        .weakness-card { background: #fffbeb; border: 1px solid #fde68a; }
+        .pattern-item { border-left: 4px solid #FFC107; background: #F8F8F8; padding: 10px 16px; margin: 8px 0; border-radius: 0 8px 8px 0; font-size: 10pt; }
+        .recommendation { padding: 6px 0; font-size: 10pt; }
+        .recommendation:before { content: "→ "; color: #FFC107; font-weight: 700; }
+        .coaching-card { background: #F8F8F8; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin: 8px 0; }
+        .coaching-name { font-weight: 700; color: #0F3460; font-size: 11pt; }
+        .focus-tag { display: inline-block; background: rgba(15,52,96,0.1); color: #0F3460; padding: 2px 8px; border-radius: 12px; font-size: 9pt; margin: 2px; }
+        .action-item { font-size: 10pt; padding: 2px 0; }
+        .action-item:before { content: "• "; }
+        .outlier-tag { display: inline-block; border: 1px solid #FFC107; background: rgba(255,193,7,0.15); color: #0F3460; padding: 3px 12px; border-radius: 16px; font-size: 9pt; margin: 3px; }
+        .cover { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; height: 100%; }
+        .cover h1 { font-size: 32pt; margin-top: 40px; }
+        .cover .subtitle { font-size: 16pt; color: #FFC107; margin-top: 12px; }
+        .cover .date { font-size: 11pt; color: #94A3B8; margin-top: 24px; }
+        .cover .confidential { font-size: 10pt; color: #94A3B8; margin-top: 60px; letter-spacing: 4px; }
+        .gold-underline { display: inline-block; border-bottom: 3px solid #FFC107; padding-bottom: 4px; }
+        .list-item { padding: 4px 0; font-size: 10pt; }
+        .list-bullet-green:before { content: "● "; color: #22c55e; }
+        .list-bullet-amber:before { content: "● "; color: #f59e0b; }
+    </style>
+</head>
+<body>
+
+<!-- Page 1: Cover -->
+<div class="page">
+    <div class="cover">
+        <h1 style="font-size: 36pt;">
+            <span class="gold">B</span><span class="navy">VisionRY</span>
+        </h1>
+        <p style="font-size: 13pt; color: #94A3B8; margin-top: 8px;">Organization Insights Report</p>
+        <h1 th:text="${orgName}" style="margin-top: 60px;">Organization Name</h1>
+        <p class="subtitle" th:text="${pipelineName}">Pipeline Name</p>
+        <p class="date" th:text="${reportDate}">April 2026</p>
+        <p class="confidential">CONFIDENTIAL</p>
+    </div>
+</div>
+
+<!-- Page 2: Team Themes -->
+<div class="page">
+    <h2 class="gold-underline">Team Themes</h2>
+
+    <div th:if="${#lists.size(strengths) > 0}" class="card strength-card" style="margin-top: 20px;">
+        <h3 style="color: #16a34a;">Common Strengths</h3>
+        <div th:each="s : ${strengths}" class="list-item list-bullet-green">
+            <span th:text="${s}">Strength item</span>
+        </div>
+    </div>
+
+    <div th:if="${#lists.size(weaknesses) > 0}" class="card weakness-card">
+        <h3 style="color: #d97706;">Common Weaknesses</h3>
+        <div th:each="w : ${weaknesses}" class="list-item list-bullet-amber">
+            <span th:text="${w}">Weakness item</span>
+        </div>
+    </div>
+
+    <div th:if="${#lists.size(patterns) > 0}" class="section">
+        <h3>Patterns Identified</h3>
+        <div th:each="p : ${patterns}" class="pattern-item">
+            <span th:text="${p}">Pattern observation</span>
+        </div>
+    </div>
+
+    <div th:if="${#lists.size(recommendations) > 0}" class="section">
+        <h3>Team Recommendations</h3>
+        <div th:each="r : ${recommendations}" class="recommendation">
+            <span th:text="${r}">Recommendation</span>
+        </div>
+    </div>
+</div>
+
+<!-- Page 3: Individual Coaching -->
+<div class="page" th:if="${#lists.size(coaching) > 0}">
+    <h2 class="gold-underline">Individual Coaching Recommendations</h2>
+
+    <div th:each="c, iter : ${coaching}" class="coaching-card">
+        <p class="coaching-name" th:text="${showNames != null and showNames and memberNames != null and iter.index lt #lists.size(memberNames)} ? ${memberNames[iter.index]} : 'Member ' + ${iter.count}">Member 1</p>
+
+        <div th:if="${c.containsKey('focusAreas')}" style="margin-top: 6px;">
+            <span class="muted">Focus Areas:</span>
+            <span th:each="a : ${c.get('focusAreas')}" class="focus-tag" th:text="${a}">Area</span>
+        </div>
+
+        <div th:if="${c.containsKey('suggestedActions')}" style="margin-top: 6px;">
+            <div th:each="a : ${c.get('suggestedActions')}" class="action-item">
+                <span th:text="${a}">Action</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Page 4: Benchmarking -->
+<div class="page" th:if="${benchmarkComparison != null or #lists.size(outlierPillars) > 0}">
+    <h2 class="gold-underline">Benchmarking</h2>
+
+    <div th:if="${benchmarkComparison != null}" class="card" style="margin-top: 20px;">
+        <h3>Team vs Platform Comparison</h3>
+        <p style="margin-top: 8px; font-size: 10pt; line-height: 1.7;" th:text="${benchmarkComparison}">Comparison narrative</p>
+    </div>
+
+    <div th:if="${#lists.size(outlierPillars) > 0}" class="section">
+        <h3>Outlier Pillars</h3>
+        <div style="margin-top: 8px;">
+            <span th:each="p : ${outlierPillars}" class="outlier-tag" th:text="${p}">Pillar</span>
+        </div>
+    </div>
+</div>
+
+<!-- Raw response fallback -->
+<div class="page" th:if="${rawResponse != null}">
+    <h2 class="gold-underline">AI Response</h2>
+    <div class="card" style="margin-top: 20px;">
+        <p style="font-size: 10pt; white-space: pre-wrap;" th:text="${rawResponse}">Raw response text</p>
+    </div>
+</div>
+
+<!-- Closing Page -->
+<div class="page">
+    <div class="cover">
+        <h1 style="font-size: 36pt;">
+            <span class="gold">B</span><span class="navy">VisionRY</span>
+        </h1>
+        <p style="font-size: 14pt; color: #94A3B8; margin-top: 20px;">"The mirror reveals. The work transforms."</p>
+        <p class="date" style="margin-top: 40px;">www.bvisionry.com</p>
+    </div>
+</div>
+
+</body>
+</html>

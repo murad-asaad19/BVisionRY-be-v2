@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <style>
+        @page { size: A4; margin: 40px 50px; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Dosis', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 11pt; color: #212529; line-height: 1.6; }
+        .page { page-break-after: always; min-height: 100%; position: relative; }
+        .page:last-child { page-break-after: avoid; }
+        h1 { font-family: 'Dosis', sans-serif; font-size: 28pt; color: #0F3460; font-weight: 700; }
+        h2 { font-family: 'Dosis', sans-serif; font-size: 20pt; color: #0F3460; margin-bottom: 8px; font-weight: 700; }
+        h3 { font-family: 'Dosis', sans-serif; font-size: 14pt; color: #0F3460; margin-bottom: 6px; font-weight: 600; }
+        h4 { font-family: 'Dosis', sans-serif; font-size: 12pt; color: #0F3460; margin: 8px 0 4px; font-weight: 600; }
+        .gold { color: #FFC107; }
+        .navy { color: #0F3460; }
+        .muted { color: #94A3B8; font-size: 10pt; }
+        .gold-underline { display: inline-block; border-bottom: 3px solid #FFC107; padding-bottom: 4px; }
+        .cover { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; height: 100%; }
+        .cover .subtitle { font-size: 16pt; color: #FFC107; margin-top: 12px; }
+        .cover .date { font-size: 11pt; color: #94A3B8; margin-top: 24px; }
+        .cover .confidential { font-size: 10pt; color: #94A3B8; margin-top: 60px; letter-spacing: 4px; }
+        .section { margin-top: 24px; }
+        .stat-grid { display: table; width: 100%; margin-top: 12px; border-collapse: collapse; }
+        .stat-row { display: table-row; }
+        .stat-label, .stat-value { display: table-cell; padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-size: 10pt; }
+        .stat-label { color: #475569; width: 60%; }
+        .stat-value { color: #0F3460; font-weight: 600; text-align: right; }
+        .pillar-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 10pt; }
+        .pillar-table th { background: #0F3460; color: #fff; padding: 8px 10px; text-align: left; font-weight: 600; }
+        .pillar-table td { padding: 8px 10px; border-bottom: 1px solid #e2e8f0; }
+        .pillar-table tr:nth-child(even) td { background: #F8FAFC; }
+        .member-card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; margin-top: 16px; page-break-inside: avoid; }
+        .member-header { border-bottom: 2px solid #FFC107; padding-bottom: 8px; margin-bottom: 10px; }
+        .member-name { font-size: 14pt; font-weight: 700; color: #0F3460; }
+        .member-meta { font-size: 9pt; color: #64748B; margin-top: 2px; }
+        .badge { display: inline-block; background: #0F3460; color: #fff; padding: 2px 10px; border-radius: 12px; font-size: 9pt; font-weight: 600; }
+        .pillar-block { margin-top: 10px; padding: 10px 12px; background: #F8FAFC; border-left: 4px solid #FFC107; border-radius: 0 8px 8px 0; page-break-inside: avoid; }
+        .pillar-block-head { display: table; width: 100%; }
+        .pillar-block-name { display: table-cell; font-weight: 700; color: #0F3460; }
+        .pillar-block-score { display: table-cell; text-align: right; color: #0F3460; font-weight: 700; }
+        .pillar-maturity { font-size: 9pt; color: #64748B; }
+        .list-item { padding: 3px 0; font-size: 10pt; }
+        .list-bullet-green:before { content: "● "; color: #22c55e; }
+        .list-bullet-amber:before { content: "● "; color: #f59e0b; }
+        .narrative { font-size: 10pt; line-height: 1.55; margin-top: 6px; }
+        .info-table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 10pt; }
+        .info-table td { padding: 4px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+        .info-label { color: #475569; width: 45%; }
+        .info-value { color: #0F3460; font-weight: 600; }
+        .empty { color: #94A3B8; font-style: italic; font-size: 10pt; }
+        .filter-note { font-size: 9pt; color: #94A3B8; margin-top: 6px; }
+    </style>
+</head>
+<body>
+
+<!-- Page 1: Cover -->
+<div class="page">
+    <div class="cover">
+        <h1 style="font-size: 36pt;">
+            <span class="gold">B</span><span class="navy">VisionRY</span>
+        </h1>
+        <p style="font-size: 13pt; color: #94A3B8; margin-top: 8px;">Team Insights Report</p>
+        <h1 th:text="${pipelineName}" style="margin-top: 60px;">Pipeline Name</h1>
+        <p class="subtitle">Team Performance Overview</p>
+        <p class="date" th:text="${reportDate}">Month Year</p>
+        <p th:if="${memberFilterApplied}" class="filter-note">Generated for selected members only</p>
+        <p class="confidential">CONFIDENTIAL</p>
+    </div>
+</div>
+
+<!-- Page 2: Team Summary -->
+<div class="page">
+    <h2 class="gold-underline">Team Summary</h2>
+
+    <div class="section">
+        <h3>Completion</h3>
+        <div class="stat-grid">
+            <div class="stat-row">
+                <span class="stat-label">Total assignments</span>
+                <span class="stat-value" th:text="${totalAssignments}">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Completed (evaluated)</span>
+                <span class="stat-value" th:text="${evaluatedCount}">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Submitted (awaiting evaluation)</span>
+                <span class="stat-value" th:text="${submittedCount}">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">In progress</span>
+                <span class="stat-value" th:text="${inProgressCount}">0</span>
+            </div>
+            <div th:if="${failedCount > 0}" class="stat-row">
+                <span class="stat-label">Failed</span>
+                <span class="stat-value" th:text="${failedCount}">0</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Completion rate</span>
+                <span class="stat-value" th:text="${completionRate}">0%</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Average overall score</span>
+                <span class="stat-value" th:text="${avgOverallScore}">—</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="section" th:if="${genderBreakdown != null and not #maps.isEmpty(genderBreakdown.counts)}">
+        <h3>Gender breakdown</h3>
+        <div class="stat-grid">
+            <div class="stat-row" th:each="entry : ${genderBreakdown.counts}">
+                <span class="stat-label" th:text="${entry.key}">Unspecified</span>
+                <span class="stat-value" th:text="${entry.value}">0</span>
+            </div>
+        </div>
+        <p class="muted" style="margin-top: 4px;">Across full pipeline roster (<span th:text="${genderBreakdown.total}">0</span> members)</p>
+    </div>
+
+    <div class="section">
+        <h3>Pillar averages</h3>
+        <p th:if="${#lists.isEmpty(pillarAverages)}" class="empty">No pillar evaluations yet.</p>
+        <table th:if="${not #lists.isEmpty(pillarAverages)}" class="pillar-table">
+            <thead>
+                <tr>
+                    <th>Pillar</th>
+                    <th>Average</th>
+                    <th>Maturity distribution</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr th:each="row : ${pillarAverages}">
+                    <td th:text="${row.pillarName}">Pillar</td>
+                    <td th:text="${row.avgScore}">—</td>
+                    <td>
+                        <span th:each="m, iter : ${row.maturityCounts}">
+                            <span th:text="${m.key}">Label</span>:
+                            <span th:text="${m.value}">0</span><span th:if="${not iter.last}">, </span>
+                        </span>
+                        <span th:if="${#maps.isEmpty(row.maturityCounts)}" class="empty">No data</span>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Per-member detail sections -->
+<div class="page" th:if="${#lists.isEmpty(members)}">
+    <h2 class="gold-underline">Member Details</h2>
+    <p class="empty section">No evaluated members for the selected scope.</p>
+</div>
+
+<div class="page" th:each="m, iter : ${members}">
+    <h2 class="gold-underline" th:if="${iter.first}">Member Details</h2>
+
+    <div class="member-card">
+        <div class="member-header">
+            <div class="pillar-block-head">
+                <span class="pillar-block-name">
+                    <span class="member-name" th:text="${m.name}">Member</span>
+                </span>
+                <span class="pillar-block-score">
+                    <span class="badge">Overall: <span th:text="${m.overallScore}">—</span></span>
+                </span>
+            </div>
+            <div class="member-meta">
+                <span th:if="${m.email != null and m.email != ''}" th:text="${m.email}">email</span>
+                <span th:if="${m.userType != null and m.userType != '' and m.userType != '—'}"> · <span th:text="${m.userType}">Type</span></span>
+                <span th:if="${m.gender != null and m.gender != ''}"> · <span th:text="${m.gender}">Gender</span></span>
+            </div>
+        </div>
+
+        <div th:if="${not #lists.isEmpty(m.personalInfo)}" class="section">
+            <h4>Personal Information</h4>
+            <table class="info-table">
+                <tr th:each="entry : ${m.personalInfo}">
+                    <td class="info-label" th:text="${entry.label}">Question</td>
+                    <td class="info-value" th:text="${entry.value}">Answer</td>
+                </tr>
+            </table>
+        </div>
+
+        <div th:if="${m.summaryNarrative != null and m.summaryNarrative != ''}">
+            <h4>Summary</h4>
+            <p class="narrative" th:text="${m.summaryNarrative}">Narrative</p>
+        </div>
+
+        <div th:if="${not #lists.isEmpty(m.strengths)}" class="section">
+            <h4>Strengths</h4>
+            <div th:each="s : ${m.strengths}" class="list-item list-bullet-green">
+                <span th:text="${s}">Strength</span>
+            </div>
+        </div>
+
+        <div th:if="${not #lists.isEmpty(m.developmentAreas)}" class="section">
+            <h4>Development areas</h4>
+            <div th:each="d : ${m.developmentAreas}" class="list-item list-bullet-amber">
+                <span th:text="${d}">Development area</span>
+            </div>
+        </div>
+
+        <div th:if="${not #lists.isEmpty(m.recommendations)}" class="section">
+            <h4>Recommendations</h4>
+            <div th:each="r : ${m.recommendations}" class="list-item">
+                <span th:text="${r}">Recommendation</span>
+            </div>
+        </div>
+
+        <div th:if="${not #lists.isEmpty(m.pillars)}" class="section">
+            <h4>Pillar breakdown</h4>
+            <div th:each="p : ${m.pillars}" class="pillar-block">
+                <div class="pillar-block-head">
+                    <span class="pillar-block-name" th:text="${p.pillarName}">Pillar</span>
+                    <span class="pillar-block-score" th:text="${p.score}">—</span>
+                </div>
+                <div class="pillar-maturity" th:if="${p.maturityLabel != null and p.maturityLabel != ''}"
+                     th:text="${'Maturity: ' + p.maturityLabel}">Maturity</div>
+                <div th:if="${not #lists.isEmpty(p.whatsWorking)}" style="margin-top: 6px;">
+                    <span class="muted">What's working:</span>
+                    <div th:each="w : ${p.whatsWorking}" class="list-item list-bullet-green">
+                        <span th:text="${w}">item</span>
+                    </div>
+                </div>
+                <div th:if="${not #lists.isEmpty(p.whatCanImprove)}" style="margin-top: 6px;">
+                    <span class="muted">What can improve:</span>
+                    <div th:each="w : ${p.whatCanImprove}" class="list-item list-bullet-amber">
+                        <span th:text="${w}">item</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Closing Page -->
+<div class="page">
+    <div class="cover">
+        <h1 style="font-size: 36pt;">
+            <span class="gold">B</span><span class="navy">VisionRY</span>
+        </h1>
+        <p style="font-size: 14pt; color: #94A3B8; margin-top: 20px;">"The mirror reveals. The work transforms."</p>
+        <p class="date" style="margin-top: 40px;">www.bvisionry.com</p>
+    </div>
+</div>
+
+</body>
+</html>

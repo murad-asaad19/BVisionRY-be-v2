@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <style>
+        @page {
+            size: A4 landscape;
+            margin: 0;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Dosis', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+            background: #ffffff;
+            color: #00174a;
+            width: 297mm;
+            height: 210mm;
+            overflow: hidden;
+        }
+
+        /* -----------------------------------------------------------------------
+           Full-bleed navy background page
+        ----------------------------------------------------------------------- */
+        .certificate-page {
+            width: 297mm;
+            height: 210mm;
+            background: linear-gradient(160deg, #00174a 0%, #060021 100%);
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20mm 24mm;
+        }
+
+        /* -----------------------------------------------------------------------
+           Gold border frame
+        ----------------------------------------------------------------------- */
+        .border-frame {
+            position: absolute;
+            top: 8mm;
+            left: 8mm;
+            right: 8mm;
+            bottom: 8mm;
+            border: 2px solid #e2ac53;
+        }
+
+        .border-frame-inner {
+            position: absolute;
+            top: 11mm;
+            left: 11mm;
+            right: 11mm;
+            bottom: 11mm;
+            border: 1px solid rgba(226, 172, 83, 0.4);
+        }
+
+        /* -----------------------------------------------------------------------
+           Corner ornaments
+        ----------------------------------------------------------------------- */
+        .corner {
+            position: absolute;
+            width: 18mm;
+            height: 18mm;
+            border-color: #e2ac53;
+            border-style: solid;
+        }
+
+        .corner-tl { top: 6mm;  left: 6mm;  border-width: 3px 0 0 3px; }
+        .corner-tr { top: 6mm;  right: 6mm; border-width: 3px 3px 0 0; }
+        .corner-bl { bottom: 6mm; left: 6mm;  border-width: 0 0 3px 3px; }
+        .corner-br { bottom: 6mm; right: 6mm; border-width: 0 3px 3px 0; }
+
+        /* -----------------------------------------------------------------------
+           Content layout
+        ----------------------------------------------------------------------- */
+        .content-wrapper {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            text-align: center;
+        }
+
+        /* -----------------------------------------------------------------------
+           Brand header
+        ----------------------------------------------------------------------- */
+        .brand-name {
+            font-family: 'Dosis', sans-serif;
+            font-size: 11pt;
+            font-weight: 700;
+            letter-spacing: 6px;
+            color: #e2ac53;
+            text-transform: uppercase;
+            margin-bottom: 3mm;
+        }
+
+        .brand-tagline {
+            font-family: 'Dosis', sans-serif;
+            font-size: 7.5pt;
+            font-weight: 400;
+            letter-spacing: 3px;
+            color: rgba(226, 172, 83, 0.7);
+            text-transform: uppercase;
+            margin-bottom: 6mm;
+        }
+
+        /* -----------------------------------------------------------------------
+           Certificate headline
+        ----------------------------------------------------------------------- */
+        .headline {
+            font-family: 'Dosis', sans-serif;
+            font-size: 8pt;
+            font-weight: 600;
+            letter-spacing: 5px;
+            color: rgba(255, 255, 255, 0.6);
+            text-transform: uppercase;
+            margin-bottom: 3mm;
+        }
+
+        .divider-gold {
+            width: 60mm;
+            height: 2px;
+            background: #e2ac53;
+            margin: 0 auto 5mm;
+        }
+
+        /* -----------------------------------------------------------------------
+           Learner name
+        ----------------------------------------------------------------------- */
+        .learner-name {
+            font-family: 'Dosis', sans-serif;
+            font-size: 28pt;
+            font-weight: 700;
+            color: #ffffff;
+            line-height: 1.1;
+            margin-bottom: 5mm;
+            letter-spacing: 1px;
+        }
+
+        /* -----------------------------------------------------------------------
+           Award statement
+        ----------------------------------------------------------------------- */
+        .award-statement {
+            font-family: 'Dosis', sans-serif;
+            font-size: 9pt;
+            font-weight: 400;
+            color: rgba(255, 255, 255, 0.75);
+            letter-spacing: 1px;
+            margin-bottom: 2mm;
+        }
+
+        /* -----------------------------------------------------------------------
+           Course title
+        ----------------------------------------------------------------------- */
+        .course-title {
+            font-family: 'Dosis', sans-serif;
+            font-size: 15pt;
+            font-weight: 700;
+            color: #e2ac53;
+            line-height: 1.25;
+            margin-bottom: 7mm;
+            max-width: 200mm;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /* -----------------------------------------------------------------------
+           Meta row (issued date + certificate number)
+        ----------------------------------------------------------------------- */
+        .meta-row {
+            display: table;
+            width: 160mm;
+            margin: 0 auto;
+        }
+
+        .meta-cell {
+            display: table-cell;
+            width: 50%;
+            text-align: center;
+            vertical-align: middle;
+            padding: 0 6mm;
+        }
+
+        .meta-label {
+            font-family: 'Dosis', sans-serif;
+            font-size: 6.5pt;
+            font-weight: 600;
+            letter-spacing: 3px;
+            color: rgba(226, 172, 83, 0.65);
+            text-transform: uppercase;
+            margin-bottom: 1.5mm;
+        }
+
+        .meta-value {
+            font-family: 'Dosis', sans-serif;
+            font-size: 9pt;
+            font-weight: 600;
+            color: #ffffff;
+            letter-spacing: 1px;
+        }
+
+        .meta-separator {
+            display: table-cell;
+            width: 1px;
+            background: rgba(226, 172, 83, 0.35);
+            vertical-align: middle;
+        }
+
+        /* -----------------------------------------------------------------------
+           Bottom seal line
+        ----------------------------------------------------------------------- */
+        .seal-line {
+            position: absolute;
+            bottom: 16mm;
+            left: 0;
+            right: 0;
+            text-align: center;
+        }
+
+        .seal-line-text {
+            font-family: 'Dosis', sans-serif;
+            font-size: 6pt;
+            font-weight: 400;
+            letter-spacing: 2px;
+            color: rgba(226, 172, 83, 0.45);
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+<div class="certificate-page">
+
+    <!-- Double border frame -->
+    <div class="border-frame"></div>
+    <div class="border-frame-inner"></div>
+
+    <!-- Corner ornaments -->
+    <div class="corner corner-tl"></div>
+    <div class="corner corner-tr"></div>
+    <div class="corner corner-bl"></div>
+    <div class="corner corner-br"></div>
+
+    <!-- Main content -->
+    <div class="content-wrapper">
+
+        <!-- Brand -->
+        <div class="brand-name">BVisionRY</div>
+        <div class="brand-tagline">Academy · Certificate of Completion</div>
+
+        <!-- Headline + divider -->
+        <div class="headline">This is to certify that</div>
+        <div class="divider-gold"></div>
+
+        <!-- Learner -->
+        <div class="learner-name" th:text="${learnerName}">Learner Name</div>
+
+        <!-- Award statement -->
+        <div class="award-statement">has successfully completed the course</div>
+
+        <!-- Course title -->
+        <div class="course-title" th:text="${courseTitle}">Course Title</div>
+
+        <!-- Meta row -->
+        <div class="meta-row">
+            <div class="meta-cell">
+                <div class="meta-label">Date of Issue</div>
+                <div class="meta-value" th:text="${issuedAtFormatted}">
+                    January 1, 2026
+                </div>
+            </div>
+            <div class="meta-separator"></div>
+            <div class="meta-cell">
+                <div class="meta-label">Certificate No.</div>
+                <div class="meta-value" th:text="${certificateNumber}">BV-2026-XXXXXX</div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Seal line -->
+    <div class="seal-line">
+        <span class="seal-line-text">
+            Verify this certificate at bvisionry.com/verify
+            &#160;·&#160;
+            <span th:text="${certificateNumber}">BV-2026-XXXXXX</span>
+        </span>
+    </div>
+
+</div>
+</body>
+</html>

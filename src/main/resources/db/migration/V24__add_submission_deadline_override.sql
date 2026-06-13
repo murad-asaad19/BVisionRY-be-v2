@@ -1,0 +1,1 @@
+ALTER TABLE submissions ADD COLUMN deadline_override TIMESTAMP WITH TIME ZONE;

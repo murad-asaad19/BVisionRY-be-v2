@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Trial Ending Soon</title>
+</head>
+<body style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 0; background-color: #f8f8f8;">
+    <!-- Header -->
+    <div style="background-color: #0f3460; padding: 24px 32px; text-align: center;">
+        <h1 style="color: #ffffff; margin: 0; font-size: 24px;">
+            <span style="color: #ffc107;">B</span>VisionRY
+        </h1>
+    </div>
+
+    <!-- Content -->
+    <div style="background-color: #ffffff; padding: 32px;">
+        <h2 style="color: #0f3460; margin-top: 0;">{{{fields.heading}}}</h2>
+
+        <p style="color: #212529;">{{{fields.introLine}}}</p>
+
+        <!-- Trial Card -->
+        <div style="background: #fff8e1; border-left: 4px solid #ffc107; border-radius: 8px; padding: 20px; margin: 24px 0;">
+            <h3 style="color: #0f3460; margin: 0 0 8px;">{{{fields.cardHeading}}}</h3>
+            <p style="color: #94a3b8; margin: 0; font-size: 14px;">
+                {{{fields.cardSubLine}}}
+            </p>
+        </div>
+
+        <p style="color: #212529;">{{{fields.ctaIntro}}}</p>
+
+        <!-- CTA Button -->
+        <div style="text-align: center; margin: 32px 0;">
+            <a href="{{dashboardUrl}}"
+               style="display: inline-block; background-color: #0f3460; color: #ffffff; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-size: 16px; font-weight: 600;">
+                {{{fields.ctaLabel}}} &#8594;
+            </a>
+        </div>
+
+        <p style="color: #94a3b8; font-size: 14px;">
+            If the button above doesn't work, copy and paste this link into your browser:
+        </p>
+        <p style="word-break: break-all; font-size: 12px; color: #0f3460;">
+            <a href="{{dashboardUrl}}" style="color: #0f3460;">{{dashboardUrl}}</a>
+        </p>
+
+        <p style="color: #94a3b8; font-size: 13px; margin-top: 24px;">
+            {{{fields.footerNote}}}
+        </p>
+    </div>
+
+    <!-- Footer -->
+    <div style="padding: 16px 32px; text-align: center;">
+        <p style="color: #94a3b8; font-size: 12px; margin: 0;">
+            This is an automated message from BVisionRY.
+        </p>
+    </div>
+</body>
+</html>

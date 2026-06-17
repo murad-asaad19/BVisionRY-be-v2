@@ -55,6 +55,16 @@ public class PublicAssessmentLink extends BaseEntity {
     @Column(name = "respondent_name_mode", nullable = false)
     private RespondentFieldMode respondentNameMode = RespondentFieldMode.NONE;
 
+    /**
+     * Per-link override for the pipeline's system Gender question, applied only
+     * when the assessment is taken through this public link (the underlying
+     * pipeline is never mutated). {@code NONE} hides it, {@code OPTIONAL} shows
+     * it as skippable, {@code REQUIRED} forces an answer.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "gender_mode", nullable = false)
+    private RespondentFieldMode genderMode = RespondentFieldMode.OPTIONAL;
+
     @Column(name = "show_results_to_respondent", nullable = false)
     private boolean showResultsToRespondent = true;
 

@@ -17,6 +17,7 @@ public record PublicAssessmentLinkDto(
         PublicAssessmentLinkStatus status,
         RespondentFieldMode respondentEmailMode,
         RespondentFieldMode respondentNameMode,
+        RespondentFieldMode genderMode,
         boolean showResultsToRespondent,
         Integer maxResponses,
         int responseCount,

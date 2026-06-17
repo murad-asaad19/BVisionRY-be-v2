@@ -125,7 +125,10 @@ public class PipelineService {
         gender.setType(QuestionType.MULTIPLE_CHOICE);
         gender.setPromptText("Gender");
         gender.setDisplayOrder(2);
-        gender.setRequired(true);
+        // Gender is system-managed (locked, undeletable) but optional to answer:
+        // it only personalises pronoun choice, which the AI handles gracefully
+        // when absent. See EvaluationEngine#buildUserContext.
+        gender.setRequired(false);
         gender.setWeight(BigDecimal.ONE);
         Map<String, Object> genderConfig = new LinkedHashMap<>();
         genderConfig.put("options", List.of("Male", "Female"));

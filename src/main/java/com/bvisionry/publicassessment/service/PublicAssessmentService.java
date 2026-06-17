@@ -21,6 +21,7 @@ import com.bvisionry.evaluation.EvaluationService;
 import com.bvisionry.evaluation.OverallSummaryRepository;
 import com.bvisionry.evaluation.PillarEvaluationRepository;
 import com.bvisionry.evaluation.entity.OverallSummary;
+import com.bvisionry.pipeline.SystemQuestion;
 import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.Pipeline;
 import com.bvisionry.pipeline.entity.Question;
@@ -103,7 +104,7 @@ public class PublicAssessmentService {
         String effectiveStatus = effectiveStatus(link);
         boolean takeable = PublicAssessmentLinkStatus.ACTIVE.name().equals(effectiveStatus);
         List<AssessmentDetailResponse.PillarSection> pillars = takeable
-                ? buildPillarSections(link.getPipeline(), Map.of())
+                ? buildPillarSections(link.getPipeline(), Map.of(), link.getGenderMode())
                 : List.of();
 
         return new PublicAssessmentLinkInfoResponse(
@@ -172,7 +173,8 @@ public class PublicAssessmentService {
                 null, // no deadline for public submissions
                 new AssessmentDetailResponse.PipelineInfo(
                         pipeline.getId(), pipeline.getName(), pipeline.getDescription()),
-                buildPillarSections(pipeline, answersByQuestion),
+                buildPillarSections(pipeline, answersByQuestion,
+                        submission.getPublicLink().getGenderMode()),
                 List.of() // public submissions never enter PENDING_REEDIT
         );
     }
@@ -295,6 +297,9 @@ public class PublicAssessmentService {
         if (request.respondentNameMode() != null) {
             link.setRespondentNameMode(request.respondentNameMode());
         }
+        if (request.genderMode() != null) {
+            link.setGenderMode(request.genderMode());
+        }
         if (request.showResultsToRespondent() != null) {
             link.setShowResultsToRespondent(request.showResultsToRespondent());
         }
@@ -333,6 +338,9 @@ public class PublicAssessmentService {
         }
         if (request.respondentNameMode() != null) {
             link.setRespondentNameMode(request.respondentNameMode());
+        }
+        if (request.genderMode() != null) {
+            link.setGenderMode(request.genderMode());
         }
         if (request.showResultsToRespondent() != null) {
             link.setShowResultsToRespondent(request.showResultsToRespondent());
@@ -475,6 +483,7 @@ public class PublicAssessmentService {
                 link.getStatus(),
                 link.getRespondentEmailMode(),
                 link.getRespondentNameMode(),
+                link.getGenderMode(),
                 link.isShowResultsToRespondent(),
                 link.getMaxResponses(),
                 link.getResponseCount(),
@@ -485,16 +494,19 @@ public class PublicAssessmentService {
     /**
      * Pillar/question tree in the member assessment shape. Pass an empty map
      * for the by-token landing payload (no answers yet) and the saved answers
-     * for the session detail.
+     * for the session detail. The link's {@code genderMode} is applied to the
+     * pipeline's system Gender question (hidden / optional / required) without
+     * mutating the pipeline.
      */
     private List<AssessmentDetailResponse.PillarSection> buildPillarSections(
-            Pipeline pipeline, Map<UUID, Answer> answersByQuestion) {
+            Pipeline pipeline, Map<UUID, Answer> answersByQuestion, RespondentFieldMode genderMode) {
         return pipeline.getPillars().stream()
                 .sorted(Comparator.comparingInt(Pillar::getDisplayOrder))
                 .map(pillar -> {
                     List<AssessmentDetailResponse.QuestionWithAnswer> questionsWithAnswers =
                             pillar.getQuestions().stream()
                                     .sorted(Comparator.comparingInt(Question::getDisplayOrder))
+                                    .filter(q -> !(isGenderQuestion(q) && genderMode == RespondentFieldMode.NONE))
                                     .map(q -> {
                                         Answer answer = answersByQuestion.get(q.getId());
                                         AssessmentDetailResponse.AnswerData answerData = answer != null
@@ -509,7 +521,7 @@ public class PublicAssessmentService {
                                                 q.getType(),
                                                 q.getPromptText(),
                                                 q.getDisplayOrder(),
-                                                q.isRequired(),
+                                                requiredForLink(q, genderMode),
                                                 q.getConfigJson(),
                                                 answerData
                                         );
@@ -538,9 +550,10 @@ public class PublicAssessmentService {
                 .map(a -> a.getQuestion().getId())
                 .collect(Collectors.toSet());
 
+        RespondentFieldMode genderMode = submission.getPublicLink().getGenderMode();
         List<Question> requiredQuestions = pipeline.getPillars().stream()
                 .flatMap(p -> p.getQuestions().stream())
-                .filter(Question::isRequired)
+                .filter(q -> requiredForLink(q, genderMode))
                 .toList();
 
         List<ReviewResponse.UnansweredQuestion> unanswered = requiredQuestions.stream()
@@ -668,6 +681,22 @@ public class PublicAssessmentService {
     private boolean hasContent(Answer answer) {
         return (answer.getResponseText() != null && !answer.getResponseText().isBlank())
                 || (answer.getSelectedValue() != null && !answer.getSelectedValue().isBlank());
+    }
+
+    private static boolean isGenderQuestion(Question q) {
+        return SystemQuestion.GENDER.equals(q.getSystemKey());
+    }
+
+    /**
+     * Effective "required" for a question when taken through this link: the
+     * system Gender question follows the link's {@code genderMode} (REQUIRED →
+     * required, OPTIONAL/NONE → not), everything else keeps the pipeline value.
+     */
+    private static boolean requiredForLink(Question q, RespondentFieldMode genderMode) {
+        if (isGenderQuestion(q)) {
+            return genderMode == RespondentFieldMode.REQUIRED;
+        }
+        return q.isRequired();
     }
 
     /**

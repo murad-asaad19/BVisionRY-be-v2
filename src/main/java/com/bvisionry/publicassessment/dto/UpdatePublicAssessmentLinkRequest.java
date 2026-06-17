@@ -22,6 +22,8 @@ public record UpdatePublicAssessmentLinkRequest(
 
         RespondentFieldMode respondentNameMode,
 
+        RespondentFieldMode genderMode,
+
         Boolean showResultsToRespondent,
 
         @Positive(message = "Max responses must be a positive number")

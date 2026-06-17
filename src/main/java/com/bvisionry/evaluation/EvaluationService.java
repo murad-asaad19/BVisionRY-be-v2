@@ -153,9 +153,12 @@ public class EvaluationService {
         boolean freeTier = tier == SubscriptionTier.FREE;
         String summaryPrompt = resolveSummaryPrompt(pipeline, freeTier);
 
-        // Public submissions may use a dedicated evaluation model from AI config;
-        // null = inherit the default (and members always use the default).
-        String modelOverride = assignment == null
+        // Public (anonymous, QR-link) submissions are evaluated with their own
+        // system prompt (PUBLIC_ASSESSMENT_SYSTEM_PROMPT) and may use a dedicated
+        // evaluation model — null model = inherit the default (members always use
+        // the default model and the shared internal SYSTEM_PROMPT).
+        boolean publicAssessment = assignment == null;
+        String modelOverride = publicAssessment
                 ? aiConfigService.getConfigEntity().getPublicAssessmentModel()
                 : null;
 
@@ -175,10 +178,10 @@ public class EvaluationService {
             List<PillarEvaluation> preserved = pillarEvaluationRepository.findBySubmissionId(submissionId);
             result = evaluationEngine.evaluatePartialPipeline(
                     pipeline, submissionId, answers, Set.copyOf(unlockedPillarIds),
-                    preserved, summaryPrompt, freeTier, modelOverride);
+                    preserved, summaryPrompt, freeTier, modelOverride, publicAssessment);
         } else {
             result = evaluationEngine.evaluatePipeline(
-                    pipeline, submissionId, answers, summaryPrompt, freeTier, modelOverride);
+                    pipeline, submissionId, answers, summaryPrompt, freeTier, modelOverride, publicAssessment);
         }
 
         savePillarEvaluations(submission, pipeline, result.pillarResults());

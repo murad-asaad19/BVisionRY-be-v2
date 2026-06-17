@@ -65,7 +65,7 @@ public class OpenRouterChatService {
     /** The AI only returns a score; the maturity label is derived by {@code ScoringService}. */
     public AIResponse<PillarEvaluationResult> evaluatePillar(String rubricInstructions, String userResponse,
                                                               String modelOverride, String userContext,
-                                                              CallMetadata metadata) {
+                                                              boolean publicAssessment, CallMetadata metadata) {
         AIConfiguration config = configService.getConfigEntity();
 
         String model = modelOverride != null ? modelOverride : config.getDefaultEvaluationModel();
@@ -73,7 +73,7 @@ public class OpenRouterChatService {
         int maxTokens = config.getMaxTokensEvaluation();
 
         PromptTemplateResponse systemPromptTemplate =
-                promptTemplateService.getActivePrompt(PromptType.SYSTEM_PROMPT);
+                promptTemplateService.getActivePrompt(systemPromptType(publicAssessment));
 
         // Rubric lives in the USER message, not the system message. The system
         // prompt is therefore stable across all pillars of a submission, so the
@@ -97,6 +97,7 @@ public class OpenRouterChatService {
                                                                     String userContext,
                                                                     boolean freeTier,
                                                                     String modelOverride,
+                                                                    boolean publicAssessment,
                                                                     CallMetadata metadata) {
         AIConfiguration config = configService.getConfigEntity();
 
@@ -105,7 +106,7 @@ public class OpenRouterChatService {
         int maxTokens = config.getMaxTokensEvaluation();
 
         PromptTemplateResponse systemPromptTemplate =
-                promptTemplateService.getActivePrompt(PromptType.SYSTEM_PROMPT);
+                promptTemplateService.getActivePrompt(systemPromptType(publicAssessment));
 
         // Summary guidance is resolved upstream in EvaluationService (pipeline override
         // → AI Config default). We treat a null here as a programmer error but keep
@@ -328,6 +329,17 @@ public class OpenRouterChatService {
 
     private static String nullSafe(String s) {
         return s == null ? "" : s;
+    }
+
+    /**
+     * Public (QR-link) assessments use a dedicated system prompt so their persona
+     * and tone can diverge from the internal/member evaluation flow. Everything
+     * else (members, team insights) uses the shared {@link PromptType#SYSTEM_PROMPT}.
+     */
+    private static PromptType systemPromptType(boolean publicAssessment) {
+        return publicAssessment
+                ? PromptType.PUBLIC_ASSESSMENT_SYSTEM_PROMPT
+                : PromptType.SYSTEM_PROMPT;
     }
 
     private <T> AIResponse<T> callAndParse(Prompt prompt, Class<T> type, String callType,

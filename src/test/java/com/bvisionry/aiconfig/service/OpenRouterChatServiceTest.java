@@ -90,7 +90,7 @@ class OpenRouterChatServiceTest {
 
         OpenRouterChatService.AIResponse<PillarEvaluationResult> response = chatService.evaluatePillar(
                 "Evaluate based on strategic thinking criteria", "Our team has implemented a comprehensive strategy...", null,
-                null, CallMetadata.NONE);
+                null, false, CallMetadata.NONE);
 
         assertThat(response.parsed().scorePercentage()).isEqualTo(75);
         assertThat(response.parsed().whatsWorking()).hasSize(2);
@@ -117,7 +117,7 @@ class OpenRouterChatServiceTest {
 
         OpenRouterChatService.AIResponse<PillarEvaluationResult> response = chatService.evaluatePillar(
                 "rubric", "response text", "openai/gpt-4o",
-                null, CallMetadata.NONE);
+                null, false, CallMetadata.NONE);
 
         assertThat(response.parsed().scorePercentage()).isEqualTo(60);
     }
@@ -130,7 +130,7 @@ class OpenRouterChatServiceTest {
 
         mockChatResponse("This is not valid JSON at all");
 
-        var response = chatService.evaluatePillar("rubric", "response", null, null, CallMetadata.NONE);
+        var response = chatService.evaluatePillar("rubric", "response", null, null, false, CallMetadata.NONE);
         assertThat(response.parsed()).isNull();
         assertThat(response.rawResponse()).isEqualTo("This is not valid JSON at all");
     }
@@ -153,7 +153,7 @@ class OpenRouterChatServiceTest {
 
         mockChatResponse(aiResponseJson);
 
-        var response = chatService.evaluatePillar("rubric", "response", null, null, CallMetadata.NONE);
+        var response = chatService.evaluatePillar("rubric", "response", null, null, false, CallMetadata.NONE);
         assertThat(response.parsed()).isNull();
     }
 
@@ -176,7 +176,7 @@ class OpenRouterChatServiceTest {
         mockChatResponse(aiResponseJson);
 
         OpenRouterChatService.AIResponse<OverallSummaryResult> response =
-                chatService.generateOverallSummary("Pillar results summary text", null, null, false, null, CallMetadata.NONE);
+                chatService.generateOverallSummary("Pillar results summary text", null, null, false, null, false, CallMetadata.NONE);
 
         assertThat(response.parsed().overallScorePercentage()).isEqualTo(82);
         assertThat(response.parsed().strengths()).hasSize(2);
@@ -190,9 +190,35 @@ class OpenRouterChatServiceTest {
                 .thenReturn(systemPromptResponse("You are an evaluator. {{RUBRIC_INSTRUCTIONS}}"));
         when(chatModel.call(any(Prompt.class))).thenThrow(new RuntimeException("Connection refused"));
 
-        assertThatThrownBy(() -> chatService.evaluatePillar("rubric", "response", null, null, CallMetadata.NONE))
+        assertThatThrownBy(() -> chatService.evaluatePillar("rubric", "response", null, null, false, CallMetadata.NONE))
                 .isInstanceOf(AIServiceException.class)
                 .hasMessageContaining("AI pillar-evaluation call failed");
+    }
+
+    @Test
+    void evaluatePillar_publicAssessment_usesPublicSystemPrompt() {
+        when(configService.getConfigEntity()).thenReturn(testConfig);
+        when(promptTemplateService.getActivePrompt(PromptType.PUBLIC_ASSESSMENT_SYSTEM_PROMPT))
+                .thenReturn(new PromptTemplateResponse(UUID.randomUUID(),
+                        PromptType.PUBLIC_ASSESSMENT_SYSTEM_PROMPT,
+                        "You are a public-assessment analyst.", Instant.now()));
+
+        mockChatResponse("""
+                {
+                    "scorePercentage": 70,
+                    "whatThisScoreMeans": "Solid.",
+                    "whatsWorking": ["A"],
+                    "whatCanImprove": ["B"],
+                    "whyThisMattersForBusiness": "Matters."
+                }
+                """);
+
+        chatService.evaluatePillar("rubric", "response", null, null, true, CallMetadata.NONE);
+
+        // Public (QR-link) flow pulls the dedicated public system prompt, never the
+        // shared internal SYSTEM_PROMPT.
+        verify(promptTemplateService).getActivePrompt(PromptType.PUBLIC_ASSESSMENT_SYSTEM_PROMPT);
+        verify(promptTemplateService, never()).getActivePrompt(PromptType.SYSTEM_PROMPT);
     }
 
     private static PromptTemplateResponse systemPromptResponse(String content) {

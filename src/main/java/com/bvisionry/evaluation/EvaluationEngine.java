@@ -92,28 +92,31 @@ public class EvaluationEngine {
 
     public PipelineEvaluationResult evaluatePipeline(Pipeline pipeline, List<Answer> answers,
                                                       String summaryPrompt, boolean freeTier) {
-        return evaluatePipeline(pipeline, null, answers, summaryPrompt, freeTier, null);
+        return evaluatePipeline(pipeline, null, answers, summaryPrompt, freeTier, null, false);
     }
 
     /**
-     * @param modelOverride Evaluation model for every AI call of this run (pillars +
-     *                      overall summary); null = the AI-config default. Used to give
-     *                      public (QR-link) assessments a dedicated model.
+     * @param modelOverride     Evaluation model for every AI call of this run (pillars +
+     *                          overall summary); null = the AI-config default. Used to give
+     *                          public (QR-link) assessments a dedicated model.
+     * @param publicAssessment  True for public (QR-link) submissions, so every AI call uses
+     *                          the dedicated PUBLIC_ASSESSMENT_SYSTEM_PROMPT instead of the
+     *                          shared internal SYSTEM_PROMPT.
      */
     public PipelineEvaluationResult evaluatePipeline(Pipeline pipeline, UUID submissionId,
                                                       List<Answer> answers,
                                                       String summaryPrompt, boolean freeTier,
-                                                      String modelOverride) {
+                                                      String modelOverride, boolean publicAssessment) {
         EvaluationContext ctx = prepareEvaluationContext(pipeline, answers);
 
         UUID pipelineId = pipeline.getId();
         List<PillarResult> pillarResults = evaluateAllPillars(
                 ctx.evaluablePillars, ctx.answersByPillar, ctx.userContext, submissionId, pipelineId,
-                modelOverride);
+                modelOverride, publicAssessment);
 
         SummaryResult summary = generateOverallSummary(
                 pillarResults, ctx.evaluableAnswers, summaryPrompt, ctx.userContext, freeTier,
-                submissionId, pipelineId, modelOverride);
+                submissionId, pipelineId, modelOverride, publicAssessment);
 
         return new PipelineEvaluationResult(pillarResults, summary);
     }
@@ -184,7 +187,7 @@ public class EvaluationEngine {
                                                              Set<UUID> pillarIdsToReeval,
                                                              List<PillarEvaluation> preservedEvaluations,
                                                              String summaryPrompt, boolean freeTier,
-                                                             String modelOverride) {
+                                                             String modelOverride, boolean publicAssessment) {
         EvaluationContext ctx = prepareEvaluationContext(pipeline, answers);
 
         UUID pipelineId = pipeline.getId();
@@ -195,7 +198,7 @@ public class EvaluationEngine {
 
         List<PillarResult> reevaluatedResults = evaluateAllPillars(
                 pillarsToReeval, ctx.answersByPillar, ctx.userContext, submissionId, pipelineId,
-                modelOverride);
+                modelOverride, publicAssessment);
 
         // Stitch reevaluated + preserved into a single ordered list so the
         // summary call sees the same shape as a full pipeline run. We key
@@ -225,7 +228,7 @@ public class EvaluationEngine {
 
         SummaryResult summary = generateOverallSummary(
                 allResults, ctx.evaluableAnswers, summaryPrompt, ctx.userContext, freeTier,
-                submissionId, pipelineId, modelOverride);
+                submissionId, pipelineId, modelOverride, publicAssessment);
 
         // The result's pillarResults list contains only the freshly re-evaluated
         // pillars — the caller writes those back to pillar_evaluations and
@@ -264,15 +267,16 @@ public class EvaluationEngine {
     // ========== Pillar evaluation ==========
 
     public PillarResult evaluatePillar(Pillar pillar, List<Answer> answers) {
-        return evaluatePillar(pillar, answers, null, null, null, null);
+        return evaluatePillar(pillar, answers, null, null, null, null, false);
     }
 
     public PillarResult evaluatePillar(Pillar pillar, List<Answer> answers, String userContext) {
-        return evaluatePillar(pillar, answers, userContext, null, null, null);
+        return evaluatePillar(pillar, answers, userContext, null, null, null, false);
     }
 
     public PillarResult evaluatePillar(Pillar pillar, List<Answer> answers, String userContext,
-                                        UUID submissionId, UUID pipelineId, String modelOverride) {
+                                        UUID submissionId, UUID pipelineId, String modelOverride,
+                                        boolean publicAssessment) {
         String modelUsed = modelOverride != null
                 ? modelOverride
                 : aiConfigService.getConfigEntity().getDefaultEvaluationModel();
@@ -288,7 +292,7 @@ public class EvaluationEngine {
         if (!assessmentXml.isBlank()) {
             CallMetadata metadata = CallMetadata.forPillar(submissionId, pipelineId, pillar.getName());
             var aiResponse = openRouterChatService.evaluatePillar(
-                    rubric, assessmentXml, modelUsed, userContext, metadata);
+                    rubric, assessmentXml, modelUsed, userContext, publicAssessment, metadata);
             aiResult = aiResponse.parsed();
             rawResponse = aiResponse.rawResponse();
             provenance = aiResponse.provenance();
@@ -325,12 +329,12 @@ public class EvaluationEngine {
     // ========== Parallel bulk evaluation ==========
 
     public List<PillarResult> evaluateAllPillars(List<Pillar> pillars, Map<UUID, List<Answer>> answersByPillar) {
-        return evaluateAllPillars(pillars, answersByPillar, null, null, null, null);
+        return evaluateAllPillars(pillars, answersByPillar, null, null, null, null, false);
     }
 
     public List<PillarResult> evaluateAllPillars(List<Pillar> pillars, Map<UUID, List<Answer>> answersByPillar,
                                                   String userContext) {
-        return evaluateAllPillars(pillars, answersByPillar, userContext, null, null, null);
+        return evaluateAllPillars(pillars, answersByPillar, userContext, null, null, null, false);
     }
 
     /**
@@ -342,13 +346,13 @@ public class EvaluationEngine {
     public List<PillarResult> evaluateAllPillars(List<Pillar> pillars, Map<UUID, List<Answer>> answersByPillar,
                                                   String userContext,
                                                   UUID submissionId, UUID pipelineId,
-                                                  String modelOverride) {
+                                                  String modelOverride, boolean publicAssessment) {
         List<CompletableFuture<PillarResult>> futures = pillars.stream()
                 .map(pillar -> CompletableFuture.supplyAsync(() -> {
                     try {
                         List<Answer> pillarAnswers = answersByPillar.getOrDefault(pillar.getId(), List.of());
                         return evaluatePillar(pillar, pillarAnswers, userContext, submissionId, pipelineId,
-                                modelOverride);
+                                modelOverride, publicAssessment);
                     } catch (Exception e) {
                         log.error("Pillar evaluation failed for '{}' ({}): {}",
                                 pillar.getName(), pillar.getId(), e.getMessage(), e);
@@ -374,7 +378,7 @@ public class EvaluationEngine {
                                                   String userContext,
                                                   boolean freeTier) {
         return generateOverallSummary(pillarResults, answers, overallSummaryPrompt,
-                userContext, freeTier, null, null, null);
+                userContext, freeTier, null, null, null, false);
     }
 
     public SummaryResult generateOverallSummary(List<PillarResult> pillarResults,
@@ -383,7 +387,7 @@ public class EvaluationEngine {
                                                   String userContext,
                                                   boolean freeTier,
                                                   UUID submissionId, UUID pipelineId,
-                                                  String modelOverride) {
+                                                  String modelOverride, boolean publicAssessment) {
         StringBuilder context = buildSummaryContext(pillarResults);
 
         // Only include FREE_TEXT and MULTI_INPUT excerpts — LIKERT/MULTIPLE_CHOICE signal
@@ -411,7 +415,7 @@ public class EvaluationEngine {
         context.append("</raw_excerpts>\n");
 
         return callOverallSummary(context.toString(), overallSummaryPrompt, userContext, freeTier,
-                modelOverride, CallMetadata.forSummary(submissionId, pipelineId));
+                modelOverride, publicAssessment, CallMetadata.forSummary(submissionId, pipelineId));
     }
 
     // ========== Assessment XML builder ==========
@@ -656,9 +660,10 @@ public class EvaluationEngine {
 
     private SummaryResult callOverallSummary(String context, String overallSummaryPrompt,
                                                String userContext, boolean freeTier,
-                                               String modelOverride, CallMetadata metadata) {
+                                               String modelOverride, boolean publicAssessment,
+                                               CallMetadata metadata) {
         var aiResponse = openRouterChatService.generateOverallSummary(
-                context, overallSummaryPrompt, userContext, freeTier, modelOverride, metadata);
+                context, overallSummaryPrompt, userContext, freeTier, modelOverride, publicAssessment, metadata);
         if (aiResponse.isParsed()) {
             OverallSummaryResult sr = aiResponse.parsed();
             return new SummaryResult(

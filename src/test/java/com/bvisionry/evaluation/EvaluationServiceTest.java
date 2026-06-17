@@ -190,7 +190,7 @@ class EvaluationServiceTest {
         when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
         when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId))
                 .thenReturn(List.of(freeTextAnswer, likertAnswer));
-        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any()))
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
                 .thenReturn(buildMockResult());
         when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
         when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -199,8 +199,9 @@ class EvaluationServiceTest {
 
         evaluationService.evaluateSubmission(submissionId);
 
-        // Member submissions never carry a model override — they use the default.
-        verify(evaluationEngine).evaluatePipeline(any(), any(), any(), any(), anyBoolean(), isNull());
+        // Member submissions never carry a model override and use the internal
+        // (non-public) system prompt — publicAssessment is false.
+        verify(evaluationEngine).evaluatePipeline(any(), any(), any(), any(), anyBoolean(), isNull(), eq(false));
         verify(pillarEvaluationRepository).saveAll(any());
 
         ArgumentCaptor<OverallSummary> summaryCaptor = ArgumentCaptor.forClass(OverallSummary.class);
@@ -229,7 +230,7 @@ class EvaluationServiceTest {
     void evaluateSubmission_sendsResultsReadyEmail() {
         when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
         when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId)).thenReturn(List.of(likertAnswer));
-        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any()))
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
                 .thenReturn(buildMockResult());
         when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
         when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -270,7 +271,7 @@ class EvaluationServiceTest {
         when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
         when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId))
                 .thenReturn(List.of(nameAnswer, freeTextAnswer));
-        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any()))
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
                 .thenReturn(buildMockResult());
         when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
         when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -280,7 +281,7 @@ class EvaluationServiceTest {
         evaluationService.evaluateSubmission(submissionId);
 
         // evaluatePipeline receives ALL answers — it handles personal filtering internally
-        verify(evaluationEngine).evaluatePipeline(eq(pipeline), any(), any(), any(), anyBoolean(), isNull());
+        verify(evaluationEngine).evaluatePipeline(eq(pipeline), any(), any(), any(), anyBoolean(), isNull(), eq(false));
     }
 
     @Test
@@ -302,7 +303,7 @@ class EvaluationServiceTest {
         when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
         when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId))
                 .thenReturn(List.of(freeTextAnswer, likertAnswer));
-        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any()))
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
                 .thenReturn(buildMockResult());
         when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
         when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -312,9 +313,10 @@ class EvaluationServiceTest {
         evaluationService.evaluateSubmission(submissionId);
 
         // Pipeline resolved from the public link, premium (non-free-tier) prompt path,
-        // evaluated with the dedicated public-assessment model.
+        // evaluated with the dedicated public-assessment model and the public system
+        // prompt (publicAssessment = true).
         verify(evaluationEngine).evaluatePipeline(eq(pipeline), eq(submissionId), any(), any(), eq(false),
-                eq("anthropic/claude-haiku-4-5"));
+                eq("anthropic/claude-haiku-4-5"), eq(true));
         verify(promptTemplateService).getActivePromptContent(PromptType.OVERALL_SUMMARY);
 
         // No account email and no org actor — both side channels stay silent.

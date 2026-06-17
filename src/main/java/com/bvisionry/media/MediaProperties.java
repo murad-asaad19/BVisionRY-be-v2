@@ -19,6 +19,14 @@ public class MediaProperties {
     private String secretKey        = "minio123";
     private String bucket           = "bvisionry-media";
     private int    presignedExpiryMinutes = 60;
+    /**
+     * S3 region for the clients. Setting it explicitly makes the SDK skip the
+     * GetBucketLocation network call when computing presigned URLs — otherwise
+     * the public client (a browser-facing host like {@code localhost:9000}) is
+     * contacted from inside the backend container and presigning fails. MinIO's
+     * default region is {@code us-east-1}.
+     */
+    private String region           = "us-east-1";
 
     // ----- getters / setters -----
 
@@ -39,4 +47,7 @@ public class MediaProperties {
 
     public int getPresignedExpiryMinutes() { return presignedExpiryMinutes; }
     public void setPresignedExpiryMinutes(int presignedExpiryMinutes) { this.presignedExpiryMinutes = presignedExpiryMinutes; }
+
+    public String getRegion() { return region; }
+    public void setRegion(String region) { this.region = region; }
 }

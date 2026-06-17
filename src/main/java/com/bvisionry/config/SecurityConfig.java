@@ -111,6 +111,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/courses", "/api/v1/courses/{slug}").permitAll()
                         // Public certificate verification — share a cert number to verify authenticity.
                         .requestMatchers(HttpMethod.GET, "/api/v1/certificates/verify/*").permitAll()
+                        // Public homepage testimonials — published list only. The /admin
+                        // list and all writes are method-secured to SUPER_ADMIN.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/testimonials").permitAll()
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
                         .requestMatchers("/actuator/**").hasAuthority("SUPER_ADMIN")

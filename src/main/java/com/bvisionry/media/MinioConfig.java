@@ -29,15 +29,20 @@ public class MinioConfig {
         return MinioClient.builder()
                 .endpoint(props.getInternalEndpoint())
                 .credentials(props.getAccessKey(), props.getSecretKey())
+                .region(props.getRegion())
                 .build();
     }
 
     @Bean
     @Qualifier("minioPublic")
     public MinioClient minioPublic(MediaProperties props) {
+        // region is set explicitly so getPresignedObjectUrl signs locally and
+        // never makes a GetBucketLocation call to the (browser-facing, often
+        // backend-unreachable) public endpoint.
         return MinioClient.builder()
                 .endpoint(props.getPublicEndpoint())
                 .credentials(props.getAccessKey(), props.getSecretKey())
+                .region(props.getRegion())
                 .build();
     }
 }

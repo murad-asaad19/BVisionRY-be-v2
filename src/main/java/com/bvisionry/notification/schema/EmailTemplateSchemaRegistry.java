@@ -32,6 +32,7 @@ public class EmailTemplateSchemaRegistry {
             case TRIAL_ENDING_SOON              -> trialEndingSoon();
             case TRIAL_EXPIRED                  -> trialExpired();
             case UPGRADE_REQUESTED              -> upgradeRequested();
+            case CONTACT_US                     -> contactMessage();
         };
     }
 
@@ -566,6 +567,61 @@ public class EmailTemplateSchemaRegistry {
                         EmailTemplateField.Kind.CTA_LABEL, 40,
                         NO_VARS,
                         "Open org dashboard",
+                        4, "Call to Action", false, null),
+                new EmailTemplateField(
+                        "footerNote", "Closing note",
+                        "Closing note at the bottom of the email.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 240,
+                        NO_VARS,
+                        "Recipients of this notification can be customized in the platform admin settings.",
+                        5, "Closing", false, null)
+        );
+    }
+
+    private List<EmailTemplateField> contactMessage() {
+        List<String> inquiryVars = List.of("inquiry");
+        return List.of(
+                new EmailTemplateField(
+                        "subject", "Subject line",
+                        "The line recipients see in their inbox.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("senderName", "inquiry"),
+                        "New contact message from {{senderName}}",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "heading", "Heading",
+                        "The large title at the top of the email body.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "New contact message",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "introLine", "Intro line",
+                        "Short line introducing what happened. Use {{inquiry}} to insert the topic.",
+                        EmailTemplateField.Kind.RICH_TEXT, 240,
+                        inquiryVars,
+                        "Someone reached out through the website contact form about <strong>{{inquiry}}</strong>.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "mainMessage", "Body paragraph",
+                        "Paragraph below the card encouraging the recipient to follow up.",
+                        EmailTemplateField.Kind.RICH_TEXT, 600,
+                        NO_VARS,
+                        "Reply directly to this person to continue the conversation.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "cardHeading", "Card heading",
+                        "Headline shown at the top of the message details card.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "Message details",
+                        3, "Message Card", false, null),
+                new EmailTemplateField(
+                        "ctaLabel", "Button label",
+                        "Text on the main action button.",
+                        EmailTemplateField.Kind.CTA_LABEL, 40,
+                        NO_VARS,
+                        "Reply by email",
                         4, "Call to Action", false, null),
                 new EmailTemplateField(
                         "footerNote", "Closing note",

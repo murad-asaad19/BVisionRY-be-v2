@@ -30,7 +30,7 @@ public class SmtpMailTransport implements MailTransport {
     private String fromAddress;
 
     @Override
-    public void send(String to, String subject, String htmlBody) {
+    public void send(String to, String subject, String htmlBody, String replyTo) {
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
@@ -38,6 +38,9 @@ public class SmtpMailTransport implements MailTransport {
             helper.setSubject(subject);
             helper.setText(htmlBody, true);
             helper.setFrom(fromAddress);
+            if (replyTo != null && !replyTo.isBlank()) {
+                helper.setReplyTo(replyTo);
+            }
             mailSender.send(message);
             log.info("Email sent via SMTP to {} - subject: {}", to, subject);
         } catch (MessagingException | MailException e) {

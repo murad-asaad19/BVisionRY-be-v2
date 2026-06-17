@@ -225,6 +225,42 @@ public class EmailService {
     }
 
     /**
+     * Send the platform-side notification when a visitor submits the website
+     * "Contact Us" form. Recipients are resolved upstream — a custom address
+     * list configured in platform settings, falling back to every SUPER_ADMIN.
+     */
+    public void sendContactMessage(String toEmail, String senderName, String senderEmail,
+                                    String company, String inquiry, String message) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("senderName", senderName);
+        vars.put("senderEmail", senderEmail);
+        // Mustache hides the {{#company}}…{{/company}} row when the value is
+        // null or empty, so a blank company produces a clean card rather than
+        // an empty row.
+        vars.put("company", company == null || company.isBlank() ? null : company);
+        vars.put("inquiry", inquiry);
+        vars.put("message", message);
+
+        // Reply-To = the visitor so admins can reply directly from their inbox.
+        // From stays the configured platform address (no spoofing/open-relay risk).
+        send(toEmail, EmailTemplateKey.CONTACT_US, vars, senderEmail);
+    }
+
+    /**
+     * Fire-and-forget variant. Called from the contact-form flow so SMTP
+     * latency or failure can't block the HTTP response.
+     */
+    @Async("emailExecutor")
+    public void sendContactMessageAsync(String toEmail, String senderName, String senderEmail,
+                                         String company, String inquiry, String message) {
+        try {
+            sendContactMessage(toEmail, senderName, senderEmail, company, inquiry, message);
+        } catch (Exception e) {
+            log.warn("Async contact-message email to {} failed: {}", toEmail, e.getMessage());
+        }
+    }
+
+    /**
      * Send arbitrary pre-rendered content. Used by the admin "send test email"
      * flow so admins can preview their draft in their own inbox before saving.
      */
@@ -233,7 +269,11 @@ public class EmailService {
     }
 
     private void send(String to, EmailTemplateKey key, Map<String, Object> vars) {
+        send(to, key, vars, null);
+    }
+
+    private void send(String to, EmailTemplateKey key, Map<String, Object> vars, String replyTo) {
         EmailTemplateRenderer.Rendered rendered = templateRenderer.render(key, vars);
-        mailTransport.send(to, rendered.subject(), rendered.body());
+        mailTransport.send(to, rendered.subject(), rendered.body(), replyTo);
     }
 }

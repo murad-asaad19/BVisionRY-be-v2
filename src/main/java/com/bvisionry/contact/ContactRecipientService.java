@@ -1,4 +1,4 @@
-package com.bvisionry.upgrade;
+package com.bvisionry.contact;
 
 import com.bvisionry.organization.OrgAuditActions;
 import com.bvisionry.platform.RecipientListSettings;
@@ -10,15 +10,15 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Resolves and persists the recipient list for {@code UPGRADE_REQUESTED}
- * notifications. When no explicit list is configured, every SUPER_ADMIN is
- * used so the feature works out-of-the-box.
+ * Resolves and persists the recipient list for website contact-form messages.
+ * When no explicit list is configured, every SUPER_ADMIN is used so the feature
+ * works out-of-the-box.
  */
 @Service
 @RequiredArgsConstructor
-public class UpgradeRequestRecipientService {
+public class ContactRecipientService {
 
-    static final String SETTING_KEY = "notifications.upgrade_request_recipients";
+    static final String SETTING_KEY = "notifications.contact_recipients";
 
     private final RecipientListSettings settings;
 
@@ -36,7 +36,7 @@ public class UpgradeRequestRecipientService {
     @Transactional
     public RecipientsView setRecipients(List<String> recipients, UUID actorId) {
         List<String> saved = settings.save(SETTING_KEY, recipients, actorId,
-                OrgAuditActions.UPGRADE_REQUEST_RECIPIENTS_UPDATED);
+                OrgAuditActions.CONTACT_RECIPIENTS_UPDATED);
         return new RecipientsView(saved, saved.isEmpty());
     }
 

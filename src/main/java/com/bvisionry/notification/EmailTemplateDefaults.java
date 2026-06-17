@@ -27,6 +27,7 @@ public class EmailTemplateDefaults {
             case TRIAL_ENDING_SOON              -> "Your {{organizationName}} trial ends in {{daysLeft}} days";
             case TRIAL_EXPIRED                  -> "Your {{organizationName}} trial has ended";
             case UPGRADE_REQUESTED              -> "{{organizationName}} requested a Premium upgrade";
+            case CONTACT_US                     -> "New contact message from {{senderName}}";
         };
     }
 
@@ -40,6 +41,7 @@ public class EmailTemplateDefaults {
             case TRIAL_ENDING_SOON              -> "trial-ending-soon.mustache";
             case TRIAL_EXPIRED                  -> "trial-expired.mustache";
             case UPGRADE_REQUESTED              -> "upgrade-requested.mustache";
+            case CONTACT_US                     -> "contact-message.mustache";
         };
         try {
             ClassPathResource resource = new ClassPathResource("templates/email/" + filename);

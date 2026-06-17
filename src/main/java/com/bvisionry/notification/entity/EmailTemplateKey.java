@@ -8,5 +8,6 @@ public enum EmailTemplateKey {
     INVITATION,
     TRIAL_ENDING_SOON,
     TRIAL_EXPIRED,
-    UPGRADE_REQUESTED
+    UPGRADE_REQUESTED,
+    CONTACT_US
 }

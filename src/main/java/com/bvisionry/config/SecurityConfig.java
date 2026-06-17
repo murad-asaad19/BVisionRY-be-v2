@@ -77,6 +77,8 @@ public class SecurityConfig {
                                 "/api/public/assessments/**",
                                 // Server-side BFF POST — no CSRF cookie in flight
                                 "/api/v1/leads",
+                                // Public marketing POST — Contact Us form, no CSRF cookie in flight
+                                "/api/v1/contact",
                                 // Player POST endpoints called through BFF (server-side, no CSRF cookie)
                                 "/api/v1/courses/*/enroll",
                                 "/api/v1/enrollments/*/content/*/complete",
@@ -103,6 +105,8 @@ public class SecurityConfig {
                         .requestMatchers("/api/public/assessments/**").permitAll()
                         // Lead capture — public POST from the Book-a-Demo BFF
                         .requestMatchers(HttpMethod.POST, "/api/v1/leads").permitAll()
+                        // Contact Us — public POST from the marketing contact form
+                        .requestMatchers(HttpMethod.POST, "/api/v1/contact").permitAll()
                         // LMS catalog + health: public, read-only.
                         .requestMatchers("/api/v1/health").permitAll()
                         // Public catalog — keep permitAll for list + detail.

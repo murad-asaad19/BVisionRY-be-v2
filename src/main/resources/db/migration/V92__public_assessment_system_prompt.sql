@@ -4,6 +4,12 @@
 -- internal/member evaluation flow. This adds a PUBLIC_ASSESSMENT_SYSTEM_PROMPT
 -- type so admins can tune the public persona/tone independently.
 
+-- Widen prompt_type first: the column is VARCHAR(30) (V6) but the new value
+-- 'PUBLIC_ASSESSMENT_SYSTEM_PROMPT' is 31 chars, so an INSERT below would fail
+-- with "value too long for type character varying(30)". 64 leaves headroom for
+-- future prompt types.
+ALTER TABLE prompt_templates ALTER COLUMN prompt_type TYPE VARCHAR(64);
+
 -- Allow the new prompt type alongside ALL existing ones. The previous constraint
 -- (V44) already permits OVERALL_SUMMARY and FREE_TIER_SUMMARY, which are seeded by
 -- V44 and read at runtime (EvaluationService.resolveSummaryPrompt); they must be

@@ -241,7 +241,9 @@ public class EmailService {
         vars.put("inquiry", inquiry);
         vars.put("message", message);
 
-        send(toEmail, EmailTemplateKey.CONTACT_US, vars);
+        // Reply-To = the visitor so admins can reply directly from their inbox.
+        // From stays the configured platform address (no spoofing/open-relay risk).
+        send(toEmail, EmailTemplateKey.CONTACT_US, vars, senderEmail);
     }
 
     /**
@@ -267,7 +269,11 @@ public class EmailService {
     }
 
     private void send(String to, EmailTemplateKey key, Map<String, Object> vars) {
+        send(to, key, vars, null);
+    }
+
+    private void send(String to, EmailTemplateKey key, Map<String, Object> vars, String replyTo) {
         EmailTemplateRenderer.Rendered rendered = templateRenderer.render(key, vars);
-        mailTransport.send(to, rendered.subject(), rendered.body());
+        mailTransport.send(to, rendered.subject(), rendered.body(), replyTo);
     }
 }

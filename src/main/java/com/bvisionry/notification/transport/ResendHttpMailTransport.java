@@ -50,13 +50,16 @@ public class ResendHttpMailTransport implements MailTransport {
     }
 
     @Override
-    public void send(String to, String subject, String htmlBody) {
-        Map<String, Object> payload = Map.of(
-                "from", fromAddress,
-                "to", List.of(to),
-                "subject", subject,
-                "html", htmlBody
-        );
+    public void send(String to, String subject, String htmlBody, String replyTo) {
+        Map<String, Object> payload = new java.util.HashMap<>();
+        payload.put("from", fromAddress);
+        payload.put("to", List.of(to));
+        payload.put("subject", subject);
+        payload.put("html", htmlBody);
+        // Resend accepts reply_to as a string or array; a single validated address suffices.
+        if (replyTo != null && !replyTo.isBlank()) {
+            payload.put("reply_to", replyTo);
+        }
 
         try {
             Map<String, Object> response = restClient.post()

@@ -13,7 +13,7 @@ class RateLimitServiceTest {
 
     @BeforeEach
     void setUp() {
-        rateLimitService = new RateLimitService(5, 10, 10, 10, 5, 30, 10);
+        rateLimitService = new RateLimitService(5, 10, 10, 10, 5, 30, 10, 3);
     }
 
     @Test
@@ -60,5 +60,26 @@ class RateLimitServiceTest {
 
         assertThatThrownBy(() -> rateLimitService.checkEvaluationLimit("org-1"))
                 .isInstanceOf(RateLimitExceededException.class);
+    }
+
+    @Test
+    void checkContactLimit_overLimit_throws() {
+        for (int i = 0; i < 3; i++) {
+            rateLimitService.checkContactLimit("ip-1");
+        }
+
+        assertThatThrownBy(() -> rateLimitService.checkContactLimit("ip-1"))
+                .isInstanceOf(RateLimitExceededException.class)
+                .hasMessageContaining("contact");
+    }
+
+    @Test
+    void checkContactLimit_isolatedFromTryItOutBucket() {
+        // Exhaust the try-it-out bucket; the contact bucket must remain unaffected.
+        for (int i = 0; i < 5; i++) {
+            rateLimitService.checkTryItOutLimit("ip-1");
+        }
+
+        rateLimitService.checkContactLimit("ip-1");
     }
 }

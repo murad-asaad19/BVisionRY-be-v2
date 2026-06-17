@@ -24,6 +24,7 @@ public class RateLimitService {
     private final int publicAssessmentRequestsPerMinute;
     private final int refreshRequestsPerMinute;
     private final int acceptRequestsPerHour;
+    private final int contactRequestsPerMinute;
 
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> tryItOutWindows =
             new ConcurrentHashMap<>();
@@ -39,6 +40,8 @@ public class RateLimitService {
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> acceptWindows =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> contactWindows =
+            new ConcurrentHashMap<>();
 
     public RateLimitService(
             @Value("${bvisionry.rate-limit.try-it-out.requests-per-minute:10}") int tryItOutRequestsPerMinute,
@@ -47,7 +50,8 @@ public class RateLimitService {
             @Value("${bvisionry.rate-limit.survey-submit.requests-per-minute:10}") int surveySubmitRequestsPerMinute,
             @Value("${bvisionry.rate-limit.public-assessment.requests-per-minute:5}") int publicAssessmentRequestsPerMinute,
             @Value("${bvisionry.rate-limit.refresh.requests-per-minute:30}") int refreshRequestsPerMinute,
-            @Value("${bvisionry.rate-limit.accept.requests-per-hour:10}") int acceptRequestsPerHour) {
+            @Value("${bvisionry.rate-limit.accept.requests-per-hour:10}") int acceptRequestsPerHour,
+            @Value("${bvisionry.rate-limit.contact.requests-per-minute:5}") int contactRequestsPerMinute) {
         this.tryItOutRequestsPerMinute = tryItOutRequestsPerMinute;
         this.evaluationRequestsPerMinute = evaluationRequestsPerMinute;
         this.authRequestsPerMinute = authRequestsPerMinute;
@@ -55,6 +59,7 @@ public class RateLimitService {
         this.publicAssessmentRequestsPerMinute = publicAssessmentRequestsPerMinute;
         this.refreshRequestsPerMinute = refreshRequestsPerMinute;
         this.acceptRequestsPerHour = acceptRequestsPerHour;
+        this.contactRequestsPerMinute = contactRequestsPerMinute;
     }
 
     /**
@@ -114,6 +119,15 @@ public class RateLimitService {
         checkLimit(acceptWindows, key, acceptRequestsPerHour, 3600, "accept");
     }
 
+    /**
+     * Rate limit for the public marketing "Contact Us" form. Its own per-IP bucket
+     * and ceiling (default 5/min) so contact traffic is isolated from other anonymous
+     * limiters and can be tuned independently against inbox-flooding bots.
+     */
+    public void checkContactLimit(String key) {
+        checkLimit(contactWindows, key, contactRequestsPerMinute, 60, "contact");
+    }
+
     private void checkLimit(ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> windows,
                            String key, int maxRequests, int windowSeconds, String limitType) {
         Instant now = Instant.now();
@@ -144,7 +158,7 @@ public class RateLimitService {
         // Per-minute windows: drop entries older than 60s.
         Instant minuteCutoff = Instant.now().minusSeconds(60);
         evictOlderThan(List.of(tryItOutWindows, evaluationWindows, authWindows,
-                surveySubmitWindows, publicAssessmentWindows, refreshWindows), minuteCutoff);
+                surveySubmitWindows, publicAssessmentWindows, refreshWindows, contactWindows), minuteCutoff);
 
         // Per-hour windows: drop entries older than 3600s.
         Instant hourCutoff = Instant.now().minusSeconds(3600);

@@ -27,17 +27,17 @@ public class ContactController {
     /**
      * Submits a contact message. Because the endpoint is public and CSRF-exempt,
      * it is rate-limited per real client IP (resolved via the trusted-proxy-aware
-     * {@link ClientIpResolver}) so a bot cannot flood the notification inbox. The
-     * bucket key is namespaced with {@code "contact:"} so contact traffic gets its
-     * own per-IP window and never collides with other users of the shared
-     * anonymous limiter. Exceeding the limit raises
-     * {@code RateLimitExceededException}, which the global handler maps to 429.
+     * {@link ClientIpResolver}) so a bot cannot flood the notification inbox. Uses
+     * its own dedicated contact bucket ({@link RateLimitService#checkContactLimit})
+     * so the ceiling is tunable independently of other anonymous limiters.
+     * Exceeding the limit raises {@code RateLimitExceededException}, which the
+     * global handler maps to 429.
      */
     @PostMapping
     public ResponseEntity<Void> submit(
             @Valid @RequestBody ContactRequest request,
             HttpServletRequest httpRequest) {
-        rateLimitService.checkTryItOutLimit("contact:" + clientIpResolver.resolve(httpRequest));
+        rateLimitService.checkContactLimit(clientIpResolver.resolve(httpRequest));
         contactService.submit(request);
         return ResponseEntity.accepted().build();
     }

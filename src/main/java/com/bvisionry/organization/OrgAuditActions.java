@@ -57,6 +57,9 @@ public final class OrgAuditActions {
     public static final String UPGRADE_PROMPT_RESET              = "UPGRADE_PROMPT_RESET";
     public static final String UPGRADE_REQUEST_RECIPIENTS_UPDATED = "UPGRADE_REQUEST_RECIPIENTS_UPDATED";
 
+    /** A SUPER_ADMIN edited the Contact Us notification recipient list. */
+    public static final String CONTACT_RECIPIENTS_UPDATED = "CONTACT_RECIPIENTS_UPDATED";
+
     public static final String ENTITY_ORGANIZATION = "Organization";
     public static final String ENTITY_PLATFORM     = "Platform";
     public static final String ENTITY_USER         = "User";

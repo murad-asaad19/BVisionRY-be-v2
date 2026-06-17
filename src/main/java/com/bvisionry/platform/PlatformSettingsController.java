@@ -1,6 +1,9 @@
 package com.bvisionry.platform;
 
 import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.contact.ContactRecipientService;
+import com.bvisionry.contact.dto.ContactRecipientsRequest;
+import com.bvisionry.contact.dto.ContactRecipientsResponse;
 import com.bvisionry.organization.AttentionThresholdsService;
 import com.bvisionry.platform.dto.AttentionThresholdsRequest;
 import com.bvisionry.platform.dto.AttentionThresholdsResponse;
@@ -28,6 +31,7 @@ public class PlatformSettingsController {
 
     private final AttentionThresholdsService attentionThresholdsService;
     private final UpgradeRequestRecipientService upgradeRequestRecipientService;
+    private final ContactRecipientService contactRecipientService;
     private final UpgradePromptService upgradePromptService;
 
     @GetMapping("/attention-thresholds")
@@ -55,6 +59,22 @@ public class PlatformSettingsController {
                 req.recipients(), SecurityUtils.getCurrentUserId());
         return ResponseEntity.ok(
                 new UpgradeRequestRecipientsResponse(view.recipients(), view.fallbackToSuperAdmins()));
+    }
+
+    @GetMapping("/contact-recipients")
+    public ResponseEntity<ContactRecipientsResponse> getContactRecipients() {
+        var view = contactRecipientService.get();
+        return ResponseEntity.ok(
+                new ContactRecipientsResponse(view.recipients(), view.fallbackToSuperAdmins()));
+    }
+
+    @PutMapping("/contact-recipients")
+    public ResponseEntity<ContactRecipientsResponse> setContactRecipients(
+            @Valid @RequestBody ContactRecipientsRequest req) {
+        var view = contactRecipientService.setRecipients(
+                req.recipients(), SecurityUtils.getCurrentUserId());
+        return ResponseEntity.ok(
+                new ContactRecipientsResponse(view.recipients(), view.fallbackToSuperAdmins()));
     }
 
     @GetMapping("/upgrade-prompt")

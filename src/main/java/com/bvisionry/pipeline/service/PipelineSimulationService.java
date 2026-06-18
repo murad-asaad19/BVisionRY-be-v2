@@ -1,5 +1,6 @@
 package com.bvisionry.pipeline.service;
 
+import com.bvisionry.aiconfig.service.AIConfigService;
 import com.bvisionry.aiconfig.service.OpenRouterChatService;
 import com.bvisionry.assessment.entity.Answer;
 import com.bvisionry.common.dto.PillarEvaluationResult;
@@ -35,6 +36,7 @@ public class PipelineSimulationService {
 
     private final PipelineRepository pipelineRepository;
     private final EvaluationEngine evaluationEngine;
+    private final AIConfigService aiConfigService;
 
     @Transactional(readOnly = true)
     public SimulationResult simulate(UUID pipelineId, SimulateRequest request) {
@@ -46,14 +48,24 @@ public class PipelineSimulationService {
         }
 
         List<Answer> answers = buildTransientAnswers(pipeline, request.answers());
-        boolean isPremium = request.tier() == SubscriptionTier.PREMIUM;
+
+        // Public (QR-link) assessments always evaluate at PREMIUM gating in the real
+        // flow (EvaluationService: tier is PREMIUM when there is no assignment), so a
+        // public simulation mirrors premium output but with the public system prompt
+        // and the configured public-assessment model.
+        boolean publicAssessment = request.publicAssessment();
+        boolean isPremium = publicAssessment || request.tier() == SubscriptionTier.PREMIUM;
 
         String summaryPrompt = isPremium
                 ? pipeline.getOverallSummaryPrompt()
                 : pipeline.getFreeTierPrompt();
 
+        String modelOverride = publicAssessment
+                ? aiConfigService.getConfigEntity().getPublicAssessmentModel()
+                : null;
+
         PipelineEvaluationResult evalResult = evaluationEngine.evaluatePipeline(
-                pipeline, answers, summaryPrompt, !isPremium);
+                pipeline, null, answers, summaryPrompt, !isPremium, modelOverride, publicAssessment);
 
         List<PillarScoreSummary> pillarScores = new ArrayList<>();
         List<SimulatorPillarDetail> pillarDetails = new ArrayList<>();

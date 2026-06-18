@@ -35,7 +35,7 @@ import java.util.stream.Collectors;
  *   - Overview       -- aggregate stats (completion rate, gender %, averages)
  *   - Summary        -- per-member scores, one column per pillar, overall last
  *   - Profiles       -- demographic info per member (Personal pillar answers)
- *   - Highlights     -- strengths / dev areas / recommendations per member
+ *   - Highlights     -- per member: summary, strengths, development areas
  *   - Pillar Details -- long-format per-member × per-pillar narrative
  *
  * All per-member sheets are limited to EVALUATED submissions. Aggregate counts
@@ -357,19 +357,18 @@ public class TeamInsightsExcelService {
                                       Map<UUID, OverallSummary> summaryBySubmission,
                                       MemberIdentity identity) {
         ExcelWorkbookBuilder.SheetBuilder s = wb.newSheet("Highlights");
-        s.headers("Member", "Summary", "Strengths", "Development areas", "Recommendations");
+        s.headers("Member", "Summary", "Strengths", "Development areas");
         for (Submission sub : submissions) {
             OverallSummary summary = summaryBySubmission.get(sub.getId());
             if (summary == null) {
-                s.row(identity.name(sub), "", "", "", "");
+                s.row(identity.name(sub), "", "", "");
                 continue;
             }
             s.row(
                     identity.name(sub),
                     summary.getSummaryNarrative(),
                     ExcelWorkbookBuilder.bullets(summary.getStrengths()),
-                    ExcelWorkbookBuilder.bullets(summary.getDevelopmentAreas()),
-                    ExcelWorkbookBuilder.bullets(summary.getRecommendations())
+                    ExcelWorkbookBuilder.bullets(summary.getDevelopmentAreas())
             );
         }
         s.autoSize();

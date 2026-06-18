@@ -66,7 +66,6 @@ public class PdfReportService {
         ctx.setVariable("pillarDetails", pillarDetails);
         ctx.setVariable("strengths", stripQids(results.strengths()));
         ctx.setVariable("developmentAreas", stripQids(results.developmentAreas()));
-        ctx.setVariable("recommendations", stripQids(results.recommendations()));
         ctx.setVariable("corePattern", stripQids(results.corePattern()));
         ctx.setVariable("movingForward", stripQids(results.movingForwardNarrative()));
         ctx.setVariable("personalInfo", results.personalInfo() == null ? List.of() : results.personalInfo());

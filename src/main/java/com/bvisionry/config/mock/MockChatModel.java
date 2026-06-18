@@ -69,7 +69,6 @@ public class MockChatModel implements ChatModel {
               "summaryNarrative": "A capable founder building durable habits, with a few focused gaps to close.",
               "strengths": ["Outcome ownership", "Cadence of reflection"],
               "developmentAreas": ["Feedback loop latency", "Longer-horizon planning"],
-              "recommendations": ["Shorten retro-to-action cycles to one week.", "Run a monthly strategy review."],
               "corePattern": "Reflective and action-oriented, but follow-through lags insight.",
               "movingForward": "Pick one improvement, ship it, and measure the impact within two weeks."
             }

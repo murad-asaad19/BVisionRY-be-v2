@@ -88,7 +88,6 @@ public class FakeChatModel implements ChatModel {
               "summaryNarrative": "A capable team building durable habits, with focused gaps to close.",
               "strengths": ["Outcome ownership", "Cadence of reflection"],
               "developmentAreas": ["Feedback loop latency"],
-              "recommendations": ["Shorten retro-to-action cycles to one week."],
               "corePattern": "Reflection without rapid follow-through.",
               "movingForward": "Pick one improvement, ship it, measure within two weeks."
             }

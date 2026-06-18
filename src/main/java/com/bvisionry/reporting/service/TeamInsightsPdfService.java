@@ -222,7 +222,6 @@ public class TeamInsightsPdfService {
                     ? "" : summary.getSummaryNarrative());
             section.put("strengths", summary == null || summary.getStrengths() == null ? List.of() : summary.getStrengths());
             section.put("developmentAreas", summary == null || summary.getDevelopmentAreas() == null ? List.of() : summary.getDevelopmentAreas());
-            section.put("recommendations", summary == null || summary.getRecommendations() == null ? List.of() : summary.getRecommendations());
             section.put("personalInfo", personalAnswersBySubmission.getOrDefault(sub.getId(), List.of()));
             section.put("pillars", pillars);
             sections.add(section);

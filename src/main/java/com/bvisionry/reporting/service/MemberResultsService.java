@@ -128,7 +128,6 @@ public class MemberResultsService {
                 summary.getSummaryNarrative(),
                 summary.getStrengths(),
                 summary.getDevelopmentAreas(),
-                summary.getRecommendations(),
                 pillarScores,
                 false, // premiumFeaturesAvailable placeholder; real value set in getResults()
                 submission.getEvaluatedAt(),
@@ -166,7 +165,7 @@ public class MemberResultsService {
                 r.submissionId(), r.pipelineName(), r.overallScore(), r.summaryNarrative(),
                 premium ? r.strengths() : List.of(),
                 premium ? r.developmentAreas() : List.of(),
-                r.recommendations(), r.pillarScores(),
+                r.pillarScores(),
                 premium, r.evaluatedAt(), r.freeTierSummary(), r.topStrengths(),
                 r.maturityIndication(), r.premiumTeaser(), r.corePattern(),
                 r.movingForwardNarrative(), r.postCompletion(),

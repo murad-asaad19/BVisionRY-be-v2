@@ -16,7 +16,6 @@ public record MemberResultsResponse(
         String summaryNarrative,
         List<String> strengths,
         List<String> developmentAreas,
-        List<String> recommendations,
         List<PillarScoreSummary> pillarScores,
         boolean premiumFeaturesAvailable,
         Instant evaluatedAt,

@@ -83,7 +83,7 @@ public class PipelineSimulationService {
         var sr = evalResult.summary();
         MemberResultsResponse results = new MemberResultsResponse(
                 null, pipeline.getName(), sr.overallScore(),
-                sr.summaryNarrative(), sr.strengths(), sr.developmentAreas(), sr.recommendations(),
+                sr.summaryNarrative(), sr.strengths(), sr.developmentAreas(),
                 pillarScores, isPremium, Instant.now(),
                 null, null, null, null,
                 sr.corePattern(), sr.movingForwardNarrative(), null,

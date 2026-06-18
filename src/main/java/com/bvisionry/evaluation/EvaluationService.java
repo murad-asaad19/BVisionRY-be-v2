@@ -378,7 +378,6 @@ public class EvaluationService {
         summary.setSummaryNarrative(sr.summaryNarrative());
         summary.setStrengths(sr.strengths());
         summary.setDevelopmentAreas(sr.developmentAreas());
-        summary.setRecommendations(sr.recommendations());
         summary.setCorePattern(sr.corePattern());
         summary.setMovingForwardNarrative(sr.movingForwardNarrative());
         summary.setAiSummaryPromptSnapshot(sr.summaryPromptSnapshot());

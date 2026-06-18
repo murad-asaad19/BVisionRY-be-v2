@@ -55,7 +55,7 @@ class PipelineSimulationServiceTest {
 
         SummaryResult summary = new SummaryResult(
                 BigDecimal.valueOf(70), "narrative",
-                List.of(), List.of(), List.of(),
+                List.of(), List.of(),
                 null, null, null, null, null);
         when(evaluationEngine.evaluatePipeline(any(), isNull(), any(), any(), anyBoolean(), any(), anyBoolean()))
                 .thenReturn(new PipelineEvaluationResult(List.of(), summary));

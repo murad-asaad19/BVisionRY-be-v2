@@ -177,7 +177,6 @@ class EvaluationServiceTest {
         EvaluationEngine.SummaryResult summary = new EvaluationEngine.SummaryResult(
                 new BigDecimal("78"), "Good overall performance",
                 List.of("Communication strength"), List.of("Delegation"),
-                List.of("Practice delegating tasks"),
                 "Strong communicator", "Continue developing delegation", "raw json",
                 null, null
         );

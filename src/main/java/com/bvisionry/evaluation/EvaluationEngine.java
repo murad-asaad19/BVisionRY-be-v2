@@ -78,7 +78,7 @@ public class EvaluationEngine {
 
     public record SummaryResult(
             BigDecimal overallScore, String summaryNarrative,
-            List<String> strengths, List<String> developmentAreas, List<String> recommendations,
+            List<String> strengths, List<String> developmentAreas,
             String corePattern, String movingForwardNarrative, String rawResponse,
             Provenance provenance, String summaryPromptSnapshot
     ) {}
@@ -668,13 +668,15 @@ public class EvaluationEngine {
             OverallSummaryResult sr = aiResponse.parsed();
             return new SummaryResult(
                     BigDecimal.valueOf(sr.overallScorePercentage()), sr.summaryNarrative(),
-                    sr.strengths(), sr.developmentAreas(), sr.recommendations(),
+                    sr.strengths(), sr.developmentAreas(),
                     sr.corePattern(), sr.movingForward(), aiResponse.rawResponse(),
                     aiResponse.provenance(),
                     overallSummaryPrompt);
         } else {
-            return new SummaryResult(BigDecimal.ZERO, aiResponse.rawResponse(),
-                    List.of(), List.of(), List.of(), null, null, aiResponse.rawResponse(),
+            // Narrative is intentionally blanked on parse failure so the results hero banner
+            // never surfaces raw model output; the raw response is still retained below for diagnostics.
+            return new SummaryResult(BigDecimal.ZERO, "",
+                    List.of(), List.of(), null, null, aiResponse.rawResponse(),
                     aiResponse.provenance(),
                     overallSummaryPrompt);
         }
@@ -691,15 +693,15 @@ public class EvaluationEngine {
         if (firstName != null || lastName != null) {
             String composed = (firstName != null ? firstName : "")
                     + (lastName != null ? (firstName != null ? " " : "") + lastName : "");
-            sb.append("- Full name: ").append(composed.trim()).append("\n");
+            sb.append("- Full name: ").append(escapeText(composed.trim())).append("\n");
             sb.append("- First name (use this when addressing them): ")
-                    .append(firstName != null ? firstName : composed.trim()).append("\n");
+                    .append(escapeText(firstName != null ? firstName : composed.trim())).append("\n");
         } else {
             sb.append("- Full name: (not provided — address the person neutrally without inventing a name)\n");
         }
 
         if (gender != null && !gender.isBlank()) {
-            sb.append("- Gender: ").append(gender.trim()).append("\n");
+            sb.append("- Gender: ").append(escapeText(gender.trim())).append("\n");
         }
 
         if (personalAnswers != null && !personalAnswers.isEmpty()) {
@@ -719,7 +721,7 @@ public class EvaluationEngine {
                     sb.append("- Other general information:\n");
                     appendedHeader = true;
                 }
-                sb.append("    * ").append(q.getPromptText()).append(": ").append(value).append("\n");
+                sb.append("    * ").append(escapeText(q.getPromptText())).append(": ").append(escapeText(value)).append("\n");
             }
         }
         return sb.toString();

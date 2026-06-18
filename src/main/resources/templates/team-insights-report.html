@@ -201,13 +201,6 @@
             </div>
         </div>
 
-        <div th:if="${not #lists.isEmpty(m.recommendations)}" class="section">
-            <h4>Recommendations</h4>
-            <div th:each="r : ${m.recommendations}" class="list-item">
-                <span th:text="${r}">Recommendation</span>
-            </div>
-        </div>
-
         <div th:if="${not #lists.isEmpty(m.pillars)}" class="section">
             <h4>Pillar breakdown</h4>
             <div th:each="p : ${m.pillars}" class="pillar-block">

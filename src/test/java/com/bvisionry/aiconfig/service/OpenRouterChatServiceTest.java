@@ -168,8 +168,7 @@ class OpenRouterChatServiceTest {
                     "overallScorePercentage": 82,
                     "summaryNarrative": "Strong performance across pillars.",
                     "strengths": ["Leadership", "Innovation"],
-                    "developmentAreas": ["Communication"],
-                    "recommendations": ["Invest in team building"]
+                    "developmentAreas": ["Communication"]
                 }
                 """;
 
@@ -180,7 +179,6 @@ class OpenRouterChatServiceTest {
 
         assertThat(response.parsed().overallScorePercentage()).isEqualTo(82);
         assertThat(response.parsed().strengths()).hasSize(2);
-        assertThat(response.parsed().recommendations()).contains("Invest in team building");
     }
 
     @Test

@@ -145,7 +145,6 @@ class MemberResultsServiceTest {
         summary.setSummaryNarrative("Strong overall performance");
         summary.setStrengths(List.of("Leadership"));
         summary.setDevelopmentAreas(List.of("Time management"));
-        summary.setRecommendations(List.of("Practice delegation"));
 
         when(submissionRepository.findById(submissionId)).thenReturn(Optional.of(submission));
         when(pillarEvaluationRepository.findBySubmissionId(submissionId)).thenReturn(List.of(eval));
@@ -195,7 +194,6 @@ class MemberResultsServiceTest {
         summary.setOverallScorePercentage(new BigDecimal("60.00"));
         summary.setStrengths(List.of("Leadership", "Vision"));
         summary.setDevelopmentAreas(List.of("Delegation"));
-        summary.setRecommendations(List.of("Practice delegation"));
 
         when(submissionRepository.findById(submissionId)).thenReturn(Optional.of(submission));
         when(pillarEvaluationRepository.findBySubmissionId(submissionId)).thenReturn(List.of());

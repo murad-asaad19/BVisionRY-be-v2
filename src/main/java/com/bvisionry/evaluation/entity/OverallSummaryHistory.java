@@ -49,10 +49,6 @@ public class OverallSummaryHistory extends BaseEntity {
     @Column(name = "development_areas", columnDefinition = "jsonb")
     private List<String> developmentAreas;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb")
-    private List<String> recommendations;
-
     @Column(name = "core_pattern", columnDefinition = "TEXT")
     private String corePattern;
 
@@ -97,7 +93,6 @@ public class OverallSummaryHistory extends BaseEntity {
         snap.setSummaryNarrative(src.getSummaryNarrative());
         snap.setStrengths(src.getStrengths());
         snap.setDevelopmentAreas(src.getDevelopmentAreas());
-        snap.setRecommendations(src.getRecommendations());
         snap.setCorePattern(src.getCorePattern());
         snap.setMovingForwardNarrative(src.getMovingForwardNarrative());
         snap.setAiModelUsed(src.getAiModelUsed());

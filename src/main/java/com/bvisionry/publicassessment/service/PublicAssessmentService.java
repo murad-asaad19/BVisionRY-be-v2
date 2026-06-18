@@ -651,7 +651,6 @@ public class PublicAssessmentService {
                 summary.getSummaryNarrative(),
                 summary.getStrengths(),
                 summary.getDevelopmentAreas(),
-                summary.getRecommendations(),
                 pillarScores,
                 true, // no org tier — public submissions always get the premium report
                 submission.getEvaluatedAt(),

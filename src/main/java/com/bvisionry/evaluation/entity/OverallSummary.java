@@ -44,10 +44,6 @@ public class OverallSummary extends BaseEntity {
     @Column(name = "development_areas", columnDefinition = "jsonb")
     private List<String> developmentAreas;
 
-    @JdbcTypeCode(SqlTypes.JSON)
-    @Column(columnDefinition = "jsonb")
-    private List<String> recommendations;
-
     @Column(name = "core_pattern", columnDefinition = "TEXT")
     private String corePattern;
 

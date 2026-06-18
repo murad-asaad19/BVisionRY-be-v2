@@ -94,7 +94,6 @@ class AIResponseValidatorTest {
         OverallSummaryResult result = new OverallSummaryResult(
                 82, "Strong performance across all pillars.",
                 List.of("Leadership"), List.of("Communication"),
-                List.of("Focus on team building"),
                 null, null
         );
 
@@ -105,7 +104,7 @@ class AIResponseValidatorTest {
     @Test
     void validateOverallSummaryResult_invalidScore_throws() {
         OverallSummaryResult result = new OverallSummaryResult(
-                150, "Summary", List.of(), List.of(), List.of(),
+                150, "Summary", List.of(), List.of(),
                 null, null
         );
 

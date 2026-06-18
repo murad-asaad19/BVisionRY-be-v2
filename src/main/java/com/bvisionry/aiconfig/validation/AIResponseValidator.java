@@ -48,7 +48,6 @@ public class AIResponseValidator {
                 cleanProse(result.summaryNarrative()),
                 cleanProseList(result.strengths()),
                 cleanProseList(result.developmentAreas()),
-                cleanProseList(result.recommendations()),
                 cleanProse(result.corePattern()),
                 cleanProse(result.movingForward())
         );

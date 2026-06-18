@@ -291,7 +291,6 @@ class PublicAssessmentServiceTest {
             summary.setSummaryNarrative("Strong overall performance");
             summary.setStrengths(List.of("Vision"));
             summary.setDevelopmentAreas(List.of("Delegation"));
-            summary.setRecommendations(List.of("Practice delegation"));
 
             List<PillarEvaluation> evaluations = List.of(new PillarEvaluation());
             PillarScoreSummary pillarScore = new PillarScoreSummary(

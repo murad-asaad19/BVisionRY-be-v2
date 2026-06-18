@@ -1,9 +1,11 @@
 package com.bvisionry.common.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public record OverallSummaryResult(
         @JsonProperty(value = "overallScorePercentage")
         int overallScorePercentage,
@@ -17,9 +19,6 @@ public record OverallSummaryResult(
         @JsonProperty(value = "developmentAreas")
         List<String> developmentAreas,
 
-        @JsonProperty(value = "recommendations")
-        List<String> recommendations,
-
         @JsonProperty(value = "corePattern")
         String corePattern,
 
@@ -30,6 +29,5 @@ public record OverallSummaryResult(
         if (summaryNarrative == null) summaryNarrative = "";
         if (strengths == null) strengths = List.of();
         if (developmentAreas == null) developmentAreas = List.of();
-        if (recommendations == null) recommendations = List.of();
     }
 }

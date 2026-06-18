@@ -88,17 +88,15 @@ public class MemberResultsExcelService {
 
     private void writeHighlightsSheet(ExcelWorkbookBuilder wb, MemberResultsResponse r) {
         ExcelWorkbookBuilder.SheetBuilder s = wb.newSheet("Highlights");
-        s.headers("Strengths", "Development areas", "Recommendations");
+        s.headers("Strengths", "Development areas");
 
         List<String> strengths = nullToEmpty(r.strengths());
         List<String> dev = nullToEmpty(r.developmentAreas());
-        List<String> recs = nullToEmpty(r.recommendations());
-        int rowCount = Math.max(strengths.size(), Math.max(dev.size(), recs.size()));
+        int rowCount = Math.max(strengths.size(), dev.size());
         for (int i = 0; i < rowCount; i++) {
             s.row(
                     i < strengths.size() ? strengths.get(i) : "",
-                    i < dev.size() ? dev.get(i) : "",
-                    i < recs.size() ? recs.get(i) : ""
+                    i < dev.size() ? dev.get(i) : ""
             );
         }
         s.autoSize();

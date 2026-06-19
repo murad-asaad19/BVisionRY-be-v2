@@ -1,66 +1,50 @@
 package com.bvisionry.e2e;
 
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
-import org.springframework.ai.chat.metadata.ChatResponseMetadata;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.chat.prompt.Prompt;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.output.FinishReason;
+import dev.langchain4j.model.output.TokenUsage;
 
 /**
- * E2E-only ChatModel that returns canned JSON instead of calling OpenRouter / Anthropic.
- *
- * <p>Resolution order on each call:
- * <ol>
- *   <li>If a response was queued via {@link FakeChatResponseRegistry#enqueue(String)},
- *       pop and return it. Tests use this to script a specific response.</li>
- *   <li>Otherwise, inspect the system prompt to figure out which schema the
- *       caller expects (pillar / overall summary / team insight) and return a
- *       schema-valid default. This keeps tests that don't care about AI output
- *       green without ceremony.</li>
- * </ol>
- *
- * <p>The defaults match the JSON schemas built by
- * {@code OpenRouterChatService.appendPremiumContract / appendFreeTierContract /
- * buildTeamInsightSystemPrompt} — keep them in sync if those schemas evolve.
+ * E2E-only LangChain4j {@link ChatModel} — the rebuilt-engine equivalent of
+ * {@link FakeChatModel}. Same resolution order: a response scripted via
+ * {@link FakeChatResponseRegistry#enqueue(String)} is returned first, otherwise a
+ * schema-valid default keyed off the system prompt. Lets the full evaluation
+ * pipeline run in the e2e suite with no live provider, and lets specs script
+ * specific (including adversarial) responses.
  */
-public class FakeChatModel implements ChatModel {
+public class FakeLangChainChatModel implements ChatModel {
 
     private final FakeChatResponseRegistry registry;
 
-    public FakeChatModel(FakeChatResponseRegistry registry) {
+    public FakeLangChainChatModel(FakeChatResponseRegistry registry) {
         this.registry = registry;
     }
 
     @Override
-    public ChatResponse call(Prompt prompt) {
+    public ChatResponse chat(ChatRequest chatRequest) {
         String scripted = registry.pollNext();
-        String body = scripted != null ? scripted : defaultFor(systemText(prompt));
-
-        Generation generation = new Generation(
-                new AssistantMessage(body),
-                ChatGenerationMetadata.builder().finishReason("stop").build());
-        return new ChatResponse(java.util.List.of(generation),
-                ChatResponseMetadata.builder().build());
+        String body = scripted != null ? scripted : defaultFor(systemText(chatRequest));
+        return ChatResponse.builder()
+                .aiMessage(AiMessage.from(body))
+                .tokenUsage(new TokenUsage(0, 0))
+                .finishReason(FinishReason.STOP)
+                .build();
     }
 
-    private static String systemText(Prompt prompt) {
-        return prompt.getInstructions().stream()
-                .filter(SystemMessage.class::isInstance)
-                .map(Message::getText)
-                .findFirst()
-                .orElse("");
+    private static String systemText(ChatRequest request) {
+        for (ChatMessage message : request.messages()) {
+            if (message instanceof SystemMessage system) {
+                return system.text();
+            }
+        }
+        return "";
     }
 
-    /**
-     * Discriminates on a unique key from each schema's output_contract block.
-     * The pillar schema's {@code scorePercentage} appears in both pillar and
-     * (under a different name) overall, so order matters: check the more
-     * specific keys first.
-     */
     private static String defaultFor(String systemPrompt) {
         if (systemPrompt.contains("teamThemes")) {
             return TEAM_INSIGHT_DEFAULT;

@@ -60,9 +60,12 @@ class PromptTemplateServiceTest {
         PromptTemplate t1 = createTemplate(PromptType.SYSTEM_PROMPT);
         PromptTemplate t2 = createTemplate(PromptType.TEAM_INSIGHT);
 
-        when(promptRepository.findByPromptType(PromptType.SYSTEM_PROMPT))
+        // getAllActivePrompts() iterates every PromptType; only two are present
+        // here, the rest resolve to Optional.empty(). lenient() so strict stubbing
+        // tolerates the additional (unstubbed) findByPromptType calls.
+        lenient().when(promptRepository.findByPromptType(PromptType.SYSTEM_PROMPT))
                 .thenReturn(Optional.of(t1));
-        when(promptRepository.findByPromptType(PromptType.TEAM_INSIGHT))
+        lenient().when(promptRepository.findByPromptType(PromptType.TEAM_INSIGHT))
                 .thenReturn(Optional.of(t2));
 
         List<PromptTemplateResponse> results = promptService.getAllActivePrompts();

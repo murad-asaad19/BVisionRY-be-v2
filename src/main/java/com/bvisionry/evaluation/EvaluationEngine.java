@@ -14,9 +14,11 @@ import com.bvisionry.pipeline.SystemQuestion;
 import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.Pipeline;
 import com.bvisionry.pipeline.entity.Question;
+import com.bvisionry.aiengine.confidence.ConfidenceGate;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -49,15 +51,32 @@ public class EvaluationEngine {
      * once {@code maxPoolSize} submissions arrive concurrently.
      */
     private final Executor pillarExecutor;
+    private final ConfidenceGate confidenceGate;
+
+    /** Confidence-gated self-consistency: borderline scores get extra samples. */
+    private final boolean escalationEnabled;
+    private final int borderlineMargin;
+    private final int escalationSamples;
+    private final String escalationModel;
 
     public EvaluationEngine(ScoringService scoringService,
                             OpenRouterChatService openRouterChatService,
                             AIConfigService aiConfigService,
-                            @Qualifier("pillarExecutor") Executor pillarExecutor) {
+                            ConfidenceGate confidenceGate,
+                            @Qualifier("pillarExecutor") Executor pillarExecutor,
+                            @Value("${bvisionry.ai.escalation.enabled:true}") boolean escalationEnabled,
+                            @Value("${bvisionry.ai.escalation.borderline-margin:3}") int borderlineMargin,
+                            @Value("${bvisionry.ai.escalation.samples:2}") int escalationSamples,
+                            @Value("${bvisionry.ai.escalation.model:}") String escalationModel) {
         this.scoringService = scoringService;
         this.openRouterChatService = openRouterChatService;
         this.aiConfigService = aiConfigService;
+        this.confidenceGate = confidenceGate;
         this.pillarExecutor = pillarExecutor;
+        this.escalationEnabled = escalationEnabled;
+        this.borderlineMargin = borderlineMargin;
+        this.escalationSamples = escalationSamples;
+        this.escalationModel = escalationModel;
     }
 
     private static final int MAX_RAW_EXCERPT_CHARS = 500;
@@ -80,7 +99,8 @@ public class EvaluationEngine {
             BigDecimal overallScore, String summaryNarrative,
             List<String> strengths, List<String> developmentAreas,
             String corePattern, String movingForwardNarrative, String rawResponse,
-            Provenance provenance, String summaryPromptSnapshot
+            Provenance provenance, String summaryPromptSnapshot,
+            boolean failed
     ) {}
 
     public record PipelineEvaluationResult(
@@ -299,6 +319,20 @@ public class EvaluationEngine {
 
             pillarScore = aiResult != null
                     ? BigDecimal.valueOf(aiResult.scorePercentage()) : BigDecimal.ZERO;
+
+            // Confidence gating: a borderline score (near a maturity boundary) gets
+            // extra self-consistency samples; take the median to stabilize it. Gated
+            // so only borderline pillars pay the cost; model-agnostic (any model can
+            // be re-sampled, no model-specific confidence field required).
+            if (aiResult != null && escalationEnabled && escalationSamples > 0
+                    && confidenceGate.isBorderline(pillarScore, pillar.getMaturityThresholds(), borderlineMargin)) {
+                var chosen = escalateBorderline(aiResponse, rubric, assessmentXml, modelUsed,
+                        userContext, publicAssessment, metadata, pillar.getName());
+                aiResult = chosen.parsed();
+                rawResponse = chosen.rawResponse();
+                provenance = chosen.provenance();
+                pillarScore = BigDecimal.valueOf(aiResult.scorePercentage());
+            }
         }
         String maturityLabel = scoringService.deriveMaturityLabel(pillarScore, pillar.getMaturityThresholds());
 
@@ -319,11 +353,58 @@ public class EvaluationEngine {
             }
         }
 
+        // We attempted an AI call (assessment had content) but got no parseable
+        // result back even after the engine's repair retries — flag it so the
+        // submission is marked NEEDS_REVIEW rather than persisting a fake zero.
+        boolean failed = !assessmentXml.isBlank() && aiResult == null;
+
         return new PillarResult(
                 pillar.getId(), pillar.getName(), pillar.getIconKey(),
                 pillarScore, maturityLabel, aiResult, rawResponse, selfAssessmentGap,
-                provenance, rubric, false
+                provenance, rubric, failed
         );
+    }
+
+    /**
+     * Borderline confidence escalation: re-sample the pillar evaluation
+     * {@code escalationSamples} more times (on {@code escalationModel} if configured,
+     * else the same model), then return the sample whose score is closest to the
+     * median across all attempts. Failed/unparseable samples are skipped; if no extra
+     * sample succeeds, the original response is returned unchanged.
+     */
+    private OpenRouterChatService.AIResponse<PillarEvaluationResult> escalateBorderline(
+            OpenRouterChatService.AIResponse<PillarEvaluationResult> first,
+            String rubric, String assessmentXml, String baseModel,
+            String userContext, boolean publicAssessment, CallMetadata metadata, String pillarName) {
+
+        String sampleModel = (escalationModel != null && !escalationModel.isBlank())
+                ? escalationModel : baseModel;
+
+        List<OpenRouterChatService.AIResponse<PillarEvaluationResult>> samples = new ArrayList<>();
+        samples.add(first);
+        for (int i = 0; i < escalationSamples; i++) {
+            try {
+                var sample = openRouterChatService.evaluatePillar(
+                        rubric, assessmentXml, sampleModel, userContext, publicAssessment, metadata);
+                if (sample.parsed() != null) {
+                    samples.add(sample);
+                }
+            } catch (Exception e) {
+                log.warn("Confidence escalation sample {} failed for pillar '{}': {}",
+                        i + 1, pillarName, e.getMessage());
+            }
+        }
+        if (samples.size() == 1) {
+            return first; // no usable extra samples — keep the original
+        }
+        List<Integer> scores = samples.stream().map(s -> s.parsed().scorePercentage()).toList();
+        int median = confidenceGate.median(scores);
+        OpenRouterChatService.AIResponse<PillarEvaluationResult> chosen = samples.stream()
+                .min(java.util.Comparator.comparingInt(s -> Math.abs(s.parsed().scorePercentage() - median)))
+                .orElse(first);
+        log.info("Confidence escalation for pillar '{}': scores={} median={} (model={})",
+                pillarName, scores, median, sampleModel);
+        return chosen;
     }
 
     // ========== Parallel bulk evaluation ==========
@@ -671,14 +752,15 @@ public class EvaluationEngine {
                     sr.strengths(), sr.developmentAreas(),
                     sr.corePattern(), sr.movingForward(), aiResponse.rawResponse(),
                     aiResponse.provenance(),
-                    overallSummaryPrompt);
+                    overallSummaryPrompt, false);
         } else {
             // Narrative is intentionally blanked on parse failure so the results hero banner
-            // never surfaces raw model output; the raw response is still retained below for diagnostics.
+            // never surfaces raw model output; the raw response is still retained below for
+            // diagnostics. failed=true marks the submission NEEDS_REVIEW rather than EVALUATED.
             return new SummaryResult(BigDecimal.ZERO, "",
                     List.of(), List.of(), null, null, aiResponse.rawResponse(),
                     aiResponse.provenance(),
-                    overallSummaryPrompt);
+                    overallSummaryPrompt, true);
         }
     }
 

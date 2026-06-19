@@ -84,33 +84,8 @@ public class InsightService {
         Set<UUID> memberFilter = memberIds == null ? Set.of() : new HashSet<>(memberIds);
 
         // Aggregate up front so data-shape errors surface synchronously (BadRequest)
-        // rather than disappearing into a FAILED row. The sort by user.id keeps the
-        // input order stable across runs, so the AI's individualCoaching list and
-        // the PDF/Excel exports (which mask names by position) agree on which
-        // person is "Member 1", "Member 2", etc.
-        List<Submission> submissions = submissionRepository.findByOrgAndPipeline(orgId, pipelineId)
-                .stream()
-                .filter(s -> s.getStatus() == SubmissionStatus.EVALUATED)
-                .filter(s -> memberFilter.isEmpty() || memberFilter.contains(s.getUser().getId()))
-                .sorted(java.util.Comparator.comparing(s -> s.getUser().getId()))
-                .toList();
-        if (submissions.isEmpty()) {
-            throw new BadRequestException(memberFilter.isEmpty()
-                    ? "No evaluated submissions found for this pipeline"
-                    : "None of the selected members have evaluated submissions for this pipeline");
-        }
-
-        // Limit pillar evaluations to the filtered submissions so the AI prompt
-        // never references a member who was excluded from the selection.
-        Set<UUID> submissionIds = submissions.stream()
-                .map(Submission::getId)
-                .collect(Collectors.toSet());
-        List<PillarEvaluation> evaluations = pillarEvaluationRepository
-                .findByOrgAndPipeline(orgId, pipelineId)
-                .stream()
-                .filter(e -> submissionIds.contains(e.getSubmission().getId()))
-                .toList();
-        String anonymizedData = buildAnonymizedData(submissions, evaluations);
+        // rather than disappearing into a FAILED row.
+        String anonymizedData = aggregateAnonymizedData(orgId, pipelineId, memberFilter);
 
         InsightReport report = new InsightReport();
         report.setOrganization(org);
@@ -135,17 +110,19 @@ public class InsightService {
                     anonymizedData,
                     new com.bvisionry.aicalllog.dto.CallMetadata(null, pipelineId, null));
 
-            Map<String, Object> reportJson;
             if (aiResponse.isParsed()) {
                 @SuppressWarnings("unchecked")
-                Map<String, Object> parsed = objectMapper.convertValue(aiResponse.parsed(), Map.class);
-                reportJson = parsed;
+                Map<String, Object> reportJson = objectMapper.convertValue(aiResponse.parsed(), Map.class);
+                String model = aiResponse.provenance() != null
+                        ? aiResponse.provenance().model() : "configured-model";
+                completeInsight(reportId, reportJson, model);
             } else {
-                reportJson = Map.of("rawResponse", aiResponse.rawResponse());
+                // Fail loud: the model output failed schema validation even after the
+                // engine's repair retries. Mark FAILED (retryable) instead of storing a
+                // COMPLETED report with an unusable {rawResponse} blob that the admin UI
+                // and PDF/Excel exports can't render.
+                failInsight(reportId, "Team insight output failed schema validation after repair retries.");
             }
-
-            String model = aiResponse.provenance() != null ? aiResponse.provenance().model() : "configured-model";
-            completeInsight(reportId, reportJson, model);
         } catch (Exception e) {
             log.error("Insight generation failed for report {}: {}", reportId, e.getMessage(), e);
             failInsight(reportId, e.getMessage());
@@ -173,6 +150,39 @@ public class InsightService {
             insightReportRepository.save(report);
             log.info("Insight {} marked FAILED", reportId);
         });
+    }
+
+    /**
+     * Re-runs a previously-FAILED team-insight report in place — the analogue of
+     * {@code EvaluationService.retryFailedSubmission}. Re-aggregates from the same
+     * pipeline + member filter, flips the row back to GENERATING, and dispatches a
+     * fresh async generation. Without this, a single transient provider error or a
+     * one-off schema-validation failure permanently dead-ended the report.
+     */
+    @Transactional
+    public InsightGenerateResponse retryFailedInsight(UUID orgId, UUID reportId) {
+        InsightReport report = insightReportRepository.findById(reportId)
+                .orElseThrow(() -> new ResourceNotFoundException("InsightReport", reportId.toString()));
+        if (!report.getOrganization().getId().equals(orgId)) {
+            throw new ResourceNotFoundException("InsightReport", reportId.toString());
+        }
+        if (report.getStatus() != InsightReportStatus.FAILED) {
+            throw new BadRequestException(
+                    "Only FAILED insight reports can be retried (was " + report.getStatus() + ")");
+        }
+
+        UUID pipelineId = report.getPipeline().getId();
+        Set<UUID> memberFilter = report.getMemberIds() == null ? Set.of() : new HashSet<>(report.getMemberIds());
+        // Re-aggregate synchronously so a now-empty selection surfaces as BadRequest
+        // instead of dead-ending in another FAILED row.
+        String anonymizedData = aggregateAnonymizedData(orgId, pipelineId, memberFilter);
+
+        report.setStatus(InsightReportStatus.GENERATING);
+        report.setFailureReason(null);
+        insightReportRepository.save(report);
+
+        AfterCommit.run(() -> self.runInsightGenerationAsync(reportId, pipelineId, anonymizedData));
+        return new InsightGenerateResponse(reportId, InsightReportStatus.GENERATING);
     }
 
     @Transactional(readOnly = true)
@@ -224,6 +234,37 @@ public class InsightService {
                 report.getStatus(),
                 report.getFailureReason()
         );
+    }
+
+    /**
+     * Resolve the EVALUATED submissions for this org+pipeline (optionally filtered
+     * to a member subset), limit pillar evaluations to those submissions, and build
+     * the anonymized prompt input. Sorted by user.id so the "Member N" numbering is
+     * stable across runs and matches the position-based masking the PDF/Excel
+     * exports use. Throws {@link BadRequestException} if nothing matches.
+     */
+    private String aggregateAnonymizedData(UUID orgId, UUID pipelineId, Set<UUID> memberFilter) {
+        List<Submission> submissions = submissionRepository.findByOrgAndPipeline(orgId, pipelineId)
+                .stream()
+                .filter(s -> s.getStatus() == SubmissionStatus.EVALUATED)
+                .filter(s -> memberFilter.isEmpty() || memberFilter.contains(s.getUser().getId()))
+                .sorted(java.util.Comparator.comparing(s -> s.getUser().getId()))
+                .toList();
+        if (submissions.isEmpty()) {
+            throw new BadRequestException(memberFilter.isEmpty()
+                    ? "No evaluated submissions found for this pipeline"
+                    : "None of the selected members have evaluated submissions for this pipeline");
+        }
+
+        Set<UUID> submissionIds = submissions.stream()
+                .map(Submission::getId)
+                .collect(Collectors.toSet());
+        List<PillarEvaluation> evaluations = pillarEvaluationRepository
+                .findByOrgAndPipeline(orgId, pipelineId)
+                .stream()
+                .filter(e -> submissionIds.contains(e.getSubmission().getId()))
+                .toList();
+        return buildAnonymizedData(submissions, evaluations);
     }
 
     /**

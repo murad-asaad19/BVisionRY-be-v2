@@ -5,21 +5,20 @@ import com.bvisionry.aicalllog.service.AICallLogService;
 import com.bvisionry.aiconfig.dto.PromptTemplateResponse;
 import com.bvisionry.aiconfig.entity.AIConfiguration;
 import com.bvisionry.aiconfig.validation.AIResponseValidator;
+import com.bvisionry.aiengine.service.AiEvaluationEngine;
 import com.bvisionry.common.dto.OverallSummaryResult;
 import com.bvisionry.common.dto.PillarEvaluationResult;
 import com.bvisionry.common.enums.PromptType;
 import com.bvisionry.common.exception.AIServiceException;
-import com.bvisionry.config.AIChatModelFactory;
+import dev.langchain4j.guardrail.OutputGuardrailException;
+import dev.langchain4j.service.Result;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.ai.anthropic.AnthropicChatModel;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.prompt.Prompt;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -28,37 +27,40 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+/**
+ * Unit tests for the orchestration seam over the LangChain4j {@link AiEvaluationEngine}.
+ * The engine itself (structured output + guardrail repair) is mocked here; its real
+ * behaviour is proven in {@code AiEvaluationEngineRepairTest}. These tests verify the
+ * mapping into {@code AIResponse} and the three outcome paths: success, soft
+ * validation-failure (→ {@code parsed == null}), and transport error (→ thrown
+ * {@link AIServiceException}).
+ */
 @ExtendWith(MockitoExtension.class)
 class OpenRouterChatServiceTest {
 
-    @Mock
-    private AnthropicChatModel chatModel;
+    @Mock private AiEvaluationEngine aiEngine;
+    @Mock private AIConfigService configService;
+    @Mock private PromptTemplateService promptTemplateService;
+    @Mock private AICallLogService callLogService;
 
-    @Mock
-    private AIChatModelFactory chatModelFactory;
-
-    @Mock
-    private AIConfigService configService;
-
-    @Mock
-    private PromptTemplateService promptTemplateService;
-
-    @Mock
-    private AICallLogService callLogService;
-
-    private AIResponseValidator validator;
     private OpenRouterChatService chatService;
-
     private AIConfiguration testConfig;
 
     @BeforeEach
     void setUp() {
-        validator = new AIResponseValidator();
-        when(chatModelFactory.create()).thenReturn(chatModel);
-        chatService = new OpenRouterChatService(chatModelFactory, configService, promptTemplateService, validator, callLogService, new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
+        AIResponseValidator validator = new AIResponseValidator();
+        chatService = new OpenRouterChatService(
+                aiEngine, configService, promptTemplateService, validator, callLogService, new SimpleMeterRegistry());
 
         testConfig = new AIConfiguration();
         testConfig.setId(UUID.randomUUID());
@@ -71,90 +73,66 @@ class OpenRouterChatServiceTest {
     }
 
     @Test
-    void evaluatePillar_validResponse_returnsParsedResult() {
+    void evaluatePillar_validResponse_returnsCleanedResult() {
         when(configService.getConfigEntity()).thenReturn(testConfig);
         when(promptTemplateService.getActivePrompt(PromptType.SYSTEM_PROMPT))
-                .thenReturn(systemPromptResponse("You are an evaluator. {{RUBRIC_INSTRUCTIONS}}"));
+                .thenReturn(systemPromptResponse("You are an evaluator."));
+        Result<PillarEvaluationResult> stub = resultOf(new PillarEvaluationResult(
+                75, "Good progress.", List.of("Clear vision", "Team alignment"),
+                List.of("Data-driven decisions"), "Drives advantage.", List.of()));
+        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn(stub);
 
-        String aiResponseJson = """
-                {
-                    "scorePercentage": 75,
-                    "whatThisScoreMeans": "Good progress in strategy execution.",
-                    "whatsWorking": ["Clear vision", "Team alignment"],
-                    "whatCanImprove": ["Data-driven decisions", "Documentation"],
-                    "whyThisMattersForBusiness": "Drives sustainable competitive advantage."
-                }
-                """;
-
-        mockChatResponse(aiResponseJson);
-
-        OpenRouterChatService.AIResponse<PillarEvaluationResult> response = chatService.evaluatePillar(
-                "Evaluate based on strategic thinking criteria", "Our team has implemented a comprehensive strategy...", null,
-                null, false, CallMetadata.NONE);
+        var response = chatService.evaluatePillar(
+                "rubric", "response text", null, null, false, CallMetadata.NONE);
 
         assertThat(response.parsed().scorePercentage()).isEqualTo(75);
         assertThat(response.parsed().whatsWorking()).hasSize(2);
-        verify(chatModel).call(any(Prompt.class));
     }
 
     @Test
-    void evaluatePillar_withModelOverride_usesOverrideModel() {
-        when(configService.getConfigEntity()).thenReturn(testConfig);
-        when(promptTemplateService.getActivePrompt(PromptType.SYSTEM_PROMPT))
-                .thenReturn(systemPromptResponse("You are an evaluator. {{RUBRIC_INSTRUCTIONS}}"));
-
-        String aiResponseJson = """
-                {
-                    "scorePercentage": 60,
-                    "whatThisScoreMeans": "Adequate performance.",
-                    "whatsWorking": ["Consistency"],
-                    "whatCanImprove": ["Innovation"],
-                    "whyThisMattersForBusiness": "Enables growth."
-                }
-                """;
-
-        mockChatResponse(aiResponseJson);
-
-        OpenRouterChatService.AIResponse<PillarEvaluationResult> response = chatService.evaluatePillar(
-                "rubric", "response text", "openai/gpt-4o",
-                null, false, CallMetadata.NONE);
-
-        assertThat(response.parsed().scorePercentage()).isEqualTo(60);
-    }
-
-    @Test
-    void evaluatePillar_invalidJsonResponse_returnsUnparsed() {
+    void evaluatePillar_withModelOverride_passesOverrideToEngine() {
         when(configService.getConfigEntity()).thenReturn(testConfig);
         when(promptTemplateService.getActivePrompt(PromptType.SYSTEM_PROMPT))
                 .thenReturn(systemPromptResponse("You are an evaluator."));
+        Result<PillarEvaluationResult> stub = resultOf(validPillar());
+        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn(stub);
 
-        mockChatResponse("This is not valid JSON at all");
+        chatService.evaluatePillar("rubric", "response", "openai/gpt-4o", null, false, CallMetadata.NONE);
 
-        var response = chatService.evaluatePillar("rubric", "response", null, null, false, CallMetadata.NONE);
-        assertThat(response.parsed()).isNull();
-        assertThat(response.rawResponse()).isEqualTo("This is not valid JSON at all");
+        ArgumentCaptor<String> model = ArgumentCaptor.forClass(String.class);
+        verify(aiEngine).evaluatePillar(anyString(), anyString(), model.capture(), anyDouble(), anyInt());
+        assertThat(model.getValue()).isEqualTo("openai/gpt-4o");
     }
 
     @Test
-    void evaluatePillar_scoreOutOfRange_returnsUnparsed() {
+    void evaluatePillar_repairExhausted_returnsUnparsed() {
         when(configService.getConfigEntity()).thenReturn(testConfig);
         when(promptTemplateService.getActivePrompt(PromptType.SYSTEM_PROMPT))
                 .thenReturn(systemPromptResponse("You are an evaluator."));
-
-        String aiResponseJson = """
-                {
-                    "scorePercentage": 150,
-                    "whatThisScoreMeans": "Explanation",
-                    "whatsWorking": ["Good"],
-                    "whatCanImprove": ["Better"],
-                    "whyThisMattersForBusiness": "Matters"
-                }
-                """;
-
-        mockChatResponse(aiResponseJson);
+        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt()))
+                .thenThrow(new OutputGuardrailException("schema validation failed after repair retries"));
 
         var response = chatService.evaluatePillar("rubric", "response", null, null, false, CallMetadata.NONE);
+
+        // Soft failure: the model never produced valid output even after repair —
+        // surfaced as parsed == null (fail-loud handling lands in P3), not a throw.
         assertThat(response.parsed()).isNull();
+    }
+
+    @Test
+    void evaluatePillar_transportError_wrapsAsAIServiceException() {
+        when(configService.getConfigEntity()).thenReturn(testConfig);
+        when(promptTemplateService.getActivePrompt(PromptType.SYSTEM_PROMPT))
+                .thenReturn(systemPromptResponse("You are an evaluator."));
+        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt()))
+                .thenThrow(new RuntimeException("Connection refused"));
+
+        assertThatThrownBy(() ->
+                chatService.evaluatePillar("rubric", "response", null, null, false, CallMetadata.NONE))
+                .isInstanceOf(AIServiceException.class)
+                .hasMessageContaining("AI pillar-evaluation call failed");
     }
 
     @Test
@@ -162,35 +140,17 @@ class OpenRouterChatServiceTest {
         when(configService.getConfigEntity()).thenReturn(testConfig);
         when(promptTemplateService.getActivePrompt(PromptType.SYSTEM_PROMPT))
                 .thenReturn(systemPromptResponse("You are an assessment AI."));
+        Result<OverallSummaryResult> stub = resultOf(new OverallSummaryResult(
+                82, "Strong performance.", List.of("Leadership", "Innovation"),
+                List.of("Communication"), "Pattern", "Forward"));
+        when(aiEngine.generateOverallSummary(anyString(), anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn(stub);
 
-        String aiResponseJson = """
-                {
-                    "overallScorePercentage": 82,
-                    "summaryNarrative": "Strong performance across pillars.",
-                    "strengths": ["Leadership", "Innovation"],
-                    "developmentAreas": ["Communication"]
-                }
-                """;
-
-        mockChatResponse(aiResponseJson);
-
-        OpenRouterChatService.AIResponse<OverallSummaryResult> response =
-                chatService.generateOverallSummary("Pillar results summary text", null, null, false, null, false, CallMetadata.NONE);
+        var response = chatService.generateOverallSummary(
+                "Pillar results summary", null, null, false, null, false, CallMetadata.NONE);
 
         assertThat(response.parsed().overallScorePercentage()).isEqualTo(82);
         assertThat(response.parsed().strengths()).hasSize(2);
-    }
-
-    @Test
-    void evaluatePillar_chatModelThrows_wrapsAsAIServiceException() {
-        when(configService.getConfigEntity()).thenReturn(testConfig);
-        when(promptTemplateService.getActivePrompt(PromptType.SYSTEM_PROMPT))
-                .thenReturn(systemPromptResponse("You are an evaluator. {{RUBRIC_INSTRUCTIONS}}"));
-        when(chatModel.call(any(Prompt.class))).thenThrow(new RuntimeException("Connection refused"));
-
-        assertThatThrownBy(() -> chatService.evaluatePillar("rubric", "response", null, null, false, CallMetadata.NONE))
-                .isInstanceOf(AIServiceException.class)
-                .hasMessageContaining("AI pillar-evaluation call failed");
     }
 
     @Test
@@ -200,33 +160,29 @@ class OpenRouterChatServiceTest {
                 .thenReturn(new PromptTemplateResponse(UUID.randomUUID(),
                         PromptType.PUBLIC_ASSESSMENT_SYSTEM_PROMPT,
                         "You are a public-assessment analyst.", Instant.now()));
-
-        mockChatResponse("""
-                {
-                    "scorePercentage": 70,
-                    "whatThisScoreMeans": "Solid.",
-                    "whatsWorking": ["A"],
-                    "whatCanImprove": ["B"],
-                    "whyThisMattersForBusiness": "Matters."
-                }
-                """);
+        Result<PillarEvaluationResult> stub = resultOf(validPillar());
+        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt()))
+                .thenReturn(stub);
 
         chatService.evaluatePillar("rubric", "response", null, null, true, CallMetadata.NONE);
 
-        // Public (QR-link) flow pulls the dedicated public system prompt, never the
-        // shared internal SYSTEM_PROMPT.
         verify(promptTemplateService).getActivePrompt(PromptType.PUBLIC_ASSESSMENT_SYSTEM_PROMPT);
-        verify(promptTemplateService, never()).getActivePrompt(PromptType.SYSTEM_PROMPT);
+        verify(promptTemplateService, never()).getActivePrompt(eq(PromptType.SYSTEM_PROMPT));
+    }
+
+    private static PillarEvaluationResult validPillar() {
+        return new PillarEvaluationResult(70, "Solid.", List.of("A"), List.of("B"), "Matters.", List.of());
     }
 
     private static PromptTemplateResponse systemPromptResponse(String content) {
         return new PromptTemplateResponse(UUID.randomUUID(), PromptType.SYSTEM_PROMPT, content, Instant.now());
     }
 
-    private void mockChatResponse(String content) {
-        AssistantMessage assistantMessage = new AssistantMessage(content);
-        Generation generation = new Generation(assistantMessage);
-        ChatResponse chatResponse = new ChatResponse(List.of(generation));
-        when(chatModel.call(any(Prompt.class))).thenReturn(chatResponse);
+    @SuppressWarnings("unchecked")
+    private static <T> Result<T> resultOf(T content) {
+        Result<T> result = mock(Result.class);
+        lenient().when(result.content()).thenReturn(content);
+        lenient().when(result.tokenUsage()).thenReturn(null);
+        return result;
     }
 }

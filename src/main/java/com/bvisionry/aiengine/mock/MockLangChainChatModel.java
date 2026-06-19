@@ -1,48 +1,64 @@
-package com.bvisionry.config.mock;
+package com.bvisionry.aiengine.mock;
 
-import org.springframework.ai.chat.messages.AssistantMessage;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
-import org.springframework.ai.chat.metadata.ChatResponseMetadata;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.chat.prompt.Prompt;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.output.FinishReason;
+import dev.langchain4j.model.output.TokenUsage;
 
-import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * Static-mock {@link ChatModel} for the {@code mock} Spring profile: returns
- * schema-valid canned JSON instead of calling a live AI provider, so the
- * assessment-evaluation flow works end-to-end with no API key configured.
+ * LangChain4j {@link ChatModel} that returns canned, schema-valid JSON instead
+ * of calling a live provider — the LangChain4j-seam equivalent of the former
+ * Spring-AI {@code MockChatModel}. Used under the {@code mock} (and, scripted,
+ * {@code e2e}) profiles so the full evaluation pipeline runs with no API key.
  *
- * <p>Mirrors the defaults of the test-source {@code com.bvisionry.e2e.FakeChatModel}
- * (which the e2e suite already proves valid) — keep both in sync with the output
- * contracts in {@code OpenRouterChatService}. Discrimination is on a unique key
- * from each schema's output_contract block; order matters because the pillar
- * schema's {@code scorePercentage} is a substring of {@code overallScorePercentage}.
+ * <p>By default it discriminates on the system prompt (each schema's contract has
+ * a unique field name) and returns a valid default. Tests can {@link #enqueue}
+ * specific raw responses — including deliberately malformed / out-of-range output
+ * — to exercise the guardrail repair loop and fail-loud paths. Scripted responses
+ * are consumed FIFO; once drained it falls back to the canned defaults.
  */
-public class MockChatModel implements ChatModel {
+public class MockLangChainChatModel implements ChatModel {
 
-    @Override
-    public ChatResponse call(Prompt prompt) {
-        String body = defaultFor(systemText(prompt));
-        Generation generation = new Generation(
-                new AssistantMessage(body),
-                ChatGenerationMetadata.builder().finishReason("stop").build());
-        return new ChatResponse(List.of(generation), ChatResponseMetadata.builder().build());
+    private final Queue<String> scripted = new ConcurrentLinkedQueue<>();
+
+    /** Queue a raw model response to be returned by the next call(s), FIFO. */
+    public MockLangChainChatModel enqueue(String rawResponse) {
+        scripted.add(rawResponse);
+        return this;
     }
 
-    private static String systemText(Prompt prompt) {
-        return prompt.getInstructions().stream()
-                .filter(SystemMessage.class::isInstance)
-                .map(Message::getText)
-                .findFirst()
-                .orElse("");
+    @Override
+    public ChatResponse chat(ChatRequest chatRequest) {
+        String body = scripted.poll();
+        if (body == null) {
+            body = defaultFor(systemText(chatRequest));
+        }
+        return ChatResponse.builder()
+                .aiMessage(AiMessage.from(body))
+                .tokenUsage(new TokenUsage(0, 0))
+                .finishReason(FinishReason.STOP)
+                .build();
+    }
+
+    private static String systemText(ChatRequest request) {
+        for (ChatMessage message : request.messages()) {
+            if (message instanceof SystemMessage system) {
+                return system.text();
+            }
+        }
+        return "";
     }
 
     private static String defaultFor(String systemPrompt) {
+        // Order matters: the pillar schema's scorePercentage is a substring of
+        // overallScorePercentage, so check the more specific keys first.
         if (systemPrompt.contains("teamThemes")) {
             return TEAM_INSIGHT_DEFAULT;
         }

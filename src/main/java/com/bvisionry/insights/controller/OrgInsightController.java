@@ -65,6 +65,20 @@ public class OrgInsightController {
     }
 
     /**
+     * Retry a FAILED org-insight report in place — re-aggregates and re-runs the
+     * AI generation. Mirrors the submission retry path so a transient provider
+     * error or one-off schema-validation failure isn't a permanent dead end.
+     */
+    @PostMapping("/{reportId}/retry")
+    public ResponseEntity<InsightGenerateResponse> retry(
+            @PathVariable UUID orgId,
+            @PathVariable UUID reportId) {
+        premiumFeatureGuard.checkPremium(orgId, "org_insights");
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(insightService.retryFailedInsight(orgId, reportId));
+    }
+
+    /**
      * Download org insight report as PDF.
      */
     @GetMapping("/{reportId}/pdf")

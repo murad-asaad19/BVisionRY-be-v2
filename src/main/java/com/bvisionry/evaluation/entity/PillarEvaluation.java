@@ -78,6 +78,15 @@ public class PillarEvaluation extends BaseEntity {
     @Column(name = "self_assessment_gap")
     private Integer selfAssessmentGap;
 
+    /**
+     * True when the AI could not produce a valid evaluation for this pillar even
+     * after repair retries — the row holds a placeholder zero score, not a real
+     * one. Drives the submission's NEEDS_REVIEW state and gives admins per-pillar
+     * visibility into what failed.
+     */
+    @Column(name = "ai_failed", nullable = false)
+    private boolean aiFailed = false;
+
     @Column(name = "evaluated_at", nullable = false)
     private Instant evaluatedAt = Instant.now();
 }

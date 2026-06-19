@@ -138,7 +138,8 @@ public class PdfReportService {
                 stripQids(p.whatsWorking()),
                 stripQids(p.whatCanImprove()),
                 stripQids(p.whyThisMattersForBusiness()),
-                p.selfAssessmentGap()
+                p.selfAssessmentGap(),
+                p.aiFailed()
         );
     }
 }

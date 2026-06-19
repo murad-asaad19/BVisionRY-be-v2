@@ -21,9 +21,16 @@ import java.util.UUID;
 @NoArgsConstructor
 public class AIConfiguration extends BaseEntity {
 
+    /**
+     * The transport always routes through OpenRouter's OpenAI-compatible endpoint
+     * (see {@code Lc4jChatModelProvider}), so OPENROUTER is the correct default: it
+     * keeps a fresh install's key slot aligned with the wire. The column is retained
+     * only because {@code AIModelCatalogService} still branches on it for the upstream
+     * /models listing.
+     */
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private AIProvider provider = AIProvider.ANTHROPIC;
+    private AIProvider provider = AIProvider.OPENROUTER;
 
     @Column(name = "openrouter_api_key_encrypted", columnDefinition = "TEXT")
     private String openRouterApiKeyEncrypted;

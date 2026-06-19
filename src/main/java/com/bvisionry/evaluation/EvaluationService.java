@@ -105,9 +105,11 @@ public class EvaluationService {
     public void retryFailedSubmission(UUID submissionId) {
         Submission submission = submissionRepository.findById(submissionId)
                 .orElseThrow(() -> new IllegalStateException("Submission not found: " + submissionId));
-        if (submission.getStatus() != SubmissionStatus.FAILED) {
+        if (submission.getStatus() != SubmissionStatus.FAILED
+                && submission.getStatus() != SubmissionStatus.NEEDS_REVIEW) {
             throw new IllegalStateException(
-                    "Only FAILED submissions can be retried (was " + submission.getStatus() + ")");
+                    "Only FAILED or NEEDS_REVIEW submissions can be retried (was "
+                            + submission.getStatus() + ")");
         }
         submission.setStatus(SubmissionStatus.SUBMITTED);
         submission.setFailureReason(null);
@@ -191,8 +193,27 @@ public class EvaluationService {
             pillarReeditService.clearUnlocks(submissionId);
         }
 
-        submission.setStatus(SubmissionStatus.EVALUATED);
+        // Fail loud: if any pillar or the overall summary could not be evaluated
+        // even after the engine's repair retries, mark NEEDS_REVIEW rather than
+        // EVALUATED — a degraded run must never masquerade as a clean one. Partial
+        // results are still saved and visible; an admin can retry.
+        long failedPillars = result.pillarResults().stream().filter(PillarResult::failed).count();
+        boolean summaryFailed = result.summary().failed();
+        boolean degraded = failedPillars > 0 || summaryFailed;
+
         submission.setEvaluatedAt(Instant.now());
+        if (degraded) {
+            submission.setStatus(SubmissionStatus.NEEDS_REVIEW);
+            submission.setFailureReason(
+                    buildDegradedReason(failedPillars, summaryFailed, result.pillarResults().size()));
+            meterRegistry.counter("bvisionry.ai.evaluation_degraded",
+                    "partial", String.valueOf(isPartialReeval)).increment();
+            log.warn("Submission {} evaluated with gaps → NEEDS_REVIEW ({}/{} pillars failed, summaryFailed={})",
+                    submissionId, failedPillars, result.pillarResults().size(), summaryFailed);
+        } else {
+            submission.setStatus(SubmissionStatus.EVALUATED);
+            submission.setFailureReason(null);
+        }
         submissionRepository.save(submission);
 
         // Attribute the evaluation to the submitting member so the entry shows
@@ -224,7 +245,7 @@ public class EvaluationService {
         // confusing, and the user is actively engaged with the page anyway.
         // Public (anonymous) submissions have no account email — they send no
         // emails at all; respondents see results on the public results page.
-        if (!isPartialReeval && submission.getUser() != null) {
+        if (!degraded && !isPartialReeval && submission.getUser() != null) {
             // Send notification email. EXTERNAL post-completion redirects continue
             // to ride along inside RESULTS_READY as an inline CTA. SURVEY pairings
             // get their own dedicated POST_ASSESSMENT_SURVEY_INVITE email so the
@@ -302,6 +323,21 @@ public class EvaluationService {
         return promptTemplateService.getActivePromptContent(type);
     }
 
+    /** Human-readable reason persisted on a NEEDS_REVIEW submission. */
+    private static String buildDegradedReason(long failedPillars, boolean summaryFailed, int totalPillars) {
+        StringBuilder sb = new StringBuilder("AI evaluation completed with gaps: ");
+        if (failedPillars > 0) {
+            sb.append(failedPillars).append(" of ").append(totalPillars)
+              .append(" pillar(s) could not be evaluated");
+        }
+        if (summaryFailed) {
+            if (failedPillars > 0) sb.append("; ");
+            sb.append("the overall summary could not be generated");
+        }
+        sb.append(". Review the results and retry.");
+        return sb.toString();
+    }
+
     /**
      * Prefer the first name the member entered in the personal pillar over their
      * account display name. Two reasons: accounts often carry a handle like
@@ -351,6 +387,7 @@ public class EvaluationService {
                 evaluation.setAiModelUsed(fallbackModel);
             }
             evaluation.setAiRubricSnapshot(pr.rubricSnapshot());
+            evaluation.setAiFailed(pr.failed());
 
             if (pr.aiResult() != null) {
                 evaluation.setAiScoreMeans(pr.aiResult().whatThisScoreMeans());

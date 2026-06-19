@@ -227,7 +227,8 @@ public class MemberResultsService {
                 eval.getAiWhatsWorking(),
                 eval.getAiWhatCanImprove(),
                 eval.getAiBusinessRelevance(),
-                eval.getSelfAssessmentGap()
+                eval.getSelfAssessmentGap(),
+                eval.isAiFailed()
         );
     }
 

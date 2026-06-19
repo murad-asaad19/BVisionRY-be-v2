@@ -105,6 +105,24 @@ public class AIConfigService {
         return encryptionService.decrypt(encrypted);
     }
 
+    /**
+     * Returns the decrypted <em>OpenRouter</em> key, regardless of the {@code provider}
+     * column. The engine transport ({@code Lc4jChatModelProvider}) and the model
+     * capability lookup always talk to OpenRouter's OpenAI-compatible endpoint, so they
+     * must read this slot and never the provider-active key — otherwise an admin who
+     * selected "Anthropic" would ship the Anthropic key to OpenRouter as a Bearer token
+     * (→ 401). Returns null when the OpenRouter slot is empty.
+     */
+    @Transactional(readOnly = true)
+    public String getDecryptedOpenRouterApiKey() {
+        AIConfiguration config = configRepository.getSingleton();
+        String encrypted = config.getOpenRouterApiKeyEncrypted();
+        if (encrypted == null || encrypted.isBlank()) {
+            return null;
+        }
+        return encryptionService.decrypt(encrypted);
+    }
+
     @Transactional(readOnly = true)
     public AIConfiguration getConfigEntity() {
         return configRepository.getSingleton();

@@ -178,7 +178,7 @@ class EvaluationServiceTest {
                 new BigDecimal("78"), "Good overall performance",
                 List.of("Communication strength"), List.of("Delegation"),
                 "Strong communicator", "Continue developing delegation", "raw json",
-                null, null
+                null, null, false
         );
 
         return new EvaluationEngine.PipelineEvaluationResult(List.of(pillarResult), summary);
@@ -212,6 +212,41 @@ class EvaluationServiceTest {
         verify(submissionRepository).save(subCaptor.capture());
         assertThat(subCaptor.getValue().getStatus()).isEqualTo(SubmissionStatus.EVALUATED);
         assertThat(subCaptor.getValue().getEvaluatedAt()).isNotNull();
+    }
+
+    @Test
+    void evaluateSubmission_pillarFailed_marksNeedsReviewAndSkipsEmail() {
+        when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
+        when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId))
+                .thenReturn(List.of(freeTextAnswer, likertAnswer));
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+                .thenReturn(buildDegradedResult());
+        when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
+        when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(overallSummaryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(submissionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        evaluationService.evaluateSubmission(submissionId);
+
+        // Fail loud: a pillar the AI couldn't evaluate (even after repair) lands the
+        // submission in NEEDS_REVIEW with a reason — never a clean EVALUATED — and the
+        // member is not emailed incomplete results.
+        ArgumentCaptor<Submission> subCaptor = ArgumentCaptor.forClass(Submission.class);
+        verify(submissionRepository).save(subCaptor.capture());
+        assertThat(subCaptor.getValue().getStatus()).isEqualTo(SubmissionStatus.NEEDS_REVIEW);
+        assertThat(subCaptor.getValue().getFailureReason()).contains("could not be evaluated");
+        verify(emailService, never()).sendResultsReady(any(), any(), any(), any(), any(), any());
+    }
+
+    private EvaluationEngine.PipelineEvaluationResult buildDegradedResult() {
+        EvaluationEngine.PillarResult failedPillar = new EvaluationEngine.PillarResult(
+                pillar.getId(), "Leadership", null,
+                BigDecimal.ZERO, "Unknown", null, "raw response", null,
+                null, "rubric", true);
+        EvaluationEngine.SummaryResult summary = new EvaluationEngine.SummaryResult(
+                BigDecimal.ZERO, "", List.of(), List.of(),
+                null, null, "raw", null, null, false);
+        return new EvaluationEngine.PipelineEvaluationResult(List.of(failedPillar), summary);
     }
 
     @Test

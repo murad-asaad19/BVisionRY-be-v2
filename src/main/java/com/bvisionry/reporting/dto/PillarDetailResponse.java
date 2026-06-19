@@ -14,5 +14,6 @@ public record PillarDetailResponse(
         List<String> whatsWorking,
         List<String> whatCanImprove,
         String whyThisMattersForBusiness,
-        Integer selfAssessmentGap
+        Integer selfAssessmentGap,
+        boolean aiFailed
 ) {}

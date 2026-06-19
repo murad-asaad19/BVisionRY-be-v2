@@ -20,6 +20,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -176,5 +177,40 @@ class AIConfigServiceTest {
         when(configRepository.getSingleton()).thenReturn(existingConfig);
 
         assertThat(configService.getDecryptedApiKey()).isNull();
+    }
+
+    /**
+     * C1: the engine transport reads the OpenRouter slot directly. Even when the
+     * provider column says ANTHROPIC, getDecryptedOpenRouterApiKey must return the
+     * OpenRouter key and NEVER the Anthropic key — so the wrong key can't reach
+     * OpenRouter as a Bearer token.
+     */
+    @Test
+    void getDecryptedOpenRouterApiKey_returnsOpenRouterKey_evenWhenProviderIsAnthropic() {
+        existingConfig.setProvider(AIProvider.ANTHROPIC);
+        existingConfig.setAnthropicApiKeyEncrypted("encrypted-ant");
+        existingConfig.setOpenRouterApiKeyEncrypted("encrypted-or");
+        when(configRepository.getSingleton()).thenReturn(existingConfig);
+        when(encryptionService.decrypt("encrypted-or")).thenReturn("sk-or-v1-realkey");
+
+        String key = configService.getDecryptedOpenRouterApiKey();
+
+        assertThat(key).isEqualTo("sk-or-v1-realkey");
+        verify(encryptionService, never()).decrypt("encrypted-ant");
+    }
+
+    @Test
+    void getDecryptedOpenRouterApiKey_openRouterSlotEmpty_returnsNull() {
+        existingConfig.setProvider(AIProvider.ANTHROPIC);
+        existingConfig.setAnthropicApiKeyEncrypted("encrypted-ant");
+        when(configRepository.getSingleton()).thenReturn(existingConfig);
+
+        assertThat(configService.getDecryptedOpenRouterApiKey()).isNull();
+        verify(encryptionService, never()).decrypt(anyString());
+    }
+
+    @Test
+    void newConfiguration_defaultsToOpenRouterProvider() {
+        assertThat(new AIConfiguration().getProvider()).isEqualTo(AIProvider.OPENROUTER);
     }
 }

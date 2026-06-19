@@ -51,6 +51,8 @@ public class EvaluationEngine {
      * once {@code maxPoolSize} submissions arrive concurrently.
      */
     private final Executor pillarExecutor;
+    /** Bounded pool for borderline re-samples — never the pillar pool (fork-join starvation). */
+    private final Executor escalationExecutor;
     private final ConfidenceGate confidenceGate;
 
     /** Confidence-gated self-consistency: borderline scores get extra samples. */
@@ -64,6 +66,7 @@ public class EvaluationEngine {
                             AIConfigService aiConfigService,
                             ConfidenceGate confidenceGate,
                             @Qualifier("pillarExecutor") Executor pillarExecutor,
+                            @Qualifier("escalationExecutor") Executor escalationExecutor,
                             @Value("${bvisionry.ai.escalation.enabled:true}") boolean escalationEnabled,
                             @Value("${bvisionry.ai.escalation.borderline-margin:3}") int borderlineMargin,
                             @Value("${bvisionry.ai.escalation.samples:2}") int escalationSamples,
@@ -73,6 +76,7 @@ public class EvaluationEngine {
         this.aiConfigService = aiConfigService;
         this.confidenceGate = confidenceGate;
         this.pillarExecutor = pillarExecutor;
+        this.escalationExecutor = escalationExecutor;
         this.escalationEnabled = escalationEnabled;
         this.borderlineMargin = borderlineMargin;
         this.escalationSamples = escalationSamples;
@@ -369,8 +373,15 @@ public class EvaluationEngine {
      * Borderline confidence escalation: re-sample the pillar evaluation
      * {@code escalationSamples} more times (on {@code escalationModel} if configured,
      * else the same model), then return the sample whose score is closest to the
-     * median across all attempts. Failed/unparseable samples are skipped; if no extra
-     * sample succeeds, the original response is returned unchanged.
+     * median across all attempts.
+     *
+     * <p>The extra samples run <b>in parallel</b> on a dedicated bounded
+     * {@code escalationExecutor} (never the pillar pool — that would fork-join-starve
+     * the very pillar tasks that spawned them) so the borderline pillar isn't blocked
+     * serially. Each sample is tagged in the audit log via
+     * {@link CallMetadata#forEscalationSample} so discarded samples are distinguishable
+     * from the chosen one and token accounting stays honest. Failed/unparseable samples
+     * are skipped; if no extra sample succeeds, the original response is returned.
      */
     private OpenRouterChatService.AIResponse<PillarEvaluationResult> escalateBorderline(
             OpenRouterChatService.AIResponse<PillarEvaluationResult> first,
@@ -380,20 +391,34 @@ public class EvaluationEngine {
         String sampleModel = (escalationModel != null && !escalationModel.isBlank())
                 ? escalationModel : baseModel;
 
+        // Fan the extra samples out in parallel; each carries its own escalation-tagged
+        // metadata so its ai_call_logs row is attributable and not double-counted.
+        List<CompletableFuture<OpenRouterChatService.AIResponse<PillarEvaluationResult>>> futures =
+                new ArrayList<>();
+        for (int i = 0; i < escalationSamples; i++) {
+            final int sampleIndex = i + 1;
+            CallMetadata sampleMetadata = CallMetadata.forEscalationSample(metadata, sampleIndex);
+            futures.add(CompletableFuture.supplyAsync(() -> {
+                try {
+                    return openRouterChatService.evaluatePillar(
+                            rubric, assessmentXml, sampleModel, userContext, publicAssessment, sampleMetadata);
+                } catch (Exception e) {
+                    log.warn("Confidence escalation sample {} failed for pillar '{}': {}",
+                            sampleIndex, pillarName, e.getMessage());
+                    return null;
+                }
+            }, escalationExecutor));
+        }
+
         List<OpenRouterChatService.AIResponse<PillarEvaluationResult>> samples = new ArrayList<>();
         samples.add(first);
-        for (int i = 0; i < escalationSamples; i++) {
-            try {
-                var sample = openRouterChatService.evaluatePillar(
-                        rubric, assessmentXml, sampleModel, userContext, publicAssessment, metadata);
-                if (sample.parsed() != null) {
-                    samples.add(sample);
-                }
-            } catch (Exception e) {
-                log.warn("Confidence escalation sample {} failed for pillar '{}': {}",
-                        i + 1, pillarName, e.getMessage());
+        for (CompletableFuture<OpenRouterChatService.AIResponse<PillarEvaluationResult>> f : futures) {
+            OpenRouterChatService.AIResponse<PillarEvaluationResult> sample = f.join();
+            if (sample != null && sample.parsed() != null) {
+                samples.add(sample);
             }
         }
+
         if (samples.size() == 1) {
             return first; // no usable extra samples — keep the original
         }

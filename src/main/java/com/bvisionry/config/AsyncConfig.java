@@ -50,6 +50,27 @@ public class AsyncConfig {
     }
 
     /**
+     * Bounded pool for borderline-confidence escalation re-samples. Kept separate
+     * from {@link #pillarExecutor()} so the extra samples a pillar fans out don't
+     * compete with — or fork-join-starve — the primary pillar tasks that spawned
+     * them. Small by design: escalation is gated to borderline pillars only, so the
+     * total extra-call budget is bounded and must never overwhelm the provider.
+     */
+    @Bean(name = "escalationExecutor")
+    public Executor escalationExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(4);
+        executor.setMaxPoolSize(8);
+        executor.setQueueCapacity(100);
+        executor.setThreadNamePrefix("escalation-");
+        // Run escalation work on the caller thread when the pool is saturated rather
+        // than rejecting — escalation is best-effort accuracy, never a failure source.
+        executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+        executor.initialize();
+        return executor;
+    }
+
+    /**
      * Dedicated pool for fire-and-forget AI call logging. Separate from the
      * evaluation pool so a flood of log writes can never starve real work.
      * Queue is generous since audit writes are backpressure-tolerant.

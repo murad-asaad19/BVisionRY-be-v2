@@ -48,7 +48,8 @@ public class AiResilience {
             @Value("${bvisionry.ai.cb.wait-duration-open-seconds:30}") long waitDurationOpenSeconds,
             @Value("${bvisionry.ai.cb.sliding-window-size:20}") int slidingWindowSize,
             @Value("${bvisionry.ai.cb.minimum-calls:8}") int minimumCalls,
-            @Value("${bvisionry.ai.bulkhead.max-concurrent:16}") int maxConcurrent) {
+            @Value("${bvisionry.ai.bulkhead.max-concurrent:24}") int maxConcurrent,
+            @Value("${bvisionry.ai.bulkhead.max-wait-millis:3000}") long bulkheadMaxWaitMillis) {
 
         CircuitBreakerConfig cbConfig = CircuitBreakerConfig.custom()
                 .failureRateThreshold(failureRateThreshold)
@@ -65,9 +66,14 @@ public class AiResilience {
                 .build();
         this.circuitBreaker = CircuitBreaker.of("ai-provider", cbConfig);
 
+        // Size the bulkhead ABOVE the pillar fan-out pool (pillarExecutor maxPoolSize=16)
+        // plus the borderline-escalation budget, and give it a short wait window. Without
+        // headroom + wait, brief LOCAL contention (the pool momentarily full) was rejected
+        // immediately → AIServiceException → false NEEDS_REVIEW that had nothing to do with
+        // provider health. A few seconds of queueing lets transient bursts drain instead.
         BulkheadConfig bhConfig = BulkheadConfig.custom()
                 .maxConcurrentCalls(maxConcurrent)
-                .maxWaitDuration(Duration.ZERO)
+                .maxWaitDuration(Duration.ofMillis(bulkheadMaxWaitMillis))
                 .build();
         this.bulkhead = Bulkhead.of("ai-provider", bhConfig);
 
@@ -101,7 +107,7 @@ public class AiResilience {
 
     /** Test/convenience factory with production-like defaults. */
     public static AiResilience withDefaults(MeterRegistry meterRegistry) {
-        return new AiResilience(meterRegistry, 50f, 120, 30, 20, 8, 16);
+        return new AiResilience(meterRegistry, 50f, 120, 30, 20, 8, 24, 3000);
     }
 
     /** Current circuit state — for tests and health/observability. */

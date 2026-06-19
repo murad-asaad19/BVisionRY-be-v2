@@ -89,7 +89,9 @@ public class ModelCapabilityRegistry {
     }
 
     private Map<String, ModelCapabilities> tryFetch() {
-        String apiKey = configService.getDecryptedApiKey();
+        // Capabilities are fetched from OpenRouter's /models, so use the OpenRouter
+        // key slot directly (same reasoning as the transport).
+        String apiKey = configService.getDecryptedOpenRouterApiKey();
         try {
             RestClient.RequestHeadersSpec<?> req = client.get().uri("/models");
             if (apiKey != null && !apiKey.isBlank()) {

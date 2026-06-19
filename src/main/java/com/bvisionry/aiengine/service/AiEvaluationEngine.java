@@ -42,6 +42,15 @@ public class AiEvaluationEngine {
     /** Local mapper for guardrail JSON tree inspection. */
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /**
+     * Narrative fields a pillar evaluation must carry to be useful. Listed as guardrail
+     * required-fields so a model that returns only a bare {@code scorePercentage} (and
+     * lets the DTO compact constructor backfill empty narrative) is repromptted rather
+     * than silently accepted.
+     */
+    private static final List<String> PILLAR_REQUIRED_FIELDS =
+            List.of("whatThisScoreMeans", "whatsWorking", "whatCanImprove");
+
     public AiEvaluationEngine(Lc4jChatModelProvider modelProvider,
                               AiResilience aiResilience,
                               @Value("${bvisionry.ai.repair-retries:2}") int repairRetries) {
@@ -55,7 +64,7 @@ public class AiEvaluationEngine {
         PillarEvaluator service = AiServices.builder(PillarEvaluator.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
                 .systemMessageProvider(memoryId -> systemPrompt)
-                .outputGuardrails(new StructuredOutputGuardrail(MAPPER, List.of(), "scorePercentage"))
+                .outputGuardrails(new StructuredOutputGuardrail(MAPPER, PILLAR_REQUIRED_FIELDS, "scorePercentage"))
                 .outputGuardrailsConfig(retryConfig())
                 .build();
         return aiResilience.execute(() -> service.evaluate(userMessage));

@@ -67,7 +67,10 @@ public class Lc4jChatModelProvider {
         if (modelName == null || modelName.isBlank()) {
             throw new AIServiceException("No AI model configured for this call.");
         }
-        String apiKey = configService.getDecryptedApiKey();
+        // The transport always speaks to OpenRouter, so it must read the OpenRouter
+        // key slot — never the provider-active key. This is what makes it impossible
+        // to ship an Anthropic key to OpenRouter when the provider column says ANTHROPIC.
+        String apiKey = configService.getDecryptedOpenRouterApiKey();
         if (apiKey == null || apiKey.isBlank()) {
             throw new AIServiceException("AI provider API key is not configured. Set it in the admin panel.");
         }

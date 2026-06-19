@@ -86,4 +86,31 @@ class StructuredOutputGuardrailTest {
         assertThat(validate(teamGuard, "{\"benchmarking\": {}}").isReprompt()).isTrue();
         assertThat(validate(teamGuard, "{\"teamThemes\": {\"patterns\": []}}").isReprompt()).isFalse();
     }
+
+    /**
+     * H3: a score-only pillar response (the model dropped all narrative) must reprompt,
+     * not pass on the strength of a valid score. Mirrors the production pillar guardrail
+     * wired in {@code AiEvaluationEngine}.
+     */
+    private final StructuredOutputGuardrail pillarGuard = new StructuredOutputGuardrail(
+            mapper, List.of("whatThisScoreMeans", "whatsWorking", "whatCanImprove"), "scorePercentage");
+
+    @Test
+    void pillarGuard_scoreOnly_droppingNarrative_reprompts() {
+        assertThat(validate(pillarGuard, "{\"scorePercentage\": 72}").isReprompt()).isTrue();
+    }
+
+    @Test
+    void pillarGuard_validScore_butMissingOneNarrativeField_reprompts() {
+        String missingImprove =
+                "{\"scorePercentage\": 72, \"whatThisScoreMeans\": \"ok\", \"whatsWorking\": [\"a\"]}";
+        assertThat(validate(pillarGuard, missingImprove).isReprompt()).isTrue();
+    }
+
+    @Test
+    void pillarGuard_completeResponse_passes() {
+        String complete = "{\"scorePercentage\": 72, \"whatThisScoreMeans\": \"ok\","
+                + " \"whatsWorking\": [\"a\"], \"whatCanImprove\": [\"b\"]}";
+        assertThat(validate(pillarGuard, complete).isReprompt()).isFalse();
+    }
 }

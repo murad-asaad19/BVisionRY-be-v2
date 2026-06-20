@@ -6,6 +6,7 @@ import com.bvisionry.assessment.dto.BatchSaveAnswersRequest;
 import com.bvisionry.assessment.dto.ReviewResponse;
 import com.bvisionry.assessment.dto.SubmissionStatusResponse;
 import com.bvisionry.assessment.dto.SubmitAssessmentResponse;
+import com.bvisionry.publicassessment.dto.GiftRecoveryResponse;
 import com.bvisionry.publicassessment.dto.PublicAssessmentLinkInfoResponse;
 import com.bvisionry.publicassessment.dto.PublicAssessmentSessionRequest;
 import com.bvisionry.publicassessment.dto.PublicAssessmentSessionResponse;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -93,5 +95,24 @@ public class PublicAssessmentController {
             @PathVariable UUID accessToken,
             @PathVariable UUID pillarId) {
         return ResponseEntity.ok(publicAssessmentService.getResultsPillarDetail(accessToken, pillarId));
+    }
+
+    /**
+     * Resolve a personalized survey-gift link (`?g={giftToken}`) to the bound
+     * submission so the taker can route a reopened link. 204 when no submission
+     * has been started yet — the FE then shows the normal intro/start screen.
+     */
+    @GetMapping("/by-token/{token}/recover")
+    public ResponseEntity<GiftRecoveryResponse> recover(
+            @PathVariable UUID token,
+            @RequestParam("g") String giftToken) {
+        return publicAssessmentService.recoverByGiftToken(token, giftToken)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    @PostMapping("/sessions/{accessToken}/retake")
+    public ResponseEntity<SubmissionStatusResponse> retake(@PathVariable UUID accessToken) {
+        return ResponseEntity.ok(publicAssessmentService.retake(accessToken));
     }
 }

@@ -57,6 +57,7 @@ import java.util.stream.Collectors;
 public class PillarReeditService {
 
     public static final String ARCHIVE_REASON_PILLAR_REEVAL = "PILLAR_REEVAL";
+    public static final String ARCHIVE_REASON_FULL_REEVAL = "FULL_REEVAL";
 
     private final AssignmentRepository assignmentRepository;
     private final SubmissionRepository submissionRepository;
@@ -285,6 +286,61 @@ public class PillarReeditService {
     @Transactional
     public void clearUnlocks(UUID submissionId) {
         unlockRepository.deleteBySubmissionId(submissionId);
+    }
+
+    /**
+     * Snapshot the FULL current evaluation (every live pillar_evaluation row plus
+     * the overall summary) into the history tables before a full re-evaluation
+     * overwrites them in place — so a retry/retake that degrades a previously-good
+     * pillar never silently loses the earlier result. Unlike
+     * {@link #archiveBeforeReeval}, the live rows are NOT deleted: the full re-eval
+     * upserts them in place. No-op on a first evaluation (nothing to snapshot).
+     *
+     * <p>Called from the persist step of {@code EvaluationService} inside the same
+     * transaction, so the snapshot and the overwrite commit (or roll back) together.
+     */
+    @Transactional
+    public void archiveCurrentEvaluation(UUID submissionId, String reason) {
+        Instant archivedAt = Instant.now();
+        UUID adminId = currentAdminIdOrNull();
+
+        List<PillarEvaluation> currentEvals = pillarEvaluationRepository.findBySubmissionId(submissionId);
+        if (!currentEvals.isEmpty()) {
+            Set<UUID> pillarIds = currentEvals.stream()
+                    .filter(pe -> pe.getPillar() != null)
+                    .map(pe -> pe.getPillar().getId())
+                    .collect(Collectors.toSet());
+            Map<UUID, Integer> baseVersionByPillar = pillarEvaluationHistoryRepository
+                    .findMaxVersionsByPillarIds(submissionId, pillarIds).stream()
+                    .collect(Collectors.toMap(
+                            row -> (UUID) row[0],
+                            row -> ((Number) row[1]).intValue()));
+
+            List<PillarEvaluationHistory> snaps = new ArrayList<>(currentEvals.size());
+            for (PillarEvaluation pe : currentEvals) {
+                if (pe.getPillar() == null) {
+                    continue;
+                }
+                int next = baseVersionByPillar.getOrDefault(pe.getPillar().getId(), 0) + 1;
+                PillarEvaluationHistory snap = PillarEvaluationHistory.fromLive(pe);
+                snap.setVersionNumber(next);
+                snap.setArchivedAt(archivedAt);
+                snap.setArchivedReason(reason);
+                snap.setArchivedByAdminId(adminId);
+                snaps.add(snap);
+            }
+            pillarEvaluationHistoryRepository.saveAll(snaps);
+        }
+
+        overallSummaryRepository.findBySubmissionId(submissionId).ifPresent(curr -> {
+            int nextV = overallSummaryHistoryRepository.findMaxVersion(submissionId) + 1;
+            OverallSummaryHistory snap = OverallSummaryHistory.fromLive(curr);
+            snap.setVersionNumber(nextV);
+            snap.setArchivedAt(archivedAt);
+            snap.setArchivedReason(reason);
+            snap.setArchivedByAdminId(adminId);
+            overallSummaryHistoryRepository.save(snap);
+        });
     }
 
     // -------------------- helpers --------------------

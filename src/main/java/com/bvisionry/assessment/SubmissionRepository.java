@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -227,4 +228,44 @@ public interface SubmissionRepository extends JpaRepository<Submission, UUID> {
             WHERE s.id = :id
             """)
     Optional<Submission> findByIdWithAllRelations(@Param("id") UUID id);
+
+    /**
+     * Atomically claims a SUBMITTED submission for evaluation: stamps
+     * {@code evaluation_claimed_at} only while the row is still SUBMITTED and not
+     * already claimed within the staleness window. Returns 1 when this worker won
+     * the claim, 0 when another worker already holds it (or the row is no longer
+     * SUBMITTED) — the caller MUST skip evaluation on 0 so the AI evaluation never
+     * runs twice for the same submission. A claim older than {@code staleAfterSeconds}
+     * (a crashed worker that stopped heart-beating) can be reclaimed.
+     *
+     * <p>Native so both the stamp and the staleness comparison use the <em>database</em>
+     * clock ({@code now()}): in a multi-instance deployment, comparing a peer's claim
+     * timestamp against the local app-server clock would let cross-host clock skew
+     * reclaim a still-active claim. Status is stored as text (EnumType.STRING).
+     */
+    @Transactional
+    @Modifying
+    @Query(value = """
+            UPDATE submissions SET evaluation_claimed_at = now()
+            WHERE id = :id
+              AND status = 'SUBMITTED'
+              AND (evaluation_claimed_at IS NULL
+                   OR evaluation_claimed_at < now() - (:staleAfterSeconds * interval '1 second'))
+            """, nativeQuery = true)
+    int claimForEvaluation(@Param("id") UUID id,
+                           @Param("staleAfterSeconds") long staleAfterSeconds);
+
+    /**
+     * Heartbeat: refresh the evaluation claim of a submission that is still being
+     * worked on, so a legitimately long-running evaluation is never mistaken for a
+     * crashed one and reclaimed by a competing worker. No-op once the row leaves
+     * SUBMITTED (the terminal write clears the claim anyway). DB clock, as above.
+     */
+    @Transactional
+    @Modifying
+    @Query(value = """
+            UPDATE submissions SET evaluation_claimed_at = now()
+            WHERE id = :id AND status = 'SUBMITTED'
+            """, nativeQuery = true)
+    int refreshEvaluationClaim(@Param("id") UUID id);
 }

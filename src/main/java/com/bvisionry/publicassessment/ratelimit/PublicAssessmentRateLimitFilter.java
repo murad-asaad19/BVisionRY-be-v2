@@ -23,11 +23,14 @@ import java.io.IOException;
 /**
  * Enforces the public-assessment rate limit BEFORE request body deserialization
  * and bean validation, so malformed payloads also consume tokens. Matches the
- * two abuse-sensitive POSTs of the anonymous flow:
+ * abuse-sensitive endpoints of the anonymous flow:
  * {@code POST /api/public/assessments/by-token/{token}/sessions} (session
- * create — gates link-token brute force and response-slot exhaustion) and
- * {@code POST /api/public/assessments/sessions/{accessToken}/submit} (each
- * submit dispatches an AI evaluation).
+ * create — gates link-token brute force and response-slot exhaustion),
+ * {@code POST /api/public/assessments/sessions/{accessToken}/submit} and
+ * {@code POST /api/public/assessments/sessions/{accessToken}/retake} (each
+ * dispatches an AI evaluation), and
+ * {@code GET /api/public/assessments/by-token/{token}/recover} (resolves a gift
+ * token to a session accessToken — the one unthrottled token-lookup surface).
  */
 @Component
 @RequiredArgsConstructor
@@ -35,6 +38,8 @@ public class PublicAssessmentRateLimitFilter extends OncePerRequestFilter {
 
     private static final String SESSION_CREATE_PATTERN = "/api/public/assessments/by-token/*/sessions";
     private static final String SUBMIT_PATTERN = "/api/public/assessments/sessions/*/submit";
+    private static final String RETAKE_PATTERN = "/api/public/assessments/sessions/*/retake";
+    private static final String RECOVER_PATTERN = "/api/public/assessments/by-token/*/recover";
     private static final AntPathMatcher MATCHER = new AntPathMatcher();
     private static final ObjectMapper JSON = new ObjectMapper()
             .registerModule(new JavaTimeModule())
@@ -47,9 +52,14 @@ public class PublicAssessmentRateLimitFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         String uri = request.getRequestURI();
-        if (!"POST".equalsIgnoreCase(request.getMethod())
-                || (!MATCHER.match(SESSION_CREATE_PATTERN, uri)
-                        && !MATCHER.match(SUBMIT_PATTERN, uri))) {
+        String method = request.getMethod();
+        boolean rateLimited =
+                ("POST".equalsIgnoreCase(method)
+                        && (MATCHER.match(SESSION_CREATE_PATTERN, uri)
+                                || MATCHER.match(SUBMIT_PATTERN, uri)
+                                || MATCHER.match(RETAKE_PATTERN, uri)))
+                || ("GET".equalsIgnoreCase(method) && MATCHER.match(RECOVER_PATTERN, uri));
+        if (!rateLimited) {
             filterChain.doFilter(request, response);
             return;
         }

@@ -12,6 +12,7 @@ import com.bvisionry.assessment.dto.SubmitAssessmentResponse;
 import com.bvisionry.assessment.entity.Answer;
 import com.bvisionry.assessment.entity.Submission;
 import com.bvisionry.common.enums.PipelineStatus;
+import com.bvisionry.common.enums.SubmissionFailureKind;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.IllegalOperationException;
@@ -30,6 +31,7 @@ import com.bvisionry.publicassessment.dto.CreatePublicAssessmentLinkRequest;
 import com.bvisionry.publicassessment.dto.PublicAssessmentLinkDto;
 import com.bvisionry.publicassessment.dto.PublicAssessmentLinkInfoResponse;
 import com.bvisionry.publicassessment.dto.PublicAssessmentSessionRequest;
+import com.bvisionry.publicassessment.dto.GiftRecoveryResponse;
 import com.bvisionry.publicassessment.dto.PublicAssessmentSessionResponse;
 import com.bvisionry.publicassessment.dto.PublicSubmissionResponsePageDto;
 import com.bvisionry.publicassessment.dto.UpdatePublicAssessmentLinkRequest;
@@ -57,6 +59,7 @@ import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -254,8 +257,10 @@ public class PublicAssessmentService {
                     "Cannot submit: " + review.unansweredQuestions().size() + " unanswered required questions");
         }
 
-        // Lock submission
-        submission.setStatus(SubmissionStatus.SUBMITTED);
+        // Lock + enqueue: flip to SUBMITTED and clear any stale failure/claim state
+        // left by a prior attempt so this submit is immediately claimable (see
+        // Submission#queueForEvaluation). submittedAt pins this submission moment.
+        submission.queueForEvaluation();
         submission.setSubmittedAt(Instant.now());
         submissionRepository.save(submission);
 
@@ -303,6 +308,97 @@ public class PublicAssessmentService {
     public PillarDetailResponse getResultsPillarDetail(UUID accessToken, UUID pillarId) {
         Submission submission = getRespondentVisibleResultsSubmission(accessToken);
         return memberResultsService.getPillarDetail(submission.getId(), pillarId);
+    }
+
+    /**
+     * Resolve a survey-gift token (the per-respondent secret in the gift email,
+     * carried as {@code ?g=}) back to that respondent's bound submission so a
+     * reopened personalized link can route to results / retake / resume.
+     *
+     * <p>The gift token is unique and email-only, so holding it is equivalent
+     * trust to holding the session {@code accessToken} — we return the
+     * submission's accessToken so all subsequent session calls work as usual.
+     * Returns empty when the token is unknown, belongs to a different link, or
+     * has no started submission yet (the FE then starts a fresh session, which
+     * binds via {@link #linkGiftSubmission}).
+     */
+    @Transactional(readOnly = true)
+    public Optional<GiftRecoveryResponse> recoverByGiftToken(UUID token, String rawGiftToken) {
+        PublicAssessmentLink link = linkRepository.findByToken(token)
+                .orElseThrow(() -> new ResourceNotFoundException("Public assessment", token.toString()));
+
+        UUID giftToken = parseGiftToken(rawGiftToken);
+        if (giftToken == null) {
+            return Optional.empty();
+        }
+
+        return surveyResponseRepository.findByGiftToken(giftToken)
+                .filter(r -> link.getId().equals(r.getSurvey().getGiftPublicAssessmentLinkId()))
+                .map(r -> r.getGiftSubmission())
+                .filter(submission -> submission != null)
+                .map(submission -> {
+                    SubmissionStatus status = submission.getStatus();
+                    // Results stay viewable even on a disabled link (admins disable a link to
+                    // stop NEW respondents, not to revoke a finished respondent's results).
+                    boolean showResults = link.isShowResultsToRespondent()
+                            && status == SubmissionStatus.EVALUATED;
+                    boolean retakeable = status == SubmissionStatus.FAILED
+                            || status == SubmissionStatus.NEEDS_REVIEW;
+                    return new GiftRecoveryResponse(
+                            submission.getAccessToken(), status, showResults, retakeable);
+                });
+    }
+
+    /**
+     * Respondent-initiated retake of a failed evaluation. Branches on why it
+     * failed: an INPUT failure reopens editing (answers must change), while a
+     * SYSTEM failure — the common case, and any legacy null kind — re-runs the
+     * evaluation on the same answers. The re-run is safe because the evaluation
+     * upserts its result rows in place (no duplicate-key collision).
+     */
+    @Transactional
+    public SubmissionStatusResponse retake(UUID accessToken) {
+        Submission submission = getSessionSubmission(accessToken);
+
+        SubmissionStatus status = submission.getStatus();
+        if (status != SubmissionStatus.FAILED && status != SubmissionStatus.NEEDS_REVIEW) {
+            throw new BadRequestException(
+                    "This assessment can only be retaken after a failed evaluation.");
+        }
+        // A disabled/archived link accepts no new evaluations, even from existing respondents.
+        if (submission.getPublicLink().getStatus() != PublicAssessmentLinkStatus.ACTIVE) {
+            throw new ResponseStatusException(HttpStatus.GONE,
+                    "This assessment link is no longer accepting responses");
+        }
+
+        if (submission.getFailureKind() == SubmissionFailureKind.INPUT) {
+            // INPUT failure: reopen editing so the respondent re-answers and submits
+            // again (no AI run yet). IN_PROGRESS re-enables validateEditable, and the
+            // original submittedAt is reset.
+            submission.setFailureReason(null);
+            submission.setFailureKind(null);
+            submission.setEvaluatedAt(null);
+            submission.setEvaluationClaimedAt(null);
+            submission.setStatus(SubmissionStatus.IN_PROGRESS);
+            submission.setSubmittedAt(null);
+            submissionRepository.save(submission);
+            log.info("Public submission {} reopened for re-answer (INPUT retake)", submission.getId());
+        } else {
+            // SYSTEM failure (the common case, and any legacy null kind): re-run the
+            // evaluation on the existing answers. Delegate to the shared retry path so
+            // the FAILED/NEEDS_REVIEW → SUBMITTED flip, the claim reset and the
+            // deferred async dispatch stay a single source of truth with the member
+            // retry flow (EvaluationService#retryFailedSubmission). The shared method
+            // re-loads the same managed submission, so the response below sees SUBMITTED.
+            evaluationService.retryFailedSubmission(submission.getId());
+            log.info("Public submission {} re-queued for evaluation (SYSTEM retake)", submission.getId());
+        }
+
+        // The resulting status tells the taker how to route: SUBMITTED → poll for the
+        // re-run; IN_PROGRESS → reopen the editor.
+        return new SubmissionStatusResponse(
+                submission.getId(), submission.getStatus(),
+                submission.getSubmittedAt(), submission.getEvaluatedAt());
     }
 
     // ---- Admin: link CRUD ----
@@ -416,19 +512,72 @@ public class PublicAssessmentService {
                 : overallSummaryRepository.findBySubmissionIdIn(submissionIds).stream()
                         .collect(Collectors.toMap(s -> s.getSubmission().getId(), s -> s, (a, b) -> a));
 
+        // Batched name recovery — FIRST_NAME / LAST_NAME are required personal-
+        // pillar system questions, so every taker answers them even on links
+        // that capture no dedicated respondent name (respondentNameMode NONE).
+        // That lets us show the real name instead of "Anonymous".
+        Map<UUID, String> firstNames = answersBySystemKey(submissionIds, SystemQuestion.FIRST_NAME);
+        Map<UUID, String> lastNames = answersBySystemKey(submissionIds, SystemQuestion.LAST_NAME);
+
         return submissions.map(sub -> {
             OverallSummary summary = summariesBySubmission.get(sub.getId());
             return new PublicSubmissionResponsePageDto(
                     sub.getId(),
                     sub.getStatus(),
                     sub.getRespondentEmail(),
-                    sub.getRespondentName(),
+                    resolveRespondentName(sub, firstNames, lastNames),
                     sub.getStartedAt(),
                     sub.getSubmittedAt(),
                     sub.getEvaluatedAt(),
                     summary != null ? summary.getOverallScorePercentage() : null
             );
         });
+    }
+
+    /**
+     * Display name for a public response. Prefers the dedicated respondent name
+     * captured at session start (lead-capture links); otherwise composes it from
+     * the FIRST_NAME / LAST_NAME personal-pillar answers, which are always
+     * present because they are required system questions. Returns {@code null}
+     * only when no name exists anywhere, leaving the FE's "Anonymous" fallback
+     * intact.
+     */
+    private static String resolveRespondentName(
+            Submission sub, Map<UUID, String> firstNames, Map<UUID, String> lastNames) {
+        String captured = sub.getRespondentName();
+        if (captured != null && !captured.isBlank()) {
+            return captured.trim();
+        }
+        String first = firstNames.get(sub.getId());
+        String last = lastNames.get(sub.getId());
+        StringBuilder composed = new StringBuilder();
+        if (first != null) {
+            composed.append(first);
+        }
+        if (last != null) {
+            if (composed.length() > 0) {
+                composed.append(' ');
+            }
+            composed.append(last);
+        }
+        return composed.length() > 0 ? composed.toString() : null;
+    }
+
+    /**
+     * Batched lookup of a system-managed answer's text keyed by submission — one
+     * query for the whole page. Blank answers are dropped so a present key always
+     * maps to a real value.
+     */
+    private Map<UUID, String> answersBySystemKey(List<UUID> submissionIds, String systemKey) {
+        if (submissionIds.isEmpty()) {
+            return Map.of();
+        }
+        return answerRepository.findBySubmissionIdsAndSystemKey(submissionIds, systemKey).stream()
+                .filter(a -> a.getResponseText() != null && !a.getResponseText().isBlank())
+                .collect(Collectors.toMap(
+                        a -> a.getSubmission().getId(),
+                        a -> a.getResponseText().trim(),
+                        (a, b) -> a));
     }
 
     /**

@@ -151,12 +151,11 @@ public class AdminAnswerOverrideService {
         }
 
         UUID submissionId = submission.getId();
-        submission.setStatus(SubmissionStatus.SUBMITTED);
-        // Clear stale evaluatedAt so the timeline doesn't show a completion
-        // timestamp on a step that's running again. Intentionally NOT touching
-        // submittedAt — it pins the original submission moment, matching the
-        // member-driven re-edit path.
-        submission.setEvaluatedAt(null);
+        // Flip PENDING_REEDIT → SUBMITTED and clear the prior evaluatedAt/claim so the
+        // re-queued evaluation can be claimed immediately. Intentionally leaves
+        // submittedAt untouched — it pins the original submission moment, matching the
+        // member-driven re-edit path (see Submission#queueForEvaluation).
+        submission.queueForEvaluation();
         submissionRepository.save(submission);
 
         AfterCommit.run(() -> evaluationService.evaluateSubmissionAsync(submissionId));

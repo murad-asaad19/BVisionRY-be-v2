@@ -85,6 +85,10 @@ class EvaluationServiceTest {
         // real one so the email-send path doesn't NPE (URL value isn't asserted).
         ReflectionTestUtils.setField(evaluationService, "frontendUrls",
                 new FrontendUrls(new FrontendProperties()));
+        // The result-persist step runs through the self proxy so its @Transactional
+        // applies on the async worker thread; point it back at this same instance so
+        // the unit test exercises the real persist method.
+        ReflectionTestUtils.setField(evaluationService, "self", evaluationService);
         submissionId = UUID.randomUUID();
 
         pipeline = new Pipeline();
@@ -162,6 +166,11 @@ class EvaluationServiceTest {
         // guard-clause tests return before reaching the pipeline load.
         lenient().when(pipelineRepository.findByIdWithPillars(pipeline.getId()))
                 .thenReturn(Optional.of(pipeline));
+        // Every evaluation first atomically claims the submission; default to a
+        // won claim so the eval-path tests proceed. Lenient because the skip-path
+        // test overrides it and the guard tests return before reaching it.
+        lenient().when(submissionRepository.claimForEvaluation(eq(submissionId), anyLong()))
+                .thenReturn(1);
     }
 
     private EvaluationEngine.PipelineEvaluationResult buildMockResult() {
@@ -219,6 +228,51 @@ class EvaluationServiceTest {
         verify(submissionRepository).save(subCaptor.capture());
         assertThat(subCaptor.getValue().getStatus()).isEqualTo(SubmissionStatus.EVALUATED);
         assertThat(subCaptor.getValue().getEvaluatedAt()).isNotNull();
+        // The finished evaluation releases its claim so the column never lingers as
+        // a false "in-flight" marker on a completed submission.
+        assertThat(subCaptor.getValue().getEvaluationClaimedAt()).isNull();
+        // A full (non-partial) evaluation snapshots the prior results to history
+        // before overwriting them in place, so a retake can't silently lose them.
+        verify(pillarReeditService).archiveCurrentEvaluation(eq(submissionId), any());
+    }
+
+    @Test
+    void evaluateSubmission_alreadyClaimedByAnotherWorker_skipsEvaluation() {
+        // 0 rows updated = another worker already holds the claim (or the row is
+        // no longer SUBMITTED) → the AI evaluation must NOT run a second time.
+        when(submissionRepository.claimForEvaluation(eq(submissionId), anyLong())).thenReturn(0);
+
+        evaluationService.evaluateSubmission(submissionId);
+
+        verify(submissionRepository, never()).findByIdWithAllRelations(any());
+        verifyNoInteractions(evaluationEngine);
+    }
+
+    @Test
+    void evaluateSubmission_whenSummaryAlreadyExists_updatesInPlaceNotInsert() {
+        // A re-evaluation must update the existing overall_summary row rather than
+        // INSERT a new one (the unique submission_id constraint would otherwise
+        // throw and the submission would be marked FAILED).
+        OverallSummary existing = new OverallSummary();
+        existing.setId(UUID.randomUUID());
+        existing.setSubmission(submission);
+
+        when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
+        when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId))
+                .thenReturn(List.of(freeTextAnswer, likertAnswer));
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+                .thenReturn(buildMockResult());
+        when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
+        when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(overallSummaryRepository.findBySubmissionId(submissionId)).thenReturn(Optional.of(existing));
+        when(overallSummaryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(submissionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        evaluationService.evaluateSubmission(submissionId);
+
+        ArgumentCaptor<OverallSummary> captor = ArgumentCaptor.forClass(OverallSummary.class);
+        verify(overallSummaryRepository).save(captor.capture());
+        assertThat(captor.getValue().getId()).isEqualTo(existing.getId());
     }
 
     @Test
@@ -254,6 +308,55 @@ class EvaluationServiceTest {
                 BigDecimal.ZERO, "", List.of(), List.of(),
                 null, null, "raw", null, null, false);
         return new EvaluationEngine.PipelineEvaluationResult(List.of(failedPillar), summary);
+    }
+
+    @Test
+    void evaluateSubmission_partialReevalSucceeds_clearsUnlocks() {
+        when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
+        when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId))
+                .thenReturn(List.of(freeTextAnswer, likertAnswer));
+        // Unlock rows present → the partial re-eval path runs.
+        when(pillarReeditService.findUnlockedPillarIds(submissionId)).thenReturn(List.of(pillar.getId()));
+        when(evaluationEngine.evaluatePartialPipeline(
+                any(), any(), any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+                .thenReturn(buildMockResult());
+        when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
+        when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(overallSummaryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(submissionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        evaluationService.evaluateSubmission(submissionId);
+
+        // A clean partial re-eval clears the unlock rows as its final step. It does
+        // NOT take a full-evaluation snapshot — the partial path archives only the
+        // unlocked pillars via archiveBeforeReeval.
+        verify(pillarReeditService).clearUnlocks(submissionId);
+        verify(pillarReeditService, never()).archiveCurrentEvaluation(any(), any());
+    }
+
+    @Test
+    void evaluateSubmission_partialReevalDegrades_keepsUnlocks() {
+        when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
+        when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId))
+                .thenReturn(List.of(freeTextAnswer, likertAnswer));
+        when(pillarReeditService.findUnlockedPillarIds(submissionId)).thenReturn(List.of(pillar.getId()));
+        when(evaluationEngine.evaluatePartialPipeline(
+                any(), any(), any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+                .thenReturn(buildDegradedResult());
+        when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
+        when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(overallSummaryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(submissionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        evaluationService.evaluateSubmission(submissionId);
+
+        // A degraded partial re-eval must leave the unlock rows intact so the admin
+        // can retry the re-edit — clearing them would strand the re-edit window
+        // (triggerReevaluation requires unlocked pillars to exist).
+        verify(pillarReeditService, never()).clearUnlocks(any());
+        ArgumentCaptor<Submission> subCaptor = ArgumentCaptor.forClass(Submission.class);
+        verify(submissionRepository).save(subCaptor.capture());
+        assertThat(subCaptor.getValue().getStatus()).isEqualTo(SubmissionStatus.NEEDS_REVIEW);
     }
 
     @Test

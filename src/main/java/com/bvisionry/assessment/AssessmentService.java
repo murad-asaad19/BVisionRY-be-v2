@@ -314,8 +314,10 @@ public class AssessmentService {
                     "Cannot submit: " + review.unansweredQuestions().size() + " unanswered required questions");
         }
 
-        // Lock submission
-        submission.setStatus(SubmissionStatus.SUBMITTED);
+        // Lock + enqueue: flip to SUBMITTED and clear any stale failure/claim state
+        // from a prior attempt so this submit is immediately claimable (see
+        // Submission#queueForEvaluation). submittedAt pins this submission moment.
+        submission.queueForEvaluation();
         submission.setSubmittedAt(Instant.now());
         submissionRepository.save(submission);
 

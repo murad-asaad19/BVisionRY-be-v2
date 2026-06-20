@@ -2,6 +2,7 @@ package com.bvisionry.assessment.entity;
 
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.entity.BaseEntity;
+import com.bvisionry.common.enums.SubmissionFailureKind;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.publicassessment.entity.PublicAssessmentLink;
 import jakarta.persistence.Column;
@@ -75,9 +76,45 @@ public class Submission extends BaseEntity {
     @Column(name = "failure_reason", columnDefinition = "TEXT")
     private String failureReason;
 
+    /**
+     * Why the evaluation failed — distinguishes a SYSTEM/AI failure (answers valid,
+     * retake re-runs) from an INPUT failure (answers must change, retake unlocks
+     * editing). Null when not failed, or for historical failures (treated as SYSTEM).
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "failure_kind")
+    private SubmissionFailureKind failureKind;
+
+    /**
+     * Stamped by an evaluation worker while it processes this submission, so a
+     * concurrent dispatch (e.g. a double-submit) can't run the AI evaluation
+     * twice and corrupt the result. Reset to null whenever the submission is
+     * re-queued for evaluation (retry / admin re-eval).
+     */
+    @Column(name = "evaluation_claimed_at")
+    private Instant evaluationClaimedAt;
+
     public Instant getEffectiveDeadline() {
         if (deadlineOverride != null) return deadlineOverride;
         return assignment != null ? assignment.getDeadline() : null;
+    }
+
+    /**
+     * Flip this submission to SUBMITTED for (re-)evaluation and reset the state a
+     * prior run could leave behind: the failure reason/kind, the evaluated
+     * timestamp, and — critically — the evaluation claim, so the next dispatch can
+     * claim it immediately instead of waiting out the stale window. Every code path
+     * that enqueues an evaluation (initial submit, respondent/member retry, admin
+     * re-eval) must go through here so the claim-reset invariant can never be
+     * forgotten. Callers that pin a submission moment still set {@code submittedAt}
+     * themselves — this helper deliberately leaves it untouched.
+     */
+    public void queueForEvaluation() {
+        this.status = SubmissionStatus.SUBMITTED;
+        this.failureReason = null;
+        this.failureKind = null;
+        this.evaluatedAt = null;
+        this.evaluationClaimedAt = null;
     }
 
     @Version

@@ -1,71 +1,48 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Assessment Assigned</title>
-</head>
-<body style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 0; background-color: #f8f8f8;">
-    <!-- Header -->
-    <div style="background-color: #0f3460; padding: 24px 32px; text-align: center;">
-        <h1 style="color: #ffffff; margin: 0; font-size: 24px;">
-            <span style="color: #ffc107;">B</span>VisionRY
-        </h1>
-    </div>
+{{>_layout-header}}
+<h2 style="margin: 0 0 18px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.3; color: #00174a;">{{{fields.heading}}}</h2>
 
-    <!-- Content -->
-    <div style="background-color: #ffffff; padding: 32px;">
-        <h2 style="color: #0f3460; margin-top: 0;">{{{fields.heading}}}</h2>
+<p style="margin: 0 0 16px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.6; color: #060021;">{{{fields.greeting}}}</p>
 
-        <p style="color: #212529;">{{{fields.greeting}}}</p>
+<p style="margin: 0 0 16px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.6; color: #060021;">{{{fields.mainMessage}}}</p>
 
-        <p style="color: #212529;">{{{fields.mainMessage}}}</p>
-
-        <!-- Assessment Card -->
-        <div style="background: #f8f8f8; border-left: 4px solid #ffc107; border-radius: 8px; padding: 20px; margin: 24px 0;">
-            <h3 style="color: #0f3460; margin: 0 0 8px;">{{{fields.cardHeading}}}</h3>
+<!-- Assessment Card -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 24px 0;">
+    <tr>
+        <td style="background-color: #f8f9fc; border: 1px solid #dce3ee; border-left: 4px solid #00174a; border-radius: 10px; padding: 18px 20px;">
+            <h3 style="margin: 0 0 6px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: #00174a;">{{{fields.cardHeading}}}</h3>
             {{#deadline}}
-            <p style="color: #94a3b8; margin: 0; font-size: 14px;">
-                {{{fields.deadlineWithValue}}}
-            </p>
+            <p style="margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.5; color: #55647d;">{{{fields.deadlineWithValue}}}</p>
             {{/deadline}}
             {{^deadline}}
-            <p style="color: #94a3b8; margin: 0; font-size: 14px;">
-                {{{fields.deadlineWithoutValue}}}
-            </p>
+            <p style="margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.5; color: #55647d;">{{{fields.deadlineWithoutValue}}}</p>
             {{/deadline}}
-        </div>
+        </td>
+    </tr>
+</table>
 
-        <!-- CTA Button -->
-        <div style="text-align: center; margin: 32px 0;">
-            <a href="{{assessmentUrl}}"
-               style="display: inline-block; background-color: #0f3460; color: #ffffff; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-size: 16px; font-weight: 600;">
-                {{{fields.ctaLabel}}} &#8594;
-            </a>
-        </div>
+<!-- CTA Button -->
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin: 28px auto;">
+    <tr>
+        <td align="center" style="border-radius: 10px; background-color: #00174a;">
+            <a href="{{assessmentUrl}}" style="display: inline-block; padding: 14px 34px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: #ffffff; text-decoration: none; border-radius: 10px;">{{{fields.ctaLabel}}} &#8594;</a>
+        </td>
+    </tr>
+</table>
 
-        <p style="color: #94a3b8; font-size: 14px;">
-            If the button above doesn't work, copy and paste this link into your browser:
-        </p>
-        <p style="word-break: break-all; font-size: 12px; color: #0f3460;">
-            <a href="{{assessmentUrl}}" style="color: #0f3460;">{{assessmentUrl}}</a>
-        </p>
+<p style="margin: 0 0 6px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13px; line-height: 1.5; color: #55647d;">If the button above doesn't work, copy and paste this link into your browser:</p>
+<p style="margin: 0; word-break: break-all; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 13px; line-height: 1.5;"><a href="{{assessmentUrl}}" style="color: #005799; text-decoration: underline;">{{assessmentUrl}}</a></p>
 
-        {{#showTips}}
-        <!-- Tips -->
-        <div style="background: #fff8e1; border-radius: 8px; padding: 16px; margin: 24px 0;">
-            <p style="color: #0f3460; font-weight: 600; margin: 0 0 8px;">{{{fields.tipsHeading}}}</p>
-            <ul style="color: #212529; font-size: 14px; margin: 0; padding-left: 20px;">
-                {{#fields.tips}}<li>{{{.}}}</li>{{/fields.tips}}
+{{#showTips}}
+<!-- Tips -->
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 28px 0 0;">
+    <tr>
+        <td style="background-color: #eef2f7; border-radius: 10px; padding: 18px 20px;">
+            <p style="margin: 0 0 8px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; font-weight: 600; color: #00174a;">{{{fields.tipsHeading}}}</p>
+            <ul style="margin: 0; padding-left: 20px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #060021;">
+                {{#fields.tips}}<li style="margin: 0 0 4px;">{{{.}}}</li>{{/fields.tips}}
             </ul>
-        </div>
-        {{/showTips}}
-    </div>
-
-    <!-- Footer -->
-    <div style="padding: 16px 32px; text-align: center;">
-        <p style="color: #94a3b8; font-size: 12px; margin: 0;">
-            This is an automated message from BVisionRY.
-        </p>
-    </div>
-</body>
-</html>
+        </td>
+    </tr>
+</table>
+{{/showTips}}
+{{>_layout-footer}}

@@ -8,6 +8,7 @@ import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.RateLimitExceededException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.EmailService;
 import com.bvisionry.organization.OrgAuditActions;
 import com.bvisionry.organization.entity.Organization;
@@ -17,7 +18,6 @@ import com.bvisionry.upgrade.entity.UpgradeFeatureContext;
 import com.bvisionry.upgrade.entity.UpgradeRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,9 +39,7 @@ public class UpgradeRequestService {
     private final UpgradePromptService promptService;
     private final EmailService emailService;
     private final AuditService auditService;
-
-    @Value("${bvisionry.frontend.base-url:http://localhost:5173}")
-    private String frontendBaseUrl;
+    private final FrontendUrls frontendUrls;
 
     private Duration cooldown() {
         return Duration.ofHours(promptService.get().cooldownHours());
@@ -129,7 +127,7 @@ public class UpgradeRequestService {
                     user.getId(), org.getId());
             return;
         }
-        String dashboardUrl = frontendBaseUrl + "/admin/organizations/" + org.getId();
+        String dashboardUrl = frontendUrls.path("/admin/organizations/" + org.getId());
         for (String to : recipients) {
             emailService.sendUpgradeRequestedAsync(
                     to, org.getName(), user.getName(), user.getEmail(),

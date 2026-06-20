@@ -1,5 +1,6 @@
 package com.bvisionry.survey.service;
 
+import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.excel.ExcelWorkbookBuilder;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.survey.dto.PillarSummaryDto;
@@ -42,6 +43,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -212,7 +214,7 @@ public class SurveyResultsService {
     @Transactional(readOnly = true)
     public SurveyResponsePageDto listResponses(UUID surveyId, String q, Instant from, Instant to,
                                                 int page, int size) {
-        surveyService.findOrThrow(surveyId);
+        Survey survey = surveyService.findOrThrow(surveyId);
         // Lowercased + LIKE-wrapped search term, or null for "no search". Pushed
         // into the repository so we don't pull the full response set into memory.
         String qLower = (q == null || q.isBlank()) ? null : "%" + q.toLowerCase() + "%";
@@ -231,21 +233,42 @@ public class SurveyResultsService {
             duplicateKeys.add("ip:" + ipHash);
         }
 
+        // Gift-assessment status: each response carries a persisted link to the
+        // submission made from its gift email (survey_responses.submission_id),
+        // so resolve it directly by response id — scoped to this survey's gift
+        // link — rather than guessing by shared email. One query per page.
+        UUID giftLinkId = survey.getGiftPublicAssessmentLinkId();
+        Map<UUID, Object[]> giftRefsByResponse = Map.of();
+        if (giftLinkId != null) {
+            List<UUID> responseIds = pageResult.getContent().stream()
+                    .map(SurveyResponse::getId).toList();
+            if (!responseIds.isEmpty()) {
+                giftRefsByResponse = responseRepository
+                        .findGiftSubmissionRefs(responseIds, giftLinkId).stream()
+                        .collect(Collectors.toMap(row -> (UUID) row[0], row -> row, (a, b) -> a));
+            }
+        }
+        final Map<UUID, Object[]> giftRefs = giftRefsByResponse;
+
         List<SurveyResponseListItemDto> items = pageResult.getContent().stream()
                 .map(r -> {
                     String key = dedupKey(r);
+                    Object[] gift = giftRefs.get(r.getId());
                     return new SurveyResponseListItemDto(
                             r.getId(),
                             r.getSubmittedAt(),
                             r.getSource(),
                             r.getRespondentEmail(),
                             r.getRespondentName(),
-                            key != null && duplicateKeys.contains(key));
+                            key != null && duplicateKeys.contains(key),
+                            gift == null ? null : (SubmissionStatus) gift[2],
+                            gift == null ? null : (UUID) gift[1]);
                 })
                 .toList();
 
         return new SurveyResponsePageDto(
-                items, page, size, pageResult.getTotalElements(), pageResult.getTotalPages());
+                items, page, size, pageResult.getTotalElements(), pageResult.getTotalPages(),
+                giftLinkId);
     }
 
     private String dedupKey(SurveyResponse r) {

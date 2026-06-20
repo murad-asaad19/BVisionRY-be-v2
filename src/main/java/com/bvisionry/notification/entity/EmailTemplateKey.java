@@ -9,5 +9,6 @@ public enum EmailTemplateKey {
     TRIAL_ENDING_SOON,
     TRIAL_EXPIRED,
     UPGRADE_REQUESTED,
-    CONTACT_US
+    CONTACT_US,
+    SURVEY_GIFT_ASSESSMENT
 }

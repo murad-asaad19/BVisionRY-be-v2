@@ -17,6 +17,7 @@ import com.bvisionry.survey.entity.SurveyStatus;
 import com.bvisionry.survey.entity.SurveyVisibility;
 import com.bvisionry.survey.repository.SurveyRepository;
 import com.bvisionry.survey.repository.SurveyResponseRepository;
+import com.bvisionry.publicassessment.repository.PublicAssessmentLinkRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,6 +36,7 @@ public class SurveyService {
 
     private final SurveyRepository surveyRepository;
     private final SurveyResponseRepository responseRepository;
+    private final PublicAssessmentLinkRepository publicAssessmentLinkRepository;
     private final SurveyMapper mapper;
 
     @Transactional
@@ -104,6 +106,7 @@ public class SurveyService {
         survey.setRespondentEmailMode(request.respondentEmailMode());
         survey.setRespondentNameMode(request.respondentNameMode());
         applyVisibilityChange(survey, request.visibility());
+        reconcileGiftWithEmailMode(survey);
         return mapper.toSurveyDto(surveyRepository.save(survey));
     }
 
@@ -131,7 +134,52 @@ public class SurveyService {
         if (request.respondentNameMode() != null) {
             survey.setRespondentNameMode(request.respondentNameMode());
         }
+        applyGiftChange(survey, request.giftPublicAssessmentLinkId(),
+                request.clearGiftPublicAssessmentLink());
+        reconcileGiftWithEmailMode(survey);
         return mapper.toSurveyDto(surveyRepository.save(survey));
+    }
+
+    /**
+     * Enforces the "a gift requires collecting an email" invariant from whichever
+     * write path runs: if email collection ends up NONE, any configured gift is
+     * dropped (it could never be delivered). {@link #applyGiftChange} rejects the
+     * explicit "set a gift while email is NONE" case up front; this catches the
+     * other direction — turning email off while a gift is already attached —
+     * including the full {@code update()} (PUT) path which doesn't touch the gift.
+     */
+    private void reconcileGiftWithEmailMode(Survey survey) {
+        if (survey.getRespondentEmailMode() == RespondentFieldMode.NONE) {
+            survey.setGiftPublicAssessmentLinkId(null);
+        }
+    }
+
+    /**
+     * Sets, keeps, or clears the gifted public assessment. A bare null is
+     * ambiguous (keep vs remove), so removal is driven by an explicit
+     * {@code clear} flag; a non-null id sets the gift, and null + no clear
+     * leaves the current value untouched (so partial metadata updates — e.g.
+     * the visibility quick-toggle — don't wipe a configured gift).
+     *
+     * <p>A gift is only deliverable if the survey collects an email, so setting
+     * one while {@code respondentEmailMode} is NONE is rejected. The email mode
+     * has already been applied above, so this reads the effective value.
+     */
+    private void applyGiftChange(Survey survey, UUID giftLinkId, boolean clear) {
+        if (clear) {
+            survey.setGiftPublicAssessmentLinkId(null);
+            return;
+        }
+        if (giftLinkId == null) return;
+        if (!publicAssessmentLinkRepository.existsById(giftLinkId)) {
+            throw new ResourceNotFoundException("Public assessment", giftLinkId.toString());
+        }
+        if (survey.getRespondentEmailMode() == RespondentFieldMode.NONE) {
+            throw new BadRequestException(
+                    "Enable respondent email collection before gifting an assessment — "
+                    + "the gift is emailed to the address the respondent provides.");
+        }
+        survey.setGiftPublicAssessmentLinkId(giftLinkId);
     }
 
     /**

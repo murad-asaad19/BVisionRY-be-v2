@@ -33,6 +33,7 @@ public class EmailTemplateSchemaRegistry {
             case TRIAL_EXPIRED                  -> trialExpired();
             case UPGRADE_REQUESTED              -> upgradeRequested();
             case CONTACT_US                     -> contactMessage();
+            case SURVEY_GIFT_ASSESSMENT         -> surveyGiftAssessment();
         };
     }
 
@@ -328,6 +329,63 @@ public class EmailTemplateSchemaRegistry {
                         EmailTemplateField.Kind.RICH_TEXT, 240,
                         NO_VARS,
                         "You can also revisit your assessment results any time.",
+                        4, "Call to Action", false, null)
+        );
+    }
+
+    private List<EmailTemplateField> surveyGiftAssessment() {
+        List<String> nameVars       = List.of("respondentName");
+        List<String> surveyVars     = List.of("surveyName");
+        List<String> assessmentVars = List.of("assessmentTitle");
+        return List.of(
+                new EmailTemplateField(
+                        "subject", "Subject line",
+                        "The line recipients see in their inbox.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("respondentName", "surveyName", "assessmentTitle"),
+                        "A gift for you: {{assessmentTitle}}",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "heading", "Heading",
+                        "The large title shown at the top of the email body.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "A gift to say thank you",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "greeting", "Greeting",
+                        "First line addressing the respondent. The survey can be answered without a name, so keep this readable when {{respondentName}} is empty.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        nameVars,
+                        "Hi there,",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "mainMessage", "Main message",
+                        "The paragraph explaining the gift.",
+                        EmailTemplateField.Kind.RICH_TEXT, 600,
+                        surveyVars,
+                        "Thanks for completing {{surveyName}}. As a thank-you, we'd like to gift you a complimentary assessment — our way of helping you go further.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "cardHeading", "Assessment name shown in card",
+                        "Usually just the assessment variable.",
+                        EmailTemplateField.Kind.RICH_TEXT, 120,
+                        assessmentVars,
+                        "{{assessmentTitle}}",
+                        3, "Assessment Card", false, null),
+                new EmailTemplateField(
+                        "cardSubline", "Helper line under the assessment name",
+                        "Short note about the assessment, e.g. how long it takes.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "Free for you — takes about 10 minutes",
+                        3, "Assessment Card", false, null),
+                new EmailTemplateField(
+                        "ctaLabel", "Button label",
+                        "Text on the main action button.",
+                        EmailTemplateField.Kind.CTA_LABEL, 40,
+                        NO_VARS,
+                        "Take your assessment",
                         4, "Call to Action", false, null)
         );
     }

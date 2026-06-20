@@ -4,6 +4,7 @@ import com.bvisionry.aiconfig.service.RateLimitService;
 import com.bvisionry.auth.dto.AuthResponse;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.web.ClientIpResolver;
+import com.bvisionry.config.FrontendUrls;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -39,9 +40,7 @@ public class OAuth2Controller {
     private final RateLimitService rateLimitService;
     private final ClientIpResolver clientIpResolver;
     private final CookieService cookieService;
-
-    @Value("${bvisionry.frontend.base-url:http://localhost:5173}")
-    private String frontendBaseUrl;
+    private final FrontendUrls frontendUrls;
 
     @Value("${bvisionry.oauth2.google.client-id:}")
     private String googleClientId;
@@ -60,7 +59,7 @@ public class OAuth2Controller {
     public ResponseEntity<Void> initiateGoogle(HttpServletResponse response) {
         if (googleClientId.isBlank()) {
             return ResponseEntity.status(HttpStatus.FOUND)
-                    .header(HttpHeaders.LOCATION, frontendBaseUrl + "/login?error=google_not_configured")
+                    .header(HttpHeaders.LOCATION, frontendUrls.path("/login?error=google_not_configured"))
                     .build();
         }
         String state = generateAndStoreState(response);
@@ -214,7 +213,7 @@ public class OAuth2Controller {
         cookieService.setAccessTokenCookie(response, auth.token());
         cookieService.setRefreshTokenCookie(response, auth.refreshToken());
 
-        String url = frontendBaseUrl + "/auth/callback?sso=success";
+        String url = frontendUrls.path("/auth/callback?sso=success");
         return ResponseEntity.status(HttpStatus.FOUND)
                 .header(HttpHeaders.LOCATION, url)
                 .build();
@@ -222,7 +221,7 @@ public class OAuth2Controller {
 
     private ResponseEntity<Void> redirectToFrontend(String error) {
         return ResponseEntity.status(HttpStatus.FOUND)
-                .header(HttpHeaders.LOCATION, frontendBaseUrl + "/login?error=" + enc(error))
+                .header(HttpHeaders.LOCATION, frontendUrls.path("/login?error=" + enc(error)))
                 .build();
     }
 

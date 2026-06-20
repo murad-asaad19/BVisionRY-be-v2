@@ -8,6 +8,8 @@ import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.config.FrontendProperties;
+import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.EmailService;
 import com.bvisionry.organization.dto.OrganizationResponse;
 import com.bvisionry.organization.entity.Organization;
@@ -69,8 +71,10 @@ class TrialServiceTest {
         freeOrg.setName("Acme");
         freeOrg.setSubscriptionTier(SubscriptionTier.FREE);
         freeOrg.setActive(true);
-        // Mirror the @Value injection so dashboardUrl assertions are stable.
-        ReflectionTestUtils.setField(trialService, "frontendBaseUrl", "http://localhost:5173");
+        // Inject a real FrontendUrls so dashboardUrl assertions are stable.
+        FrontendProperties frontendProperties = new FrontendProperties();
+        frontendProperties.setBaseUrl("http://localhost:5173");
+        ReflectionTestUtils.setField(trialService, "frontendUrls", new FrontendUrls(frontendProperties));
         // @PostConstruct is not invoked under Mockito @InjectMocks, so build the
         // REQUIRES_NEW TransactionTemplate that expireLapsed()/expireOne() rely on.
         // The mock transaction manager returns a real status and no-ops on commit,

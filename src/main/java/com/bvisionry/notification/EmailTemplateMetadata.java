@@ -28,6 +28,7 @@ public final class EmailTemplateMetadata {
             case TRIAL_EXPIRED                  -> "Trial Expired";
             case UPGRADE_REQUESTED              -> "Upgrade Requested";
             case CONTACT_US                     -> "Contact Message";
+            case SURVEY_GIFT_ASSESSMENT         -> "Survey Gift Assessment";
         };
     }
 
@@ -42,6 +43,7 @@ public final class EmailTemplateMetadata {
             case TRIAL_EXPIRED                  -> "Sent to org admins once their Premium trial has ended.";
             case UPGRADE_REQUESTED              -> "Sent to platform admins when a member of a Free-tier org requests an upgrade to Premium.";
             case CONTACT_US                     -> "Sent to platform admins when someone submits the website contact form.";
+            case SURVEY_GIFT_ASSESSMENT         -> "Sent to a respondent who completes a survey (via its public link) that is configured to gift a public assessment, with a link to take it.";
         };
     }
 
@@ -105,6 +107,12 @@ public final class EmailTemplateMetadata {
                     new TemplateVariable("inquiry",     "What the message is about (the selected topic)"),
                     new TemplateVariable("message",     "The message the visitor wrote")
             );
+            case SURVEY_GIFT_ASSESSMENT -> List.of(
+                    new TemplateVariable("respondentName",  "Name the respondent entered on the survey (may be empty)"),
+                    new TemplateVariable("surveyName",      "Name of the survey they just completed"),
+                    new TemplateVariable("assessmentTitle", "Title of the gifted public assessment"),
+                    new TemplateVariable("assessmentUrl",   "Link the respondent opens to take the gifted assessment")
+            );
         };
     }
 
@@ -165,6 +173,12 @@ public final class EmailTemplateMetadata {
                     "company",     "Acme Accelerator",
                     "inquiry",     "Partnership",
                     "message",     "We run a 12-week accelerator and would love to explore using the Founder Readiness Index with our next cohort."
+            );
+            case SURVEY_GIFT_ASSESSMENT -> Map.of(
+                    "respondentName",  "Alex Johnson",
+                    "surveyName",      "Founder Pulse Survey",
+                    "assessmentTitle", "Founder Readiness Index",
+                    "assessmentUrl",   "https://app.bvisionry.com/a/sample-token"
             );
         };
     }

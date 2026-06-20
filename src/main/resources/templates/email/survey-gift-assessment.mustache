@@ -5,17 +5,12 @@
 
 <p style="margin: 0 0 16px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 16px; line-height: 1.6; color: #060021;">{{{fields.mainMessage}}}</p>
 
-<!-- Assessment Card (attention) -->
+<!-- Assessment Card -->
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 24px 0;">
     <tr>
-        <td style="background-color: #faf2e2; border: 1px solid #f0e2c4; border-left: 4px solid #e2ac53; border-radius: 10px; padding: 18px 20px;">
-            <h3 style="margin: 0 0 6px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: #00174a;">{{{fields.cardHeading}}}</h3>
-            {{#deadline}}
-            <p style="margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.5; font-weight: 600; color: #7a5a13;">{{{fields.deadlineWithValue}}}</p>
-            {{/deadline}}
-            {{^deadline}}
-            <p style="margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.5; color: #55647d;">{{{fields.deadlineWithoutValue}}}</p>
-            {{/deadline}}
+        <td style="background-color: #f8f9fc; border: 1px solid #dce3ee; border-left: 4px solid #00174a; border-radius: 10px; padding: 18px 20px;">
+            <h3 style="margin: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: #00174a;">{{{fields.cardHeading}}}</h3>
+            <p style="margin: 8px 0 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.5; color: #55647d;">{{{fields.cardSubline}}}</p>
         </td>
     </tr>
 </table>

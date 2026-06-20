@@ -59,6 +59,17 @@ public class Survey extends BaseEntity {
     @Column(name = "created_by", nullable = false)
     private UUID createdBy;
 
+    /**
+     * Optional public assessment link gifted to respondents. When set and the
+     * survey is completed through its public link with an email present, the
+     * respondent is emailed a link to take this assessment. Stored as a plain
+     * id (resolved via PublicAssessmentLinkRepository) to keep the survey
+     * package decoupled from the publicassessment entity graph — mirrors the
+     * pipelines.post_completion_survey_id convention.
+     */
+    @Column(name = "gift_public_assessment_link_id")
+    private UUID giftPublicAssessmentLinkId;
+
     @OneToMany(mappedBy = "survey", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("displayOrder")
     private List<SurveyPillar> pillars = new ArrayList<>();

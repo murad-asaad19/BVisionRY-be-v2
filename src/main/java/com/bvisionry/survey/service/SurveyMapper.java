@@ -36,6 +36,7 @@ public class SurveyMapper {
                 survey.getClosedAt(),
                 survey.getRespondentEmailMode(),
                 survey.getRespondentNameMode(),
+                survey.getGiftPublicAssessmentLinkId(),
                 survey.getCreatedBy(),
                 pillarDtos,
                 survey.getCreatedAt(),

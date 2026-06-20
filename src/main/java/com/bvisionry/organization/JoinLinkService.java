@@ -9,6 +9,7 @@ import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.organization.dto.AcceptJoinLinkRequest;
 import com.bvisionry.organization.dto.JoinLinkInfoResponse;
 import com.bvisionry.organization.dto.JoinLinkResponse;
@@ -16,7 +17,6 @@ import com.bvisionry.organization.entity.JoinLink;
 import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.organization.event.MemberJoinedEvent;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -39,9 +39,7 @@ public class JoinLinkService {
     private final PasswordEncoder passwordEncoder;
     private final AuthService authService;
     private final ApplicationEventPublisher eventPublisher;
-
-    @Value("${bvisionry.frontend.base-url:http://localhost:5173}")
-    private String frontendBaseUrl;
+    private final FrontendUrls frontendUrls;
 
     @Transactional
     public JoinLinkResponse generate(UUID orgId, int expiryDays, UUID createdBy) {

@@ -43,6 +43,7 @@ import com.bvisionry.reporting.dto.PillarScoreSummary;
 import com.bvisionry.reporting.service.MemberResultsService;
 import com.bvisionry.reporting.service.PersonalInfoResolver;
 import com.bvisionry.survey.entity.RespondentFieldMode;
+import com.bvisionry.survey.repository.SurveyResponseRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -87,6 +88,7 @@ public class PublicAssessmentService {
     private final PillarEvaluationRepository pillarEvaluationRepository;
     private final OverallSummaryRepository overallSummaryRepository;
     private final PersonalInfoResolver personalInfoResolver;
+    private final SurveyResponseRepository surveyResponseRepository;
 
     // ---- Anonymous respondent flow ----
 
@@ -150,8 +152,42 @@ public class PublicAssessmentService {
         submission.setAccessToken(UUID.randomUUID());
         submission = submissionRepository.save(submission);
 
+        linkGiftSubmission(link, parseGiftToken(request.giftToken()), submission);
+
         log.info("Public assessment session {} started on link {}", submission.getId(), link.getId());
         return new PublicAssessmentSessionResponse(submission.getAccessToken(), submission.getId());
+    }
+
+    /**
+     * When this session was opened from a survey gift email ({@code ?g=<token>}),
+     * tie the new submission back to the originating survey response so the admin
+     * "View results" action resolves to THIS respondent rather than guessing by
+     * email. No-op when the token is absent, unknown, already linked, or points at
+     * a response whose survey gifts a different link.
+     */
+    private void linkGiftSubmission(PublicAssessmentLink link, UUID giftToken, Submission submission) {
+        if (giftToken == null) {
+            return;
+        }
+        surveyResponseRepository.findByGiftToken(giftToken).ifPresent(response -> {
+            UUID giftLinkId = response.getSurvey().getGiftPublicAssessmentLinkId();
+            if (link.getId().equals(giftLinkId) && response.getGiftSubmission() == null) {
+                response.setGiftSubmission(submission);
+                surveyResponseRepository.save(response);
+            }
+        });
+    }
+
+    /** Parse the optional gift token; a malformed/blank value is treated as absent. */
+    private static UUID parseGiftToken(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(raw.trim());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     @Transactional(readOnly = true)

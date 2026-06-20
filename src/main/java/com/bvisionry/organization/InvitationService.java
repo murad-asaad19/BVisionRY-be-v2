@@ -10,6 +10,7 @@ import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.tx.AfterCommit;
+import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.EmailService;
 import com.bvisionry.organization.dto.AcceptInvitationRequest;
 import com.bvisionry.organization.dto.InvitationAttemptResponse;
@@ -49,9 +50,7 @@ public class InvitationService {
     private final PasswordEncoder passwordEncoder;
     private final AuthService authService;
     private final ApplicationEventPublisher eventPublisher;
-
-    @org.springframework.beans.factory.annotation.Value("${bvisionry.frontend.base-url:http://localhost:5173}")
-    private String frontendBaseUrl;
+    private final FrontendUrls frontendUrls;
 
     @Transactional
     public List<InvitationResponse> inviteMembers(UUID orgId, InviteMembersRequest request) {
@@ -76,7 +75,7 @@ public class InvitationService {
             invitation.setExpiresAt(Instant.now().plus(INVITATION_EXPIRY_DAYS, ChronoUnit.DAYS));
 
             Invitation saved = invitationRepository.save(invitation);
-            String acceptUrl = frontendBaseUrl + "/invitations/" + saved.getToken();
+            String acceptUrl = frontendUrls.path("/invitations/" + saved.getToken());
             // Fire-and-forget on the emailExecutor pool: SMTP latency must not
             // hold row locks for the surrounding @Transactional method.
             emailService.sendInvitationEmailAsync(normalizedEmail, org.getName(), acceptUrl,

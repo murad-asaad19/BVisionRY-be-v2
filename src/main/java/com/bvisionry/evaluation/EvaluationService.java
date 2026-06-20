@@ -12,6 +12,7 @@ import com.bvisionry.common.enums.PromptType;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.common.tx.AfterCommit;
+import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.evaluation.EvaluationEngine.PillarResult;
 import com.bvisionry.evaluation.EvaluationEngine.PipelineEvaluationResult;
 import com.bvisionry.evaluation.entity.OverallSummary;
@@ -61,9 +62,7 @@ public class EvaluationService {
     private final MeterRegistry meterRegistry;
     private final AuditService auditService;
     private final PillarReeditService pillarReeditService;
-
-    @org.springframework.beans.factory.annotation.Value("${bvisionry.frontend.base-url:http://localhost:5173}")
-    private String frontendBaseUrl;
+    private final FrontendUrls frontendUrls;
     private final CacheInvalidationService cacheInvalidationService;
 
     /**
@@ -253,7 +252,7 @@ public class EvaluationService {
             // link points at the authenticated submission-scoped survey page.
             String memberEmail = submission.getUser().getEmail();
             String memberName = resolveMemberDisplayName(submission, answers);
-            String resultsUrl = frontendBaseUrl + "/my/assessments/" + submissionId + "/results";
+            String resultsUrl = frontendUrls.path("/my/assessments/" + submissionId + "/results");
 
             PostCompletionLinkDto postCompletion = postCompletionLinkResolver
                     .resolveForCompletionEmail(pipeline, submissionId)
@@ -286,7 +285,7 @@ public class EvaluationService {
                 memberEmail, memberName, pipeline.getName(), resultsUrl, extUrl, extLabel));
 
         if (postCompletion instanceof PostCompletionLinkDto.Survey survey) {
-            String surveyUrl = frontendBaseUrl + survey.url();
+            String surveyUrl = frontendUrls.path(survey.url());
             sendOrLog("survey-invite", submissionId, () -> emailService.sendPostAssessmentSurveyInvite(
                     memberEmail, memberName, pipeline.getName(), survey.surveyName(),
                     surveyUrl, resultsUrl));

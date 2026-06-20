@@ -9,8 +9,13 @@ import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.DuplicateResourceException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.tx.AfterCommit;
+import com.bvisionry.config.FrontendUrls;
+import com.bvisionry.notification.EmailService;
 import com.bvisionry.organization.OrgAuditActions;
 import com.bvisionry.pipeline.entity.Pipeline;
+import com.bvisionry.publicassessment.entity.PublicAssessmentLink;
+import com.bvisionry.publicassessment.entity.PublicAssessmentLinkStatus;
+import com.bvisionry.publicassessment.repository.PublicAssessmentLinkRepository;
 import com.bvisionry.reporting.service.CacheInvalidationService;
 import com.bvisionry.survey.dto.MemberSurveyDto;
 import com.bvisionry.survey.dto.PublicSurveyDto;
@@ -56,6 +61,9 @@ public class SurveyResponseService {
     private final UserRepository userRepository;
     private final CacheInvalidationService cacheInvalidationService;
     private final AuditService auditService;
+    private final PublicAssessmentLinkRepository publicAssessmentLinkRepository;
+    private final EmailService emailService;
+    private final FrontendUrls frontendUrls;
 
     @Transactional(readOnly = true)
     public PublicSurveyDto getPublicByToken(UUID token) {
@@ -86,16 +94,70 @@ public class SurveyResponseService {
         validateFieldMode(survey.getRespondentEmailMode(), request.respondentEmail(), "email");
         validateFieldMode(survey.getRespondentNameMode(), request.respondentName(), "name");
 
-        return persistResponse(
+        // Resolve the gift (and mint its per-response token) before persisting so
+        // the token is saved on the response row — that token is what later ties
+        // the gifted submission back to THIS response instead of matching by email.
+        GiftAssessment gift = planGiftAssessment(survey, request.respondentEmail());
+
+        SurveySubmitResponseDto result = persistResponse(
                 survey,
                 request.answers(),
                 new ResponseContext.Public(
                         request.respondentEmail(),
                         request.respondentName(),
                         ipHash,
-                        cookieId),
+                        cookieId,
+                        gift == null ? null : gift.giftToken()),
                 userAgent);
+
+        if (gift == null) {
+            return result;
+        }
+
+        // Send runs after commit (so a rolled-back submission never emails) and
+        // async (so SMTP latency can't block the response). The email may still
+        // fail silently, so we also return the link to the client as a fallback.
+        String email = normalize(request.respondentEmail());
+        String name = normalize(request.respondentName());
+        String surveyName = survey.getName();
+        String assessmentTitle = gift.link().getTitle();
+        String assessmentUrl = gift.assessmentUrl();
+        AfterCommit.run(() -> emailService.sendSurveyGiftAssessmentAsync(
+                email, name, surveyName, assessmentTitle, assessmentUrl));
+        return new SurveySubmitResponseDto(
+                result.responseId(), result.thankYouMessage(), assessmentUrl);
     }
+
+    /**
+     * Resolves whether this public submission should receive a gifted assessment
+     * and, if so, mints the per-response gift token and builds its link. Returns
+     * {@code null} when no gift applies — no gift configured, no email collected,
+     * email mode NONE, or the link is missing/inactive. The email-mode guard
+     * mirrors the config-time invariant so a crafted submit can't trigger a gift
+     * on a survey that hides the email field.
+     *
+     * <p>The link carries the token as {@code ?g=<giftToken>} so that when the
+     * respondent opens it, {@code PublicAssessmentService} can link the resulting
+     * submission back to this exact response.
+     */
+    private GiftAssessment planGiftAssessment(Survey survey, String respondentEmail) {
+        UUID giftLinkId = survey.getGiftPublicAssessmentLinkId();
+        String email = normalize(respondentEmail);
+        if (giftLinkId == null || email == null
+                || survey.getRespondentEmailMode() == RespondentFieldMode.NONE) {
+            return null;
+        }
+        PublicAssessmentLink link = publicAssessmentLinkRepository.findById(giftLinkId).orElse(null);
+        if (link == null || link.getStatus() != PublicAssessmentLinkStatus.ACTIVE) {
+            return null;
+        }
+        UUID giftToken = UUID.randomUUID();
+        String assessmentUrl = frontendUrls.assessmentLink(link.getToken()) + "?g=" + giftToken;
+        return new GiftAssessment(link, giftToken, assessmentUrl);
+    }
+
+    /** A resolved gift: the target link, the per-response token, and the built link URL. */
+    private record GiftAssessment(PublicAssessmentLink link, UUID giftToken, String assessmentUrl) {}
 
     /**
      * Resolve the published survey paired to this user's assessment for the
@@ -263,7 +325,7 @@ public class SurveyResponseService {
         response.setAnswers(entities);
 
         SurveyResponse saved = responseRepository.save(response);
-        return new SurveySubmitResponseDto(saved.getId(), "Thank you for your response.");
+        return new SurveySubmitResponseDto(saved.getId(), "Thank you for your response.", null);
     }
 
     private SurveyAnswer buildAnswer(SurveyQuestion question, SurveyAnswerSubmitDto dto) {
@@ -357,6 +419,7 @@ public class SurveyResponseService {
                 response.setRespondentName(normalize(p.name()));
                 response.setIpHash(p.ipHash());
                 response.setCookieId(p.cookieId());
+                response.setGiftToken(p.giftToken());
             }
             case ResponseContext.Member m -> {
                 response.setSource(ResponseSource.POST_ASSESSMENT);

@@ -129,6 +129,40 @@ public class EmailService {
     }
 
     /**
+     * Send the "gift assessment" email to a survey respondent. Fired when a
+     * survey configured with a gifted public assessment is completed through its
+     * public link and the respondent left an email. {@code respondentName} may
+     * be blank (the survey name field is optional).
+     */
+    public void sendSurveyGiftAssessment(String email, String respondentName,
+                                          String surveyName, String assessmentTitle,
+                                          String assessmentUrl) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("respondentName", respondentName == null ? "" : respondentName);
+        vars.put("surveyName", surveyName);
+        vars.put("assessmentTitle", assessmentTitle);
+        vars.put("assessmentUrl", assessmentUrl);
+
+        send(email, EmailTemplateKey.SURVEY_GIFT_ASSESSMENT, vars);
+    }
+
+    /**
+     * Fire-and-forget variant used by the public survey submit flow. Delivery
+     * runs on the async executor so a slow SMTP/Resend endpoint cannot block the
+     * respondent's submission response. Failures are logged, not surfaced.
+     */
+    @Async("emailExecutor")
+    public void sendSurveyGiftAssessmentAsync(String email, String respondentName,
+                                               String surveyName, String assessmentTitle,
+                                               String assessmentUrl) {
+        try {
+            sendSurveyGiftAssessment(email, respondentName, surveyName, assessmentTitle, assessmentUrl);
+        } catch (Exception e) {
+            log.warn("Async survey-gift-assessment email to {} failed: {}", email, e.getMessage());
+        }
+    }
+
+    /**
      * Send the heads-up email when an org's Premium trial is approaching its end.
      * Recipients are typically ORG_ADMINs of the org (resolved by the caller).
      */

@@ -17,6 +17,7 @@ import com.bvisionry.audit.AuditService;
 import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.evaluation.EvaluationService;
 import com.bvisionry.membertype.MemberTypeService;
 import com.bvisionry.notification.EmailService;
@@ -63,9 +64,7 @@ public class AssignmentService {
     private final MemberTypeService memberTypeService;
     private final PersonalInfoResolver personalInfoResolver;
     private final PipelineAutoAssignmentService pipelineAutoAssignmentService;
-
-    @org.springframework.beans.factory.annotation.Value("${bvisionry.frontend.base-url:http://localhost:5173}")
-    private String frontendBaseUrl;
+    private final FrontendUrls frontendUrls;
 
     /**
      * Create one Assignment (+ one Submission) per target member. The caller's
@@ -276,7 +275,7 @@ public class AssignmentService {
                 member.getName(),
                 pipeline.getName(),
                 assignment.getDeadline(),
-                frontendBaseUrl + "/my/assessments/" + submission.getId());
+                frontendUrls.path("/my/assessments/" + submission.getId()));
     }
 
     @Transactional(readOnly = true)
@@ -469,7 +468,7 @@ public class AssignmentService {
                 member.getName(),
                 assignment.getPipeline().getName(),
                 submission.getEffectiveDeadline(),
-                frontendBaseUrl + "/my/assessments/" + submission.getId());
+                frontendUrls.path("/my/assessments/" + submission.getId()));
         // Log user UUID instead of email to keep PII out of application logs
         // — the user can still be looked up via the UUID for support cases.
         log.info("Reminder sent for assignment {} to user {}", assignmentId, member.getId());

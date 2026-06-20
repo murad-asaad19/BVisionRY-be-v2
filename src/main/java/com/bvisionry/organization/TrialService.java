@@ -10,13 +10,13 @@ import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.tx.AfterCommit;
+import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.EmailService;
 import com.bvisionry.organization.dto.OrganizationResponse;
 import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.reporting.service.CacheInvalidationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -48,6 +48,7 @@ public class TrialService {
     private final EmailService emailService;
     private final CacheInvalidationService cacheInvalidationService;
     private final PlatformTransactionManager transactionManager;
+    private final FrontendUrls frontendUrls;
 
     /**
      * REQUIRES_NEW template used by {@link #expireLapsed()} so each org commits in its
@@ -55,9 +56,6 @@ public class TrialService {
      * by the Spring proxy and share the caller's transaction, defeating the isolation.
      */
     private TransactionTemplate requiresNewTx;
-
-    @Value("${bvisionry.frontend.base-url:http://localhost:5173}")
-    private String frontendBaseUrl;
 
     @PostConstruct
     void initTransactionTemplate() {
@@ -214,7 +212,7 @@ public class TrialService {
                 continue;
             }
 
-            String dashboardUrl = frontendBaseUrl + "/admin/organizations/" + org.getId();
+            String dashboardUrl = frontendUrls.path("/admin/organizations/" + org.getId());
             for (User u : recipients) {
                 emailService.sendTrialEndingSoonAsync(
                         u.getEmail(), org.getName(), daysLeft, org.getTrialEndsAt(), dashboardUrl);
@@ -253,7 +251,7 @@ public class TrialService {
                     org.getId(), org.getName());
             return;
         }
-        String dashboardUrl = frontendBaseUrl + "/admin/organizations/" + org.getId();
+        String dashboardUrl = frontendUrls.path("/admin/organizations/" + org.getId());
         Instant expiredAt = org.getTrialEndsAt();
         for (User u : recipients) {
             emailService.sendTrialExpiredAsync(u.getEmail(), org.getName(), expiredAt, dashboardUrl);

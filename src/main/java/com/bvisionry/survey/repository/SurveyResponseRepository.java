@@ -40,6 +40,30 @@ public interface SurveyResponseRepository extends JpaRepository<SurveyResponse, 
     boolean existsBySurveyIdAndSubmissionId(UUID surveyId, UUID submissionId);
 
     /**
+     * Resolves the survey response that a gift assessment was emailed to. The
+     * gift token travels in the {@code /a/<link>?g=<token>} URL; when the
+     * respondent starts the assessment we look the response up here and stamp the
+     * resulting submission onto it. Unique column, so at most one row.
+     */
+    Optional<SurveyResponse> findByGiftToken(UUID giftToken);
+
+    /**
+     * {@code (responseId, submissionId, submissionStatus)} for the gifted-assessment
+     * submissions tied to the given responses on a specific gift link. Reads the
+     * persisted {@code giftSubmission} link (set when the respondent opens the gift
+     * email), scoped by the link as a safety net. Replaces the old email-based
+     * matching.
+     */
+    @Query("""
+            SELECT r.id, s.id, s.status FROM SurveyResponse r
+            JOIN r.giftSubmission s
+            WHERE r.id IN :responseIds
+              AND s.publicLink.id = :giftLinkId
+            """)
+    List<Object[]> findGiftSubmissionRefs(@Param("responseIds") Collection<UUID> responseIds,
+                                          @Param("giftLinkId") UUID giftLinkId);
+
+    /**
      * Filtered + paginated lookup used by the admin "responses" table. Pushes the
      * search (email/name LIKE) and date-range filters into the database so we don't
      * load every response into memory just to slice a page off the end.

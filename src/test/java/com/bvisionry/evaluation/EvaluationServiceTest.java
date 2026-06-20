@@ -15,6 +15,8 @@ import com.bvisionry.common.enums.PromptType;
 import com.bvisionry.common.enums.QuestionType;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.enums.SubscriptionTier;
+import com.bvisionry.config.FrontendProperties;
+import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.evaluation.entity.OverallSummary;
 import com.bvisionry.notification.EmailService;
@@ -33,6 +35,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -78,6 +81,10 @@ class EvaluationServiceTest {
 
     @BeforeEach
     void setUp() {
+        // EvaluationService builds the results-ready link via FrontendUrls; inject a
+        // real one so the email-send path doesn't NPE (URL value isn't asserted).
+        ReflectionTestUtils.setField(evaluationService, "frontendUrls",
+                new FrontendUrls(new FrontendProperties()));
         submissionId = UUID.randomUUID();
 
         pipeline = new Pipeline();

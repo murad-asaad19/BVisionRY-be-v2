@@ -5,6 +5,8 @@ import com.bvisionry.survey.entity.SurveyVisibility;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
+import java.util.UUID;
+
 /**
  * PATCH-style update for survey metadata. Allowed in any status — used both
  * for inline-rename of the survey name and for toggling the visibility on
@@ -12,6 +14,12 @@ import jakarta.validation.constraints.Size;
  *
  * <p>{@code visibility}, {@code respondentEmailMode} and {@code respondentNameMode}
  * are all optional: when null, the existing value is preserved.
+ *
+ * <p>The gift public assessment is clearable, so a bare null can't mean both
+ * "keep" and "remove": {@code giftPublicAssessmentLinkId} sets the gift when
+ * non-null, and {@code clearGiftPublicAssessmentLink} removes it. This lets
+ * partial callers (e.g. the published-survey visibility toggle) omit both and
+ * leave the gift untouched.
  */
 public record SurveyMetadataUpdateRequest(
         @NotBlank(message = "Survey name is required")
@@ -25,5 +33,9 @@ public record SurveyMetadataUpdateRequest(
 
         RespondentFieldMode respondentEmailMode,
 
-        RespondentFieldMode respondentNameMode
+        RespondentFieldMode respondentNameMode,
+
+        UUID giftPublicAssessmentLinkId,
+
+        boolean clearGiftPublicAssessmentLink
 ) {}

@@ -1,5 +1,6 @@
 package com.bvisionry.notification;
 
+import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.entity.EmailTemplate;
 import com.bvisionry.notification.entity.EmailTemplateKey;
 import com.bvisionry.notification.schema.EmailTemplateField;
@@ -9,14 +10,19 @@ import com.samskivert.mustache.Template;
 import lombok.RequiredArgsConstructor;
 import org.owasp.html.HtmlPolicyBuilder;
 import org.owasp.html.PolicyFactory;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.util.HtmlUtils;
 
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Renders email subject and body from Mustache templates with admin-editable
@@ -37,10 +43,30 @@ public class EmailTemplateRenderer {
     private final EmailTemplateDefaults defaults;
     private final EmailTemplateSchemaRegistry schemaRegistry;
 
+    /**
+     * Shared helper that resolves the frontend origin and builds absolute URLs for
+     * brand assets. Replaces the former per-class {@code @Value} field so the origin
+     * is configured and normalised in one place across all services.
+     */
+    private final FrontendUrls frontendUrls;
+
+    /** Cache of compiled body templates keyed by {@link EmailTemplateKey}. */
+    private final Map<EmailTemplateKey, Template> bodyTemplateCache = new ConcurrentHashMap<>();
+
     private final Mustache.Compiler compiler = Mustache.compiler()
             // Don't throw when a variable is missing; render as empty instead.
             // Email authors often reference optional fields (postCompletionUrl, deadline).
-            .defaultValue("");
+            .defaultValue("")
+            // Resolve {{>_layout-header}} / {{>_layout-footer}} partials against the
+            // classpath email-template directory so the locked HTML shell (navy header
+            // band, footer, responsive styles) lives once in shared partials instead of
+            // being duplicated across every template skeleton.
+            .withLoader(EmailTemplateRenderer::loadPartial);
+
+    private static Reader loadPartial(String name) throws Exception {
+        ClassPathResource resource = new ClassPathResource("templates/email/" + name + ".mustache");
+        return new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8);
+    }
 
     /**
      * Allowlist policy for RICH_TEXT email fields. Permits a small set of inline
@@ -74,11 +100,12 @@ public class EmailTemplateRenderer {
         Map<String, Object> scope = new HashMap<>(systemVariables);
         scope.put("fields", renderedFields);
         computeSectionFlags(key, fieldValues, scope);
+        applyBrandAssets(scope);
 
         String subjectSource = textValue(fieldValues.get("subject"),
                 textValue(schemaRegistry.defaultValues(key).get("subject"), defaults.subject(key)));
         String subject = compile(subjectSource).execute(systemVariables);
-        String body    = compile(defaults.body(key)).execute(scope);
+        String body    = bodyTemplateCache.computeIfAbsent(key, k -> compiler.compile(defaults.body(k))).execute(scope);
         return new Rendered(subject, body);
     }
 
@@ -152,6 +179,17 @@ public class EmailTemplateRenderer {
     private static String htmlizeNewlines(String s) {
         if (s == null || s.indexOf('\n') < 0) return s;
         return s.replace("\r\n", "\n").replace("\n", "<br>");
+    }
+
+    /**
+     * Injects absolute brand-logo URLs into the render scope so the shared layout
+     * partials can reference {@code {{headerLogoUrl}}} / {@code {{footerLogoUrl}}}.
+     * The white logotype sits on the navy header; the full-colour logotype sits on
+     * the white footer. {@code putIfAbsent} lets a caller (e.g. a preview) override.
+     */
+    private void applyBrandAssets(Map<String, Object> scope) {
+        scope.putIfAbsent("headerLogoUrl", frontendUrls.path("/brand/bvisionry-logo-white.png"));
+        scope.putIfAbsent("footerLogoUrl", frontendUrls.path("/brand/bvisionry-logo.png"));
     }
 
     /**

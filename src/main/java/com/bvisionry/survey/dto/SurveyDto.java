@@ -19,6 +19,7 @@ public record SurveyDto(
         Instant closedAt,
         RespondentFieldMode respondentEmailMode,
         RespondentFieldMode respondentNameMode,
+        UUID giftPublicAssessmentLinkId,
         UUID createdBy,
         List<SurveyPillarDto> pillars,
         Instant createdAt,

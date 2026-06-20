@@ -13,6 +13,8 @@ import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.config.FrontendProperties;
+import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.EmailService;
 import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.organization.OrganizationRepository;
@@ -28,6 +30,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
 import java.util.List;
@@ -66,6 +69,10 @@ class AssignmentServiceTest {
 
     @BeforeEach
     void setUp() {
+        // AssignmentService builds /my/assessments links via FrontendUrls; inject a
+        // real one so the email-send paths don't NPE (URL value isn't asserted).
+        ReflectionTestUtils.setField(assignmentService, "frontendUrls",
+                new FrontendUrls(new FrontendProperties()));
         orgId = UUID.randomUUID();
         pipelineId = UUID.randomUUID();
         assignedBy = UUID.randomUUID();

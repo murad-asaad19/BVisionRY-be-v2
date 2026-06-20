@@ -41,6 +41,28 @@ public class SurveyResponse extends BaseEntity {
     @JoinColumn(name = "submission_id")
     private Submission submission;
 
+    /**
+     * Per-response token minted when a gift assessment is emailed for this public
+     * survey response. Travels in the gift link ({@code /a/<link>?g=<giftToken>})
+     * and lets the gifted submission be tied back to THIS response (via
+     * {@link #giftSubmission}) when the respondent starts it — instead of guessing
+     * by shared email. Null for responses that never received a gift.
+     */
+    @Column(name = "gift_token", unique = true)
+    private UUID giftToken;
+
+    /**
+     * The gifted public-assessment submission the respondent started from this
+     * response's gift email, matched via {@link #giftToken}. Distinct from
+     * {@link #submission} (the post-assessment link): the survey response is the
+     * primary artifact for a gift, so this FK is {@code ON DELETE SET NULL} —
+     * deleting the gifted submission detaches it rather than cascading the
+     * response away. Null until (and unless) the respondent opens the gift.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "gift_submission_id")
+    private Submission giftSubmission;
+
     @Column(name = "submitted_at", nullable = false)
     private Instant submittedAt;
 

@@ -30,6 +30,7 @@ import com.bvisionry.reporting.dto.PillarScoreSummary;
 import com.bvisionry.reporting.service.MemberResultsService;
 import com.bvisionry.reporting.service.PersonalInfoResolver;
 import com.bvisionry.survey.entity.RespondentFieldMode;
+import com.bvisionry.survey.repository.SurveyResponseRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -64,6 +65,7 @@ class PublicAssessmentServiceTest {
     @Mock private PillarEvaluationRepository pillarEvaluationRepository;
     @Mock private OverallSummaryRepository overallSummaryRepository;
     @Mock private PersonalInfoResolver personalInfoResolver;
+    @Mock private SurveyResponseRepository surveyResponseRepository;
 
     @InjectMocks
     private PublicAssessmentService publicAssessmentService;
@@ -140,7 +142,7 @@ class PublicAssessmentServiceTest {
             });
 
             PublicAssessmentSessionResponse response = publicAssessmentService.createSession(
-                    token, new PublicAssessmentSessionRequest("jane@example.com", "  Jane Doe  "));
+                    token, new PublicAssessmentSessionRequest("jane@example.com", "  Jane Doe  ", null));
 
             ArgumentCaptor<Submission> captor = ArgumentCaptor.forClass(Submission.class);
             verify(submissionRepository).save(captor.capture());
@@ -164,7 +166,7 @@ class PublicAssessmentServiceTest {
             when(linkRepository.findByToken(token)).thenReturn(Optional.of(link));
 
             assertThatThrownBy(() -> publicAssessmentService.createSession(
-                    token, new PublicAssessmentSessionRequest(null, "Jane Doe")))
+                    token, new PublicAssessmentSessionRequest(null, "Jane Doe", null)))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("email");
 
@@ -179,7 +181,7 @@ class PublicAssessmentServiceTest {
 
             // Blank-only input counts as missing, same as null.
             assertThatThrownBy(() -> publicAssessmentService.createSession(
-                    token, new PublicAssessmentSessionRequest("jane@example.com", "   ")))
+                    token, new PublicAssessmentSessionRequest("jane@example.com", "   ", null)))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("name");
 
@@ -193,7 +195,7 @@ class PublicAssessmentServiceTest {
             when(linkRepository.findByToken(token)).thenReturn(Optional.of(link));
 
             assertThatThrownBy(() -> publicAssessmentService.createSession(
-                    token, new PublicAssessmentSessionRequest(null, null)))
+                    token, new PublicAssessmentSessionRequest(null, null, null)))
                     .isInstanceOf(ResponseStatusException.class)
                     .extracting(e -> ((ResponseStatusException) e).getStatusCode())
                     .isEqualTo(HttpStatus.GONE);
@@ -208,7 +210,7 @@ class PublicAssessmentServiceTest {
             when(linkRepository.incrementResponseCount(linkId)).thenReturn(0);
 
             assertThatThrownBy(() -> publicAssessmentService.createSession(
-                    token, new PublicAssessmentSessionRequest(null, null)))
+                    token, new PublicAssessmentSessionRequest(null, null, null)))
                     .isInstanceOf(IllegalOperationException.class)
                     .hasMessageContaining("maximum number of responses");
 

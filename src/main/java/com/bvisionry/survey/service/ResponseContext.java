@@ -3,6 +3,8 @@ package com.bvisionry.survey.service;
 import com.bvisionry.assessment.entity.Submission;
 import com.bvisionry.auth.entity.User;
 
+import java.util.UUID;
+
 /**
  * Sealed identity-and-channel context for a survey submission. The two
  * variants correspond to the two ingress paths into
@@ -23,7 +25,8 @@ import com.bvisionry.auth.entity.User;
  */
 public sealed interface ResponseContext permits ResponseContext.Public, ResponseContext.Member {
 
-    record Public(String email, String name, String ipHash, String cookieId) implements ResponseContext {}
+    record Public(String email, String name, String ipHash, String cookieId,
+                  UUID giftToken) implements ResponseContext {}
 
     record Member(Submission submission, User user) implements ResponseContext {}
 }

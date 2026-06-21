@@ -250,6 +250,15 @@ public class PublicAssessmentService {
         }
         // Re-submit from FAILED is allowed, mirroring the member flow.
 
+        // A disabled/archived link accepts no new evaluations, even from a respondent
+        // who already has an open session — mirror retake() and createSession() so the
+        // re-evaluation entry points enforce one rule and we never spend AI on a link
+        // the organizer has shut off.
+        if (submission.getPublicLink().getStatus() != PublicAssessmentLinkStatus.ACTIVE) {
+            throw new ResponseStatusException(HttpStatus.GONE,
+                    "This assessment link is no longer accepting responses");
+        }
+
         // Verify all required questions are answered
         ReviewResponse review = buildReview(submission);
         if (!review.complete()) {
@@ -332,21 +341,15 @@ public class PublicAssessmentService {
             return Optional.empty();
         }
 
-        return surveyResponseRepository.findByGiftToken(giftToken)
+        // Fetch-join the survey + bound submission so reading the link id and the
+        // submission status/token below doesn't fire a lazy SELECT per association
+        // on this rate-limited taker hot path.
+        return surveyResponseRepository.findByGiftTokenWithSurveyAndSubmission(giftToken)
                 .filter(r -> link.getId().equals(r.getSurvey().getGiftPublicAssessmentLinkId()))
                 .map(r -> r.getGiftSubmission())
                 .filter(submission -> submission != null)
-                .map(submission -> {
-                    SubmissionStatus status = submission.getStatus();
-                    // Results stay viewable even on a disabled link (admins disable a link to
-                    // stop NEW respondents, not to revoke a finished respondent's results).
-                    boolean showResults = link.isShowResultsToRespondent()
-                            && status == SubmissionStatus.EVALUATED;
-                    boolean retakeable = status == SubmissionStatus.FAILED
-                            || status == SubmissionStatus.NEEDS_REVIEW;
-                    return new GiftRecoveryResponse(
-                            submission.getAccessToken(), status, showResults, retakeable);
-                });
+                .map(submission -> new GiftRecoveryResponse(
+                        submission.getAccessToken(), submission.getStatus()));
     }
 
     /**
@@ -361,7 +364,11 @@ public class PublicAssessmentService {
         Submission submission = getSessionSubmission(accessToken);
 
         SubmissionStatus status = submission.getStatus();
-        if (status != SubmissionStatus.FAILED && status != SubmissionStatus.NEEDS_REVIEW) {
+        // Only a hard FAILED is respondent-retakeable. NEEDS_REVIEW means the run
+        // partially succeeded and its results are saved pending admin review — letting
+        // a respondent re-run would overwrite that admin-review state, so re-evaluating
+        // a NEEDS_REVIEW submission is gated to the admin/member retry path only.
+        if (status != SubmissionStatus.FAILED) {
             throw new BadRequestException(
                     "This assessment can only be retaken after a failed evaluation.");
         }
@@ -386,16 +393,23 @@ public class PublicAssessmentService {
         } else {
             // SYSTEM failure (the common case, and any legacy null kind): re-run the
             // evaluation on the existing answers. Delegate to the shared retry path so
-            // the FAILED/NEEDS_REVIEW → SUBMITTED flip, the claim reset and the
-            // deferred async dispatch stay a single source of truth with the member
-            // retry flow (EvaluationService#retryFailedSubmission). The shared method
-            // re-loads the same managed submission, so the response below sees SUBMITTED.
+            // the FAILED → SUBMITTED flip, the claim reset and the deferred async
+            // dispatch stay one source of truth with the member retry flow
+            // (EvaluationService#retryFailedSubmission).
             evaluationService.retryFailedSubmission(submission.getId());
             log.info("Public submission {} re-queued for evaluation (SYSTEM retake)", submission.getId());
+            // The shared retry deterministically flips the submission to SUBMITTED and
+            // queues the re-run. Report that explicitly rather than reading the status
+            // back off the shared managed instance, so the response stays correct
+            // regardless of the retry method's transaction propagation. SUBMITTED →
+            // the taker polls for the re-run.
+            return new SubmissionStatusResponse(
+                    submission.getId(), SubmissionStatus.SUBMITTED,
+                    submission.getSubmittedAt(), submission.getEvaluatedAt());
         }
 
-        // The resulting status tells the taker how to route: SUBMITTED → poll for the
-        // re-run; IN_PROGRESS → reopen the editor.
+        // INPUT failure path: this method reopened editing on the submission directly,
+        // so its state is authoritative here. IN_PROGRESS → the taker reopens the editor.
         return new SubmissionStatusResponse(
                 submission.getId(), submission.getStatus(),
                 submission.getSubmittedAt(), submission.getEvaluatedAt());

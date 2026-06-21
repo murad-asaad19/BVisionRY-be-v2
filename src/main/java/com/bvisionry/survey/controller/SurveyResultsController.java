@@ -35,6 +35,16 @@ public class SurveyResultsController {
         return ResponseEntity.ok(resultsService.getSummary(surveyId));
     }
 
+    /**
+     * Per-section / per-question aggregate for the "Live" analytics tab —
+     * restricted to sections opted into live analytics. Polled while responses
+     * come in. Same shape as {@code /summary}, filtered.
+     */
+    @GetMapping("/live")
+    public ResponseEntity<SurveyResultsSummaryDto> live(@PathVariable UUID surveyId) {
+        return ResponseEntity.ok(resultsService.getLive(surveyId));
+    }
+
     @GetMapping("/responses")
     public ResponseEntity<SurveyResponsePageDto> listResponses(
             @PathVariable UUID surveyId,

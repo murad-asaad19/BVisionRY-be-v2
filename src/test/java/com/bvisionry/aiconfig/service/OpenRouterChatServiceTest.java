@@ -147,7 +147,7 @@ class OpenRouterChatServiceTest {
                 .thenReturn(stub);
 
         var response = chatService.generateOverallSummary(
-                "Pillar results summary", null, null, false, null, false, CallMetadata.NONE);
+                "Pillar results summary", null, null, null, false, CallMetadata.NONE);
 
         assertThat(response.parsed().overallScorePercentage()).isEqualTo(82);
         assertThat(response.parsed().strengths()).hasSize(2);

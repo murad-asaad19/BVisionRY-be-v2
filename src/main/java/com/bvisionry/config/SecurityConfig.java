@@ -103,6 +103,8 @@ public class SecurityConfig {
                         .requestMatchers("/api/join/**").permitAll()
                         .requestMatchers("/api/public/surveys/**").permitAll()
                         .requestMatchers("/api/public/assessments/**").permitAll()
+                        // Public digital business cards — single published card by slug (read-only).
+                        .requestMatchers(HttpMethod.GET, "/api/public/business-cards/**").permitAll()
                         // Lead capture — public POST from the Book-a-Demo BFF
                         .requestMatchers(HttpMethod.POST, "/api/v1/leads").permitAll()
                         // Contact Us — public POST from the marketing contact form

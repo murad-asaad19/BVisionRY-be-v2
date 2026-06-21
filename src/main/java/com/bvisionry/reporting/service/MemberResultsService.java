@@ -148,10 +148,12 @@ public class MemberResultsService {
      * Re-wraps the cached payload for a specific viewer. Two orthogonal
      * filters apply:
      * <ul>
-     *   <li>Free-tier callers (member or org admin) get {@code strengths} and
-     *       {@code developmentAreas} blanked — those narrative blocks are part
-     *       of the premium report and must not leak through the API even though
-     *       the cached payload always carries them.</li>
+     *   <li>Free-tier callers (member or org admin) get {@code strengths},
+     *       {@code developmentAreas} and {@code corePattern} blanked — those
+     *       narrative blocks are part of the premium report and must not leak
+     *       through the API even though the cached payload always carries them
+     *       (it is generated and stored for every tier, so an upgrade reveals
+     *       them instantly with no re-evaluation).</li>
      *   <li>Non-super-admin callers get {@code surveyResponse} and
      *       {@code survey} stripped — only the platform's super admin
      *       (Conductor) is allowed to read post-assessment survey responses;
@@ -167,7 +169,8 @@ public class MemberResultsService {
                 premium ? r.developmentAreas() : List.of(),
                 r.pillarScores(),
                 premium, r.evaluatedAt(), r.freeTierSummary(), r.topStrengths(),
-                r.maturityIndication(), r.premiumTeaser(), r.corePattern(),
+                r.maturityIndication(), r.premiumTeaser(),
+                premium ? r.corePattern() : null,
                 r.movingForwardNarrative(), r.postCompletion(),
                 superAdmin ? r.surveyResponse() : null,
                 superAdmin ? r.survey() : null,

@@ -27,6 +27,7 @@ import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.Pipeline;
 import com.bvisionry.pipeline.entity.Question;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -42,6 +43,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -171,6 +173,18 @@ class EvaluationServiceTest {
         // test overrides it and the guard tests return before reaching it.
         lenient().when(submissionRepository.claimForEvaluation(eq(submissionId), anyLong()))
                 .thenReturn(1);
+        // persistEvaluationOutcome reloads the submission inside its own transaction
+        // (a managed entity, not the detached one from findByIdWithAllRelations).
+        lenient().when(submissionRepository.findById(submissionId))
+                .thenReturn(Optional.of(submission));
+    }
+
+    @AfterEach
+    void tearDown() {
+        // EvaluationService spins up a real daemon heartbeat scheduler in its field
+        // initializer; @PreDestroy never fires under @InjectMocks, so shut it down
+        // here to avoid leaking a thread per test method.
+        evaluationService.shutdownClaimHeartbeat();
     }
 
     private EvaluationEngine.PipelineEvaluationResult buildMockResult() {
@@ -205,7 +219,7 @@ class EvaluationServiceTest {
         when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
         when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId))
                 .thenReturn(List.of(freeTextAnswer, likertAnswer));
-        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), any(), anyBoolean()))
                 .thenReturn(buildMockResult());
         when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
         when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -216,7 +230,7 @@ class EvaluationServiceTest {
 
         // Member submissions never carry a model override and use the internal
         // (non-public) system prompt — publicAssessment is false.
-        verify(evaluationEngine).evaluatePipeline(any(), any(), any(), any(), anyBoolean(), isNull(), eq(false));
+        verify(evaluationEngine).evaluatePipeline(any(), any(), any(), any(), isNull(), eq(false));
         verify(pillarEvaluationRepository).saveAll(any());
 
         ArgumentCaptor<OverallSummary> summaryCaptor = ArgumentCaptor.forClass(OverallSummary.class);
@@ -233,7 +247,10 @@ class EvaluationServiceTest {
         assertThat(subCaptor.getValue().getEvaluationClaimedAt()).isNull();
         // A full (non-partial) evaluation snapshots the prior results to history
         // before overwriting them in place, so a retake can't silently lose them.
-        verify(pillarReeditService).archiveCurrentEvaluation(eq(submissionId), any());
+        // A null scope means "all pillars" (full re-eval).
+        verify(pillarReeditService).archiveEvaluation(
+                eq(submissionId), any(), any(), isNull(),
+                eq(PillarReeditService.ARCHIVE_REASON_FULL_REEVAL));
     }
 
     @Test
@@ -260,7 +277,7 @@ class EvaluationServiceTest {
         when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
         when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId))
                 .thenReturn(List.of(freeTextAnswer, likertAnswer));
-        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), any(), anyBoolean()))
                 .thenReturn(buildMockResult());
         when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
         when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -280,7 +297,7 @@ class EvaluationServiceTest {
         when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
         when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId))
                 .thenReturn(List.of(freeTextAnswer, likertAnswer));
-        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), any(), anyBoolean()))
                 .thenReturn(buildDegradedResult());
         when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
         when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -318,7 +335,7 @@ class EvaluationServiceTest {
         // Unlock rows present → the partial re-eval path runs.
         when(pillarReeditService.findUnlockedPillarIds(submissionId)).thenReturn(List.of(pillar.getId()));
         when(evaluationEngine.evaluatePartialPipeline(
-                any(), any(), any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+                any(), any(), any(), any(), any(), any(), any(), anyBoolean()))
                 .thenReturn(buildMockResult());
         when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
         when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -327,11 +344,13 @@ class EvaluationServiceTest {
 
         evaluationService.evaluateSubmission(submissionId);
 
-        // A clean partial re-eval clears the unlock rows as its final step. It does
-        // NOT take a full-evaluation snapshot — the partial path archives only the
-        // unlocked pillars via archiveBeforeReeval.
+        // A clean partial re-eval clears the unlock rows as its final step, and
+        // snapshots ONLY the unlocked pillars (scope = the unlocked set) rather than
+        // every pillar.
         verify(pillarReeditService).clearUnlocks(submissionId);
-        verify(pillarReeditService, never()).archiveCurrentEvaluation(any(), any());
+        verify(pillarReeditService).archiveEvaluation(
+                eq(submissionId), any(), any(), eq(Set.of(pillar.getId())),
+                eq(PillarReeditService.ARCHIVE_REASON_PILLAR_REEVAL));
     }
 
     @Test
@@ -341,7 +360,7 @@ class EvaluationServiceTest {
                 .thenReturn(List.of(freeTextAnswer, likertAnswer));
         when(pillarReeditService.findUnlockedPillarIds(submissionId)).thenReturn(List.of(pillar.getId()));
         when(evaluationEngine.evaluatePartialPipeline(
-                any(), any(), any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+                any(), any(), any(), any(), any(), any(), any(), anyBoolean()))
                 .thenReturn(buildDegradedResult());
         when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
         when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -374,7 +393,7 @@ class EvaluationServiceTest {
     void evaluateSubmission_sendsResultsReadyEmail() {
         when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
         when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId)).thenReturn(List.of(likertAnswer));
-        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), any(), anyBoolean()))
                 .thenReturn(buildMockResult());
         when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
         when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -415,7 +434,7 @@ class EvaluationServiceTest {
         when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
         when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId))
                 .thenReturn(List.of(nameAnswer, freeTextAnswer));
-        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), any(), anyBoolean()))
                 .thenReturn(buildMockResult());
         when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
         when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -425,7 +444,7 @@ class EvaluationServiceTest {
         evaluationService.evaluateSubmission(submissionId);
 
         // evaluatePipeline receives ALL answers — it handles personal filtering internally
-        verify(evaluationEngine).evaluatePipeline(eq(pipeline), any(), any(), any(), anyBoolean(), isNull(), eq(false));
+        verify(evaluationEngine).evaluatePipeline(eq(pipeline), any(), any(), any(), isNull(), eq(false));
     }
 
     @Test
@@ -447,7 +466,7 @@ class EvaluationServiceTest {
         when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
         when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId))
                 .thenReturn(List.of(freeTextAnswer, likertAnswer));
-        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), anyBoolean(), any(), anyBoolean()))
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), any(), anyBoolean()))
                 .thenReturn(buildMockResult());
         when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
         when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
@@ -459,7 +478,7 @@ class EvaluationServiceTest {
         // Pipeline resolved from the public link, premium (non-free-tier) prompt path,
         // evaluated with the dedicated public-assessment model and the public system
         // prompt (publicAssessment = true).
-        verify(evaluationEngine).evaluatePipeline(eq(pipeline), eq(submissionId), any(), any(), eq(false),
+        verify(evaluationEngine).evaluatePipeline(eq(pipeline), eq(submissionId), any(), any(),
                 eq("anthropic/claude-haiku-4-5"), eq(true));
         verify(promptTemplateService).getActivePromptContent(PromptType.OVERALL_SUMMARY);
 

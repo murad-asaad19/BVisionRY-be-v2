@@ -14,13 +14,13 @@ import java.util.UUID;
  *
  * @param accessToken the bound submission's session credential, used for all
  *                    subsequent {@code /sessions/{accessToken}} calls
- * @param status      the bound submission's current status
- * @param showResults whether results are viewable now (link allows it AND status is EVALUATED)
- * @param retakeable  whether the respondent may retake (status is FAILED or NEEDS_REVIEW)
+ * @param status      the bound submission's current status — the taker derives
+ *                    routing (results / retake / resume) from this plus the link
+ *                    info it already holds, so no redundant visibility flags are
+ *                    sent (they would only duplicate, and risk disagreeing with,
+ *                    the authoritative client-side derivation)
  */
 public record GiftRecoveryResponse(
         UUID accessToken,
-        SubmissionStatus status,
-        boolean showResults,
-        boolean retakeable
+        SubmissionStatus status
 ) {}

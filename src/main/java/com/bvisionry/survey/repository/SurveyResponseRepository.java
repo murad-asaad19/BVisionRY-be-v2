@@ -48,6 +48,20 @@ public interface SurveyResponseRepository extends JpaRepository<SurveyResponse, 
     Optional<SurveyResponse> findByGiftToken(UUID giftToken);
 
     /**
+     * Same lookup as {@link #findByGiftToken} but eager-fetches the survey and the
+     * bound gift submission, so the public {@code recover} endpoint can read
+     * {@code survey.giftPublicAssessmentLinkId} and the submission's status/token
+     * without firing a lazy SELECT per association on the taker hot path.
+     */
+    @Query("""
+            SELECT r FROM SurveyResponse r
+            JOIN FETCH r.survey
+            LEFT JOIN FETCH r.giftSubmission
+            WHERE r.giftToken = :giftToken
+            """)
+    Optional<SurveyResponse> findByGiftTokenWithSurveyAndSubmission(@Param("giftToken") UUID giftToken);
+
+    /**
      * {@code (responseId, submissionId, submissionStatus)} for the gifted-assessment
      * submissions tied to the given responses on a specific gift link. Reads the
      * persisted {@code giftSubmission} link (set when the respondent opens the gift

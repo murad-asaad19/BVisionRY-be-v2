@@ -264,9 +264,27 @@ class PublicAssessmentServiceTest {
         }
 
         @Test
+        void submit_disabledLink_throwsGone() {
+            // A disabled/archived link accepts no new evaluations, even from a
+            // respondent with an open session — mirrors retake()/createSession().
+            link.setStatus(PublicAssessmentLinkStatus.DISABLED);
+            submission.setStatus(SubmissionStatus.FAILED);
+            when(submissionRepository.findByAccessTokenWithPublicLink(accessToken))
+                    .thenReturn(Optional.of(submission));
+
+            assertThatThrownBy(() -> publicAssessmentService.submit(accessToken))
+                    .isInstanceOf(ResponseStatusException.class)
+                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                    .isEqualTo(HttpStatus.GONE);
+
+            verify(evaluationService, never()).evaluateSubmissionAsync(any());
+        }
+
+        @Test
         void submit_fromFailed_clearsStaleEvaluationClaim() {
             // A prior failed evaluation left a claim stamp; resubmitting must clear it
-            // or claimForEvaluation would silently skip the new run for 15 minutes.
+            // or claimForEvaluation would silently skip the new run until the 10-minute
+            // stale-claim window elapsed.
             submission.setStatus(SubmissionStatus.FAILED);
             submission.setEvaluationClaimedAt(Instant.now());
 
@@ -309,28 +327,26 @@ class PublicAssessmentServiceTest {
         void recover_evaluatedSubmission_returnsAccessTokenAndShowResults() {
             submission.setStatus(SubmissionStatus.EVALUATED);
             when(linkRepository.findByToken(token)).thenReturn(Optional.of(link));
-            when(surveyResponseRepository.findByGiftToken(giftToken)).thenReturn(Optional.of(surveyResponse));
+            when(surveyResponseRepository.findByGiftTokenWithSurveyAndSubmission(giftToken)).thenReturn(Optional.of(surveyResponse));
 
             GiftRecoveryResponse result = publicAssessmentService
                     .recoverByGiftToken(token, giftToken.toString()).orElseThrow();
 
             assertThat(result.accessToken()).isEqualTo(accessToken);
             assertThat(result.status()).isEqualTo(SubmissionStatus.EVALUATED);
-            assertThat(result.showResults()).isTrue();
-            assertThat(result.retakeable()).isFalse();
         }
 
         @Test
         void recover_failedSubmission_isRetakeable() {
             submission.setStatus(SubmissionStatus.FAILED);
             when(linkRepository.findByToken(token)).thenReturn(Optional.of(link));
-            when(surveyResponseRepository.findByGiftToken(giftToken)).thenReturn(Optional.of(surveyResponse));
+            when(surveyResponseRepository.findByGiftTokenWithSurveyAndSubmission(giftToken)).thenReturn(Optional.of(surveyResponse));
 
             GiftRecoveryResponse result = publicAssessmentService
                     .recoverByGiftToken(token, giftToken.toString()).orElseThrow();
 
-            assertThat(result.retakeable()).isTrue();
-            assertThat(result.showResults()).isFalse();
+            assertThat(result.accessToken()).isEqualTo(accessToken);
+            assertThat(result.status()).isEqualTo(SubmissionStatus.FAILED);
         }
 
         @Test
@@ -338,19 +354,22 @@ class PublicAssessmentServiceTest {
             submission.setStatus(SubmissionStatus.EVALUATED);
             link.setStatus(PublicAssessmentLinkStatus.DISABLED);
             when(linkRepository.findByToken(token)).thenReturn(Optional.of(link));
-            when(surveyResponseRepository.findByGiftToken(giftToken)).thenReturn(Optional.of(surveyResponse));
+            when(surveyResponseRepository.findByGiftTokenWithSurveyAndSubmission(giftToken)).thenReturn(Optional.of(surveyResponse));
 
             GiftRecoveryResponse result = publicAssessmentService
                     .recoverByGiftToken(token, giftToken.toString()).orElseThrow();
 
-            assertThat(result.showResults()).isTrue();
+            // Recover still resolves the bound submission on a disabled link (results
+            // stay viewable to a finished respondent; the taker decides from status).
+            assertThat(result.accessToken()).isEqualTo(accessToken);
+            assertThat(result.status()).isEqualTo(SubmissionStatus.EVALUATED);
         }
 
         @Test
         void recover_notStartedYet_returnsEmpty() {
             surveyResponse.setGiftSubmission(null);
             when(linkRepository.findByToken(token)).thenReturn(Optional.of(link));
-            when(surveyResponseRepository.findByGiftToken(giftToken)).thenReturn(Optional.of(surveyResponse));
+            when(surveyResponseRepository.findByGiftTokenWithSurveyAndSubmission(giftToken)).thenReturn(Optional.of(surveyResponse));
 
             assertThat(publicAssessmentService.recoverByGiftToken(token, giftToken.toString())).isEmpty();
         }
@@ -359,7 +378,7 @@ class PublicAssessmentServiceTest {
         void recover_giftTokenForDifferentLink_returnsEmpty() {
             surveyResponse.getSurvey().setGiftPublicAssessmentLinkId(UUID.randomUUID());
             when(linkRepository.findByToken(token)).thenReturn(Optional.of(link));
-            when(surveyResponseRepository.findByGiftToken(giftToken)).thenReturn(Optional.of(surveyResponse));
+            when(surveyResponseRepository.findByGiftTokenWithSurveyAndSubmission(giftToken)).thenReturn(Optional.of(surveyResponse));
 
             assertThat(publicAssessmentService.recoverByGiftToken(token, giftToken.toString())).isEmpty();
         }
@@ -369,7 +388,7 @@ class PublicAssessmentServiceTest {
             when(linkRepository.findByToken(token)).thenReturn(Optional.of(link));
 
             assertThat(publicAssessmentService.recoverByGiftToken(token, "  ")).isEmpty();
-            verify(surveyResponseRepository, never()).findByGiftToken(any());
+            verify(surveyResponseRepository, never()).findByGiftTokenWithSurveyAndSubmission(any());
         }
     }
 
@@ -403,19 +422,17 @@ class PublicAssessmentServiceTest {
         }
 
         @Test
-        void retake_needsReview_delegatesToSharedRetry() {
+        void retake_needsReview_throwsBadRequest() {
+            // NEEDS_REVIEW results are saved pending admin review — a respondent retake
+            // must NOT overwrite them, so it is rejected (admin/member retry only).
             submission.setStatus(SubmissionStatus.NEEDS_REVIEW);
             when(submissionRepository.findByAccessTokenWithPublicLink(accessToken))
                     .thenReturn(Optional.of(submission));
-            doAnswer(inv -> {
-                submission.queueForEvaluation();
-                return null;
-            }).when(evaluationService).retryFailedSubmission(submissionId);
 
-            publicAssessmentService.retake(accessToken);
+            assertThatThrownBy(() -> publicAssessmentService.retake(accessToken))
+                    .isInstanceOf(BadRequestException.class);
 
-            assertThat(submission.getStatus()).isEqualTo(SubmissionStatus.SUBMITTED);
-            verify(evaluationService).retryFailedSubmission(submissionId);
+            verify(evaluationService, never()).retryFailedSubmission(any());
             verify(evaluationService, never()).evaluateSubmissionAsync(any());
         }
 

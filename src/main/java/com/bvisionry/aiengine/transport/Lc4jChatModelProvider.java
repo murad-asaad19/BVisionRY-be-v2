@@ -54,6 +54,17 @@ public class Lc4jChatModelProvider {
     @Value("${bvisionry.ai.openrouter.app-title:BVisionRY}")
     private String openRouterAppTitle;
 
+    /**
+     * Optional OpenRouter routing-variant suffix applied to the model id ON THE WIRE
+     * only — "nitro" sorts providers by throughput (fastest tok/s), "floor" by price.
+     * Blank = OpenRouter default routing. Deliberately kept out of the capability
+     * lookup and the cache key (both key on the base id): OpenRouter's /models list
+     * has no variant entries, so a suffixed id would miss structured-output detection
+     * and silently fall back to guardrail-only mode.
+     */
+    @Value("${bvisionry.ai.openrouter.routing-variant:}")
+    private String routingVariant;
+
     private final Map<String, ChatModel> cache = new ConcurrentHashMap<>();
 
     /**
@@ -91,7 +102,7 @@ public class Lc4jChatModelProvider {
         OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
                 .baseUrl(OPENROUTER_OPENAI_BASE_URL)
                 .apiKey(apiKey)
-                .modelName(modelName)
+                .modelName(applyRoutingVariant(modelName))
                 .temperature(temperature)
                 .maxTokens(maxTokens)
                 .timeout(Duration.ofSeconds(requestTimeoutSeconds))
@@ -108,6 +119,18 @@ public class Lc4jChatModelProvider {
         }
 
         return builder.build();
+    }
+
+    /**
+     * Append the configured OpenRouter routing variant (e.g. ":nitro") to the wire
+     * model id. No-op when unset, or when the id already pins a variant (a ":" is
+     * present) so we never double-suffix an explicitly chosen route.
+     */
+    private String applyRoutingVariant(String modelName) {
+        if (routingVariant == null || routingVariant.isBlank() || modelName.contains(":")) {
+            return modelName;
+        }
+        return modelName + ":" + routingVariant.strip();
     }
 
     private Map<String, String> buildHeaders() {

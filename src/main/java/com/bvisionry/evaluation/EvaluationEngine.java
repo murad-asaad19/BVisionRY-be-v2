@@ -115,8 +115,8 @@ public class EvaluationEngine {
     // ========== Full pipeline evaluation ==========
 
     public PipelineEvaluationResult evaluatePipeline(Pipeline pipeline, List<Answer> answers,
-                                                      String summaryPrompt, boolean freeTier) {
-        return evaluatePipeline(pipeline, null, answers, summaryPrompt, freeTier, null, false);
+                                                      String summaryPrompt) {
+        return evaluatePipeline(pipeline, null, answers, summaryPrompt, null, false);
     }
 
     /**
@@ -129,7 +129,7 @@ public class EvaluationEngine {
      */
     public PipelineEvaluationResult evaluatePipeline(Pipeline pipeline, UUID submissionId,
                                                       List<Answer> answers,
-                                                      String summaryPrompt, boolean freeTier,
+                                                      String summaryPrompt,
                                                       String modelOverride, boolean publicAssessment) {
         EvaluationContext ctx = prepareEvaluationContext(pipeline, answers);
 
@@ -139,7 +139,7 @@ public class EvaluationEngine {
                 modelOverride, publicAssessment);
 
         SummaryResult summary = generateOverallSummary(
-                pillarResults, ctx.evaluableAnswers, summaryPrompt, ctx.userContext, freeTier,
+                pillarResults, ctx.evaluableAnswers, summaryPrompt, ctx.userContext,
                 submissionId, pipelineId, modelOverride, publicAssessment);
 
         return new PipelineEvaluationResult(pillarResults, summary);
@@ -203,14 +203,12 @@ public class EvaluationEngine {
      *                             re-evaluated. Used to synthesize PillarResults for the
      *                             summary call so the AI sees the full picture.
      * @param summaryPrompt        Same overall-summary prompt the full pipeline path uses.
-     * @param freeTier             True when the org is on the FREE tier — unlocks the
-     *                             trimmed free-tier summary template.
      */
     public PipelineEvaluationResult evaluatePartialPipeline(Pipeline pipeline, UUID submissionId,
                                                              List<Answer> answers,
                                                              Set<UUID> pillarIdsToReeval,
                                                              List<PillarEvaluation> preservedEvaluations,
-                                                             String summaryPrompt, boolean freeTier,
+                                                             String summaryPrompt,
                                                              String modelOverride, boolean publicAssessment) {
         EvaluationContext ctx = prepareEvaluationContext(pipeline, answers);
 
@@ -251,7 +249,7 @@ public class EvaluationEngine {
         List<PillarResult> allResults = new ArrayList<>(resultsById.values());
 
         SummaryResult summary = generateOverallSummary(
-                allResults, ctx.evaluableAnswers, summaryPrompt, ctx.userContext, freeTier,
+                allResults, ctx.evaluableAnswers, summaryPrompt, ctx.userContext,
                 submissionId, pipelineId, modelOverride, publicAssessment);
 
         // The result's pillarResults list contains only the freshly re-evaluated
@@ -481,17 +479,15 @@ public class EvaluationEngine {
     public SummaryResult generateOverallSummary(List<PillarResult> pillarResults,
                                                   List<Answer> answers,
                                                   String overallSummaryPrompt,
-                                                  String userContext,
-                                                  boolean freeTier) {
+                                                  String userContext) {
         return generateOverallSummary(pillarResults, answers, overallSummaryPrompt,
-                userContext, freeTier, null, null, null, false);
+                userContext, null, null, null, false);
     }
 
     public SummaryResult generateOverallSummary(List<PillarResult> pillarResults,
                                                   List<Answer> answers,
                                                   String overallSummaryPrompt,
                                                   String userContext,
-                                                  boolean freeTier,
                                                   UUID submissionId, UUID pipelineId,
                                                   String modelOverride, boolean publicAssessment) {
         StringBuilder context = buildSummaryContext(pillarResults);
@@ -520,7 +516,7 @@ public class EvaluationEngine {
         }
         context.append("</raw_excerpts>\n");
 
-        return callOverallSummary(context.toString(), overallSummaryPrompt, userContext, freeTier,
+        return callOverallSummary(context.toString(), overallSummaryPrompt, userContext,
                 modelOverride, publicAssessment, CallMetadata.forSummary(submissionId, pipelineId));
     }
 
@@ -765,11 +761,11 @@ public class EvaluationEngine {
     }
 
     private SummaryResult callOverallSummary(String context, String overallSummaryPrompt,
-                                               String userContext, boolean freeTier,
+                                               String userContext,
                                                String modelOverride, boolean publicAssessment,
                                                CallMetadata metadata) {
         var aiResponse = openRouterChatService.generateOverallSummary(
-                context, overallSummaryPrompt, userContext, freeTier, modelOverride, publicAssessment, metadata);
+                context, overallSummaryPrompt, userContext, modelOverride, publicAssessment, metadata);
         if (aiResponse.isParsed()) {
             OverallSummaryResult sr = aiResponse.parsed();
             return new SummaryResult(

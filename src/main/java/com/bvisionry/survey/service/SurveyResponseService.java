@@ -400,6 +400,7 @@ public class SurveyResponseService {
                     }
                 }
             }
+            case COUNTRY -> answer.setSelectedValue(validateCountryCode(question, dto.selectedValue()));
         }
         return answer;
     }
@@ -463,6 +464,25 @@ public class SurveyResponseService {
             throw new BadRequestException("Response is shorter than minimum length for question: "
                     + question.getPromptText());
         }
+    }
+
+    /**
+     * Normalize + validate a COUNTRY answer. Accepts a blank/absent value (the
+     * required-question gate runs separately); otherwise the value must be an
+     * ISO-3166 alpha-2 code. We validate the format rather than a fixed catalog
+     * so the stored code never drifts out of sync with the frontend country
+     * list — the dropdown already constrains the respondent to real countries.
+     * Returns the uppercased code, or {@code null} when blank.
+     */
+    private String validateCountryCode(SurveyQuestion question, String value) {
+        String normalized = normalize(value);
+        if (normalized == null) return null;
+        String upper = normalized.toUpperCase();
+        if (!upper.matches("^[A-Z]{2}$")) {
+            throw new BadRequestException("Invalid country code '" + value + "' for question: "
+                    + question.getPromptText());
+        }
+        return upper;
     }
 
     private boolean isMultiSelect(SurveyQuestion question) {

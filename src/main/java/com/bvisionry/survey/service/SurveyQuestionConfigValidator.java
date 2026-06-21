@@ -20,6 +20,7 @@ public class SurveyQuestionConfigValidator {
             case LIKERT -> validateLikert(config);
             case NUMBER -> validateNumber(config);
             case SELF_RATING -> validateSelfRating(config);
+            case COUNTRY -> { /* no config: the answer is an ISO-3166 country code */ }
         }
     }
 

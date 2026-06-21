@@ -49,7 +49,6 @@ class PipelineSimulationServiceTest {
         lenient().when(pipeline.getPillars()).thenReturn(List.of());
         lenient().when(pipeline.getName()).thenReturn("Test Pipeline");
         lenient().when(pipeline.getOverallSummaryPrompt()).thenReturn("overall-summary");
-        lenient().when(pipeline.getFreeTierPrompt()).thenReturn("free-summary");
         when(pipelineRepository.findByIdWithPillarsAndQuestions(pipelineId))
                 .thenReturn(Optional.of(pipeline));
 
@@ -57,7 +56,7 @@ class PipelineSimulationServiceTest {
                 BigDecimal.valueOf(70), "narrative",
                 List.of(), List.of(),
                 null, null, null, null, null, false);
-        when(evaluationEngine.evaluatePipeline(any(), isNull(), any(), any(), anyBoolean(), any(), anyBoolean()))
+        when(evaluationEngine.evaluatePipeline(any(), isNull(), any(), any(), any(), anyBoolean()))
                 .thenReturn(new PipelineEvaluationResult(List.of(), summary));
     }
 
@@ -73,11 +72,11 @@ class PipelineSimulationServiceTest {
 
         service.simulate(pipelineId, request(SubscriptionTier.PREMIUM, true));
 
-        // Public mirrors the real QR-link flow: premium gating (freeTier=false),
-        // overall-summary prompt, the public model override, and publicAssessment=true.
+        // Public mirrors the real QR-link flow: the overall-summary prompt, the public
+        // model override, and publicAssessment=true. Generation is tier-agnostic now.
         verify(evaluationEngine).evaluatePipeline(
                 any(), isNull(), any(),
-                eq("overall-summary"), eq(false), eq("public-haiku"), eq(true));
+                eq("overall-summary"), eq("public-haiku"), eq(true));
     }
 
     @Test
@@ -86,15 +85,18 @@ class PipelineSimulationServiceTest {
 
         verify(evaluationEngine).evaluatePipeline(
                 any(), isNull(), any(),
-                eq("overall-summary"), eq(false), isNull(), eq(false));
+                eq("overall-summary"), isNull(), eq(false));
     }
 
     @Test
-    void simulate_free_usesFreeTierPromptNoPublic() {
+    void simulate_free_generatesPremiumSummaryTierAgnostic() {
         service.simulate(pipelineId, request(SubscriptionTier.FREE, false));
 
+        // Generation no longer branches on tier: even a FREE simulation runs the full
+        // premium summary prompt. Free vs premium is a display scope, not a generation
+        // switch — so the engine sees the overall-summary prompt, same as premium.
         verify(evaluationEngine).evaluatePipeline(
                 any(), isNull(), any(),
-                eq("free-summary"), eq(true), isNull(), eq(false));
+                eq("overall-summary"), isNull(), eq(false));
     }
 }

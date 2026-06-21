@@ -56,16 +56,17 @@ public class PipelineSimulationService {
         boolean publicAssessment = request.publicAssessment();
         boolean isPremium = publicAssessment || request.tier() == SubscriptionTier.PREMIUM;
 
-        String summaryPrompt = isPremium
-                ? pipeline.getOverallSummaryPrompt()
-                : pipeline.getFreeTierPrompt();
+        // Generation is tier-agnostic now (always the full premium summary); the
+        // free/premium distinction is applied below as a DISPLAY scope, mirroring the
+        // real read path (MemberResultsService.applyViewerScope).
+        String summaryPrompt = pipeline.getOverallSummaryPrompt();
 
         String modelOverride = publicAssessment
                 ? aiConfigService.getConfigEntity().getPublicAssessmentModel()
                 : null;
 
         PipelineEvaluationResult evalResult = evaluationEngine.evaluatePipeline(
-                pipeline, null, answers, summaryPrompt, !isPremium, modelOverride, publicAssessment);
+                pipeline, null, answers, summaryPrompt, modelOverride, publicAssessment);
 
         List<PillarScoreSummary> pillarScores = new ArrayList<>();
         List<SimulatorPillarDetail> pillarDetails = new ArrayList<>();
@@ -81,12 +82,16 @@ public class PipelineSimulationService {
         }
 
         var sr = evalResult.summary();
+        // Mirror the real read-time scope (MemberResultsService.applyViewerScope): a
+        // FREE simulation hides the premium-only blocks even though they were generated.
         MemberResultsResponse results = new MemberResultsResponse(
                 null, pipeline.getName(), sr.overallScore(),
-                sr.summaryNarrative(), sr.strengths(), sr.developmentAreas(),
+                sr.summaryNarrative(),
+                isPremium ? sr.strengths() : List.of(),
+                isPremium ? sr.developmentAreas() : List.of(),
                 pillarScores, isPremium, Instant.now(),
                 null, null, null, null,
-                sr.corePattern(), sr.movingForwardNarrative(), null,
+                isPremium ? sr.corePattern() : null, sr.movingForwardNarrative(), null,
                 null, null, List.of());
 
         SimulatorProvenance summaryProvenance = toSimulatorProvenance(sr.provenance());

@@ -5,6 +5,7 @@ import com.bvisionry.common.excel.ExcelWorkbookBuilder;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.survey.dto.PillarSummaryDto;
 import com.bvisionry.survey.dto.QuestionSummaryDto;
+import com.bvisionry.survey.dto.QuestionSummaryDto.GeoPointDto;
 import com.bvisionry.survey.dto.QuestionSummaryDto.HistogramBucketDto;
 import com.bvisionry.survey.dto.QuestionSummaryDto.SnippetDto;
 import com.bvisionry.survey.dto.SurveyAnswerDetailDto;
@@ -37,6 +38,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -58,6 +60,25 @@ public class SurveyResultsService {
 
     @Transactional(readOnly = true)
     public SurveyResultsSummaryDto getSummary(UUID surveyId) {
+        return buildSummary(surveyId, false);
+    }
+
+    /**
+     * Aggregate for the results "Live" page — same shape as the summary but
+     * restricted to sections flagged {@code liveAnalyticsEnabled}. COUNTRY
+     * questions carry their per-ISO {@code geoPoints} so the client can render
+     * the map. Lean enough to poll every few seconds.
+     */
+    @Transactional(readOnly = true)
+    public SurveyResultsSummaryDto getLive(UUID surveyId) {
+        return buildSummary(surveyId, true);
+    }
+
+    /**
+     * Build the per-section / per-question aggregate. When {@code liveOnly} is
+     * set, only sections opted into live analytics are included.
+     */
+    private SurveyResultsSummaryDto buildSummary(UUID surveyId, boolean liveOnly) {
         Survey survey = surveyService.findOrThrow(surveyId);
         long total = responseRepository.countBySurveyId(surveyId);
 
@@ -79,6 +100,7 @@ public class SurveyResultsService {
         List<SurveyPillar> sortedPillars = new ArrayList<>(survey.getPillars());
         sortedPillars.sort(Comparator.comparingInt(SurveyPillar::getDisplayOrder));
         for (SurveyPillar pillar : sortedPillars) {
+            if (liveOnly && !pillar.isLiveAnalyticsEnabled()) continue;
             List<QuestionSummaryDto> qs = new ArrayList<>();
             List<SurveyQuestion> sortedQs = new ArrayList<>(pillar.getQuestions());
             sortedQs.sort(Comparator.comparingInt(SurveyQuestion::getDisplayOrder));
@@ -102,6 +124,7 @@ public class SurveyResultsService {
         BigDecimal max = null;
         List<HistogramBucketDto> histogramBuckets = null;
         List<SnippetDto> snippets = null;
+        List<GeoPointDto> geoPoints = null;
 
         switch (q.getType()) {
             case MULTIPLE_CHOICE -> {
@@ -158,11 +181,58 @@ public class SurveyResultsService {
                         })
                         .toList();
             }
+            case COUNTRY -> {
+                counts = countryCounts(answers);
+                geoPoints = countryGeoPoints(answers);
+            }
         }
 
         return new QuestionSummaryDto(
                 q.getId(), q.getType(), q.getPromptText(),
-                count, counts, average, min, max, histogramBuckets, snippets);
+                count, counts, average, min, max, histogramBuckets, snippets, geoPoints);
+    }
+
+    /**
+     * Tally COUNTRY answers by their human-readable country name, ordered most
+     * frequent first. Keyed by name (not ISO code) so the summary tab's choice
+     * bars read naturally — the map endpoint aggregates by code separately.
+     */
+    private Map<String, Long> countryCounts(List<SurveyAnswer> answers) {
+        Map<String, Long> raw = new HashMap<>();
+        for (SurveyAnswer a : answers) {
+            String code = a.getSelectedValue();
+            if (code != null && !code.isBlank()) {
+                raw.merge(countryDisplayName(code), 1L, Long::sum);
+            }
+        }
+        return raw.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
+                        (x, y) -> x, LinkedHashMap::new));
+    }
+
+    /**
+     * Tally COUNTRY answers by ISO-3166 alpha-2 code (most frequent first) for
+     * the live map. The client resolves each code to a centroid + name.
+     */
+    private List<GeoPointDto> countryGeoPoints(List<SurveyAnswer> answers) {
+        Map<String, Long> byCode = new HashMap<>();
+        for (SurveyAnswer a : answers) {
+            String code = a.getSelectedValue();
+            if (code != null && !code.isBlank()) {
+                byCode.merge(code.toUpperCase(), 1L, Long::sum);
+            }
+        }
+        return byCode.entrySet().stream()
+                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
+                .map(e -> new GeoPointDto(e.getKey(), e.getValue()))
+                .toList();
+    }
+
+    /** Resolve an ISO-3166 alpha-2 code to its English country name, or the raw code. */
+    private String countryDisplayName(String code) {
+        String name = Locale.of("", code).getDisplayCountry(Locale.ENGLISH);
+        return (name.isBlank() || name.equalsIgnoreCase(code)) ? code : name;
     }
 
     private void putOptionKeys(SurveyQuestion q, Map<String, Long> counts) {
@@ -472,7 +542,7 @@ public class SurveyResultsService {
         // SELF_RATING the Average/Min/Max columns already cover it.
         long total = dto.responseCount();
         return switch (q.getType()) {
-            case MULTIPLE_CHOICE -> formatOptionCountsWithPct(dto.counts(), total);
+            case MULTIPLE_CHOICE, COUNTRY -> formatOptionCountsWithPct(dto.counts(), total);
             case LIKERT -> formatHistogramWithPct(dto.histogramBuckets(), total);
             case SHORT_TEXT, NUMBER, SELF_RATING -> "";
         };
@@ -514,6 +584,7 @@ public class SurveyResultsService {
             case LIKERT, NUMBER, SELF_RATING -> a.getNumericValue() == null
                     ? Optional.ofNullable(a.getSelectedValue()).orElse("")
                     : a.getNumericValue().toPlainString();
+            case COUNTRY -> a.getSelectedValue() == null ? "" : countryDisplayName(a.getSelectedValue());
         };
     }
 }

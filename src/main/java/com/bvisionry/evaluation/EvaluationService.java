@@ -137,7 +137,8 @@ public class EvaluationService {
             // so a retake re-runs evaluation rather than asking the respondent to re-answer.
             submission.setFailureKind(SubmissionFailureKind.SYSTEM);
             // A failed submission is no longer being evaluated — release the claim so a
-            // retake can re-acquire it immediately, not only after the 15-min stale window.
+            // retake can re-acquire it immediately, not only after the stale-claim window
+            // ({@link #EVALUATION_CLAIM_STALE_AFTER}).
             submission.setEvaluationClaimedAt(null);
             submissionRepository.save(submission);
             log.info("Submission {} marked as FAILED", submissionId);
@@ -174,10 +175,11 @@ public class EvaluationService {
      * outcome atomically → fire post-commit side effects. Deliberately NOT
      * {@code @Transactional} — the AI call can run for minutes and must not hold a
      * DB connection/transaction open. Each durable step takes its own short
-     * transaction: the claim ({@link SubmissionRepository#claimForEvaluation}), the
-     * partial-reeval archive, and {@link #persistEvaluationOutcome}. Runs on the
-     * async executor via self-invocation, so there is no open session — relations
-     * are eager-loaded, never lazily.
+     * transaction: the claim ({@link SubmissionRepository#claimForEvaluation}) and
+     * {@link #persistEvaluationOutcome}, which snapshots the prior results to history
+     * and writes the new ones together. Runs on the async executor via
+     * self-invocation, so there is no open session — relations are eager-loaded,
+     * never lazily.
      */
     public void evaluateSubmission(UUID submissionId) {
         // Atomically claim this submission before doing any work, so a concurrent
@@ -219,8 +221,11 @@ public class EvaluationService {
                 ? assignment.getOrganization().getSubscriptionTier()
                 : SubscriptionTier.PREMIUM;
 
-        boolean freeTier = tier == SubscriptionTier.FREE;
-        String summaryPrompt = resolveSummaryPrompt(pipeline, freeTier);
+        // Generation is tier-agnostic: every submission gets the full premium summary so
+        // an upgrade reveals the stored detail with no re-evaluation. Free/premium is a
+        // read-time display scope (MemberResultsService.applyViewerScope). `tier` is kept
+        // only for the completion log below.
+        String summaryPrompt = resolveSummaryPrompt(pipeline);
 
         // Public (anonymous, QR-link) submissions are evaluated with their own
         // system prompt (PUBLIC_ASSESSMENT_SYSTEM_PROMPT) and may use a dedicated
@@ -245,17 +250,22 @@ public class EvaluationService {
         PipelineEvaluationResult result;
         try {
             if (isPartialReeval) {
-                pillarReeditService.archiveBeforeReeval(submission, unlockedPillarIds);
-                // After archiving, the rows for unlocked pillars + the overall summary
-                // are gone; the rows for preserved (locked) pillars remain — load
-                // them so the summary can see all pillars.
-                List<PillarEvaluation> preserved = pillarEvaluationRepository.findBySubmissionId(submissionId);
+                // The unlocked pillars' live rows are left in place; the summary just
+                // needs the pillars we are NOT re-evaluating so the engine can stitch
+                // them in. Snapshotting + overwriting the unlocked rows happens
+                // atomically later in persistEvaluationOutcome, so an AI run that fails
+                // here loses nothing — the prior results are still live.
+                Set<UUID> unlockedSet = Set.copyOf(unlockedPillarIds);
+                List<PillarEvaluation> preserved = pillarEvaluationRepository.findBySubmissionId(submissionId)
+                        .stream()
+                        .filter(pe -> pe.getPillar() != null && !unlockedSet.contains(pe.getPillar().getId()))
+                        .toList();
                 result = evaluationEngine.evaluatePartialPipeline(
-                        pipeline, submissionId, answers, Set.copyOf(unlockedPillarIds),
-                        preserved, summaryPrompt, freeTier, modelOverride, publicAssessment);
+                        pipeline, submissionId, answers, unlockedSet,
+                        preserved, summaryPrompt, modelOverride, publicAssessment);
             } else {
                 result = evaluationEngine.evaluatePipeline(
-                        pipeline, submissionId, answers, summaryPrompt, freeTier, modelOverride, publicAssessment);
+                        pipeline, submissionId, answers, summaryPrompt, modelOverride, publicAssessment);
             }
         } finally {
             heartbeat.cancel(false);
@@ -265,8 +275,36 @@ public class EvaluationService {
         // final status as ONE transaction (through the proxy so @Transactional
         // applies on the async thread). A crash can no longer leave result rows
         // committed while the submission is stranded SUBMITTED with a stale claim.
-        boolean degraded = self.persistEvaluationOutcome(submission, pipeline, result, isPartialReeval);
+        boolean degraded = self.persistEvaluationOutcome(submissionId, pipeline, result, isPartialReeval,
+                isPartialReeval ? unlockedPillarIds : null);
 
+        // The evaluation result is now committed. Everything below is best-effort
+        // post-completion bookkeeping (audit trail + notification emails) — guard it
+        // so a failure can't propagate to evaluateSubmissionAsync's catch and flip an
+        // already-persisted submission to FAILED, discarding a result the AI produced.
+        try {
+            recordEvaluationSideEffects(submission, assignment, pipeline, answers,
+                    submissionId, isPartialReeval, degraded);
+        } catch (RuntimeException e) {
+            log.warn("Post-evaluation side effects failed for submission {} "
+                    + "(results already saved): {}", submissionId, e.getMessage(), e);
+        }
+
+        log.info("Evaluation complete for submission {} (tier={}, partial={})",
+                submissionId, tier, isPartialReeval);
+    }
+
+    /**
+     * Best-effort post-completion bookkeeping run AFTER the evaluation outcome has
+     * been committed: the org Activity-feed audit entry and the member notification
+     * emails. Kept separate from {@link #evaluateSubmission} and invoked under a
+     * guard so a failure here can never flip an already-persisted
+     * EVALUATED/NEEDS_REVIEW submission to FAILED.
+     */
+    private void recordEvaluationSideEffects(Submission submission, Assignment assignment,
+                                             Pipeline pipeline, List<Answer> answers,
+                                             UUID submissionId, boolean isPartialReeval,
+                                             boolean degraded) {
         // Attribute the evaluation to the submitting member so the entry shows
         // up in the org Activity feed (which scopes by actorId IN org members).
         // Use a distinct action for partial re-evaluations so the activity feed
@@ -305,9 +343,6 @@ public class EvaluationService {
                     .orElse(null);
             sendCompletionEmails(pipeline, submissionId, memberEmail, memberName, resultsUrl, postCompletion);
         }
-
-        log.info("Evaluation complete for submission {} (tier={}, partial={})",
-                submissionId, tier, isPartialReeval);
     }
 
     /**
@@ -322,20 +357,36 @@ public class EvaluationService {
      *         caller can gate the post-commit completion emails.
      */
     @Transactional
-    public boolean persistEvaluationOutcome(Submission submission, Pipeline pipeline,
-                                            PipelineEvaluationResult result, boolean isPartialReeval) {
-        // A full re-evaluation (respondent retake / member retry) overwrites the
-        // prior pillar rows + summary in place. Snapshot them to history first so a
-        // re-run that degrades a previously-good pillar never silently loses the
-        // earlier result — the partial re-eval path already archives via
-        // archiveBeforeReeval, so it's excluded here. No-op on a first evaluation.
-        if (!isPartialReeval) {
-            pillarReeditService.archiveCurrentEvaluation(
-                    submission.getId(), PillarReeditService.ARCHIVE_REASON_FULL_REEVAL);
-        }
+    public boolean persistEvaluationOutcome(UUID submissionId, Pipeline pipeline,
+                                            PipelineEvaluationResult result, boolean isPartialReeval,
+                                            List<UUID> reevaluatedPillarIds) {
+        // Reload inside this transaction so we mutate a managed entity rather than
+        // merging the instance loaded before the (untransacted) AI call: a stale
+        // @Version on that detached copy would make the final save fail with
+        // OptimisticLockException and discard a result the AI actually produced.
+        Submission submission = submissionRepository.findById(submissionId)
+                .orElseThrow(() -> new IllegalStateException("Submission not found: " + submissionId));
 
-        savePillarEvaluations(submission, pipeline, result.pillarResults());
-        saveOverallSummary(submission, result.summary());
+        // Load the live rows once and reuse them for both the history snapshot and the
+        // in-place upsert below, so a re-eval no longer re-queries the same rows two or
+        // three times.
+        List<PillarEvaluation> existingEvals = pillarEvaluationRepository.findBySubmissionId(submissionId);
+        OverallSummary existingSummary = overallSummaryRepository.findBySubmissionId(submissionId).orElse(null);
+
+        // Snapshot the rows this run is about to overwrite — in THIS transaction, so the
+        // snapshot and the overwrite commit (or roll back) together. A partial re-eval
+        // snapshots only the re-evaluated pillars; a full re-eval snapshots them all. The
+        // live rows are left in place for the upsert, so an AI run that crashed before
+        // reaching this point never loses the prior results. No-op on a first evaluation.
+        Set<UUID> archiveScope = isPartialReeval ? Set.copyOf(reevaluatedPillarIds) : null;
+        String archiveReason = isPartialReeval
+                ? PillarReeditService.ARCHIVE_REASON_PILLAR_REEVAL
+                : PillarReeditService.ARCHIVE_REASON_FULL_REEVAL;
+        pillarReeditService.archiveEvaluation(submissionId, existingEvals, existingSummary,
+                archiveScope, archiveReason);
+
+        savePillarEvaluations(submission, pipeline, result.pillarResults(), existingEvals);
+        saveOverallSummary(submission, result.summary(), existingSummary);
 
         // Fail loud: if any pillar or the overall summary could not be evaluated
         // even after the engine's repair retries, mark NEEDS_REVIEW rather than
@@ -450,13 +501,12 @@ public class EvaluationService {
      * overrides; when blank we fall back to the global default configured on the
      * AI Config page (prompt_templates table), keeping defaults centrally editable.
      */
-    private String resolveSummaryPrompt(Pipeline pipeline, boolean freeTier) {
-        String pipelineLevel = freeTier ? pipeline.getFreeTierPrompt() : pipeline.getOverallSummaryPrompt();
+    private String resolveSummaryPrompt(Pipeline pipeline) {
+        String pipelineLevel = pipeline.getOverallSummaryPrompt();
         if (pipelineLevel != null && !pipelineLevel.isBlank()) {
             return pipelineLevel;
         }
-        PromptType type = freeTier ? PromptType.FREE_TIER_SUMMARY : PromptType.OVERALL_SUMMARY;
-        return promptTemplateService.getActivePromptContent(type);
+        return promptTemplateService.getActivePromptContent(PromptType.OVERALL_SUMMARY);
     }
 
     /** Human-readable reason persisted on a NEEDS_REVIEW submission. */
@@ -500,14 +550,15 @@ public class EvaluationService {
     }
 
     private void savePillarEvaluations(Submission submission, Pipeline pipeline,
-                                        List<PillarResult> pillarResults) {
+                                        List<PillarResult> pillarResults,
+                                        List<PillarEvaluation> existingEvals) {
         String fallbackModel = aiConfigService.getConfigEntity().getDefaultEvaluationModel();
         Map<UUID, Pillar> pillarsById = pipeline.getPillars().stream()
                 .collect(Collectors.toMap(Pillar::getId, p -> p));
         // Re-use any existing row per pillar so a re-evaluation (retry / admin
-        // re-eval) updates in place instead of inserting a duplicate.
-        Map<UUID, PillarEvaluation> existingByPillar = pillarEvaluationRepository
-                .findBySubmissionId(submission.getId()).stream()
+        // re-eval) updates in place instead of inserting a duplicate. The rows were
+        // loaded once by the caller and reused for the history snapshot above.
+        Map<UUID, PillarEvaluation> existingByPillar = existingEvals.stream()
                 .filter(e -> e.getPillar() != null)
                 .collect(Collectors.toMap(e -> e.getPillar().getId(), e -> e, (a, b) -> a));
         List<PillarEvaluation> evaluations = new ArrayList<>();
@@ -548,13 +599,14 @@ public class EvaluationService {
         pillarEvaluationRepository.saveAll(evaluations);
     }
 
-    private void saveOverallSummary(Submission submission, EvaluationEngine.SummaryResult sr) {
+    private void saveOverallSummary(Submission submission, EvaluationEngine.SummaryResult sr,
+                                    OverallSummary existing) {
         String fallbackModel = aiConfigService.getConfigEntity().getDefaultEvaluationModel();
         // Re-use the existing summary row so a re-evaluation updates in place
         // instead of colliding with the unique (submission_id) constraint — the
-        // bug that previously turned a re-run into a hard "Evaluation Failed".
-        OverallSummary summary = overallSummaryRepository.findBySubmissionId(submission.getId())
-                .orElseGet(OverallSummary::new);
+        // bug that previously turned a re-run into a hard "Evaluation Failed". The
+        // row was loaded once by the caller and reused for the history snapshot.
+        OverallSummary summary = existing != null ? existing : new OverallSummary();
         summary.setSubmission(submission);
         summary.setGeneratedAt(Instant.now());
         summary.setOverallScorePercentage(sr.overallScore());

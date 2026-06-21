@@ -5,5 +5,11 @@ public enum SurveyQuestionType {
     MULTIPLE_CHOICE,
     LIKERT,
     NUMBER,
-    SELF_RATING
+    SELF_RATING,
+    /**
+     * A single-country selection. The answer stores the respondent's chosen
+     * ISO-3166 alpha-2 code (uppercase, e.g. "US") in {@code selectedValue}.
+     * Powers the survey-results map.
+     */
+    COUNTRY
 }

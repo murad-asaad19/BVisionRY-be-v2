@@ -99,8 +99,13 @@ public class PublicAssessmentController {
 
     /**
      * Resolve a personalized survey-gift link (`?g={giftToken}`) to the bound
-     * submission so the taker can route a reopened link. 204 when no submission
-     * has been started yet — the FE then shows the normal intro/start screen.
+     * submission so the taker can route a reopened link.
+     *
+     * <p>Status contract: 200 with the bound submission when one exists; 204 when
+     * the gift token resolves but no submission has been started yet (or points at
+     * a different link) — the FE falls through to the normal intro/start screen;
+     * 404 when the {@code token} path segment is not a known link (a genuinely
+     * missing resource, the same status the page-level link lookup returns).
      */
     @GetMapping("/by-token/{token}/recover")
     public ResponseEntity<GiftRecoveryResponse> recover(

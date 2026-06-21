@@ -18,9 +18,13 @@ public record QuestionSummaryDto(
         BigDecimal min,
         BigDecimal max,
         List<HistogramBucketDto> histogramBuckets,
-        List<SnippetDto> recentSnippets
+        List<SnippetDto> recentSnippets,
+        /** Per-country tallies by ISO-3166 alpha-2 code — populated for COUNTRY questions, else null. Drives the live map. */
+        List<GeoPointDto> geoPoints
 ) {
     public record HistogramBucketDto(String label, long count) {}
 
     public record SnippetDto(String text, Instant submittedAt) {}
+
+    public record GeoPointDto(String code, long count) {}
 }

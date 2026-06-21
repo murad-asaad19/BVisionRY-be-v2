@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -25,6 +26,17 @@ public class BusinessCardService {
 
     /** Max link buttons per card — a generous bound so the UI stays usable. */
     private static final int MAX_LINKS = 12;
+
+    /**
+     * URL schemes a card link may use. An allowlist (not a denylist) so novel
+     * dangerous schemes (javascript:, data:, vbscript:, file:, …) are rejected
+     * by default and never persist to the public, unauthenticated card page —
+     * the back half of the defense-in-depth XSS guard shared with the frontend
+     * renderer. {@code mailto}/{@code tel} are included because the seeded card
+     * uses them; the http(s)-only common ValidExternalUrlValidator deliberately
+     * is NOT reused here as it would reject those.
+     */
+    private static final Set<String> ALLOWED_LINK_SCHEMES = Set.of("http", "https", "mailto", "tel");
 
     private final BusinessCardRepository repository;
     private final MediaService mediaService;
@@ -138,11 +150,31 @@ public class BusinessCardService {
                         && l.url() != null && !l.url().isBlank()
                         && l.label() != null && !l.label().isBlank())
                 .limit(MAX_LINKS)
-                .map(l -> new CardLink(
-                        (l.icon() == null || l.icon().isBlank()) ? "LINK" : l.icon().trim().toUpperCase(Locale.ROOT),
-                        l.label().trim(),
-                        l.url().trim()))
+                .map(l -> {
+                    String url = l.url().trim();
+                    requireAllowedScheme(url);
+                    return new CardLink(
+                            (l.icon() == null || l.icon().isBlank()) ? "LINK" : l.icon().trim().toUpperCase(Locale.ROOT),
+                            l.label().trim(),
+                            url);
+                })
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+    }
+
+    /**
+     * Rejects a link URL whose scheme is not in {@link #ALLOWED_LINK_SCHEMES} so a
+     * dangerous scheme (e.g. {@code javascript:}) can never be stored and later
+     * served into an {@code <a href>} on the public card page (stored XSS). A URL
+     * with no scheme is also rejected — a bare value would be rendered as a
+     * same-origin relative link, not the off-site contact link a card button means.
+     */
+    private static void requireAllowedScheme(String url) {
+        int colon = url.indexOf(':');
+        String scheme = colon > 0 ? url.substring(0, colon).toLowerCase(Locale.ROOT) : "";
+        if (!ALLOWED_LINK_SCHEMES.contains(scheme)) {
+            throw new BadRequestException(
+                    "Link URL must start with a supported scheme (http, https, mailto, tel): " + url);
+        }
     }
 
     private BusinessCardResponse toAdminResponse(BusinessCard card) {

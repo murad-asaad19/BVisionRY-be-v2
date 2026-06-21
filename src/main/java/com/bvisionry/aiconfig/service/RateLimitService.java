@@ -22,6 +22,7 @@ public class RateLimitService {
     private final int authRequestsPerMinute;
     private final int surveySubmitRequestsPerMinute;
     private final int publicAssessmentRequestsPerMinute;
+    private final int businessCardRequestsPerMinute;
     private final int refreshRequestsPerMinute;
     private final int acceptRequestsPerHour;
     private final int contactRequestsPerMinute;
@@ -36,6 +37,8 @@ public class RateLimitService {
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> publicAssessmentWindows =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> businessCardWindows =
+            new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> refreshWindows =
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> acceptWindows =
@@ -49,6 +52,7 @@ public class RateLimitService {
             @Value("${bvisionry.rate-limit.auth.requests-per-minute:10}") int authRequestsPerMinute,
             @Value("${bvisionry.rate-limit.survey-submit.requests-per-minute:10}") int surveySubmitRequestsPerMinute,
             @Value("${bvisionry.rate-limit.public-assessment.requests-per-minute:5}") int publicAssessmentRequestsPerMinute,
+            @Value("${bvisionry.rate-limit.business-card.requests-per-minute:60}") int businessCardRequestsPerMinute,
             @Value("${bvisionry.rate-limit.refresh.requests-per-minute:30}") int refreshRequestsPerMinute,
             @Value("${bvisionry.rate-limit.accept.requests-per-hour:10}") int acceptRequestsPerHour,
             @Value("${bvisionry.rate-limit.contact.requests-per-minute:5}") int contactRequestsPerMinute) {
@@ -57,6 +61,7 @@ public class RateLimitService {
         this.authRequestsPerMinute = authRequestsPerMinute;
         this.surveySubmitRequestsPerMinute = surveySubmitRequestsPerMinute;
         this.publicAssessmentRequestsPerMinute = publicAssessmentRequestsPerMinute;
+        this.businessCardRequestsPerMinute = businessCardRequestsPerMinute;
         this.refreshRequestsPerMinute = refreshRequestsPerMinute;
         this.acceptRequestsPerHour = acceptRequestsPerHour;
         this.contactRequestsPerMinute = contactRequestsPerMinute;
@@ -99,6 +104,16 @@ public class RateLimitService {
      */
     public void checkPublicAssessmentLimit(String key) {
         checkLimit(publicAssessmentWindows, key, publicAssessmentRequestsPerMinute, 60, "public-assessment");
+    }
+
+    /**
+     * Rate limit for the public, unauthenticated business-card lookup. Its own
+     * per-IP bucket with a generous default (60/min) because a card may be
+     * scanned repeatedly at an event, but still bounded so the PII endpoint can't
+     * be enumerated or scraped unthrottled.
+     */
+    public void checkBusinessCardLimit(String key) {
+        checkLimit(businessCardWindows, key, businessCardRequestsPerMinute, 60, "business-card");
     }
 
     /**
@@ -158,7 +173,8 @@ public class RateLimitService {
         // Per-minute windows: drop entries older than 60s.
         Instant minuteCutoff = Instant.now().minusSeconds(60);
         evictOlderThan(List.of(tryItOutWindows, evaluationWindows, authWindows,
-                surveySubmitWindows, publicAssessmentWindows, refreshWindows, contactWindows), minuteCutoff);
+                surveySubmitWindows, publicAssessmentWindows, businessCardWindows,
+                refreshWindows, contactWindows), minuteCutoff);
 
         // Per-hour windows: drop entries older than 3600s.
         Instant hourCutoff = Instant.now().minusSeconds(3600);

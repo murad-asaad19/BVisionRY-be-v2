@@ -13,7 +13,9 @@ class RateLimitServiceTest {
 
     @BeforeEach
     void setUp() {
-        rateLimitService = new RateLimitService(5, 10, 10, 10, 5, 30, 10, 3);
+        // Args: tryItOut, evaluation, auth, surveySubmit, publicAssessment,
+        // businessCard, refresh, accept, contact.
+        rateLimitService = new RateLimitService(5, 10, 10, 10, 5, 7, 30, 10, 3);
     }
 
     @Test
@@ -71,6 +73,27 @@ class RateLimitServiceTest {
         assertThatThrownBy(() -> rateLimitService.checkContactLimit("ip-1"))
                 .isInstanceOf(RateLimitExceededException.class)
                 .hasMessageContaining("contact");
+    }
+
+    @Test
+    void checkBusinessCardLimit_overLimit_throws() {
+        for (int i = 0; i < 7; i++) {
+            rateLimitService.checkBusinessCardLimit("ip-1");
+        }
+
+        assertThatThrownBy(() -> rateLimitService.checkBusinessCardLimit("ip-1"))
+                .isInstanceOf(RateLimitExceededException.class)
+                .hasMessageContaining("business-card");
+    }
+
+    @Test
+    void checkBusinessCardLimit_isolatedFromTryItOutBucket() {
+        // Exhaust the try-it-out bucket; the business-card bucket must remain unaffected.
+        for (int i = 0; i < 5; i++) {
+            rateLimitService.checkTryItOutLimit("ip-1");
+        }
+
+        rateLimitService.checkBusinessCardLimit("ip-1");
     }
 
     @Test

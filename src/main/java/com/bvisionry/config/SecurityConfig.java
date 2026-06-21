@@ -2,6 +2,7 @@ package com.bvisionry.config;
 
 import com.bvisionry.auth.jwt.DownloadTokenAuthenticationFilter;
 import com.bvisionry.auth.jwt.JwtAuthenticationFilter;
+import com.bvisionry.businesscard.ratelimit.BusinessCardRateLimitFilter;
 import com.bvisionry.publicassessment.ratelimit.PublicAssessmentRateLimitFilter;
 import com.bvisionry.survey.ratelimit.SurveySubmitRateLimitFilter;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +36,7 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final SurveySubmitRateLimitFilter surveySubmitRateLimitFilter;
     private final PublicAssessmentRateLimitFilter publicAssessmentRateLimitFilter;
+    private final BusinessCardRateLimitFilter businessCardRateLimitFilter;
     private final DownloadTokenAuthenticationFilter downloadTokenAuthenticationFilter;
 
     @Value("${bvisionry.cors.allowed-origins:http://localhost:5173,http://localhost:4173,http://localhost:3000,http://localhost:5174}")
@@ -140,7 +142,8 @@ public class SecurityConfig {
                 .addFilterBefore(downloadTokenAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterAfter(jwtAuthenticationFilter, DownloadTokenAuthenticationFilter.class)
                 .addFilterBefore(surveySubmitRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterBefore(publicAssessmentRateLimitFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(publicAssessmentRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(businessCardRateLimitFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 

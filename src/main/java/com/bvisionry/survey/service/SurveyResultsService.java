@@ -57,6 +57,7 @@ public class SurveyResultsService {
     private final SurveyService surveyService;
     private final SurveyResponseRepository responseRepository;
     private final SurveyAnswerRepository answerRepository;
+    private final CountryCatalog countryCatalog;
 
     @Transactional(readOnly = true)
     public SurveyResultsSummaryDto getSummary(UUID surveyId) {
@@ -90,7 +91,13 @@ public class SurveyResultsService {
             last = (Instant) firstLastRaw[1];
         }
 
-        List<SurveyAnswer> allAnswers = answerRepository.findByResponseSurveyId(surveyId);
+        // Scope the answer load to what we'll actually summarize: the live page
+        // only renders live-enabled sections, so loading every answer just to
+        // discard most on a ~5s poll is wasteful. The query-side filter keeps
+        // cost proportional to live sections rather than total responses.
+        List<SurveyAnswer> allAnswers = liveOnly
+                ? answerRepository.findLiveByResponseSurveyId(surveyId)
+                : answerRepository.findByResponseSurveyId(surveyId);
         Map<UUID, List<SurveyAnswer>> answersByQuestion = new HashMap<>();
         for (SurveyAnswer a : allAnswers) {
             answersByQuestion.computeIfAbsent(a.getQuestion().getId(), k -> new ArrayList<>()).add(a);
@@ -117,7 +124,11 @@ public class SurveyResultsService {
     }
 
     private QuestionSummaryDto summarizeQuestion(SurveyQuestion q, List<SurveyAnswer> answers) {
-        long count = answers.size();
+        // Count only rows that actually carry an answer for this question's type.
+        // An OPTIONAL question persists a blank/empty answer row when skipped;
+        // counting those would inflate the response count and, for choice/country
+        // questions, the percentage denominator the client derives from it.
+        long count = answers.stream().filter(a -> answerHasContent(q, a)).count();
         Map<String, Long> counts = null;
         BigDecimal average = null;
         BigDecimal min = null;
@@ -125,6 +136,13 @@ public class SurveyResultsService {
         List<HistogramBucketDto> histogramBuckets = null;
         List<SnippetDto> snippets = null;
         List<GeoPointDto> geoPoints = null;
+
+        // COUNTRY tabulates a single tally by ISO code, descending — the name-keyed
+        // counts (summary bars) and the code-keyed geo points (live map) are both
+        // derived from it, so the work is done once.
+        Map<String, Long> countryByCode = q.getType() == SurveyQuestionType.COUNTRY
+                ? tallyCountriesByCode(answers)
+                : null;
 
         switch (q.getType()) {
             case MULTIPLE_CHOICE -> {
@@ -182,8 +200,8 @@ public class SurveyResultsService {
                         .toList();
             }
             case COUNTRY -> {
-                counts = countryCounts(answers);
-                geoPoints = countryGeoPoints(answers);
+                counts = countryCounts(countryByCode);
+                geoPoints = countryGeoPoints(countryByCode);
             }
         }
 
@@ -193,46 +211,57 @@ public class SurveyResultsService {
     }
 
     /**
-     * Tally COUNTRY answers by their human-readable country name, ordered most
-     * frequent first. Keyed by name (not ISO code) so the summary tab's choice
-     * bars read naturally — the map endpoint aggregates by code separately.
+     * Single source-of-truth tally of COUNTRY answers by ISO-3166 alpha-2 code,
+     * ordered most frequent first. Both the name-keyed summary counts and the
+     * code-keyed geo points are derived from this, so the tally + sort runs once.
      */
-    private Map<String, Long> countryCounts(List<SurveyAnswer> answers) {
-        Map<String, Long> raw = new HashMap<>();
+    private Map<String, Long> tallyCountriesByCode(List<SurveyAnswer> answers) {
+        Map<String, Long> byCode = new HashMap<>();
         for (SurveyAnswer a : answers) {
             String code = a.getSelectedValue();
             if (code != null && !code.isBlank()) {
-                raw.merge(countryDisplayName(code), 1L, Long::sum);
+                byCode.merge(code.toUpperCase(Locale.ROOT), 1L, Long::sum);
             }
         }
-        return raw.entrySet().stream()
+        return byCode.entrySet().stream()
                 .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
                         (x, y) -> x, LinkedHashMap::new));
     }
 
     /**
-     * Tally COUNTRY answers by ISO-3166 alpha-2 code (most frequent first) for
-     * the live map. The client resolves each code to a centroid + name.
+     * Project the code-keyed tally onto canonical country names so the summary
+     * tab's choice bars read naturally (e.g. "Türkiye"). Iteration order is the
+     * tally's descending order. Names come from {@link CountryCatalog} (mirrors
+     * the client list), never the JVM {@link Locale}.
      */
-    private List<GeoPointDto> countryGeoPoints(List<SurveyAnswer> answers) {
-        Map<String, Long> byCode = new HashMap<>();
-        for (SurveyAnswer a : answers) {
-            String code = a.getSelectedValue();
-            if (code != null && !code.isBlank()) {
-                byCode.merge(code.toUpperCase(), 1L, Long::sum);
-            }
+    private Map<String, Long> countryCounts(Map<String, Long> byCode) {
+        Map<String, Long> out = new LinkedHashMap<>();
+        for (Map.Entry<String, Long> e : byCode.entrySet()) {
+            out.merge(countryCatalog.displayName(e.getKey()), e.getValue(), Long::sum);
         }
+        return out;
+    }
+
+    /**
+     * Project the code-keyed tally into geo points (most frequent first) for the
+     * live map. The client resolves each code to a centroid + name.
+     */
+    private List<GeoPointDto> countryGeoPoints(Map<String, Long> byCode) {
         return byCode.entrySet().stream()
-                .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
                 .map(e -> new GeoPointDto(e.getKey(), e.getValue()))
                 .toList();
     }
 
-    /** Resolve an ISO-3166 alpha-2 code to its English country name, or the raw code. */
-    private String countryDisplayName(String code) {
-        String name = Locale.of("", code).getDisplayCountry(Locale.ENGLISH);
-        return (name.isBlank() || name.equalsIgnoreCase(code)) ? code : name;
+    /** Whether an answer row actually carries content for its question's type. */
+    private boolean answerHasContent(SurveyQuestion q, SurveyAnswer a) {
+        return switch (q.getType()) {
+            case SHORT_TEXT -> a.getResponseText() != null && !a.getResponseText().isBlank();
+            case LIKERT, NUMBER, SELF_RATING -> a.getNumericValue() != null;
+            case MULTIPLE_CHOICE -> (a.getSelectedValues() != null && !a.getSelectedValues().isEmpty())
+                    || (a.getSelectedValue() != null && !a.getSelectedValue().isBlank());
+            case COUNTRY -> a.getSelectedValue() != null && !a.getSelectedValue().isBlank();
+        };
     }
 
     private void putOptionKeys(SurveyQuestion q, Map<String, Long> counts) {
@@ -584,7 +613,7 @@ public class SurveyResultsService {
             case LIKERT, NUMBER, SELF_RATING -> a.getNumericValue() == null
                     ? Optional.ofNullable(a.getSelectedValue()).orElse("")
                     : a.getNumericValue().toPlainString();
-            case COUNTRY -> a.getSelectedValue() == null ? "" : countryDisplayName(a.getSelectedValue());
+            case COUNTRY -> a.getSelectedValue() == null ? "" : countryCatalog.displayName(a.getSelectedValue());
         };
     }
 }

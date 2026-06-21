@@ -159,10 +159,21 @@ public class MemberResultsService {
      *       (Conductor) is allowed to read post-assessment survey responses;
      *       org admins and members must see no trace of them.</li>
      * </ul>
+     *
+     * <p>It also distinguishes the two reasons premium narrative blocks can be
+     * empty. For a free-tier viewer the blocks are blanked on purpose (a tier
+     * restriction) — an upgrade reveals them instantly. But rows evaluated
+     * under the OLD free-tier contract never generated {@code corePattern} and
+     * left {@code strengths}/{@code developmentAreas} empty, so an upgraded org
+     * would see permanently-blank premium sections with no recovery short of a
+     * re-evaluation. When the viewer IS premium yet the stored premium detail
+     * is genuinely absent (a legacy row), {@code premiumDetailUnavailable} is
+     * set so the UI can prompt a re-evaluation rather than render silent blanks.
      */
     private MemberResultsResponse applyViewerScope(MemberResultsResponse r,
                                                    boolean premium,
                                                    boolean superAdmin) {
+        boolean premiumDetailUnavailable = premium && isLegacyBlankPremium(r);
         return new MemberResultsResponse(
                 r.submissionId(), r.pipelineName(), r.overallScore(), r.summaryNarrative(),
                 premium ? r.strengths() : List.of(),
@@ -174,8 +185,28 @@ public class MemberResultsService {
                 r.movingForwardNarrative(), r.postCompletion(),
                 superAdmin ? r.surveyResponse() : null,
                 superAdmin ? r.survey() : null,
-                r.personalInfo()
+                r.personalInfo(),
+                premiumDetailUnavailable
         );
+    }
+
+    /**
+     * A row is "legacy-blank premium" when none of the premium-only narrative
+     * blocks were ever stored: {@code corePattern} is the canonical marker
+     * (the current evaluation contract always generates it for every tier, so
+     * its absence means the row predates that contract), and the strengths /
+     * development-area lists are also empty. We require all three to be absent
+     * so a current-contract row that legitimately yielded e.g. no development
+     * areas is never mistaken for a legacy row.
+     */
+    private boolean isLegacyBlankPremium(MemberResultsResponse r) {
+        return (r.corePattern() == null || r.corePattern().isBlank())
+                && isNullOrEmpty(r.strengths())
+                && isNullOrEmpty(r.developmentAreas());
+    }
+
+    private boolean isNullOrEmpty(List<String> list) {
+        return list == null || list.isEmpty();
     }
 
     /**

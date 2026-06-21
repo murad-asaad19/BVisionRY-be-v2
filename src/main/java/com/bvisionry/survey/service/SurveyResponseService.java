@@ -64,6 +64,7 @@ public class SurveyResponseService {
     private final PublicAssessmentLinkRepository publicAssessmentLinkRepository;
     private final EmailService emailService;
     private final FrontendUrls frontendUrls;
+    private final CountryCatalog countryCatalog;
 
     @Transactional(readOnly = true)
     public PublicSurveyDto getPublicByToken(UUID token) {
@@ -468,17 +469,17 @@ public class SurveyResponseService {
 
     /**
      * Normalize + validate a COUNTRY answer. Accepts a blank/absent value (the
-     * required-question gate runs separately); otherwise the value must be an
-     * ISO-3166 alpha-2 code. We validate the format rather than a fixed catalog
-     * so the stored code never drifts out of sync with the frontend country
-     * list — the dropdown already constrains the respondent to real countries.
+     * required-question gate runs separately); otherwise the value must be a real
+     * ISO-3166-1 alpha-2 code present in the canonical {@link CountryCatalog}
+     * (mirrored from the frontend list), so a well-formed-but-fictional code like
+     * "ZZ" is rejected rather than stored and later disagreeing with the map.
      * Returns the uppercased code, or {@code null} when blank.
      */
     private String validateCountryCode(SurveyQuestion question, String value) {
         String normalized = normalize(value);
         if (normalized == null) return null;
-        String upper = normalized.toUpperCase();
-        if (!upper.matches("^[A-Z]{2}$")) {
+        String upper = normalized.toUpperCase(java.util.Locale.ROOT);
+        if (!countryCatalog.isValidCode(upper)) {
             throw new BadRequestException("Invalid country code '" + value + "' for question: "
                     + question.getPromptText());
         }

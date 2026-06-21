@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
@@ -52,10 +53,15 @@ class PipelineSimulationServiceTest {
         when(pipelineRepository.findByIdWithPillarsAndQuestions(pipelineId))
                 .thenReturn(Optional.of(pipeline));
 
+        // Populate the premium-only blocks (strengths / developmentAreas / corePattern)
+        // so the FREE-vs-PREMIUM display scoping in PipelineSimulationService is actually
+        // exercised: a FREE simulation must scope these OUT, a PREMIUM one must keep them.
+        // With empty/null values the scoped branch would be a silent no-op and a leak of
+        // premium detail into a FREE result would pass unnoticed.
         SummaryResult summary = new SummaryResult(
                 BigDecimal.valueOf(70), "narrative",
-                List.of(), List.of(),
-                null, null, null, null, null, false);
+                List.of("strength-1", "strength-2"), List.of("dev-1", "dev-2"),
+                "core-pattern", "moving-forward", null, null, null, false);
         when(evaluationEngine.evaluatePipeline(any(), isNull(), any(), any(), any(), anyBoolean()))
                 .thenReturn(new PipelineEvaluationResult(List.of(), summary));
     }
@@ -81,16 +87,23 @@ class PipelineSimulationServiceTest {
 
     @Test
     void simulate_premium_noPublicFlagNoModelOverride() {
-        service.simulate(pipelineId, request(SubscriptionTier.PREMIUM, false));
+        var result = service.simulate(pipelineId, request(SubscriptionTier.PREMIUM, false));
 
         verify(evaluationEngine).evaluatePipeline(
                 any(), isNull(), any(),
                 eq("overall-summary"), isNull(), eq(false));
+
+        // PREMIUM display scope INCLUDES the premium-only blocks the engine produced.
+        var results = result.results();
+        assertThat(results.premiumFeaturesAvailable()).isTrue();
+        assertThat(results.strengths()).containsExactly("strength-1", "strength-2");
+        assertThat(results.developmentAreas()).containsExactly("dev-1", "dev-2");
+        assertThat(results.corePattern()).isEqualTo("core-pattern");
     }
 
     @Test
-    void simulate_free_generatesPremiumSummaryTierAgnostic() {
-        service.simulate(pipelineId, request(SubscriptionTier.FREE, false));
+    void simulate_free_generatesPremiumSummaryButScopesOutPremiumDetail() {
+        var result = service.simulate(pipelineId, request(SubscriptionTier.FREE, false));
 
         // Generation no longer branches on tier: even a FREE simulation runs the full
         // premium summary prompt. Free vs premium is a display scope, not a generation
@@ -98,5 +111,13 @@ class PipelineSimulationServiceTest {
         verify(evaluationEngine).evaluatePipeline(
                 any(), isNull(), any(),
                 eq("overall-summary"), isNull(), eq(false));
+
+        // ...but the FREE display scope must SUPPRESS the premium-only blocks even though
+        // the engine generated them — a regression that leaks premium detail fails here.
+        var results = result.results();
+        assertThat(results.premiumFeaturesAvailable()).isFalse();
+        assertThat(results.strengths()).isEmpty();
+        assertThat(results.developmentAreas()).isEmpty();
+        assertThat(results.corePattern()).isNull();
     }
 }

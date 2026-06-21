@@ -9,7 +9,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,8 +32,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * accuracy). Otherwise the model is plain and shape is enforced downstream by the
  * output guardrails — the universal path that works for every model.
  *
- * <p>Built models are cached and reused; the cache key folds in the API-key hash
- * so a key rotation transparently rebuilds the client.
+ * <p>Built models are cached and reused; the cache key folds in a collision-resistant
+ * (SHA-256) fingerprint of the API key so a key rotation transparently rebuilds the
+ * client and never reuses a stale-key model.
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -87,12 +92,15 @@ public class Lc4jChatModelProvider {
         }
 
         ModelCapabilities caps = capabilityRegistry.getCapabilities(modelName);
+        // Fold a collision-resistant digest of the key material — never String.hashCode(),
+        // whose 32-bit space can collide an old and a rotated key onto the same cache slot
+        // and so reuse a ChatModel built with the stale key (401s until restart).
         String cacheKey = String.join("|",
                 modelName,
                 Double.toString(temperature),
                 Integer.toString(maxTokens),
                 Boolean.toString(caps.supportsStructuredOutputs()),
-                Integer.toString(apiKey.hashCode()));
+                apiKeyFingerprint(apiKey));
 
         return cache.computeIfAbsent(cacheKey, k -> build(modelName, temperature, maxTokens, apiKey, caps));
     }
@@ -123,14 +131,44 @@ public class Lc4jChatModelProvider {
 
     /**
      * Append the configured OpenRouter routing variant (e.g. ":nitro") to the wire
-     * model id. No-op when unset, or when the id already pins a variant (a ":" is
-     * present) so we never double-suffix an explicitly chosen route.
+     * model id. No-op when unset, or when the id ALREADY carries a variant suffix so
+     * we never double-suffix an explicitly chosen route.
+     *
+     * <p>An OpenRouter id is {@code vendor/slug[:variant]} and may carry at most one
+     * variant suffix — the colon that denotes it appears AFTER the {@code /}. A raw
+     * {@code modelName.contains(":")} therefore wrongly treats legitimate ids whose
+     * SLUG contains a colon (e.g. {@code deepseek/deepseek-r1:free}) as already-pinned
+     * and never applies the configured variant. We detect a variant by looking for a
+     * colon only in the segment after the last {@code /}.
      */
     private String applyRoutingVariant(String modelName) {
-        if (routingVariant == null || routingVariant.isBlank() || modelName.contains(":")) {
+        if (routingVariant == null || routingVariant.isBlank() || hasVariantSuffix(modelName)) {
             return modelName;
         }
         return modelName + ":" + routingVariant.strip();
+    }
+
+    /** True when the id already pins a variant: a ":" in the segment after the last "/". */
+    private static boolean hasVariantSuffix(String modelName) {
+        int slash = modelName.lastIndexOf('/');
+        return modelName.indexOf(':', slash + 1) >= 0;
+    }
+
+    /**
+     * Collision-resistant fingerprint of the API key for use as a cache-key component.
+     * SHA-256 over the raw key bytes — distinct keys map to distinct fingerprints with
+     * overwhelming probability, so a rotated key always builds a fresh ChatModel rather
+     * than colliding onto a stale-key entry. The digest (not the key) is what lands in
+     * the in-memory cache key.
+     */
+    private static String apiKeyFingerprint(String apiKey) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(apiKey.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 is mandated on every JRE; this is unreachable in practice.
+            throw new IllegalStateException("SHA-256 is unavailable in this JVM", e);
+        }
     }
 
     private Map<String, String> buildHeaders() {

@@ -8,12 +8,14 @@ import com.bvisionry.aiconfig.repository.AIConfigurationRepository;
 import com.bvisionry.audit.AuditService;
 import com.bvisionry.common.enums.AIProvider;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Map;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class AIConfigService {
 
@@ -114,10 +116,7 @@ public class AIConfigService {
             case OPENROUTER -> config.getOpenRouterApiKeyEncrypted();
             case ANTHROPIC -> config.getAnthropicApiKeyEncrypted();
         };
-        if (encrypted == null || encrypted.isBlank()) {
-            return null;
-        }
-        return encryptionService.decrypt(encrypted);
+        return tryDecrypt(encrypted);
     }
 
     /**
@@ -131,11 +130,7 @@ public class AIConfigService {
     @Transactional(readOnly = true)
     public String getDecryptedOpenRouterApiKey() {
         AIConfiguration config = configRepository.getSingleton();
-        String encrypted = config.getOpenRouterApiKeyEncrypted();
-        if (encrypted == null || encrypted.isBlank()) {
-            return null;
-        }
-        return encryptionService.decrypt(encrypted);
+        return tryDecrypt(config.getOpenRouterApiKeyEncrypted());
     }
 
     /**
@@ -159,11 +154,40 @@ public class AIConfigService {
         cachedConfig = null;
     }
 
+    /**
+     * Decrypts a stored ciphertext, returning {@code null} (never throwing) when it
+     * cannot be decrypted. The expected cause is a rotated {@code BVISIONRY_ENCRYPTION_KEY}:
+     * AES-GCM then fails its auth-tag check ({@code AEADBadTagException}) and the
+     * previously-stored keys are permanently undecryptable. An undecryptable key is
+     * unusable, so callers treat {@code null} as "not configured". Crucially this keeps
+     * the read paths ({@link #getConfig()}, model listing, evaluation) from hard-500ing
+     * and bricking the very admin page used to re-enter the key. Blank/absent input also
+     * returns {@code null}.
+     */
+    private String tryDecrypt(String encrypted) {
+        if (encrypted == null || encrypted.isBlank()) {
+            return null;
+        }
+        try {
+            return encryptionService.decrypt(encrypted);
+        } catch (RuntimeException e) {
+            log.warn("Stored AI provider API key could not be decrypted (BVISIONRY_ENCRYPTION_KEY "
+                    + "rotated since it was saved?). Treating it as not configured — re-enter the key "
+                    + "from the AI Config admin page to fix.");
+            return null;
+        }
+    }
+
     private KeySummary summarize(String encrypted) {
         if (encrypted == null || encrypted.isBlank()) {
             return new KeySummary(false, null);
         }
-        String decrypted = encryptionService.decrypt(encrypted);
+        String decrypted = tryDecrypt(encrypted);
+        if (decrypted == null) {
+            // A key IS stored but can't be decrypted (encryption key rotated). Report it
+            // as unconfigured so the UI prompts a re-entry, with a masked note explaining why.
+            return new KeySummary(false, "Stored key can't be decrypted — re-enter to fix");
+        }
         return new KeySummary(true, ApiKeyEncryptionService.maskApiKey(decrypted));
     }
 

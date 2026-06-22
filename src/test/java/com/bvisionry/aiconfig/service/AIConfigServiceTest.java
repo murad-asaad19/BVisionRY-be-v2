@@ -97,6 +97,36 @@ class AIConfigServiceTest {
     }
 
     @Test
+    void getConfig_keyUndecryptable_reportsNotConfiguredInsteadOfThrowing() {
+        // BVISIONRY_ENCRYPTION_KEY rotated since the key was saved: AES-GCM fails its
+        // auth-tag check. getConfig must still load (so the admin page is reachable to
+        // re-enter the key) and flag the key as unconfigured with a re-entry note.
+        existingConfig.setOpenRouterApiKeyEncrypted("ciphertext-from-old-key");
+        when(configRepository.getSingleton()).thenReturn(existingConfig);
+        when(encryptionService.decrypt("ciphertext-from-old-key"))
+                .thenThrow(new RuntimeException("Failed to decrypt API key"));
+
+        AIConfigResponse response = configService.getConfig();
+
+        assertThat(response.openRouterKeyConfigured()).isFalse();
+        assertThat(response.openRouterKeyMasked()).contains("re-enter");
+        // The empty Anthropic slot is untouched — null, not the warning string.
+        assertThat(response.anthropicKeyConfigured()).isFalse();
+        assertThat(response.anthropicKeyMasked()).isNull();
+    }
+
+    @Test
+    void getDecryptedApiKey_keyUndecryptable_returnsNull() {
+        existingConfig.setOpenRouterApiKeyEncrypted("ciphertext-from-old-key");
+        when(configRepository.getSingleton()).thenReturn(existingConfig);
+        when(encryptionService.decrypt("ciphertext-from-old-key"))
+                .thenThrow(new RuntimeException("Failed to decrypt API key"));
+
+        // Treated as "not configured" so callers surface a clean error, never a 500.
+        assertThat(configService.getDecryptedApiKey()).isNull();
+    }
+
+    @Test
     void updateConfig_savesNewValues() {
         when(configRepository.getSingleton()).thenReturn(existingConfig);
         when(configRepository.save(any())).thenReturn(existingConfig);

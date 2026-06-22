@@ -15,7 +15,7 @@ class RateLimitServiceTest {
     void setUp() {
         // Args: tryItOut, evaluation, auth, surveySubmit, publicAssessment,
         // businessCard, refresh, accept, contact.
-        rateLimitService = new RateLimitService(5, 10, 10, 10, 5, 7, 30, 10, 3);
+        rateLimitService = new RateLimitService(5, 10, 10, 10, 5, 7, 30, 10, 3, 5);
     }
 
     @Test

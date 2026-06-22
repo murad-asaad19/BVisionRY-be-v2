@@ -29,6 +29,7 @@ public class EmailTemplateDefaults {
             case UPGRADE_REQUESTED              -> "{{organizationName}} requested a Premium upgrade";
             case CONTACT_US                     -> "New contact message from {{senderName}}";
             case SURVEY_GIFT_ASSESSMENT         -> "A gift for you: {{assessmentTitle}}";
+            case LEAD_MAGNET                    -> "The science behind the 11 pillars of founder readiness";
         };
     }
 
@@ -44,6 +45,7 @@ public class EmailTemplateDefaults {
             case UPGRADE_REQUESTED              -> "upgrade-requested.mustache";
             case CONTACT_US                     -> "contact-message.mustache";
             case SURVEY_GIFT_ASSESSMENT         -> "survey-gift-assessment.mustache";
+            case LEAD_MAGNET                    -> "lead-magnet.mustache";
         };
         try {
             ClassPathResource resource = new ClassPathResource("templates/email/" + filename);

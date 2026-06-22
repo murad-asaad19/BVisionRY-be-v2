@@ -1,5 +1,7 @@
 package com.bvisionry.notification.transport;
 
+import java.util.List;
+
 /**
  * Delivers a fully-rendered email to its recipient. Implementations decide
  * the transport (SMTP, provider HTTP API, etc.); callers stay transport-agnostic.
@@ -23,9 +25,8 @@ public interface MailTransport {
     }
 
     /**
-     * Sends a single email. Implementations must throw
-     * {@link com.bvisionry.common.exception.EmailDeliveryException} on failure
-     * so the caller can surface a uniform error to the API client.
+     * Sends a single email. Convenience overload that delegates to
+     * {@link #send(String, String, String, String, List)} with no attachments.
      *
      * @param to        recipient address
      * @param subject   subject line (already rendered, no template placeholders)
@@ -34,5 +35,21 @@ public interface MailTransport {
      *                  Used by the contact form so admins can reply straight to
      *                  the visitor (the From stays the configured platform address).
      */
-    void send(String to, String subject, String htmlBody, String replyTo);
+    default void send(String to, String subject, String htmlBody, String replyTo) {
+        send(to, subject, htmlBody, replyTo, List.of());
+    }
+
+    /**
+     * Sends a single email, optionally with file attachments. Implementations
+     * must throw {@link com.bvisionry.common.exception.EmailDeliveryException}
+     * on failure so the caller can surface a uniform error to the API client.
+     *
+     * @param to          recipient address
+     * @param subject     subject line (already rendered, no template placeholders)
+     * @param htmlBody    HTML body (already rendered)
+     * @param replyTo     Reply-To address, or {@code null}/blank to omit the header
+     * @param attachments files to attach; empty for the common no-attachment case.
+     *                    Used by the lead-magnet flow to deliver the research PDF.
+     */
+    void send(String to, String subject, String htmlBody, String replyTo, List<MailAttachment> attachments);
 }

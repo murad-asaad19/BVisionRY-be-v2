@@ -34,6 +34,7 @@ public class EmailTemplateSchemaRegistry {
             case UPGRADE_REQUESTED              -> upgradeRequested();
             case CONTACT_US                     -> contactMessage();
             case SURVEY_GIFT_ASSESSMENT         -> surveyGiftAssessment();
+            case LEAD_MAGNET                    -> leadMagnet();
         };
     }
 
@@ -633,6 +634,60 @@ public class EmailTemplateSchemaRegistry {
                         NO_VARS,
                         "Recipients of this notification can be customized in the platform admin settings.",
                         5, "Closing", false, null)
+        );
+    }
+
+    private List<EmailTemplateField> leadMagnet() {
+        return List.of(
+                new EmailTemplateField(
+                        "subject", "Subject line",
+                        "The line recipients see in their inbox.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        NO_VARS,
+                        "The science behind the 11 pillars of founder readiness",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "heading", "Heading",
+                        "The large title shown at the top of the email body.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "Here's the science behind founder readiness",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "greeting", "Greeting",
+                        "The first line that welcomes the reader.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        NO_VARS,
+                        "Hi there,",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "mainMessage", "Main message",
+                        "The welcoming paragraph that introduces the attached research.",
+                        EmailTemplateField.Kind.RICH_TEXT, 600,
+                        NO_VARS,
+                        "Thanks for your interest in the Founder Readiness Index. We've attached the research paper behind the 11 pillars — how each one is measured, tracked, and developed with real founders worldwide. Enjoy the read.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "cardHeading", "Attachment card heading",
+                        "Headline of the highlighted card that points to the attachment.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "Your PDF is attached",
+                        3, "Attachment Card", false, null),
+                new EmailTemplateField(
+                        "cardSubline", "Attachment card helper line",
+                        "Short note under the card heading.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 160,
+                        NO_VARS,
+                        "Look for the PDF attached to this email — open it any time.",
+                        3, "Attachment Card", false, null),
+                new EmailTemplateField(
+                        "footerNote", "Closing note",
+                        "Closing line at the bottom of the email.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 240,
+                        NO_VARS,
+                        "If you have any questions, just reply to this email — we're happy to help.",
+                        4, "Closing", false, null)
         );
     }
 

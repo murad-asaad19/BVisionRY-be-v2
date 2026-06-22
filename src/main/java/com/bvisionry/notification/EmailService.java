@@ -1,6 +1,7 @@
 package com.bvisionry.notification;
 
 import com.bvisionry.notification.entity.EmailTemplateKey;
+import com.bvisionry.notification.transport.MailAttachment;
 import com.bvisionry.notification.transport.MailTransport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -9,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -295,6 +297,22 @@ public class EmailService {
     }
 
     /**
+     * Send the lead-magnet email to a website visitor who requested the research
+     * PDF (the "science behind the 11 pillars" CTA on the Platform page). The PDF
+     * is delivered as a real attachment — the caller loads the bytes from the
+     * configured asset before invoking this.
+     *
+     * <p>Invoked from {@code LeadMagnetDispatcher}, which already runs on the
+     * {@code emailExecutor}, so this method is intentionally synchronous (no
+     * separate async variant — the dispatcher is the async boundary).
+     */
+    public void sendLeadMagnet(String email, byte[] pdf, String fileName) {
+        Map<String, Object> vars = new HashMap<>();
+        send(email, EmailTemplateKey.LEAD_MAGNET, vars, null,
+                List.of(new MailAttachment(fileName, "application/pdf", pdf)));
+    }
+
+    /**
      * Send arbitrary pre-rendered content. Used by the admin "send test email"
      * flow so admins can preview their draft in their own inbox before saving.
      */
@@ -309,5 +327,11 @@ public class EmailService {
     private void send(String to, EmailTemplateKey key, Map<String, Object> vars, String replyTo) {
         EmailTemplateRenderer.Rendered rendered = templateRenderer.render(key, vars);
         mailTransport.send(to, rendered.subject(), rendered.body(), replyTo);
+    }
+
+    private void send(String to, EmailTemplateKey key, Map<String, Object> vars, String replyTo,
+                      List<MailAttachment> attachments) {
+        EmailTemplateRenderer.Rendered rendered = templateRenderer.render(key, vars);
+        mailTransport.send(to, rendered.subject(), rendered.body(), replyTo, attachments);
     }
 }

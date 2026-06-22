@@ -26,6 +26,7 @@ public class RateLimitService {
     private final int refreshRequestsPerMinute;
     private final int acceptRequestsPerHour;
     private final int contactRequestsPerMinute;
+    private final int leadMagnetRequestsPerMinute;
 
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> tryItOutWindows =
             new ConcurrentHashMap<>();
@@ -45,6 +46,8 @@ public class RateLimitService {
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> contactWindows =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> leadMagnetWindows =
+            new ConcurrentHashMap<>();
 
     public RateLimitService(
             @Value("${bvisionry.rate-limit.try-it-out.requests-per-minute:10}") int tryItOutRequestsPerMinute,
@@ -55,7 +58,8 @@ public class RateLimitService {
             @Value("${bvisionry.rate-limit.business-card.requests-per-minute:60}") int businessCardRequestsPerMinute,
             @Value("${bvisionry.rate-limit.refresh.requests-per-minute:30}") int refreshRequestsPerMinute,
             @Value("${bvisionry.rate-limit.accept.requests-per-hour:10}") int acceptRequestsPerHour,
-            @Value("${bvisionry.rate-limit.contact.requests-per-minute:5}") int contactRequestsPerMinute) {
+            @Value("${bvisionry.rate-limit.contact.requests-per-minute:100}") int contactRequestsPerMinute,
+            @Value("${bvisionry.rate-limit.lead-magnet.requests-per-minute:20}") int leadMagnetRequestsPerMinute) {
         this.tryItOutRequestsPerMinute = tryItOutRequestsPerMinute;
         this.evaluationRequestsPerMinute = evaluationRequestsPerMinute;
         this.authRequestsPerMinute = authRequestsPerMinute;
@@ -65,6 +69,7 @@ public class RateLimitService {
         this.refreshRequestsPerMinute = refreshRequestsPerMinute;
         this.acceptRequestsPerHour = acceptRequestsPerHour;
         this.contactRequestsPerMinute = contactRequestsPerMinute;
+        this.leadMagnetRequestsPerMinute = leadMagnetRequestsPerMinute;
     }
 
     /**
@@ -143,6 +148,16 @@ public class RateLimitService {
         checkLimit(contactWindows, key, contactRequestsPerMinute, 60, "contact");
     }
 
+    /**
+     * Rate limit for the public lead-magnet capture ("the science behind the 11
+     * pillars"). Its own per-IP bucket and ceiling (default 5/min) so it is
+     * isolated from the AI "try it out" limiter and can be tuned independently
+     * against a bot flooding the lead table or the PDF mailer.
+     */
+    public void checkLeadMagnetLimit(String key) {
+        checkLimit(leadMagnetWindows, key, leadMagnetRequestsPerMinute, 60, "lead-magnet");
+    }
+
     private void checkLimit(ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> windows,
                            String key, int maxRequests, int windowSeconds, String limitType) {
         Instant now = Instant.now();
@@ -174,7 +189,7 @@ public class RateLimitService {
         Instant minuteCutoff = Instant.now().minusSeconds(60);
         evictOlderThan(List.of(tryItOutWindows, evaluationWindows, authWindows,
                 surveySubmitWindows, publicAssessmentWindows, businessCardWindows,
-                refreshWindows, contactWindows), minuteCutoff);
+                refreshWindows, contactWindows, leadMagnetWindows), minuteCutoff);
 
         // Per-hour windows: drop entries older than 3600s.
         Instant hourCutoff = Instant.now().minusSeconds(3600);

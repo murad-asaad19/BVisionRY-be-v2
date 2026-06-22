@@ -81,6 +81,8 @@ public class SecurityConfig {
                                 "/api/v1/leads",
                                 // Public marketing POST — Contact Us form, no CSRF cookie in flight
                                 "/api/v1/contact",
+                                // Public marketing POST — lead-magnet (science PDF) modal
+                                "/api/v1/lead-magnet",
                                 // Player POST endpoints called through BFF (server-side, no CSRF cookie)
                                 "/api/v1/courses/*/enroll",
                                 "/api/v1/enrollments/*/content/*/complete",
@@ -111,6 +113,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/leads").permitAll()
                         // Contact Us — public POST from the marketing contact form
                         .requestMatchers(HttpMethod.POST, "/api/v1/contact").permitAll()
+                        // Lead magnet — public POST from the "science behind the pillars" modal
+                        .requestMatchers(HttpMethod.POST, "/api/v1/lead-magnet").permitAll()
                         // LMS catalog + health: public, read-only.
                         .requestMatchers("/api/v1/health").permitAll()
                         // Public catalog — keep permitAll for list + detail.

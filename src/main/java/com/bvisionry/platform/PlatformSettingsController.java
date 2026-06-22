@@ -7,6 +7,8 @@ import com.bvisionry.contact.dto.ContactRecipientsResponse;
 import com.bvisionry.organization.AttentionThresholdsService;
 import com.bvisionry.platform.dto.AttentionThresholdsRequest;
 import com.bvisionry.platform.dto.AttentionThresholdsResponse;
+import com.bvisionry.platform.dto.LeadMagnetPdfRequest;
+import com.bvisionry.platform.dto.LeadMagnetPdfResponse;
 import com.bvisionry.upgrade.UpgradePromptLoader.UpgradePrompt;
 import com.bvisionry.upgrade.UpgradePromptService;
 import com.bvisionry.upgrade.UpgradeRequestRecipientService;
@@ -33,6 +35,7 @@ public class PlatformSettingsController {
     private final UpgradeRequestRecipientService upgradeRequestRecipientService;
     private final ContactRecipientService contactRecipientService;
     private final UpgradePromptService upgradePromptService;
+    private final LeadMagnetSettingsService leadMagnetSettingsService;
 
     @GetMapping("/attention-thresholds")
     public ResponseEntity<AttentionThresholdsResponse> get() {
@@ -90,5 +93,17 @@ public class PlatformSettingsController {
     @DeleteMapping("/upgrade-prompt")
     public ResponseEntity<UpgradePrompt> resetUpgradePrompt() {
         return ResponseEntity.ok(upgradePromptService.reset(SecurityUtils.getCurrentUserId()));
+    }
+
+    @GetMapping("/lead-magnet")
+    public ResponseEntity<LeadMagnetPdfResponse> getLeadMagnet() {
+        return ResponseEntity.ok(leadMagnetSettingsService.get());
+    }
+
+    @PutMapping("/lead-magnet")
+    public ResponseEntity<LeadMagnetPdfResponse> setLeadMagnet(
+            @Valid @RequestBody LeadMagnetPdfRequest req) {
+        return ResponseEntity.ok(
+                leadMagnetSettingsService.save(req.marker(), SecurityUtils.getCurrentUserId()));
     }
 }

@@ -29,6 +29,7 @@ public final class EmailTemplateMetadata {
             case UPGRADE_REQUESTED              -> "Upgrade Requested";
             case CONTACT_US                     -> "Contact Message";
             case SURVEY_GIFT_ASSESSMENT         -> "Survey Gift Assessment";
+            case LEAD_MAGNET                    -> "Lead Magnet (Science PDF)";
         };
     }
 
@@ -44,6 +45,7 @@ public final class EmailTemplateMetadata {
             case UPGRADE_REQUESTED              -> "Sent to platform admins when a member of a Free-tier org requests an upgrade to Premium.";
             case CONTACT_US                     -> "Sent to platform admins when someone submits the website contact form.";
             case SURVEY_GIFT_ASSESSMENT         -> "Sent to a respondent who completes a survey (via its public link) that is configured to gift a public assessment, with a link to take it.";
+            case LEAD_MAGNET                    -> "Sent to a website visitor who requests the research PDF from the \"science behind the 11 pillars\" CTA on the Platform page. The PDF is delivered as an attachment.";
         };
     }
 
@@ -113,6 +115,9 @@ public final class EmailTemplateMetadata {
                     new TemplateVariable("assessmentTitle", "Title of the gifted public assessment"),
                     new TemplateVariable("assessmentUrl",   "Link the respondent opens to take the gifted assessment")
             );
+            // No system variables — the PDF is an attachment and all copy is
+            // admin-editable (fields.*).
+            case LEAD_MAGNET -> List.of();
         };
     }
 
@@ -180,6 +185,7 @@ public final class EmailTemplateMetadata {
                     "assessmentTitle", "Founder Readiness Index",
                     "assessmentUrl",   "https://app.bvisionry.com/a/sample-token"
             );
+            case LEAD_MAGNET -> Map.of();
         };
     }
 }

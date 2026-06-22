@@ -4,14 +4,23 @@ import com.bvisionry.common.exception.EmailDeliveryException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.time.Duration;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Sends email via Resend's HTTPS REST API ({@code POST /emails}). Used in
@@ -50,7 +59,8 @@ public class ResendHttpMailTransport implements MailTransport {
     }
 
     @Override
-    public void send(String to, String subject, String htmlBody, String replyTo) {
+    public void send(String to, String subject, String htmlBody, String replyTo,
+                     List<MailAttachment> attachments) {
         Map<String, Object> payload = new java.util.HashMap<>();
         payload.put("from", fromAddress);
         payload.put("to", List.of(to));
@@ -59,6 +69,17 @@ public class ResendHttpMailTransport implements MailTransport {
         // Resend accepts reply_to as a string or array; a single validated address suffices.
         if (replyTo != null && !replyTo.isBlank()) {
             payload.put("reply_to", replyTo);
+        }
+        // Resend's REST API takes attachments as { filename, content (base64), content_type }.
+        if (attachments != null && !attachments.isEmpty()) {
+            List<Map<String, Object>> parts = new ArrayList<>(attachments.size());
+            for (MailAttachment att : attachments) {
+                parts.add(Map.of(
+                        "filename", att.fileName(),
+                        "content", Base64.getEncoder().encodeToString(att.content()),
+                        "content_type", att.contentType()));
+            }
+            payload.put("attachments", parts);
         }
 
         try {

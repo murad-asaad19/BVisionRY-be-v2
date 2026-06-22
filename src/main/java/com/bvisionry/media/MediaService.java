@@ -1,6 +1,12 @@
 package com.bvisionry.media;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -12,6 +18,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import io.minio.BucketExistsArgs;
+import io.minio.GetObjectArgs;
+import io.minio.GetObjectResponse;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
@@ -39,6 +47,8 @@ public class MediaService {
 
     private static final Logger log = LoggerFactory.getLogger(MediaService.class);
     private static final String MINIO_SCHEME = "minio://";
+    /** Upper bound on a server-side external-asset fetch so a misconfigured URL can't exhaust memory. */
+    private static final long MAX_EXTERNAL_BYTES = 25L * 1024 * 1024;
 
     private final MinioClient internalClient;
     private final MinioClient publicClient;
@@ -122,24 +132,13 @@ public class MediaService {
             return stored;
         }
 
-        // minio://bucket/objectKey  →  parse bucket and key
-        String withoutScheme = stored.substring(MINIO_SCHEME.length()); // "bucket/objectKey"
-        int slashIdx = withoutScheme.indexOf('/');
-        if (slashIdx < 0) {
-            log.warn("Malformed minio:// marker (no slash after bucket): {}", stored);
-            return stored;
-        }
-        String markerBucket = withoutScheme.substring(0, slashIdx);
-        String objectKey    = withoutScheme.substring(slashIdx + 1);
-
-        // SECURITY: never presign against the bucket named in the stored marker.
-        // A privileged author can persist videoUrl/assetUrl = minio://other-internal-bucket/secret,
-        // which would otherwise hand every learner a working presigned GET into an arbitrary bucket.
-        // The only bucket this service uploads to is props.getBucket(); reject any marker that
-        // references a different bucket rather than silently resolving it against the wrong store.
-        if (!props.getBucket().equals(markerBucket)) {
-            log.warn("Rejecting minio:// marker referencing unexpected bucket '{}' (configured bucket is '{}'): {}",
-                    markerBucket, props.getBucket(), stored);
+        final MinioObjectRef ref;
+        try {
+            ref = parseMinioMarker(stored);
+        } catch (MediaUploadException ex) {
+            // Malformed / disallowed-bucket marker: log and fall back to the raw
+            // value rather than presigning against the wrong store.
+            log.warn("Cannot resolve media marker: {}", ex.getMessage());
             return stored;
         }
 
@@ -148,7 +147,7 @@ public class MediaService {
                     GetPresignedObjectUrlArgs.builder()
                             .method(Method.GET)
                             .bucket(props.getBucket())
-                            .object(objectKey)
+                            .object(ref.objectKey())
                             .expiry(props.getPresignedExpiryMinutes() * 60, TimeUnit.SECONDS)
                             .build());
         } catch (Exception ex) {
@@ -160,8 +159,142 @@ public class MediaService {
     }
 
     // -------------------------------------------------------------------------
+    // Download (server-side byte fetch)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Reads the full bytes of a stored {@code minio://bucket/objectKey} marker via
+     * the internal client. Used server-side when the file must travel inside the
+     * application rather than to the browser — e.g. attaching the lead-magnet PDF
+     * to an outgoing email.
+     *
+     * <p>Applies the same bucket guard as {@link #resolveUrl(String)}: a marker
+     * pointing at any bucket other than the configured one is rejected. Only
+     * {@code minio://} markers are supported; pass external URLs through a
+     * different fetch path.
+     *
+     * @throws MediaUploadException if the marker is not a usable minio marker or
+     *                              the object cannot be read.
+     */
+    public byte[] download(String stored) {
+        MinioObjectRef ref = parseMinioMarker(stored);
+        try (GetObjectResponse response = internalClient.getObject(
+                GetObjectArgs.builder()
+                        .bucket(props.getBucket())
+                        .object(ref.objectKey())
+                        .build())) {
+            return response.readAllBytes();
+        } catch (Exception ex) {
+            throw new MediaUploadException("Failed to download object from MinIO: " + ex.getMessage(), ex);
+        }
+    }
+
+    /**
+     * Reads the full bytes behind any stored marker for server-side use (e.g.
+     * attaching the lead-magnet PDF to an outgoing email):
+     *
+     * <ul>
+     *   <li>{@code minio://} markers are read via {@link #download(String)}.</li>
+     *   <li>{@code http(s)://} URLs are fetched over HTTP — admin-configured
+     *       assets hosted off-platform, which {@link #resolveUrl(String)} already
+     *       exposes to the browser, must also be fetchable here.</li>
+     * </ul>
+     *
+     * <p>This is the symmetric server-side counterpart to {@link #resolveUrl},
+     * so the two marker kinds the admin UI accepts (uploaded file or external
+     * URL) both work end-to-end instead of the URL form silently failing.
+     *
+     * @throws MediaUploadException if the marker is unsupported or cannot be read.
+     */
+    public byte[] fetchBytes(String marker) {
+        if (marker == null || marker.isBlank()) {
+            throw new MediaUploadException("No media marker provided");
+        }
+        if (marker.startsWith(MINIO_SCHEME)) {
+            return download(marker);
+        }
+        if (marker.startsWith("http://") || marker.startsWith("https://")) {
+            return fetchExternal(marker);
+        }
+        throw new MediaUploadException(
+                "Unsupported media marker (expected minio:// or http(s)://): " + marker);
+    }
+
+    private byte[] fetchExternal(String url) {
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
+
+        final HttpRequest request;
+        try {
+            request = HttpRequest.newBuilder(URI.create(url))
+                    .timeout(Duration.ofSeconds(30))
+                    .GET()
+                    .build();
+        } catch (IllegalArgumentException ex) {
+            throw new MediaUploadException("Invalid external media URL: " + url, ex);
+        }
+
+        try {
+            HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            if (response.statusCode() / 100 != 2) {
+                throw new MediaUploadException(
+                        "External media fetch returned HTTP " + response.statusCode() + " for " + url);
+            }
+            byte[] body = response.body();
+            if (body.length > MAX_EXTERNAL_BYTES) {
+                throw new MediaUploadException(
+                        "External media exceeds the " + (MAX_EXTERNAL_BYTES / (1024 * 1024)) + "MB limit: " + url);
+            }
+            return body;
+        } catch (IOException ex) {
+            throw new MediaUploadException("Failed to fetch external media from " + url + ": " + ex.getMessage(), ex);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new MediaUploadException("Interrupted fetching external media from " + url, ex);
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /** A parsed, bucket-validated {@code minio://bucket/objectKey} reference. */
+    private record MinioObjectRef(String bucket, String objectKey) {}
+
+    /**
+     * Parses and bucket-guards a {@code minio://bucket/objectKey} marker. Shared
+     * by {@link #resolveUrl(String)} (browser read) and {@link #download(String)}
+     * (server-side fetch) so the marker format and the security guard can never
+     * drift between the two paths.
+     *
+     * <p>SECURITY: rejects any marker referencing a bucket other than the one
+     * this service owns. A privileged author could otherwise persist a marker
+     * like {@code minio://other-internal-bucket/secret} and have it resolved or
+     * downloaded against an arbitrary store.
+     *
+     * @throws MediaUploadException if the value is not a minio marker, is
+     *                              malformed, or references a different bucket.
+     */
+    private MinioObjectRef parseMinioMarker(String stored) {
+        if (stored == null || !stored.startsWith(MINIO_SCHEME)) {
+            throw new MediaUploadException("Not a minio:// marker: " + stored);
+        }
+        String withoutScheme = stored.substring(MINIO_SCHEME.length()); // "bucket/objectKey"
+        int slashIdx = withoutScheme.indexOf('/');
+        if (slashIdx < 0) {
+            throw new MediaUploadException("Malformed minio:// marker (no slash after bucket): " + stored);
+        }
+        String markerBucket = withoutScheme.substring(0, slashIdx);
+        String objectKey    = withoutScheme.substring(slashIdx + 1);
+        if (!props.getBucket().equals(markerBucket)) {
+            throw new MediaUploadException(
+                    "Rejecting minio:// marker referencing unexpected bucket '" + markerBucket
+                            + "' (configured bucket is '" + props.getBucket() + "')");
+        }
+        return new MinioObjectRef(markerBucket, objectKey);
+    }
 
     private void lazyEnsureBucket() {
         if (!bucketEnsured.get()) {

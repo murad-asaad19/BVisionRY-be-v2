@@ -1,5 +1,6 @@
 package com.bvisionry.notification;
 
+import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.dto.EmailTemplateDto.TemplateVariable;
 import com.bvisionry.notification.entity.EmailTemplateKey;
 
@@ -124,19 +125,25 @@ public final class EmailTemplateMetadata {
     /**
      * Sample values used by the preview endpoint and test-send flow so admins
      * can see rendered output without waiting for a real assessment to happen.
+     *
+     * <p>Link-valued samples are built through {@link FrontendUrls} — the single
+     * owner of the frontend origin — so a preview/test send always points at the
+     * real configured host ({@code https://bvisionry.com} in prod,
+     * {@code http://localhost:3000} in dev) and can never drift to a stale,
+     * hand-typed domain.
      */
-    public static Map<String, Object> sampleValues(EmailTemplateKey key) {
+    public static Map<String, Object> sampleValues(EmailTemplateKey key, FrontendUrls urls) {
         return switch (key) {
             case ASSESSMENT_ASSIGNED, ASSESSMENT_REMINDER -> Map.of(
                     "memberName",    "Alex Johnson",
                     "pipelineName",  "Leadership Self-Assessment",
                     "deadline",      Instant.parse("2026-05-15T00:00:00Z").toString(),
-                    "assessmentUrl", "https://app.bvisionry.com/my/assessments/sample"
+                    "assessmentUrl", urls.path("/my/assessments/sample")
             );
             case RESULTS_READY -> Map.of(
                     "memberName",          "Alex Johnson",
                     "pipelineName",        "Leadership Self-Assessment",
-                    "resultsUrl",          "https://app.bvisionry.com/my/assessments/sample/results",
+                    "resultsUrl",          urls.path("/my/assessments/sample/results"),
                     "postCompletionUrl",   "https://typeform.com/sample-feedback",
                     "postCompletionLabel", "Continue"
             );
@@ -144,25 +151,25 @@ public final class EmailTemplateMetadata {
                     "memberName",   "Alex Johnson",
                     "pipelineName", "Leadership Self-Assessment",
                     "surveyName",   "Post-Assessment Feedback",
-                    "surveyUrl",    "https://app.bvisionry.com/my/assessments/sample/post-completion-survey",
-                    "resultsUrl",   "https://app.bvisionry.com/my/assessments/sample/results"
+                    "surveyUrl",    urls.path("/my/assessments/sample/post-completion-survey"),
+                    "resultsUrl",   urls.path("/my/assessments/sample/results")
             );
             case INVITATION -> Map.of(
                     "inviterName",      "Jordan Lee",
                     "organizationName", "Acme Ventures",
-                    "acceptUrl",        "https://app.bvisionry.com/invite/sample-token",
+                    "acceptUrl",        urls.path("/invite/sample-token"),
                     "expiresAt",        Instant.parse("2026-05-01T00:00:00Z").toString()
             );
             case TRIAL_ENDING_SOON -> Map.of(
                     "organizationName", "Acme Ventures",
                     "daysLeft",         3,
                     "trialEndsAt",      Instant.parse("2026-05-01T00:00:00Z").toString(),
-                    "dashboardUrl",     "https://app.bvisionry.com/admin/organizations/sample"
+                    "dashboardUrl",     urls.path("/admin/organizations/sample")
             );
             case TRIAL_EXPIRED -> Map.of(
                     "organizationName", "Acme Ventures",
                     "expiredAt",        Instant.parse("2026-04-25T00:00:00Z").toString(),
-                    "dashboardUrl",     "https://app.bvisionry.com/admin/organizations/sample"
+                    "dashboardUrl",     urls.path("/admin/organizations/sample")
             );
             case UPGRADE_REQUESTED -> Map.of(
                     "organizationName", "Acme Ventures",
@@ -170,7 +177,7 @@ public final class EmailTemplateMetadata {
                     "memberEmail",      "alex@acmeventures.com",
                     "featureContext",   "Org Insights",
                     "note",             "Our leadership team would really benefit from cohort comparisons before the next QBR.",
-                    "dashboardUrl",     "https://app.bvisionry.com/admin/organizations/sample"
+                    "dashboardUrl",     urls.path("/admin/organizations/sample")
             );
             case CONTACT_US -> Map.of(
                     "senderName",  "Jordan Rivera",
@@ -183,7 +190,7 @@ public final class EmailTemplateMetadata {
                     "respondentName",  "Alex Johnson",
                     "surveyName",      "Founder Pulse Survey",
                     "assessmentTitle", "Founder Readiness Index",
-                    "assessmentUrl",   "https://app.bvisionry.com/a/sample-token"
+                    "assessmentUrl",   urls.assessmentLink("sample-token")
             );
             case LEAD_MAGNET -> Map.of();
         };

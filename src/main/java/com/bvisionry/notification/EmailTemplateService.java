@@ -1,5 +1,6 @@
 package com.bvisionry.notification;
 
+import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.dto.EmailTemplateDto;
 import com.bvisionry.notification.dto.EmailTemplatePreviewResponse;
 import com.bvisionry.notification.dto.EmailTemplateSummaryDto;
@@ -40,6 +41,7 @@ public class EmailTemplateService {
     private final EmailTemplateRenderer renderer;
     private final EmailTemplateSchemaRegistry schemaRegistry;
     private final EmailService emailService;
+    private final FrontendUrls frontendUrls;
 
     @Transactional(readOnly = true)
     public List<EmailTemplateSummaryDto> listAll() {
@@ -125,7 +127,7 @@ public class EmailTemplateService {
             validateOverrides(key, values);
             Map<String, Object> merged = mergeWithDefaults(key, values);
             EmailTemplateRenderer.Rendered rendered = renderer.renderWith(
-                    key, merged, EmailTemplateMetadata.sampleValues(key));
+                    key, merged, EmailTemplateMetadata.sampleValues(key, frontendUrls));
             return EmailTemplatePreviewResponse.ok(rendered.subject(), rendered.body());
         } catch (Exception e) {
             return EmailTemplatePreviewResponse.error(e.getMessage());
@@ -139,7 +141,7 @@ public class EmailTemplateService {
         validateOverrides(key, values);
         Map<String, Object> merged = mergeWithDefaults(key, values);
         EmailTemplateRenderer.Rendered rendered = renderer.renderWith(
-                key, merged, EmailTemplateMetadata.sampleValues(key));
+                key, merged, EmailTemplateMetadata.sampleValues(key, frontendUrls));
         emailService.sendRaw(toEmail, "[TEST] " + rendered.subject(), rendered.body());
     }
 

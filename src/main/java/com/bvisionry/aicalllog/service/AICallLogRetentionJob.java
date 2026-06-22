@@ -1,0 +1,55 @@
+package com.bvisionry.aicalllog.service;
+
+import com.bvisionry.aicalllog.repository.AICallLogRepository;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+import java.time.Duration;
+import java.time.Instant;
+
+/**
+ * Bounds long-term growth of {@code ai_call_logs} (F41): the table accrues several
+ * rows per submission and, without a retention policy, grows without limit on the
+ * same Postgres instance serving the hot path. This scheduled purge deletes rows
+ * older than the configured retention window. Payload-size growth per row is bounded
+ * separately in {@link AICallLogService}; this bounds row count over time.
+ */
+@Component
+@Slf4j
+public class AICallLogRetentionJob {
+
+    private final AICallLogRepository repository;
+    private final int retentionDays;
+
+    public AICallLogRetentionJob(
+            AICallLogRepository repository,
+            @Value("${bvisionry.ai-call-log.retention-days:90}") int retentionDays) {
+        this.repository = repository;
+        this.retentionDays = retentionDays;
+    }
+
+    /**
+     * Runs daily (and ~5 min after boot). A non-positive retention value disables
+     * the purge so an operator can opt into keeping everything. Fully guarded so a
+     * failed purge never kills the scheduler.
+     */
+    @Scheduled(fixedDelayString = "${bvisionry.ai-call-log.retention.interval-ms:86400000}",
+            initialDelayString = "${bvisionry.ai-call-log.retention.initial-delay-ms:300000}")
+    public void purgeOldLogs() {
+        if (retentionDays <= 0) {
+            return;
+        }
+        try {
+            Instant cutoff = Instant.now().minus(Duration.ofDays(retentionDays));
+            int deleted = repository.deleteByCalledAtBefore(cutoff);
+            if (deleted > 0) {
+                log.info("AICallLogRetentionJob: purged {} ai_call_logs row(s) older than {} day(s)",
+                        deleted, retentionDays);
+            }
+        } catch (RuntimeException e) {
+            log.error("AICallLogRetentionJob purge failed: {}", e.getMessage(), e);
+        }
+    }
+}

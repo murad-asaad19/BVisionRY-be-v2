@@ -1,5 +1,6 @@
 package com.bvisionry.config;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
@@ -9,6 +10,7 @@ import java.util.concurrent.Executor;
 
 @Configuration
 @EnableAsync
+@Slf4j
 public class AsyncConfig {
 
     /**
@@ -27,6 +29,21 @@ public class AsyncConfig {
         executor.setMaxPoolSize(8);
         executor.setQueueCapacity(100);
         executor.setThreadNamePrefix("eval-");
+        // On saturation, log and DROP the dispatch rather than the JDK default
+        // AbortPolicy (which throws RejectedExecutionException into the post-commit
+        // callback) or CallerRunsPolicy (which would run a minutes-long AI
+        // evaluation on the HTTP/commit thread). A dropped dispatch is NOT lost:
+        // the row is already committed SUBMITTED, and EvaluationReaper re-dispatches
+        // it once capacity frees — so a launch burst degrades to "evaluated a little
+        // later" instead of "result silently stranded forever".
+        executor.setRejectedExecutionHandler((r, exec) -> log.warn(
+                "evaluationExecutor saturated — evaluation dispatch dropped; "
+                        + "EvaluationReaper will recover the stranded SUBMITTED submission"));
+        // Drain in-flight evaluations on shutdown (e.g. a Railway redeploy) instead
+        // of hard-killing them mid-run; anything that doesn't finish in the window
+        // is recovered by the reaper on the next instance.
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(30);
         executor.initialize();
         return executor;
     }

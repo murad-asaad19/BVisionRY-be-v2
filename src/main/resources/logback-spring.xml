@@ -7,6 +7,10 @@
         <root level="INFO">
             <appender-ref ref="CONSOLE"/>
         </root>
+        <!-- Verbose app logging is a DEV convenience only. It used to live outside
+             the profile blocks, so it also applied in prod — leaking internal
+             detail and bloating logs on the hot path (F22). Scoped to non-prod. -->
+        <logger name="com.bvisionry" level="DEBUG"/>
     </springProfile>
 
     <springProfile name="prod">
@@ -16,7 +20,6 @@
         <root level="INFO">
             <appender-ref ref="JSON_CONSOLE"/>
         </root>
+        <logger name="com.bvisionry" level="INFO"/>
     </springProfile>
-
-    <logger name="com.bvisionry" level="DEBUG"/>
 </configuration>

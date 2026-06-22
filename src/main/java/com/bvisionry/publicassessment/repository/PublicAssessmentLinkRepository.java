@@ -31,4 +31,19 @@ public interface PublicAssessmentLinkRepository extends JpaRepository<PublicAsse
             AND (l.maxResponses IS NULL OR l.responseCount < l.maxResponses)
             """)
     int incrementResponseCount(@Param("id") UUID id);
+
+    /**
+     * Releases a reserved response slot (F6/F42). A slot is claimed atomically at
+     * session-create to prevent racing past the cap, but abandoned IN_PROGRESS
+     * sessions used to hold it forever — letting honest abandonment (or scripted
+     * session-create spam) permanently brick a capped link. PublicSubmissionReaper
+     * calls this when it reaps an abandoned session. Floored at 0.
+     */
+    @Modifying
+    @Query("""
+            UPDATE PublicAssessmentLink l
+            SET l.responseCount = l.responseCount - 1
+            WHERE l.id = :id AND l.responseCount > 0
+            """)
+    int decrementResponseCount(@Param("id") UUID id);
 }

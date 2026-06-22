@@ -4,8 +4,10 @@ import com.bvisionry.aicalllog.dto.AICallLogEntry;
 import com.bvisionry.aicalllog.dto.AICallLogResponse;
 import com.bvisionry.aicalllog.entity.AICallLog;
 import com.bvisionry.aicalllog.repository.AICallLogRepository;
+import com.bvisionry.common.enums.AICallStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -24,6 +26,20 @@ public class AICallLogService {
     private final AICallLogRepository repository;
 
     /**
+     * At launch scale the audit table is the dominant growth risk (F41): ~6 AI calls
+     * per submission, each persisting full system_prompt + user_message + raw_response
+     * as TEXT, on the same Postgres serving the hot path. By default we drop those
+     * bulky payloads for SUCCESS rows (keeping model/timing/token metadata) and retain
+     * them only for FAILED rows — which is exactly when the prompt/response is needed
+     * to debug. Flip {@code store-success-payloads=true} to keep the full reproducible
+     * trail at the cost of storage. Whatever IS stored is truncated to a hard cap.
+     */
+    @Value("${bvisionry.ai-call-log.store-success-payloads:false}")
+    private boolean storeSuccessPayloads;
+    @Value("${bvisionry.ai-call-log.max-payload-chars:10000}")
+    private int maxPayloadChars;
+
+    /**
      * Fire-and-forget write on the dedicated {@code aiLogExecutor}. Runs in a
      * fresh transaction so a caller-side rollback doesn't discard the log —
      * audit trails are most useful precisely when something went wrong.
@@ -40,10 +56,13 @@ public class AICallLogService {
             e.setModel(entry.model());
             e.setCalledAt(entry.calledAt());
             e.setElapsedMs(entry.elapsedMs());
-            e.setSystemPrompt(entry.systemPrompt());
-            e.setUserMessage(entry.userMessage());
-            e.setRawResponse(entry.rawResponse());
-            e.setErrorMessage(entry.errorMessage());
+            // Bound storage growth: keep heavy payloads only for failures (or when
+            // explicitly enabled), always truncated to the configured cap.
+            boolean keepPayload = storeSuccessPayloads || entry.status() != AICallStatus.SUCCESS;
+            e.setSystemPrompt(keepPayload ? truncate(entry.systemPrompt()) : null);
+            e.setUserMessage(keepPayload ? truncate(entry.userMessage()) : null);
+            e.setRawResponse(keepPayload ? truncate(entry.rawResponse()) : null);
+            e.setErrorMessage(truncate(entry.errorMessage()));
             e.setInputTokens(entry.inputTokens());
             e.setOutputTokens(entry.outputTokens());
             e.setCacheCreationTokens(entry.cacheCreationTokens());
@@ -63,5 +82,13 @@ public class AICallLogService {
         PageRequest pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "calledAt"));
         return repository.findFiltered(pipelineId, submissionId, pageable)
                 .map(AICallLogResponse::from);
+    }
+
+    /** Cap a stored payload field so a single pathological prompt/response can't bloat a row. */
+    private String truncate(String value) {
+        if (value == null || value.length() <= maxPayloadChars) {
+            return value;
+        }
+        return value.substring(0, maxPayloadChars) + "…[truncated]";
     }
 }

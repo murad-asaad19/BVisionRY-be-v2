@@ -14,8 +14,9 @@ class RateLimitServiceTest {
     @BeforeEach
     void setUp() {
         // Args: tryItOut, evaluation, auth, surveySubmit, publicAssessment,
-        // businessCard, refresh, accept, contact.
-        rateLimitService = new RateLimitService(5, 10, 10, 10, 5, 7, 30, 10, 3, 5);
+        // publicAssessmentSave, businessCard, refresh, accept, contact, leadMagnet.
+        // No StringRedisTemplate is wired here, so all checks use the in-memory path.
+        rateLimitService = new RateLimitService(5, 10, 10, 10, 5, 50, 7, 30, 10, 3, 5);
     }
 
     @Test
@@ -104,5 +105,27 @@ class RateLimitServiceTest {
         }
 
         rateLimitService.checkContactLimit("ip-1");
+    }
+
+    @Test
+    void checkPublicAssessmentSaveLimit_overLimit_throws() {
+        for (int i = 0; i < 50; i++) {
+            rateLimitService.checkPublicAssessmentSaveLimit("ip-1");
+        }
+
+        assertThatThrownBy(() -> rateLimitService.checkPublicAssessmentSaveLimit("ip-1"))
+                .isInstanceOf(RateLimitExceededException.class)
+                .hasMessageContaining("public-assessment-save");
+    }
+
+    @Test
+    void checkPublicAssessmentSaveLimit_isolatedFromSubmitBucket() {
+        // Exhaust the tight public-assessment (submit) bucket; the generous autosave
+        // bucket must remain usable so legitimate autosaves are never collateral-blocked.
+        for (int i = 0; i < 5; i++) {
+            rateLimitService.checkPublicAssessmentLimit("ip-1");
+        }
+
+        rateLimitService.checkPublicAssessmentSaveLimit("ip-1");
     }
 }

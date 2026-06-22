@@ -21,6 +21,19 @@ public class AIConfigService {
     private final ApiKeyEncryptionService encryptionService;
     private final AuditService auditService;
 
+    /**
+     * Short-lived memo of the singleton config (F18). It is read once per pillar on
+     * every evaluation, so on the launch hot path the unmemoized version fired
+     * millions of identical single-row SELECTs, each borrowing a pooled connection.
+     * Cached in-process (not Redis — a JPA entity is awkward to serialize) for a
+     * brief TTL and invalidated on every write below, so an admin change is picked
+     * up within seconds. The entity is read-only on the eval path and only its basic
+     * columns are touched, so handing out the detached instance is safe.
+     */
+    private static final long CONFIG_CACHE_TTL_MS = 30_000;
+    private volatile AIConfiguration cachedConfig;
+    private volatile long cachedConfigAt;
+
     @Transactional(readOnly = true)
     public AIConfigResponse getConfig() {
         AIConfiguration config = configRepository.getSingleton();
@@ -61,6 +74,7 @@ public class AIConfigService {
         config.setMaxTokensEvaluation(request.maxTokensEvaluation());
         config.setMaxTokensInsight(request.maxTokensInsight());
         configRepository.save(config);
+        invalidateConfigCache();
 
         auditService.log(null, null, "AI_CONFIG_UPDATED", "AIConfiguration", config.getId(),
                 Map.of("provider", request.provider().name(),
@@ -81,6 +95,7 @@ public class AIConfigService {
             case ANTHROPIC -> config.setAnthropicApiKeyEncrypted(encrypted);
         }
         configRepository.save(config);
+        invalidateConfigCache();
 
         auditService.log(null, null, "API_KEY_UPDATED", "AIConfiguration", config.getId(),
                 Map.of("provider", request.provider().name()));
@@ -123,9 +138,25 @@ public class AIConfigService {
         return encryptionService.decrypt(encrypted);
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * Hot-path accessor used per-pillar during evaluation. Intentionally NOT
+     * {@code @Transactional}: a cache hit must not borrow a pooled connection. On a
+     * miss the repository call opens its own short transaction. See the cache fields.
+     */
     public AIConfiguration getConfigEntity() {
-        return configRepository.getSingleton();
+        AIConfiguration cached = cachedConfig;
+        if (cached != null && (System.currentTimeMillis() - cachedConfigAt) < CONFIG_CACHE_TTL_MS) {
+            return cached;
+        }
+        AIConfiguration fresh = configRepository.getSingleton();
+        cachedConfig = fresh;
+        cachedConfigAt = System.currentTimeMillis();
+        return fresh;
+    }
+
+    /** Drop the memo so the next read reloads — called after any config/key write. */
+    private void invalidateConfigCache() {
+        cachedConfig = null;
     }
 
     private KeySummary summarize(String encrypted) {

@@ -1,7 +1,11 @@
 package com.bvisionry.aiconfig.service;
 
 import com.bvisionry.common.exception.RateLimitExceededException;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -11,17 +15,45 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
 /**
- * In-memory sliding window rate limiter for dev/V1.
- * For production, replace with Redis-backed implementation (e.g., Bucket4j + Redis).
+ * Per-key rate limiter.
+ *
+ * <p><b>Distributed by default (F4/F8/F15/F21/F27/F37).</b> When a Redis connection
+ * is available the counter lives in Redis, so the limit is enforced across ALL
+ * backend instances and survives a redeploy. The increment + first-write expiry is
+ * a single atomic Lua script, so there is no INCR/EXPIRE race that could leak a
+ * never-expiring key.
+ *
+ * <p><b>Graceful degradation.</b> If Redis is unreachable, each check falls back to
+ * the in-process sliding window below — the platform degrades to PER-INSTANCE
+ * limiting (still bounded) rather than failing open (no limit) or failing closed
+ * (locking everyone out). The in-memory path is also the sole path in unit tests,
+ * which construct this service directly with no Redis wired.
  */
 @Service
+@Slf4j
 public class RateLimitService {
+
+    /** Atomic INCR + first-write EXPIRE; returns the new counter value for the window. */
+    private static final RedisScript<Long> INCREMENT_WINDOW = RedisScript.of(
+            "local c = redis.call('INCR', KEYS[1]) "
+                    + "if c == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end "
+                    + "return c",
+            Long.class);
+
+    /**
+     * Optional — present only when a Redis connection is configured. Field-injected
+     * (not via the constructor) so the limiter still constructs cleanly in unit tests
+     * and simply uses the in-memory path when Redis is absent.
+     */
+    @Autowired(required = false)
+    private StringRedisTemplate redisTemplate;
 
     private final int tryItOutRequestsPerMinute;
     private final int evaluationRequestsPerMinute;
     private final int authRequestsPerMinute;
     private final int surveySubmitRequestsPerMinute;
     private final int publicAssessmentRequestsPerMinute;
+    private final int publicAssessmentSaveRequestsPerMinute;
     private final int businessCardRequestsPerMinute;
     private final int refreshRequestsPerMinute;
     private final int acceptRequestsPerHour;
@@ -37,6 +69,8 @@ public class RateLimitService {
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> surveySubmitWindows =
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> publicAssessmentWindows =
+            new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> publicAssessmentSaveWindows =
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> businessCardWindows =
             new ConcurrentHashMap<>();
@@ -55,6 +89,7 @@ public class RateLimitService {
             @Value("${bvisionry.rate-limit.auth.requests-per-minute:10}") int authRequestsPerMinute,
             @Value("${bvisionry.rate-limit.survey-submit.requests-per-minute:10}") int surveySubmitRequestsPerMinute,
             @Value("${bvisionry.rate-limit.public-assessment.requests-per-minute:5}") int publicAssessmentRequestsPerMinute,
+            @Value("${bvisionry.rate-limit.public-assessment-save.requests-per-minute:60}") int publicAssessmentSaveRequestsPerMinute,
             @Value("${bvisionry.rate-limit.business-card.requests-per-minute:60}") int businessCardRequestsPerMinute,
             @Value("${bvisionry.rate-limit.refresh.requests-per-minute:30}") int refreshRequestsPerMinute,
             @Value("${bvisionry.rate-limit.accept.requests-per-hour:10}") int acceptRequestsPerHour,
@@ -65,6 +100,7 @@ public class RateLimitService {
         this.authRequestsPerMinute = authRequestsPerMinute;
         this.surveySubmitRequestsPerMinute = surveySubmitRequestsPerMinute;
         this.publicAssessmentRequestsPerMinute = publicAssessmentRequestsPerMinute;
+        this.publicAssessmentSaveRequestsPerMinute = publicAssessmentSaveRequestsPerMinute;
         this.businessCardRequestsPerMinute = businessCardRequestsPerMinute;
         this.refreshRequestsPerMinute = refreshRequestsPerMinute;
         this.acceptRequestsPerHour = acceptRequestsPerHour;
@@ -104,11 +140,21 @@ public class RateLimitService {
     }
 
     /**
-     * Checks the public-assessment rate limit (anonymous session create +
-     * submit). Applied per IP and per token+IP, like the survey limit.
+     * Checks the public-assessment rate limit (anonymous session create + submit +
+     * retake). Applied per IP and per token+IP, like the survey limit.
      */
     public void checkPublicAssessmentLimit(String key) {
         checkLimit(publicAssessmentWindows, key, publicAssessmentRequestsPerMinute, 60, "public-assessment");
+    }
+
+    /**
+     * Checks the public-assessment ANSWER-SAVE rate limit — its own, generous bucket
+     * so frequent legitimate autosaves are not throttled as if they were submits,
+     * while still bounding a request flood. Answer saves upsert by
+     * (submission, question), so they cannot grow storage; this only caps request rate.
+     */
+    public void checkPublicAssessmentSaveLimit(String key) {
+        checkLimit(publicAssessmentSaveWindows, key, publicAssessmentSaveRequestsPerMinute, 60, "public-assessment-save");
     }
 
     /**
@@ -141,8 +187,8 @@ public class RateLimitService {
 
     /**
      * Rate limit for the public marketing "Contact Us" form. Its own per-IP bucket
-     * and ceiling (default 5/min) so contact traffic is isolated from other anonymous
-     * limiters and can be tuned independently against inbox-flooding bots.
+     * and ceiling so contact traffic is isolated from other anonymous limiters and
+     * can be tuned independently against inbox-flooding bots.
      */
     public void checkContactLimit(String key) {
         checkLimit(contactWindows, key, contactRequestsPerMinute, 60, "contact");
@@ -150,16 +196,58 @@ public class RateLimitService {
 
     /**
      * Rate limit for the public lead-magnet capture ("the science behind the 11
-     * pillars"). Its own per-IP bucket and ceiling (default 5/min) so it is
-     * isolated from the AI "try it out" limiter and can be tuned independently
-     * against a bot flooding the lead table or the PDF mailer.
+     * pillars"). Its own per-IP bucket and ceiling so it is isolated from the AI
+     * "try it out" limiter and can be tuned independently against a bot flooding the
+     * lead table or the PDF mailer.
      */
     public void checkLeadMagnetLimit(String key) {
         checkLimit(leadMagnetWindows, key, leadMagnetRequestsPerMinute, 60, "lead-magnet");
     }
 
+    /**
+     * Enforce a limit: try the shared Redis counter first (cross-instance), and only
+     * if Redis is unavailable fall back to the per-instance in-memory window.
+     */
     private void checkLimit(ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> windows,
-                           String key, int maxRequests, int windowSeconds, String limitType) {
+                            String key, int maxRequests, int windowSeconds, String limitType) {
+        if (checkLimitRedis(key, maxRequests, windowSeconds, limitType)) {
+            return;
+        }
+        checkLimitInMemory(windows, key, maxRequests, windowSeconds, limitType);
+    }
+
+    /**
+     * @return {@code true} when Redis authoritatively allowed the request (or threw
+     *         on exceed); {@code false} when Redis is unavailable, signalling the
+     *         caller to fall back to the in-memory window.
+     */
+    private boolean checkLimitRedis(String key, int maxRequests, int windowSeconds, String limitType) {
+        StringRedisTemplate redis = this.redisTemplate;
+        if (redis == null) {
+            return false;
+        }
+        try {
+            String redisKey = "rl:" + limitType + ":" + key;
+            Long count = redis.execute(INCREMENT_WINDOW, List.of(redisKey), String.valueOf(windowSeconds));
+            if (count == null) {
+                return false; // treat an unexpected null as "backend unavailable"
+            }
+            if (count > maxRequests) {
+                throw rateLimitExceeded(limitType, maxRequests, windowSeconds);
+            }
+            return true;
+        } catch (RateLimitExceededException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            log.warn("Redis rate-limit backend unavailable ({}) — falling back to per-instance limiting for '{}'",
+                    e.getMessage(), limitType);
+            return false;
+        }
+    }
+
+    /** Per-instance sliding window — fallback only (used when Redis is down or in tests). */
+    private void checkLimitInMemory(ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> windows,
+                                    String key, int maxRequests, int windowSeconds, String limitType) {
         Instant now = Instant.now();
         Instant windowStart = now.minusSeconds(windowSeconds);
 
@@ -172,15 +260,19 @@ public class RateLimitService {
         }
 
         if (timestamps.size() >= maxRequests) {
-            String windowDesc = windowSeconds == 60 ? "minute"
-                    : windowSeconds == 3600 ? "hour"
-                    : (windowSeconds + " seconds");
-            throw new RateLimitExceededException(
-                    "Rate limit exceeded for " + limitType + ". Maximum " + maxRequests
-                            + " requests per " + windowDesc + ".");
+            throw rateLimitExceeded(limitType, maxRequests, windowSeconds);
         }
 
         timestamps.addLast(now);
+    }
+
+    private static RateLimitExceededException rateLimitExceeded(String limitType, int maxRequests, int windowSeconds) {
+        String windowDesc = windowSeconds == 60 ? "minute"
+                : windowSeconds == 3600 ? "hour"
+                : (windowSeconds + " seconds");
+        return new RateLimitExceededException(
+                "Rate limit exceeded for " + limitType + ". Maximum " + maxRequests
+                        + " requests per " + windowDesc + ".");
     }
 
     @Scheduled(fixedDelay = 60_000)
@@ -188,8 +280,8 @@ public class RateLimitService {
         // Per-minute windows: drop entries older than 60s.
         Instant minuteCutoff = Instant.now().minusSeconds(60);
         evictOlderThan(List.of(tryItOutWindows, evaluationWindows, authWindows,
-                surveySubmitWindows, publicAssessmentWindows, businessCardWindows,
-                refreshWindows, contactWindows, leadMagnetWindows), minuteCutoff);
+                surveySubmitWindows, publicAssessmentWindows, publicAssessmentSaveWindows,
+                businessCardWindows, refreshWindows, contactWindows, leadMagnetWindows), minuteCutoff);
 
         // Per-hour windows: drop entries older than 3600s.
         Instant hourCutoff = Instant.now().minusSeconds(3600);

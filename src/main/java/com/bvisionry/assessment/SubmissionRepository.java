@@ -268,4 +268,59 @@ public interface SubmissionRepository extends JpaRepository<Submission, UUID> {
             WHERE id = :id AND status = 'SUBMITTED'
             """, nativeQuery = true)
     int refreshEvaluationClaim(@Param("id") UUID id);
+
+    /**
+     * IDs of submissions stranded in SUBMITTED — committed for evaluation but not
+     * picked up (executor overflow) or abandoned by a crashed/redeployed worker.
+     * Drives {@link com.bvisionry.evaluation.EvaluationReaper}'s recovery sweep.
+     *
+     * <p>{@code graceSeconds} ignores freshly-submitted rows that the executor is
+     * still working through normally; {@code staleSeconds} skips rows a live worker
+     * still holds (its heartbeat keeps {@code evaluation_claimed_at} fresh). The
+     * re-dispatch is idempotent regardless — {@link #claimForEvaluation} is the
+     * authoritative gate — so a row briefly matched in error is simply skipped.
+     * DB clock ({@code now()}) for the same cross-host-skew reason as the claim.
+     */
+    @Query(value = """
+            SELECT id FROM submissions
+            WHERE status = 'SUBMITTED'
+              AND submitted_at < now() - (:graceSeconds * interval '1 second')
+              AND (evaluation_claimed_at IS NULL
+                   OR evaluation_claimed_at < now() - (:staleSeconds * interval '1 second'))
+            ORDER BY submitted_at ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<UUID> findStrandedSubmittedIds(@Param("graceSeconds") long graceSeconds,
+                                        @Param("staleSeconds") long staleSeconds,
+                                        @Param("limit") int limit);
+
+    /**
+     * Backlog size for the {@code bvisionry.ai.evaluation_backlog} gauge: how many
+     * submissions are stuck in SUBMITTED past the grace window. A non-zero, growing
+     * value means evaluation intake is outrunning drain — the launch-day alert.
+     */
+    @Query(value = """
+            SELECT COUNT(*) FROM submissions
+            WHERE status = 'SUBMITTED'
+              AND submitted_at < now() - (:graceSeconds * interval '1 second')
+            """, nativeQuery = true)
+    long countStrandedSubmitted(@Param("graceSeconds") long graceSeconds);
+
+    /**
+     * Abandoned anonymous sessions: public submissions left IN_PROGRESS past the TTL.
+     * Each reserved a response slot at session-create that must be released
+     * ({@link com.bvisionry.publicassessment.PublicSubmissionReaper}). Returns
+     * {@code [submissionId, publicLinkId]} pairs so the reaper can release the slot
+     * on the right link and then bulk-delete the submissions. DB clock; oldest first.
+     */
+    @Query(value = """
+            SELECT id, public_link_id FROM submissions
+            WHERE status = 'IN_PROGRESS'
+              AND public_link_id IS NOT NULL
+              AND created_at < now() - (:ttlSeconds * interval '1 second')
+            ORDER BY created_at ASC
+            LIMIT :limit
+            """, nativeQuery = true)
+    List<Object[]> findStaleInProgressPublicSessions(@Param("ttlSeconds") long ttlSeconds,
+                                                     @Param("limit") int limit);
 }

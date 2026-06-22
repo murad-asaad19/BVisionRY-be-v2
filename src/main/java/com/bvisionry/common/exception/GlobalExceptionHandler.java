@@ -60,6 +60,22 @@ public class GlobalExceptionHandler {
                 .body(new ErrorResponse(409, ex.getMessage()));
     }
 
+    /**
+     * A unique/foreign-key constraint collision — most notably two concurrent
+     * autosaves racing to insert the first answer for the same
+     * (submission, question) pair past the V86 unique index. Without this it falls
+     * through to the 500 catch-all; it is really a transient write conflict, so
+     * answer 409 and let the client retry rather than surfacing a server error.
+     * The DB message is deliberately not echoed (it can leak schema details).
+     */
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(
+            org.springframework.dao.DataIntegrityViolationException ex) {
+        log.warn("Data integrity violation: {}", ex.getMostSpecificCause().getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ErrorResponse(409, "This change conflicts with a concurrent update. Please retry."));
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
         String message = ex.getBindingResult().getFieldErrors().stream()

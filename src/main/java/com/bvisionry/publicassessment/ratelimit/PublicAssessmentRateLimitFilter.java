@@ -40,6 +40,10 @@ public class PublicAssessmentRateLimitFilter extends OncePerRequestFilter {
     private static final String SUBMIT_PATTERN = "/api/public/assessments/sessions/*/submit";
     private static final String RETAKE_PATTERN = "/api/public/assessments/sessions/*/retake";
     private static final String RECOVER_PATTERN = "/api/public/assessments/by-token/*/recover";
+    // Autosave batch — previously unthrottled (B4/F44). Uses its OWN generous bucket
+    // (checkPublicAssessmentSaveLimit) so legitimate frequent autosaves aren't blocked
+    // by the much tighter session-create/submit limit.
+    private static final String SAVE_PATTERN = "/api/public/assessments/sessions/*/answers/batch";
     private static final AntPathMatcher MATCHER = new AntPathMatcher();
     private static final ObjectMapper JSON = new ObjectMapper()
             .registerModule(new JavaTimeModule())
@@ -53,13 +57,15 @@ public class PublicAssessmentRateLimitFilter extends OncePerRequestFilter {
                                     FilterChain filterChain) throws ServletException, IOException {
         String uri = request.getRequestURI();
         String method = request.getMethod();
-        boolean rateLimited =
-                ("POST".equalsIgnoreCase(method)
-                        && (MATCHER.match(SESSION_CREATE_PATTERN, uri)
+        boolean post = "POST".equalsIgnoreCase(method);
+
+        boolean isSave = post && MATCHER.match(SAVE_PATTERN, uri);
+        boolean isStrict =
+                (post && (MATCHER.match(SESSION_CREATE_PATTERN, uri)
                                 || MATCHER.match(SUBMIT_PATTERN, uri)
                                 || MATCHER.match(RETAKE_PATTERN, uri)))
                 || ("GET".equalsIgnoreCase(method) && MATCHER.match(RECOVER_PATTERN, uri));
-        if (!rateLimited) {
+        if (!isSave && !isStrict) {
             filterChain.doFilter(request, response);
             return;
         }
@@ -68,8 +74,15 @@ public class PublicAssessmentRateLimitFilter extends OncePerRequestFilter {
         String token = extractToken(uri);
 
         try {
-            rateLimitService.checkPublicAssessmentLimit("ip:" + ip);
-            rateLimitService.checkPublicAssessmentLimit("token:" + token + ":" + ip);
+            if (isSave) {
+                // Generous, autosave-friendly bucket.
+                rateLimitService.checkPublicAssessmentSaveLimit("ip:" + ip);
+                rateLimitService.checkPublicAssessmentSaveLimit("token:" + token + ":" + ip);
+            } else {
+                // Tight bucket: session-create / submit / retake / recover.
+                rateLimitService.checkPublicAssessmentLimit("ip:" + ip);
+                rateLimitService.checkPublicAssessmentLimit("token:" + token + ":" + ip);
+            }
         } catch (RateLimitExceededException ex) {
             writeTooManyRequests(response, ex.getMessage());
             return;

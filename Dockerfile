@@ -50,6 +50,15 @@ EXPOSE 8080
 # metaspace, threads and direct buffers.
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0"
 
+# Default the DEPLOYED image to the prod profile (B6). The source default in
+# application.properties is 'dev' for local IDE convenience, which meant a deploy
+# that forgot to set SPRING_PROFILES_ACTIVE would boot prod with dev config
+# (insecure cookies, mail->localhost, dev super-admin seed). The image now
+# defaults to a safe profile; docker-compose / Railway still override this env for
+# local (dev,mock) or other environments. StartupSafetyValidator is the backstop
+# that refuses to boot prod with dev secrets/insecure cookies.
+ENV SPRING_PROFILES_ACTIVE=prod
+
 # The slim launcher jar references the extracted dependency layers; it is the
 # Spring Boot 3.5 recommended entrypoint (NOT the original uber jar).
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar application.jar"]

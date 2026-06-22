@@ -77,7 +77,8 @@ public class SurveyResultsService {
 
     /**
      * Build the per-section / per-question aggregate. When {@code liveOnly} is
-     * set, only sections opted into live analytics are included.
+     * set, only questions opted into live analytics are included, and sections
+     * left with no such question are dropped.
      */
     private SurveyResultsSummaryDto buildSummary(UUID surveyId, boolean liveOnly) {
         Survey survey = surveyService.findOrThrow(surveyId);
@@ -92,9 +93,9 @@ public class SurveyResultsService {
         }
 
         // Scope the answer load to what we'll actually summarize: the live page
-        // only renders live-enabled sections, so loading every answer just to
+        // only renders live-enabled questions, so loading every answer just to
         // discard most on a ~5s poll is wasteful. The query-side filter keeps
-        // cost proportional to live sections rather than total responses.
+        // cost proportional to live questions rather than total responses.
         List<SurveyAnswer> allAnswers = liveOnly
                 ? answerRepository.findLiveByResponseSurveyId(surveyId)
                 : answerRepository.findByResponseSurveyId(surveyId);
@@ -107,13 +108,16 @@ public class SurveyResultsService {
         List<SurveyPillar> sortedPillars = new ArrayList<>(survey.getPillars());
         sortedPillars.sort(Comparator.comparingInt(SurveyPillar::getDisplayOrder));
         for (SurveyPillar pillar : sortedPillars) {
-            if (liveOnly && !pillar.isLiveAnalyticsEnabled()) continue;
             List<QuestionSummaryDto> qs = new ArrayList<>();
             List<SurveyQuestion> sortedQs = new ArrayList<>(pillar.getQuestions());
             sortedQs.sort(Comparator.comparingInt(SurveyQuestion::getDisplayOrder));
             for (SurveyQuestion q : sortedQs) {
+                if (liveOnly && !q.isLiveAnalyticsEnabled()) continue;
                 qs.add(summarizeQuestion(q, answersByQuestion.getOrDefault(q.getId(), List.of())));
             }
+            // On the live page, a section with no opted-in question contributes
+            // nothing — drop it so the client renders no empty section card.
+            if (liveOnly && qs.isEmpty()) continue;
             pillarSummaries.add(new PillarSummaryDto(
                     pillar.getId(), pillar.getName(), pillar.getDescription(),
                     pillar.getDisplayOrder(), qs));

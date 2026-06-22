@@ -77,6 +77,24 @@ public class SurveyQuestionService {
         return mapper.toQuestionDto(questionRepository.save(q));
     }
 
+    /**
+     * Toggle whether a question appears on the results "Live" analytics page.
+     * Deliberately NOT gated by {@link SurveyService#requireEditable} — this is
+     * a display preference, so it's adjustable even after publish, which is
+     * exactly when live analytics matters.
+     */
+    @Transactional
+    public SurveyQuestionDto setLiveAnalytics(UUID surveyId, UUID pillarId, UUID questionId,
+                                              boolean enabled) {
+        surveyService.findOrThrow(surveyId);
+        pillarService.findPillarOrThrow(surveyId, pillarId);
+
+        SurveyQuestion q = questionRepository.findByIdAndPillarId(questionId, pillarId)
+                .orElseThrow(() -> new ResourceNotFoundException("SurveyQuestion", questionId.toString()));
+        q.setLiveAnalyticsEnabled(enabled);
+        return mapper.toQuestionDto(questionRepository.save(q));
+    }
+
     @Transactional
     public SurveyQuestionDto duplicate(UUID surveyId, UUID pillarId, UUID questionId) {
         Survey survey = surveyService.findOrThrow(surveyId);
@@ -94,6 +112,7 @@ public class SurveyQuestionService {
         cloned.setType(original.getType());
         cloned.setPromptText(original.getPromptText());
         cloned.setRequired(original.isRequired());
+        cloned.setLiveAnalyticsEnabled(original.isLiveAnalyticsEnabled());
         cloned.setDisplayOrder(nextOrder);
         if (original.getConfigJson() != null) {
             cloned.setConfigJson(new LinkedHashMap<>(original.getConfigJson()));

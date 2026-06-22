@@ -13,6 +13,7 @@ public record SurveyQuestionDto(
         String promptText,
         int displayOrder,
         boolean isRequired,
+        boolean liveAnalyticsEnabled,
         Map<String, Object> configJson,
         Instant createdAt,
         Instant updatedAt

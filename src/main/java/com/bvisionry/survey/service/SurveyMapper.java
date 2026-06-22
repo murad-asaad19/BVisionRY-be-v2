@@ -57,7 +57,6 @@ public class SurveyMapper {
                 pillar.getName(),
                 pillar.getDescription(),
                 pillar.getDisplayOrder(),
-                pillar.isLiveAnalyticsEnabled(),
                 questionDtos,
                 pillar.getCreatedAt(),
                 pillar.getUpdatedAt()
@@ -72,6 +71,7 @@ public class SurveyMapper {
                 q.getPromptText(),
                 q.getDisplayOrder(),
                 q.isRequired(),
+                q.isLiveAnalyticsEnabled(),
                 q.getConfigJson(),
                 q.getCreatedAt(),
                 q.getUpdatedAt()

@@ -24,13 +24,13 @@ public interface SurveyAnswerRepository extends JpaRepository<SurveyAnswer, UUID
     List<SurveyAnswer> findByResponseSurveyId(UUID surveyId);
 
     /**
-     * Live-page variant: load only answers whose question belongs to a section
-     * opted into live analytics. Pushing the {@code liveAnalyticsEnabled} filter
-     * into the query keeps the polled live endpoint's cost proportional to the
-     * live sections, not the survey's total response volume.
+     * Live-page variant: load only answers whose question is opted into live
+     * analytics. Pushing the {@code liveAnalyticsEnabled} filter into the query
+     * keeps the polled live endpoint's cost proportional to the live questions,
+     * not the survey's total response volume.
      */
     @EntityGraph(attributePaths = {"question", "question.pillar"})
     @Query("select a from SurveyAnswer a where a.response.survey.id = :surveyId "
-            + "and a.question.pillar.liveAnalyticsEnabled = true")
+            + "and a.question.liveAnalyticsEnabled = true")
     List<SurveyAnswer> findLiveByResponseSurveyId(UUID surveyId);
 }

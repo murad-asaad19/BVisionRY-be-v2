@@ -37,10 +37,6 @@ public class SurveyPillar extends BaseEntity {
     @Column(name = "display_order", nullable = false)
     private int displayOrder = 0;
 
-    /** Whether this section's questions appear on the survey-results "Live" page. Opt-in. */
-    @Column(name = "live_analytics_enabled", nullable = false)
-    private boolean liveAnalyticsEnabled = false;
-
     @OneToMany(mappedBy = "pillar", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("displayOrder")
     private List<SurveyQuestion> questions = new ArrayList<>();

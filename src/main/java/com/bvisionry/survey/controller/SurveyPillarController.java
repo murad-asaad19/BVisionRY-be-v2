@@ -1,7 +1,6 @@
 package com.bvisionry.survey.controller;
 
 import com.bvisionry.survey.dto.SurveyPillarDto;
-import com.bvisionry.survey.dto.SurveyPillarLiveRequest;
 import com.bvisionry.survey.dto.SurveyPillarRequest;
 import com.bvisionry.survey.dto.SurveyReorderRequest;
 import com.bvisionry.survey.service.SurveyPillarService;
@@ -43,20 +42,6 @@ public class SurveyPillarController {
             @PathVariable UUID id,
             @Valid @RequestBody SurveyPillarRequest request) {
         return ResponseEntity.ok(pillarService.update(surveyId, id, request));
-    }
-
-    /**
-     * Toggle a section's inclusion on the results "Live" analytics page. A
-     * display preference, so it is allowed regardless of survey status (unlike
-     * the structural create/update/delete operations above).
-     */
-    @PutMapping("/{id}/live-analytics")
-    public ResponseEntity<SurveyPillarDto> setLiveAnalytics(
-            @PathVariable UUID surveyId,
-            @PathVariable UUID id,
-            @RequestBody SurveyPillarLiveRequest request) {
-        boolean enabled = Boolean.TRUE.equals(request.enabled());
-        return ResponseEntity.ok(pillarService.setLiveAnalytics(surveyId, id, enabled));
     }
 
     @PostMapping("/{id}/duplicate")

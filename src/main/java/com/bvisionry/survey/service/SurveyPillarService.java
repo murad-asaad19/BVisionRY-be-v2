@@ -60,21 +60,6 @@ public class SurveyPillarService {
         return mapper.toPillarDto(pillarRepository.save(pillar));
     }
 
-    /**
-     * Toggle whether a section appears on the results "Live" analytics page.
-     * Deliberately NOT gated by {@link SurveyService#requireEditable} — this is
-     * a display preference, so it's adjustable even after publish, which is
-     * exactly when live analytics matters.
-     */
-    @Transactional
-    public SurveyPillarDto setLiveAnalytics(UUID surveyId, UUID pillarId, boolean enabled) {
-        surveyService.findOrThrow(surveyId);
-        SurveyPillar pillar = pillarRepository.findByIdAndSurveyId(pillarId, surveyId)
-                .orElseThrow(() -> new ResourceNotFoundException("SurveyPillar", pillarId.toString()));
-        pillar.setLiveAnalyticsEnabled(enabled);
-        return mapper.toPillarDto(pillarRepository.save(pillar));
-    }
-
     @Transactional
     public SurveyPillarDto duplicate(UUID surveyId, UUID pillarId) {
         Survey survey = surveyService.findOrThrow(surveyId);
@@ -90,7 +75,6 @@ public class SurveyPillarService {
         cloned.setName(original.getName() + " (Copy)");
         cloned.setDescription(original.getDescription());
         cloned.setDisplayOrder(nextOrder);
-        cloned.setLiveAnalyticsEnabled(original.isLiveAnalyticsEnabled());
 
         List<SurveyQuestion> clonedQuestions = new ArrayList<>();
         for (SurveyQuestion q : original.getQuestions()) {
@@ -100,6 +84,7 @@ public class SurveyPillarService {
             clonedQ.setPromptText(q.getPromptText());
             clonedQ.setDisplayOrder(q.getDisplayOrder());
             clonedQ.setRequired(q.isRequired());
+            clonedQ.setLiveAnalyticsEnabled(q.isLiveAnalyticsEnabled());
             if (q.getConfigJson() != null) {
                 clonedQ.setConfigJson(new LinkedHashMap<>(q.getConfigJson()));
             }

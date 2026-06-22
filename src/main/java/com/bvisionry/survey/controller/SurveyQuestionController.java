@@ -1,6 +1,7 @@
 package com.bvisionry.survey.controller;
 
 import com.bvisionry.survey.dto.SurveyQuestionDto;
+import com.bvisionry.survey.dto.SurveyQuestionLiveRequest;
 import com.bvisionry.survey.dto.SurveyQuestionRequest;
 import com.bvisionry.survey.dto.SurveyReorderRequest;
 import com.bvisionry.survey.service.SurveyQuestionService;
@@ -44,6 +45,21 @@ public class SurveyQuestionController {
             @PathVariable UUID id,
             @Valid @RequestBody SurveyQuestionRequest request) {
         return ResponseEntity.ok(questionService.update(surveyId, pillarId, id, request));
+    }
+
+    /**
+     * Toggle a question's inclusion on the results "Live" analytics page. A
+     * display preference, so it is allowed regardless of survey status (unlike
+     * the structural create/update/delete operations above).
+     */
+    @PutMapping("/{id}/live-analytics")
+    public ResponseEntity<SurveyQuestionDto> setLiveAnalytics(
+            @PathVariable UUID surveyId,
+            @PathVariable UUID pillarId,
+            @PathVariable UUID id,
+            @RequestBody SurveyQuestionLiveRequest request) {
+        boolean enabled = Boolean.TRUE.equals(request.enabled());
+        return ResponseEntity.ok(questionService.setLiveAnalytics(surveyId, pillarId, id, enabled));
     }
 
     @PostMapping("/{id}/duplicate")

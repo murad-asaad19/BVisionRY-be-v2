@@ -10,7 +10,6 @@ public record SurveyPillarDto(
         String name,
         String description,
         int displayOrder,
-        boolean liveAnalyticsEnabled,
         List<SurveyQuestionDto> questions,
         Instant createdAt,
         Instant updatedAt

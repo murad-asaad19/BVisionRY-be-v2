@@ -41,6 +41,10 @@ public class SurveyQuestion extends BaseEntity {
     @Column(name = "is_required", nullable = false)
     private boolean isRequired = true;
 
+    /** Whether this question appears on the survey-results "Live" page. Opt-in. */
+    @Column(name = "live_analytics_enabled", nullable = false)
+    private boolean liveAnalyticsEnabled = false;
+
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "config_json", columnDefinition = "jsonb")
     private Map<String, Object> configJson;

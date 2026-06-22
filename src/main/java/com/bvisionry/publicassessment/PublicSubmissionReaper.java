@@ -63,14 +63,19 @@ public class PublicSubmissionReaper {
 
             List<UUID> submissionIds = new ArrayList<>(stale.size());
             for (Object[] row : stale) {
-                UUID submissionId = (UUID) row[0];
-                UUID linkId = (UUID) row[1];
-                submissionIds.add(submissionId);
-                linkRepository.decrementResponseCount(linkId);
+                submissionIds.add((UUID) row[0]);
             }
-            int deleted = submissionRepository.deleteAllByIdIn(submissionIds);
+
+            // Delete FIRST under a status-guarded native DELETE, then release a slot only
+            // for the rows this instance actually deleted (the returned link ids). The
+            // guard skips any session that became SUBMITTED since the SELECT (no TOCTOU
+            // delete of just-submitted work); the row lock means a competing instance
+            // deletes 0 of the same rows and returns no ids (no double-decrement).
+            List<UUID> freedLinkIds = submissionRepository.deleteStaleInProgressReturningLinkIds(submissionIds);
+            freedLinkIds.forEach(linkRepository::decrementResponseCount);
+
             log.info("PublicSubmissionReaper: reclaimed {} abandoned IN_PROGRESS public session(s), "
-                    + "releasing their reserved response slots", deleted);
+                    + "releasing their reserved response slots", freedLinkIds.size());
         } catch (RuntimeException e) {
             log.error("PublicSubmissionReaper sweep failed: {}", e.getMessage(), e);
         }

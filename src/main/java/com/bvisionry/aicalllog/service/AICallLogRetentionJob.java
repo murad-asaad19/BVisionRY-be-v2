@@ -22,18 +22,30 @@ public class AICallLogRetentionJob {
 
     private final AICallLogRepository repository;
     private final int retentionDays;
+    private final int batchSize;
+    private final int maxBatches;
 
     public AICallLogRetentionJob(
             AICallLogRepository repository,
-            @Value("${bvisionry.ai-call-log.retention-days:90}") int retentionDays) {
+            @Value("${bvisionry.ai-call-log.retention-days:90}") int retentionDays,
+            @Value("${bvisionry.ai-call-log.retention.batch-size:1000}") int batchSize,
+            @Value("${bvisionry.ai-call-log.retention.max-batches:10000}") int maxBatches) {
         this.repository = repository;
         this.retentionDays = retentionDays;
+        this.batchSize = batchSize;
+        this.maxBatches = maxBatches;
     }
 
     /**
      * Runs daily (and ~5 min after boot). A non-positive retention value disables
      * the purge so an operator can opt into keeping everything. Fully guarded so a
      * failed purge never kills the scheduler.
+     *
+     * <p>Deletes in bounded batches of {@code batch-size} rows, each in its own
+     * transaction, so a large backlog never holds a single long-running DELETE (and
+     * its locks) against the hot-path table. Loops until a batch deletes fewer than
+     * {@code batch-size} rows — i.e. nothing older than the cutoff remains — capped at
+     * {@code max-batches} iterations as a safety bound against unbounded looping.
      */
     @Scheduled(fixedDelayString = "${bvisionry.ai-call-log.retention.interval-ms:86400000}",
             initialDelayString = "${bvisionry.ai-call-log.retention.initial-delay-ms:300000}")
@@ -43,10 +55,24 @@ public class AICallLogRetentionJob {
         }
         try {
             Instant cutoff = Instant.now().minus(Duration.ofDays(retentionDays));
-            int deleted = repository.deleteByCalledAtBefore(cutoff);
-            if (deleted > 0) {
-                log.info("AICallLogRetentionJob: purged {} ai_call_logs row(s) older than {} day(s)",
-                        deleted, retentionDays);
+            long totalDeleted = 0;
+            int batches = 0;
+            int deleted;
+            do {
+                deleted = repository.deleteBatchByCalledAtBefore(cutoff, batchSize);
+                totalDeleted += deleted;
+                batches++;
+            } while (deleted == batchSize && batches < maxBatches);
+
+            if (batches >= maxBatches && deleted == batchSize) {
+                log.warn("AICallLogRetentionJob: hit max-batches cap ({}) with rows still older "
+                                + "than {} day(s) remaining; will continue on the next run",
+                        maxBatches, retentionDays);
+            }
+            if (totalDeleted > 0) {
+                log.info("AICallLogRetentionJob: purged {} ai_call_logs row(s) older than {} day(s) "
+                                + "across {} batch(es)",
+                        totalDeleted, retentionDays, batches);
             }
         } catch (RuntimeException e) {
             log.error("AICallLogRetentionJob purge failed: {}", e.getMessage(), e);

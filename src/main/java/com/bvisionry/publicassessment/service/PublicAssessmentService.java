@@ -274,7 +274,7 @@ public class PublicAssessmentService {
         submissionRepository.save(submission);
 
         UUID submissionId = submission.getId();
-        AfterCommit.run(() -> {
+        AfterCommit.dispatch(() -> {
             log.info("Transaction committed for public submission {}, dispatching async evaluation",
                     submissionId);
             evaluationService.evaluateSubmissionAsync(submissionId);

@@ -96,7 +96,7 @@ public class InsightService {
         InsightReport saved = insightReportRepository.save(report);
         UUID reportId = saved.getId();
 
-        AfterCommit.run(() -> self.runInsightGenerationAsync(reportId, pipelineId, anonymizedData));
+        AfterCommit.dispatch(() -> self.runInsightGenerationAsync(reportId, pipelineId, anonymizedData));
 
         return new InsightGenerateResponse(reportId, InsightReportStatus.GENERATING);
     }
@@ -181,7 +181,7 @@ public class InsightService {
         report.setFailureReason(null);
         insightReportRepository.save(report);
 
-        AfterCommit.run(() -> self.runInsightGenerationAsync(reportId, pipelineId, anonymizedData));
+        AfterCommit.dispatch(() -> self.runInsightGenerationAsync(reportId, pipelineId, anonymizedData));
         return new InsightGenerateResponse(reportId, InsightReportStatus.GENERATING);
     }
 

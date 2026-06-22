@@ -158,7 +158,7 @@ public class AdminAnswerOverrideService {
         submission.queueForEvaluation();
         submissionRepository.save(submission);
 
-        AfterCommit.run(() -> evaluationService.evaluateSubmissionAsync(submissionId));
+        AfterCommit.dispatch(() -> evaluationService.evaluateSubmissionAsync(submissionId));
 
         log.info("Super-admin triggered re-evaluation for submission {}", submissionId);
     }

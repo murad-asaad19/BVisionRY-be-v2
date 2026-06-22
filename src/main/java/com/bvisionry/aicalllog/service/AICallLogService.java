@@ -5,6 +5,7 @@ import com.bvisionry.aicalllog.dto.AICallLogResponse;
 import com.bvisionry.aicalllog.entity.AICallLog;
 import com.bvisionry.aicalllog.repository.AICallLogRepository;
 import com.bvisionry.common.enums.AICallStatus;
+import com.bvisionry.common.util.TextTruncator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -84,11 +85,12 @@ public class AICallLogService {
                 .map(AICallLogResponse::from);
     }
 
-    /** Cap a stored payload field so a single pathological prompt/response can't bloat a row. */
+    /**
+     * Cap a stored payload field so a single pathological prompt/response can't bloat a
+     * row. Truncates by code point (never splitting a surrogate pair) and strips NUL,
+     * both of which Postgres would otherwise reject — failing the audit write entirely.
+     */
     private String truncate(String value) {
-        if (value == null || value.length() <= maxPayloadChars) {
-            return value;
-        }
-        return value.substring(0, maxPayloadChars) + "…[truncated]";
+        return TextTruncator.truncate(value, maxPayloadChars, "…[truncated]");
     }
 }

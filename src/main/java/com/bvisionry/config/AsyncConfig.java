@@ -1,6 +1,5 @@
 package com.bvisionry.config;
 
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
@@ -10,7 +9,6 @@ import java.util.concurrent.Executor;
 
 @Configuration
 @EnableAsync
-@Slf4j
 public class AsyncConfig {
 
     /**
@@ -29,16 +27,19 @@ public class AsyncConfig {
         executor.setMaxPoolSize(8);
         executor.setQueueCapacity(100);
         executor.setThreadNamePrefix("eval-");
-        // On saturation, log and DROP the dispatch rather than the JDK default
-        // AbortPolicy (which throws RejectedExecutionException into the post-commit
-        // callback) or CallerRunsPolicy (which would run a minutes-long AI
-        // evaluation on the HTTP/commit thread). A dropped dispatch is NOT lost:
-        // the row is already committed SUBMITTED, and EvaluationReaper re-dispatches
-        // it once capacity frees — so a launch burst degrades to "evaluated a little
-        // later" instead of "result silently stranded forever".
-        executor.setRejectedExecutionHandler((r, exec) -> log.warn(
-                "evaluationExecutor saturated — evaluation dispatch dropped; "
-                        + "EvaluationReaper will recover the stranded SUBMITTED submission"));
+        // On saturation, throw rather than silently drop. AbortPolicy (also the
+        // ThreadPoolTaskExecutor default) makes saturation observable: the
+        // RejectedExecutionException is surfaced — Spring wraps it as
+        // TaskRejectedException at the @Async submit — so a dropped dispatch is no
+        // longer mistaken for a successful one. A rejected dispatch is NOT lost: the
+        // row is already committed SUBMITTED, and EvaluationReaper re-dispatches it
+        // once capacity frees (its catch(RuntimeException) detects the throw and
+        // leaves the row stranded for the next tick). A launch burst therefore
+        // degrades to "evaluated a little later" instead of "result silently stranded
+        // forever". Every submit-path dispatch is registered via AfterCommit, so the
+        // rejection throw lands on the post-commit path (the row is already durably
+        // SUBMITTED) and never as a 500 on the respondent's submit response.
+        executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
         // Drain in-flight evaluations on shutdown (e.g. a Railway redeploy) instead
         // of hard-killing them mid-run; anything that doesn't finish in the window
         // is recovered by the reaper on the next instance.

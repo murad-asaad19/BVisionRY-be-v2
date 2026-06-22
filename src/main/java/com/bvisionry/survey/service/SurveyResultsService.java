@@ -185,6 +185,11 @@ public class SurveyResultsService {
                     average = sum.divide(BigDecimal.valueOf(values.size()), 2, RoundingMode.HALF_UP);
                     min = values.stream().min(BigDecimal::compareTo).orElse(null);
                     max = values.stream().max(BigDecimal::compareTo).orElse(null);
+                    // Distribution donut (mirrors LIKERT): SELF_RATING uses fixed 0–100
+                    // bands; NUMBER uses dynamic equal-width ranges over the observed span.
+                    histogramBuckets = q.getType() == SurveyQuestionType.SELF_RATING
+                            ? buildSelfRatingHistogram(values)
+                            : buildNumberHistogram(values);
                 }
             }
             case SHORT_TEXT -> {
@@ -297,6 +302,56 @@ public class SurveyResultsService {
                 label = String.valueOf(position);
             }
             out.add(new HistogramBucketDto(label, entry.getValue()));
+        }
+        return out;
+    }
+
+    /** Fixed 0–100 bands for the SELF_RATING slider — always all five, in scale order. */
+    private static final String[] SELF_RATING_BANDS = {
+            "0–20", "21–40", "41–60", "61–80", "81–100"
+    };
+
+    private List<HistogramBucketDto> buildSelfRatingHistogram(List<BigDecimal> values) {
+        long[] counts = new long[SELF_RATING_BANDS.length];
+        for (BigDecimal v : values) {
+            int n = Math.max(0, Math.min(100, v.setScale(0, RoundingMode.HALF_UP).intValue()));
+            int idx = n <= 20 ? 0 : n <= 40 ? 1 : n <= 60 ? 2 : n <= 80 ? 3 : 4;
+            counts[idx]++;
+        }
+        List<HistogramBucketDto> out = new ArrayList<>(SELF_RATING_BANDS.length);
+        for (int i = 0; i < SELF_RATING_BANDS.length; i++) {
+            out.add(new HistogramBucketDto(SELF_RATING_BANDS[i], counts[i]));
+        }
+        return out;
+    }
+
+    /**
+     * Equal-width histogram over the observed integer range of NUMBER answers
+     * (values rounded to whole numbers). One bucket when every value is equal;
+     * otherwise up to five contiguous ranges spanning min→max. Single-width
+     * buckets are labelled with the bare value rather than "n–n".
+     */
+    private List<HistogramBucketDto> buildNumberHistogram(List<BigDecimal> values) {
+        List<Integer> ints = values.stream()
+                .map(v -> v.setScale(0, RoundingMode.HALF_UP).intValue())
+                .sorted()
+                .toList();
+        int minV = ints.get(0);
+        int maxV = ints.get(ints.size() - 1);
+        if (minV == maxV) {
+            return List.of(new HistogramBucketDto(String.valueOf(minV), (long) ints.size()));
+        }
+        long span = (long) maxV - minV + 1;
+        int bucketCount = (int) Math.min(5, span);
+        int width = (int) Math.ceil((double) span / bucketCount);
+        List<HistogramBucketDto> out = new ArrayList<>(bucketCount);
+        for (int b = 0; b < bucketCount; b++) {
+            final int lo = minV + b * width;
+            if (lo > maxV) break;
+            final int hi = Math.min(maxV, lo + width - 1);
+            String label = lo == hi ? String.valueOf(lo) : lo + "–" + hi;
+            long c = ints.stream().filter(n -> n >= lo && n <= hi).count();
+            out.add(new HistogramBucketDto(label, c));
         }
         return out;
     }

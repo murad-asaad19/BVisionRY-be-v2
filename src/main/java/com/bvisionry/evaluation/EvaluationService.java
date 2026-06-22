@@ -167,7 +167,7 @@ public class EvaluationService {
         // worker reloads the submission on its own thread before the FAILED→SUBMITTED
         // write is visible and bails out of evaluateSubmission's status guard.
         // Self-reference keeps the @Async("evaluationExecutor") proxy in play.
-        AfterCommit.run(() -> self.evaluateSubmissionAsync(submissionId));
+        AfterCommit.dispatch(() -> self.evaluateSubmissionAsync(submissionId));
     }
 
     /**

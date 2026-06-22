@@ -326,7 +326,7 @@ public class AssessmentService {
                 OrgAuditActions.ENTITY_SUBMISSION, submissionId,
                 Map.of("pipelineName", submission.getAssignment().getPipeline().getName()));
 
-        AfterCommit.run(() -> {
+        AfterCommit.dispatch(() -> {
             log.info("Transaction committed for submission {}, dispatching async evaluation", submissionId);
             evaluationService.evaluateSubmissionAsync(submissionId);
         });

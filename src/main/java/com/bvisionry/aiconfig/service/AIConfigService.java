@@ -9,8 +9,12 @@ import com.bvisionry.audit.AuditService;
 import com.bvisionry.common.enums.AIProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.Map;
 
@@ -19,9 +23,27 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class AIConfigService {
 
+    /**
+     * Redis Pub/Sub channel for cross-instance cache invalidation (R1#13). On every
+     * committed config/key write we publish here; each backend instance subscribes
+     * (see {@code AIConfigCacheInvalidationConfig}) and drops its local memo on receipt,
+     * so a rotation done on one node is reflected on all the others within a round-trip
+     * instead of being bounded by the {@link #CONFIG_CACHE_TTL_MS} TTL.
+     */
+    public static final String INVALIDATE_CHANNEL = "ai-config:invalidate";
+
     private final AIConfigurationRepository configRepository;
     private final ApiKeyEncryptionService encryptionService;
     private final AuditService auditService;
+
+    /**
+     * Optional — present only when a Redis connection is configured. Field-injected
+     * (not via the constructor) so the service still constructs cleanly in unit tests
+     * and simply skips the cross-instance publish when Redis is absent. Local memo
+     * invalidation always happens regardless, preserving single-instance correctness.
+     */
+    @Autowired(required = false)
+    private StringRedisTemplate stringRedisTemplate;
 
     /**
      * Short-lived memo of the singleton config (F18). It is read once per pillar on
@@ -76,7 +98,7 @@ public class AIConfigService {
         config.setMaxTokensEvaluation(request.maxTokensEvaluation());
         config.setMaxTokensInsight(request.maxTokensInsight());
         configRepository.save(config);
-        invalidateConfigCache();
+        invalidateAfterCommit();
 
         auditService.log(null, null, "AI_CONFIG_UPDATED", "AIConfiguration", config.getId(),
                 Map.of("provider", request.provider().name(),
@@ -97,7 +119,7 @@ public class AIConfigService {
             case ANTHROPIC -> config.setAnthropicApiKeyEncrypted(encrypted);
         }
         configRepository.save(config);
-        invalidateConfigCache();
+        invalidateAfterCommit();
 
         auditService.log(null, null, "API_KEY_UPDATED", "AIConfiguration", config.getId(),
                 Map.of("provider", request.provider().name()));
@@ -111,7 +133,7 @@ public class AIConfigService {
      */
     @Transactional(readOnly = true)
     public String getDecryptedApiKey() {
-        AIConfiguration config = configRepository.getSingleton();
+        AIConfiguration config = getConfigEntity();
         String encrypted = switch (config.getProvider()) {
             case OPENROUTER -> config.getOpenRouterApiKeyEncrypted();
             case ANTHROPIC -> config.getAnthropicApiKeyEncrypted();
@@ -129,7 +151,7 @@ public class AIConfigService {
      */
     @Transactional(readOnly = true)
     public String getDecryptedOpenRouterApiKey() {
-        AIConfiguration config = configRepository.getSingleton();
+        AIConfiguration config = getConfigEntity();
         return tryDecrypt(config.getOpenRouterApiKeyEncrypted());
     }
 
@@ -149,9 +171,54 @@ public class AIConfigService {
         return fresh;
     }
 
-    /** Drop the memo so the next read reloads — called after any config/key write. */
-    private void invalidateConfigCache() {
+    /**
+     * Drop the local in-process memo so the next read reloads. Public so the Redis
+     * Pub/Sub listener can invoke it on a cross-instance invalidation signal (R1#13).
+     */
+    public void invalidateConfigCache() {
         cachedConfig = null;
+    }
+
+    /**
+     * Invalidate the cache <em>after</em> the surrounding write commits (R1#6). Calling
+     * {@link #invalidateConfigCache()} inline would let a concurrent {@link #getConfigEntity()}
+     * reload the still-uncommitted row and re-memoize stale data for the full TTL. By
+     * registering an {@link TransactionSynchronization#afterCommit()} callback we only
+     * clear (and broadcast) once the new row is durably visible. When no transaction is
+     * active (e.g. unit tests calling the service directly) we fall back to invalidating
+     * immediately so single-call correctness still holds.
+     */
+    private void invalidateAfterCommit() {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    publishInvalidation();
+                }
+            });
+        } else {
+            publishInvalidation();
+        }
+    }
+
+    /**
+     * Clear the local memo and, when Redis is available, broadcast the invalidation to
+     * the other instances (R1#13). The local clear always runs first so single-instance
+     * correctness holds even with Redis absent; the publish is best-effort — if Redis is
+     * down the platform degrades to exactly today's TTL-bounded staleness on peer nodes.
+     */
+    private void publishInvalidation() {
+        invalidateConfigCache();
+        StringRedisTemplate redis = this.stringRedisTemplate;
+        if (redis == null) {
+            return;
+        }
+        try {
+            redis.convertAndSend(INVALIDATE_CHANNEL, "");
+        } catch (RuntimeException e) {
+            log.warn("Failed to publish AI-config cache invalidation to Redis ({}) — peer instances "
+                    + "will refresh within the {}ms TTL instead.", e.getMessage(), CONFIG_CACHE_TTL_MS);
+        }
     }
 
     /**

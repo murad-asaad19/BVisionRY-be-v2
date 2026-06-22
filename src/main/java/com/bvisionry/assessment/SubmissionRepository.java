@@ -323,4 +323,30 @@ public interface SubmissionRepository extends JpaRepository<Submission, UUID> {
             """, nativeQuery = true)
     List<Object[]> findStaleInProgressPublicSessions(@Param("ttlSeconds") long ttlSeconds,
                                                      @Param("limit") int limit);
+
+    /**
+     * Status-guarded reaper delete for abandoned public sessions: deletes only the
+     * rows in {@code ids} that are <em>still</em> IN_PROGRESS public submissions, and
+     * returns the {@code public_link_id} of each row actually deleted so the caller can
+     * release exactly those reserved response slots.
+     *
+     * <p>The {@code status = 'IN_PROGRESS'} guard re-checks under the DELETE's own row
+     * lock, closing the TOCTOU window between {@link #findStaleInProgressPublicSessions}
+     * (a non-locking SELECT) and the delete: a session that became SUBMITTED in between
+     * no longer matches and is left intact. Because Postgres row-locks each deleted row,
+     * across competing instances exactly one deletes a given row and gets its link id
+     * back via {@code RETURNING}; any loser deletes 0 rows and releases nothing — so the
+     * per-row slot release happens exactly once. Distinct from {@link #deleteAllByIdIn},
+     * which is an unconditional admin clear-responses delete and must stay unguarded.
+     * Native for the {@code RETURNING} clause; status is stored as text (EnumType.STRING).
+     */
+    @Modifying
+    @Query(value = """
+            DELETE FROM submissions
+            WHERE id IN (:ids)
+              AND status = 'IN_PROGRESS'
+              AND public_link_id IS NOT NULL
+            RETURNING public_link_id
+            """, nativeQuery = true)
+    List<UUID> deleteStaleInProgressReturningLinkIds(@Param("ids") List<UUID> ids);
 }

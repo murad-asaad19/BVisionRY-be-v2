@@ -4,6 +4,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -55,9 +56,28 @@ public class MediaController {
         return new MediaUploadResponse(marker, previewUrl);
     }
 
+    @Operation(summary = "Presign a direct-to-MinIO upload",
+               description = "Returns a short-lived presigned PUT URL the browser uploads the file to "
+                           + "directly — bypassing application-server / proxy body-size limits (e.g. "
+                           + "Vercel Functions' 4.5MB cap) — plus the persistent minio:// marker and a "
+                           + "presigned GET preview URL. Use this instead of POST /media for large files.")
+    @PostMapping(value = "/media/presign", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public MediaService.PresignedUpload presignUpload(@RequestBody PresignUploadRequest request) {
+        return mediaService.presignUpload(request.kind(), request.filename(), request.contentType());
+    }
+
     // -------------------------------------------------------------------------
-    // Response DTO
+    // Request / Response DTOs
     // -------------------------------------------------------------------------
+
+    /**
+     * Body of {@code POST /api/v1/media/presign}.
+     *
+     * @param filename    original filename (used only to build a readable object key)
+     * @param contentType the file's MIME type (the browser applies it to the object on PUT)
+     * @param kind        folder prefix (e.g. {@code "pdf"}); defaults to {@code "asset"} when blank
+     */
+    public record PresignUploadRequest(String filename, String contentType, String kind) {}
 
     /**
      * Returned by {@code POST /api/v1/media}.

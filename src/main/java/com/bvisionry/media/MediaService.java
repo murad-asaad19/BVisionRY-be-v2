@@ -92,8 +92,7 @@ public class MediaService {
     public String upload(MultipartFile file, String kind) {
         lazyEnsureBucket();
 
-        String sanitizedName = sanitizeFilename(file.getOriginalFilename());
-        String objectKey     = kind + "/" + UUID.randomUUID() + "-" + sanitizedName;
+        String objectKey = buildObjectKey(kind, file.getOriginalFilename());
 
         try (InputStream is = file.getInputStream()) {
             internalClient.putObject(
@@ -108,6 +107,58 @@ public class MediaService {
         }
 
         return MINIO_SCHEME + props.getBucket() + "/" + objectKey;
+    }
+
+    /**
+     * Browser-direct upload coordinates returned by {@link #presignUpload}.
+     *
+     * @param uploadUrl  short-lived presigned PUT URL the browser uploads bytes to directly
+     * @param marker     the {@code minio://bucket/objectKey} value to persist in the DB
+     * @param previewUrl a presigned GET URL usable for preview once the PUT completes
+     */
+    public record PresignedUpload(String uploadUrl, String marker, String previewUrl) {}
+
+    /**
+     * Issues a presigned PUT URL so the browser uploads a file <strong>directly</strong> to
+     * MinIO, never routing the bytes through this application server.
+     *
+     * <p>This is the upload-side counterpart to {@link #resolveUrl(String)}: the same
+     * public-endpoint client signs a short-lived URL the browser can reach. It exists because
+     * fronting platforms cap proxied request bodies — e.g. Vercel Functions reject anything over
+     * 4.5MB with a 413 before it reaches the backend — a ceiling the server-proxied
+     * {@link #upload(MultipartFile, String)} path can never exceed. A direct PUT sidesteps every
+     * intermediate body-size limit; only MinIO ever sees the bytes.
+     *
+     * <p>The returned {@code marker} has the identical format to {@link #upload}, so
+     * {@link #resolveUrl(String)} (browser preview) and {@link #download(String)} (server-side
+     * fetch, e.g. emailing the lead-magnet PDF) work against it unchanged once the object lands.
+     *
+     * @param kind        path prefix / folder (e.g. {@code "pdf"}, {@code "video"}); defaults to {@code "asset"} when blank
+     * @param filename    original filename, used only to build a readable object key
+     * @param contentType the file's MIME type; not bound into the signature — the browser applies it on PUT
+     * @return the presigned PUT URL, the {@code minio://} marker to persist, and a presigned GET preview URL
+     */
+    public PresignedUpload presignUpload(String kind, String filename, String contentType) {
+        lazyEnsureBucket();
+
+        String resolvedKind = (kind == null || kind.isBlank()) ? "asset" : kind;
+        String objectKey    = buildObjectKey(resolvedKind, filename);
+        String marker       = MINIO_SCHEME + props.getBucket() + "/" + objectKey;
+
+        final String uploadUrl;
+        try {
+            uploadUrl = publicClient.getPresignedObjectUrl(
+                    GetPresignedObjectUrlArgs.builder()
+                            .method(Method.PUT)
+                            .bucket(props.getBucket())
+                            .object(objectKey)
+                            .expiry(props.getPresignedExpiryMinutes() * 60, TimeUnit.SECONDS)
+                            .build());
+        } catch (Exception ex) {
+            throw new MediaUploadException("Failed to presign upload URL: " + ex.getMessage(), ex);
+        }
+
+        return new PresignedUpload(uploadUrl, marker, resolveUrl(marker));
     }
 
     // -------------------------------------------------------------------------
@@ -317,6 +368,15 @@ public class MediaService {
             log.debug("MinIO bucket already exists: {}", props.getBucket());
         }
         bucketEnsured.set(true);
+    }
+
+    /**
+     * Builds the {@code kind/uuid-filename} object key shared by the server-proxied
+     * ({@link #upload}) and browser-direct ({@link #presignUpload}) upload paths, so the key
+     * format and filename sanitisation can never drift between them.
+     */
+    private String buildObjectKey(String kind, String filename) {
+        return kind + "/" + UUID.randomUUID() + "-" + sanitizeFilename(filename);
     }
 
     /**

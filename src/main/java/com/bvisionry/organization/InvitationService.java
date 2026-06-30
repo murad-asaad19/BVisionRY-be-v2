@@ -204,6 +204,66 @@ public class InvitationService {
     }
 
     /**
+     * Accept an invitation as part of an SSO (e.g. "Continue with Google") sign-in.
+     *
+     * <p>The credential path ({@link #acceptInvitationWithRegistration}) binds the invite's own
+     * email to a new/passwordless account. SSO is different: the identity comes from the
+     * provider's verified email, so we resolve/provision that user via
+     * {@link AuthService#resolveSsoUser} and then bind org membership onto it — exactly the step
+     * the plain SSO login path was missing, which is why Google invitees were never added to the
+     * organization. Membership is applied <em>before</em> {@link AuthService#issueSession} so the
+     * minted access token carries the new {@code orgId}/{@code role}.
+     *
+     * <p>The provider-verified email MUST match the invited address: an invitation is bound to a
+     * specific recipient, and binding any other Google account that happens to hold the link would
+     * let it join the org as someone it was never offered to.
+     */
+    @Transactional
+    public AuthResponse acceptInvitationViaSso(UUID token, String email, String avatarUrl,
+                                               String provider, AuthService.ClientContext context) {
+        Invitation invitation = invitationRepository.findByToken(token)
+                .orElseThrow(() -> new ResourceNotFoundException("Invitation", token.toString()));
+        UUID invitationId = invitation.getId();
+        try {
+            if (invitation.getStatus() == Invitation.InvitationStatus.ACCEPTED) {
+                throw new BadRequestException("Invitation has already been accepted");
+            }
+            if (!invitation.isAcceptable()) {
+                throw new BadRequestException("Invitation is expired or no longer valid");
+            }
+            if (!invitation.getEmail().equalsIgnoreCase(email.trim())) {
+                throw new BadRequestException(
+                        "This invitation was sent to " + invitation.getEmail()
+                                + ". Sign in with that Google account to accept it.");
+            }
+
+            User user = authService.resolveSsoUser(invitation.getEmail(), avatarUrl, provider);
+            boolean isNewMembership = user.getOrganization() == null;
+            requireInvitationBindable(user, invitation);
+
+            applyMembership(user, invitation);
+            User savedUser = userRepository.save(user);
+
+            invitation.setStatus(Invitation.InvitationStatus.ACCEPTED);
+            invitation.setAcceptedAt(Instant.now());
+            invitationRepository.save(invitation);
+
+            if (isNewMembership) {
+                eventPublisher.publishEvent(new MemberJoinedEvent(
+                        invitation.getOrganization().getId(), savedUser.getId(), savedUser.getUserType()));
+            }
+
+            AuthResponse response = authService.issueSession(savedUser, context);
+            AfterCommit.run(() -> invitationAttemptService.recordSuccess(invitationId));
+            return response;
+        } catch (RuntimeException ex) {
+            invitationAttemptService.recordFailure(invitationId,
+                    ex.getClass().getSimpleName(), ex.getMessage());
+            throw ex;
+        }
+    }
+
+    /**
      * Gate which existing accounts may be bound to an invitation.
      *
      * <p>SUPER_ADMIN is a platform-level (org-less) account. Allowing it to

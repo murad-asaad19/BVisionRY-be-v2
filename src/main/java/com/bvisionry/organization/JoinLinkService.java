@@ -147,4 +147,59 @@ public class JoinLinkService {
         // and revocation on subsequent /refresh calls.
         return authService.issueSession(savedUser, null);
     }
+
+    /**
+     * Accept a self-serve join link as part of an SSO (e.g. "Continue with Google") sign-in.
+     *
+     * <p>Mirrors {@link #acceptJoinLink} but keys off the provider-verified email instead of a
+     * password registration. Unlike the credential path — which can only provision a brand-new
+     * user — SSO safely resolves an existing account too: {@link AuthService#resolveSsoUser}
+     * already enforces the account-takeover and provider-mismatch guards, so an SSO sign-in can
+     * never seize a password account. Membership is bound onto the resolved user <em>before</em>
+     * the session is issued so the access token carries the new {@code orgId}/{@code role} — the
+     * step the plain SSO login path omitted, leaving Google users out of the organization.
+     */
+    @Transactional
+    public AuthResponse acceptJoinLinkViaSso(UUID token, String email, String avatarUrl,
+                                             String provider, AuthService.ClientContext context) {
+        JoinLink link = joinLinkRepository.findByTokenAndActiveTrue(token)
+                .orElseThrow(() -> new ResourceNotFoundException("JoinLink", token.toString()));
+        if (!link.isUsable()) {
+            throw new BadRequestException("This join link is expired or no longer active");
+        }
+        Organization org = link.getOrganization();
+        if (!org.isActive()) {
+            throw new BadRequestException("This organization is no longer active");
+        }
+
+        User user = authService.resolveSsoUser(email, avatarUrl, provider);
+
+        // An account already bound to a different org keeps its membership — silently re-homing it
+        // would move its history to a new tenant. Steer it to switch accounts instead.
+        if (user.getOrganization() != null && !user.getOrganization().getId().equals(org.getId())) {
+            throw new BadRequestException(
+                    "This account is already a member of another organization.");
+        }
+
+        boolean isNewMembership = user.getOrganization() == null;
+        if (isNewMembership) {
+            user.setOrganization(org);
+            user.setRole(UserRole.MEMBER);
+            user.setStatus(UserStatus.ACTIVE);
+            if (user.getActivatedAt() == null) {
+                user.setActivatedAt(Instant.now());
+            }
+        }
+        User savedUser = userRepository.save(user);
+
+        if (isNewMembership) {
+            auditService.log(savedUser.getId(), org.getId(), OrgAuditActions.JOIN_LINK_USED,
+                    OrgAuditActions.ENTITY_JOIN_LINK, link.getId(),
+                    Map.of("email", savedUser.getEmail()));
+            eventPublisher.publishEvent(new MemberJoinedEvent(
+                    org.getId(), savedUser.getId(), savedUser.getUserType()));
+        }
+
+        return authService.issueSession(savedUser, context);
+    }
 }

@@ -28,6 +28,7 @@ public class CookieService {
     public static final String ACCESS_TOKEN_COOKIE = "bv_access";
     public static final String REFRESH_TOKEN_COOKIE = "bv_refresh";
     public static final String OAUTH2_STATE_COOKIE = "oauth2_state";
+    public static final String OAUTH2_PENDING_COOKIE = "oauth2_pending";
 
     // Session cookies are scoped to "/" so they are sent on BOTH page navigations
     // and API calls. The Next.js BFF is the session authority and mints the same
@@ -42,6 +43,10 @@ public class CookieService {
     // callback endpoint, so it stays narrowly scoped (not a session cookie).
     private static final String OAUTH2_STATE_PATH = "/api/auth/oauth2";
     private static final long OAUTH2_STATE_MAX_AGE_SECONDS = 600;
+    // Carries the pending invitation/join token across the OAuth round-trip (initiation →
+    // Google → callback). Same narrow scope + lifetime as the state handshake cookie.
+    private static final String OAUTH2_PENDING_PATH = "/api/auth/oauth2";
+    private static final long OAUTH2_PENDING_MAX_AGE_SECONDS = 600;
 
     private final long accessTokenMaxAgeSeconds;
     private final long refreshTokenMaxAgeSeconds;
@@ -85,6 +90,21 @@ public class CookieService {
         response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
     }
 
+    public void setOAuth2PendingCookie(HttpServletResponse response, String value) {
+        ResponseCookie cookie = baseCookie(OAUTH2_PENDING_COOKIE, value, OAUTH2_PENDING_PATH)
+                .maxAge(OAUTH2_PENDING_MAX_AGE_SECONDS)
+                .build();
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+    }
+
+    /** Expire the pending-acceptance cookie — always done at the callback so a token is single-use. */
+    public void clearOAuth2PendingCookie(HttpServletResponse response) {
+        ResponseCookie cookie = baseCookie(OAUTH2_PENDING_COOKIE, "", OAUTH2_PENDING_PATH)
+                .maxAge(0)
+                .build();
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+    }
+
     public void clearAuthCookies(HttpServletResponse response) {
         ResponseCookie access = baseCookie(ACCESS_TOKEN_COOKIE, "", ACCESS_TOKEN_PATH)
                 .maxAge(0)
@@ -106,6 +126,10 @@ public class CookieService {
 
     public Optional<String> readOAuth2State(HttpServletRequest request) {
         return readCookie(request, OAUTH2_STATE_COOKIE);
+    }
+
+    public Optional<String> readOAuth2Pending(HttpServletRequest request) {
+        return readCookie(request, OAUTH2_PENDING_COOKIE);
     }
 
     private static Optional<String> readCookie(HttpServletRequest request, String name) {

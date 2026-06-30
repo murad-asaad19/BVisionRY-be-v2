@@ -99,6 +99,24 @@ public class AuthService {
      */
     @Transactional
     public AuthResponse ssoLogin(String email, String avatarUrl, String provider, ClientContext context) {
+        User user = resolveSsoUser(email, avatarUrl, provider);
+        return issueTokens(user, context);
+    }
+
+    /**
+     * Resolve (and persist provider-linking / activation side-effects for) the user behind an
+     * SSO sign-in WITHOUT minting a session. Auto-creates the account on first sign-in, mirroring
+     * {@link #register}, and runs the same account-takeover / provider-mismatch / suspended-org
+     * guards as {@link #ssoLogin}.
+     *
+     * <p>Split out so invitation / join-link acceptance can bind organization membership onto the
+     * returned managed entity <em>before</em> the session is issued — the access token embeds
+     * {@code orgId}/{@code role}, so membership must be set first or the freshly minted token would
+     * carry no org. Callers MUST invoke this inside their own transaction (the returned {@link User}
+     * is managed) and then call {@link #issueSession} once membership is applied.
+     */
+    @Transactional
+    public User resolveSsoUser(String email, String avatarUrl, String provider) {
         String normalizedEmail = email.toLowerCase();
         User user = userRepository.findByEmail(normalizedEmail)
                 .orElseGet(() -> createSsoUser(normalizedEmail));
@@ -135,7 +153,7 @@ public class AuthService {
         }
 
         user.setLastLoginAt(Instant.now());
-        return issueTokens(user, context);
+        return user;
     }
 
     /**

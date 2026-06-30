@@ -5,6 +5,8 @@ import com.bvisionry.auth.dto.AuthResponse;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.web.ClientIpResolver;
 import com.bvisionry.config.FrontendUrls;
+import com.bvisionry.organization.InvitationService;
+import com.bvisionry.organization.JoinLinkService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -23,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Base64;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Handles the OAuth2 SSO flow for Google.
@@ -36,6 +39,8 @@ import java.util.Map;
 public class OAuth2Controller {
 
     private final AuthService authService;
+    private final InvitationService invitationService;
+    private final JoinLinkService joinLinkService;
     private final RestClient.Builder restClientBuilder;
     private final RateLimitService rateLimitService;
     private final ClientIpResolver clientIpResolver;
@@ -56,13 +61,20 @@ public class OAuth2Controller {
     // ========== Initiation endpoints ==========
 
     @GetMapping("/google")
-    public ResponseEntity<Void> initiateGoogle(HttpServletResponse response) {
+    public ResponseEntity<Void> initiateGoogle(
+            @RequestParam(required = false) String invitation,
+            @RequestParam(required = false) String join,
+            HttpServletResponse response) {
         if (googleClientId.isBlank()) {
             return ResponseEntity.status(HttpStatus.FOUND)
                     .header(HttpHeaders.LOCATION, frontendUrls.path("/login?error=google_not_configured"))
                     .build();
         }
         String state = generateAndStoreState(response);
+        // Stash any pending invitation/join token so the callback can bind org membership after
+        // the Google round-trip. Carried in its own short-lived, narrowly-scoped cookie (the
+        // state cookie is reserved for the CSRF handshake).
+        storePendingAccept(invitation, join, response);
         String redirectUri = redirectBaseUrl + "/api/auth/oauth2/google/callback";
         String url = "https://accounts.google.com/o/oauth2/v2/auth"
                 + "?client_id=" + enc(googleClientId)
@@ -139,8 +151,31 @@ public class OAuth2Controller {
 
             AuthService.ClientContext ctx = AuthService.ClientContext.of(
                     request.getHeader("User-Agent"), clientIpResolver.resolve(request));
-            AuthResponse auth = authService.ssoLogin(email, avatar, "GOOGLE", ctx);
-            return redirectToFrontendWithAuth(auth, response);
+
+            // A pending invitation/join token (stashed at initiation) means the user came from an
+            // accept/join page: bind org membership as part of this sign-in instead of a plain
+            // login — otherwise the Google user is authenticated but never added to the org.
+            PendingAccept pending = readAndClearPendingAccept(request, response);
+            try {
+                AuthResponse auth = switch (pending.kind()) {
+                    case INVITATION -> invitationService.acceptInvitationViaSso(
+                            pending.token(), email, avatar, "GOOGLE", ctx);
+                    case JOIN -> joinLinkService.acceptJoinLinkViaSso(
+                            pending.token(), email, avatar, "GOOGLE", ctx);
+                    case NONE -> authService.ssoLogin(email, avatar, "GOOGLE", ctx);
+                };
+                return redirectToFrontendWithAuth(auth, response);
+            } catch (RuntimeException acceptError) {
+                // Membership binding failed (expired/revoked invite, wrong Google account, link no
+                // longer active, …). Surface a code the accept/join surface can explain rather than
+                // collapsing it into a generic SSO error.
+                if (pending.kind() != PendingAccept.Kind.NONE) {
+                    log.warn("SSO {} acceptance failed: {}", pending.kind(), acceptError.getMessage());
+                    return redirectToFrontend(pending.kind() == PendingAccept.Kind.INVITATION
+                            ? "invitation_invalid" : "join_invalid");
+                }
+                throw acceptError;
+            }
 
         } catch (Exception e) {
             log.error("Google OAuth2 callback failed: {}", e.getMessage(), e);
@@ -223,6 +258,59 @@ public class OAuth2Controller {
         return ResponseEntity.status(HttpStatus.FOUND)
                 .header(HttpHeaders.LOCATION, frontendUrls.path("/login?error=" + enc(error)))
                 .build();
+    }
+
+    /**
+     * A token carried across the OAuth round-trip so the callback can bind organization
+     * membership. Encoded in the {@code oauth2_pending} cookie as {@code "<kind>:<uuid>"}.
+     */
+    private record PendingAccept(Kind kind, UUID token) {
+        enum Kind { INVITATION, JOIN, NONE }
+
+        static final PendingAccept NONE = new PendingAccept(Kind.NONE, null);
+    }
+
+    /**
+     * Persist the pending invitation/join token (if any) for the callback. Invitation wins if both
+     * are somehow present. Malformed UUIDs are ignored — a bad token simply degrades to a plain SSO
+     * login rather than failing the whole sign-in.
+     */
+    private void storePendingAccept(String invitation, String join, HttpServletResponse response) {
+        String value = null;
+        if (invitation != null && !invitation.isBlank()) {
+            value = "invitation:" + invitation.trim();
+        } else if (join != null && !join.isBlank()) {
+            value = "join:" + join.trim();
+        }
+        if (value != null) {
+            cookieService.setOAuth2PendingCookie(response, value);
+        }
+    }
+
+    /** Read, decode, and immediately expire the pending-acceptance cookie (single use). */
+    private PendingAccept readAndClearPendingAccept(HttpServletRequest request, HttpServletResponse response) {
+        String raw = cookieService.readOAuth2Pending(request).orElse(null);
+        cookieService.clearOAuth2PendingCookie(response);
+        if (raw == null) {
+            return PendingAccept.NONE;
+        }
+        int sep = raw.indexOf(':');
+        if (sep <= 0) {
+            return PendingAccept.NONE;
+        }
+        PendingAccept.Kind kind = switch (raw.substring(0, sep)) {
+            case "invitation" -> PendingAccept.Kind.INVITATION;
+            case "join" -> PendingAccept.Kind.JOIN;
+            default -> PendingAccept.Kind.NONE;
+        };
+        if (kind == PendingAccept.Kind.NONE) {
+            return PendingAccept.NONE;
+        }
+        try {
+            return new PendingAccept(kind, UUID.fromString(raw.substring(sep + 1)));
+        } catch (IllegalArgumentException badUuid) {
+            return PendingAccept.NONE;
+        }
     }
 
     private String generateAndStoreState(HttpServletResponse response) {

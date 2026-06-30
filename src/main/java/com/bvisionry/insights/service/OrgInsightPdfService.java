@@ -3,18 +3,15 @@ package com.bvisionry.insights.service;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.assessment.entity.Submission;
 import com.bvisionry.common.enums.SubmissionStatus;
-import com.bvisionry.common.exception.ReportGenerationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.pdf.PdfRenderer;
 import com.bvisionry.insights.InsightReportRepository;
 import com.bvisionry.insights.entity.InsightReport;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.thymeleaf.TemplateEngine;
 import org.thymeleaf.context.Context;
-import org.xhtmlrenderer.pdf.ITextRenderer;
 
-import java.io.ByteArrayOutputStream;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -30,7 +27,7 @@ public class OrgInsightPdfService {
 
     private final InsightReportRepository insightReportRepository;
     private final SubmissionRepository submissionRepository;
-    private final TemplateEngine templateEngine;
+    private final PdfRenderer pdfRenderer;
 
     @org.springframework.transaction.annotation.Transactional(readOnly = true)
     public byte[] generatePdf(UUID orgId, UUID reportId, String orgName, boolean showNames) {
@@ -88,25 +85,9 @@ public class OrgInsightPdfService {
         // Raw fallback
         ctx.setVariable("rawResponse", data.get("rawResponse"));
 
-        String html = templateEngine.process("org-insights-report", ctx);
-
-        try (ByteArrayOutputStream os = new ByteArrayOutputStream()) {
-            ITextRenderer renderer = new ITextRenderer();
-
-            // Register Dosis fonts
-            registerFont(renderer, "fonts/Dosis-Regular.ttf");
-            registerFont(renderer, "fonts/Dosis-SemiBold.ttf");
-            registerFont(renderer, "fonts/Dosis-Bold.ttf");
-
-            renderer.setDocumentFromString(html);
-            renderer.layout();
-            renderer.createPDF(os);
-            log.info("Generated org insight PDF for report {} ({} bytes)", reportId, os.size());
-            return os.toByteArray();
-        } catch (Exception e) {
-            log.error("Failed to generate org insight PDF for report {}: {}", reportId, e.getMessage(), e);
-            throw new ReportGenerationException("Org insight PDF generation failed", e);
-        }
+        byte[] pdf = pdfRenderer.renderTemplate("org-insights-report", ctx);
+        log.info("Generated org insight PDF for report {} ({} bytes)", reportId, pdf.length);
+        return pdf;
     }
 
     /**
@@ -132,19 +113,6 @@ public class OrgInsightPdfService {
                         || memberFilter.contains(s.getUser().getId()))
                 .sorted(java.util.Comparator.comparing(s -> s.getUser().getId()))
                 .toList();
-    }
-
-    private void registerFont(ITextRenderer renderer, String resourcePath) {
-        try {
-            var resource = getClass().getClassLoader().getResource(resourcePath);
-            if (resource != null) {
-                renderer.getFontResolver().addFont(
-                        resource.toExternalForm(), "Dosis",
-                        com.lowagie.text.pdf.BaseFont.IDENTITY_H, true, null);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to register font {}: {}", resourcePath, e.getMessage());
-        }
     }
 
     @SuppressWarnings("unchecked")

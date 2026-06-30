@@ -1,18 +1,14 @@
 package com.bvisionry.reporting.service;
 
-import com.bvisionry.common.exception.ReportGenerationException;
+import com.bvisionry.common.pdf.PdfRenderer;
 import com.bvisionry.evaluation.PillarEvaluationRepository;
-import com.bvisionry.evaluation.entity.PillarEvaluation;
 import com.bvisionry.reporting.dto.MemberResultsResponse;
 import com.bvisionry.reporting.dto.PillarDetailResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.thymeleaf.TemplateEngine;
 import org.thymeleaf.context.Context;
-import org.xhtmlrenderer.pdf.ITextRenderer;
 
-import java.io.ByteArrayOutputStream;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -26,7 +22,7 @@ public class PdfReportService {
 
     private final MemberResultsService memberResultsService;
     private final PillarEvaluationRepository pillarEvaluationRepository;
-    private final TemplateEngine templateEngine;
+    private final PdfRenderer pdfRenderer;
 
     // Strips inline references like "(qid: <uuid>)", "qid: <uuid>", "(Q: <hex>)",
     // or "Q: <hex>" added by the upstream AI evaluator — they are useful for
@@ -70,43 +66,11 @@ public class PdfReportService {
         ctx.setVariable("movingForward", stripQids(results.movingForwardNarrative()));
         ctx.setVariable("personalInfo", results.personalInfo() == null ? List.of() : results.personalInfo());
 
-        // Render HTML
-        String html = templateEngine.process("pdf-report", ctx);
-
-        // Convert to PDF
-        try (ByteArrayOutputStream os = new ByteArrayOutputStream()) {
-            ITextRenderer renderer = new ITextRenderer();
-
-            // Register Dosis fonts for brand consistency
-            registerFont(renderer, "fonts/Dosis-Regular.ttf", "Dosis", false, false);
-            registerFont(renderer, "fonts/Dosis-SemiBold.ttf", "Dosis", false, false);
-            registerFont(renderer, "fonts/Dosis-Bold.ttf", "Dosis", true, false);
-
-            renderer.setDocumentFromString(html);
-            renderer.layout();
-            renderer.createPDF(os);
-            log.info("Generated PDF report for submission {} ({} bytes)", submissionId, os.size());
-            return os.toByteArray();
-        } catch (Exception e) {
-            log.error("Failed to generate PDF for submission {}: {}", submissionId, e.getMessage(), e);
-            throw new ReportGenerationException("Member results PDF generation failed", e);
-        }
-    }
-
-    private void registerFont(ITextRenderer renderer, String resourcePath, String family,
-                              boolean bold, boolean italic) {
-        try {
-            var resource = getClass().getClassLoader().getResource(resourcePath);
-            if (resource != null) {
-                renderer.getFontResolver().addFont(
-                        resource.toExternalForm(), family, com.lowagie.text.pdf.BaseFont.IDENTITY_H,
-                        true, null);
-            } else {
-                log.warn("Font resource not found: {}", resourcePath);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to register font {}: {}", resourcePath, e.getMessage());
-        }
+        // Render the branded PDF via the shared renderer (fonts + brand imagery
+        // are injected centrally).
+        byte[] pdf = pdfRenderer.renderTemplate("pdf-report", ctx);
+        log.info("Generated PDF report for submission {} ({} bytes)", submissionId, pdf.length);
+        return pdf;
     }
 
     private String deriveCategory(int score) {

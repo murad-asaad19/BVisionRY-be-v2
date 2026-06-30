@@ -40,6 +40,8 @@ public final class OrgAuditActions {
 
     // --- Assessment & survey lifecycle (drives the org Activity feed) -------
     public static final String ASSESSMENT_ASSIGNED       = "ASSESSMENT_ASSIGNED";
+    /** Super admin provisioned a pipeline to an org (no member yet). */
+    public static final String ASSESSMENT_PROVISIONED    = "ASSESSMENT_PROVISIONED";
     public static final String AUTO_ASSIGN_RULE_CREATED  = "AUTO_ASSIGN_RULE_CREATED";
     public static final String AUTO_ASSIGN_RULE_UPDATED  = "AUTO_ASSIGN_RULE_UPDATED";
     public static final String AUTO_ASSIGN_RULE_DELETED  = "AUTO_ASSIGN_RULE_DELETED";

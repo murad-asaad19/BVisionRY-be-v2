@@ -5,6 +5,7 @@ import com.bvisionry.assessment.dto.AssessmentSummaryResponse;
 import com.bvisionry.assessment.dto.AssignmentDetailResponse;
 import com.bvisionry.assessment.dto.AssignmentResponse;
 import com.bvisionry.assessment.dto.CreateAssignmentRequest;
+import com.bvisionry.assessment.dto.PillarSummaryResponse;
 import com.bvisionry.assessment.entity.Assignment;
 import com.bvisionry.assessment.entity.PipelineAutoAssignment;
 import com.bvisionry.assessment.entity.Submission;
@@ -24,6 +25,7 @@ import com.bvisionry.notification.EmailService;
 import com.bvisionry.organization.OrgAuditActions;
 import com.bvisionry.organization.OrganizationRepository;
 import com.bvisionry.organization.entity.Organization;
+import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.Pipeline;
 import com.bvisionry.pipeline.repository.PipelineRepository;
 import com.bvisionry.reporting.dto.PersonalInfoEntry;
@@ -39,6 +41,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -451,6 +454,25 @@ public class AssignmentService {
         Submission submission = submissionRepository.requireLatestForAssignment(
                 assignment, "No submission exists for this assignment yet.");
         return assessmentService.getAssessmentForAdmin(submission.getId());
+    }
+
+    /**
+     * Pillar structure (id/name/type) for the assignment's pipeline — no
+     * question or answer content, so unlike {@link #getAssignmentAnswers} this
+     * is safe for Org Admins. Powers the unlock-pillars picker, which only
+     * needs to know which pillars exist.
+     */
+    @Transactional(readOnly = true)
+    public List<PillarSummaryResponse> getAssignmentPillars(UUID orgId, UUID assignmentId) {
+        Assignment assignment = assignmentRepository.findById(assignmentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
+        if (!assignment.getOrganization().getId().equals(orgId)) {
+            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
+        }
+        return assignment.getPipeline().getPillars().stream()
+                .sorted(Comparator.comparingInt(Pillar::getDisplayOrder))
+                .map(p -> new PillarSummaryResponse(p.getId(), p.getName(), p.getType().name()))
+                .toList();
     }
 
     /**

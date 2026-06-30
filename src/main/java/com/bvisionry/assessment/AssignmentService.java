@@ -126,7 +126,7 @@ public class AssignmentService {
         // client-supplied {@code assignedBy} field for audit attribution.
         UUID assignerId = SecurityUtils.getCurrentUserId();
 
-        int maxCheckIns = request.maxCheckInsOrDefault();
+        int maxCheckIns = resolveMaxCheckIns(request);
         List<AssignmentResponse> responses = new ArrayList<>();
         for (User member : newMembers) {
             AssignmentCreated created = createAssignmentForMember(
@@ -245,6 +245,16 @@ public class AssignmentService {
                 rule.getCreatedBy(), rule.getDeadline(), rule.getMaxCheckIns());
         log.info("Auto-assigned pipeline {} to user {} in org {} via rule {}",
                 rule.getPipeline().getId(), userId, rule.getOrganization().getId(), rule.getId());
+    }
+
+    private int resolveMaxCheckIns(CreateAssignmentRequest request) {
+        if (SecurityUtils.isSuperAdmin()) {
+            return request.maxCheckInsOrDefault();
+        }
+        if (request.maxCheckIns() != null && request.maxCheckIns() != 1) {
+            throw new BadRequestException("Only super admins can configure max check-ins.");
+        }
+        return 1;
     }
 
     private List<User> resolveTargetMembers(UUID orgId, CreateAssignmentRequest request) {

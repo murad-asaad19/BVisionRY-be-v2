@@ -273,6 +273,54 @@ class AssignmentServiceTest {
     }
 
     @Test
+    void createAssignment_orgAdminRequestsCustomMaxCheckIns_throwsBadRequest() {
+        // Caller seeded in setUp() is ORG_ADMIN — only SUPER_ADMIN may configure
+        // maxCheckIns above the single-check-in default.
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(organization));
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+        when(userRepository.findByOrganizationIdAndStatus(orgId, UserStatus.ACTIVE))
+                .thenReturn(List.of(member1));
+
+        CreateAssignmentRequest request = new CreateAssignmentRequest(
+                pipelineId, null, null, null, false, 3);
+
+        assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("super admin");
+        verify(assignmentRepository, never()).save(any(Assignment.class));
+    }
+
+    @Test
+    void createAssignment_superAdminRequestsCustomMaxCheckIns_isHonored() {
+        User superAdminCaller = new User();
+        superAdminCaller.setId(assignedBy);
+        superAdminCaller.setRole(UserRole.SUPER_ADMIN);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(superAdminCaller, null, List.of()));
+
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(organization));
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+        when(userRepository.findByOrganizationIdAndStatus(orgId, UserStatus.ACTIVE))
+                .thenReturn(List.of(member1));
+        when(assignmentRepository.save(any(Assignment.class))).thenAnswer(inv -> {
+            Assignment a = inv.getArgument(0);
+            a.setId(UUID.randomUUID());
+            return a;
+        });
+        when(submissionRepository.save(any(Submission.class))).thenAnswer(inv -> {
+            Submission s = inv.getArgument(0);
+            s.setId(UUID.randomUUID());
+            return s;
+        });
+
+        CreateAssignmentRequest request = new CreateAssignmentRequest(
+                pipelineId, null, null, null, false, 3);
+        assignmentService.createAssignment(orgId, request);
+
+        verify(assignmentRepository).save(argThat(a -> a.getMaxCheckIns() == 3));
+    }
+
+    @Test
     void createAssignment_autoAssignOnEmptyOrg_stillUpsertsRule() {
         // Org has no active members yet — the rule itself is still the
         // deliverable for future joiners, so the service must not throw

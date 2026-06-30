@@ -2,7 +2,9 @@ package com.bvisionry.auth;
 
 import com.bvisionry.aiconfig.service.RateLimitService;
 import com.bvisionry.auth.dto.AuthResponse;
+import com.bvisionry.common.exception.AuthenticationException;
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.web.ClientIpResolver;
 import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.organization.InvitationService;
@@ -99,6 +101,13 @@ public class OAuth2Controller {
                                                 HttpServletRequest request,
                                                 HttpServletResponse response) {
         rateLimitService.checkAuthLimit(clientIpResolver.resolve(request));
+
+        // Consume the pending invitation/join token (stashed at initiation) up-front so it is cleared
+        // on EVERY callback outcome — the early returns below, a failed sign-in, or success alike.
+        // Reading it later would let a token from an abandoned/failed attempt survive its TTL and be
+        // replayed into a later, unrelated sign-in.
+        PendingAccept pending = readAndClearPendingAccept(request, response);
+
         if (error != null || code == null) {
             return redirectToFrontend("sso_denied");
         }
@@ -152,10 +161,9 @@ public class OAuth2Controller {
             AuthService.ClientContext ctx = AuthService.ClientContext.of(
                     request.getHeader("User-Agent"), clientIpResolver.resolve(request));
 
-            // A pending invitation/join token (stashed at initiation) means the user came from an
-            // accept/join page: bind org membership as part of this sign-in instead of a plain
-            // login — otherwise the Google user is authenticated but never added to the org.
-            PendingAccept pending = readAndClearPendingAccept(request, response);
+            // A pending invitation/join token (read above) means the user came from an accept/join
+            // page: bind org membership as part of this sign-in instead of a plain login — otherwise
+            // the Google user is authenticated but never added to the org.
             try {
                 AuthResponse auth = switch (pending.kind()) {
                     case INVITATION -> invitationService.acceptInvitationViaSso(
@@ -165,10 +173,12 @@ public class OAuth2Controller {
                     case NONE -> authService.ssoLogin(email, avatar, "GOOGLE", ctx);
                 };
                 return redirectToFrontendWithAuth(auth, response);
-            } catch (RuntimeException acceptError) {
-                // Membership binding failed (expired/revoked invite, wrong Google account, link no
-                // longer active, …). Surface a code the accept/join surface can explain rather than
-                // collapsing it into a generic SSO error.
+            } catch (BadRequestException | ResourceNotFoundException | AuthenticationException acceptError) {
+                // EXPECTED membership-binding rejections only (expired/revoked invite, wrong Google
+                // account, suspended/inactive org, link no longer active, …). Surface a code the
+                // accept/join surface can explain. An unexpected fault (NPE, DB constraint, …) is NOT
+                // caught here: it propagates to the outer handler and is logged at ERROR as sso_error,
+                // so a real outage is never masked as a merely "invalid" invitation/link.
                 if (pending.kind() != PendingAccept.Kind.NONE) {
                     log.warn("SSO {} acceptance failed: {}", pending.kind(), acceptError.getMessage());
                     return redirectToFrontend(pending.kind() == PendingAccept.Kind.INVITATION
@@ -271,19 +281,46 @@ public class OAuth2Controller {
     }
 
     /**
-     * Persist the pending invitation/join token (if any) for the callback. Invitation wins if both
-     * are somehow present. Malformed UUIDs are ignored — a bad token simply degrades to a plain SSO
-     * login rather than failing the whole sign-in.
+     * Persist the pending invitation/join token (if any) for the callback. An {@code invitation}
+     * param takes precedence: when present it is validated and used, and we never fall back to
+     * {@code join} (binding via a join link would add the user to a different organization than the
+     * invitation intended). The token is validated as a UUID and re-serialized in canonical form
+     * <em>before</em> being written: a malformed value is dropped — degrading to a plain SSO login
+     * rather than crashing the request when Spring rejects cookie-illegal characters in the raw
+     * query param — and the canonical form is guaranteed cookie-safe. A plain initiation (no usable
+     * token) clears any stale pending cookie so a token from an earlier abandoned attempt can't be
+     * replayed into this sign-in.
      */
     private void storePendingAccept(String invitation, String join, HttpServletResponse response) {
-        String value = null;
-        if (invitation != null && !invitation.isBlank()) {
-            value = "invitation:" + invitation.trim();
-        } else if (join != null && !join.isBlank()) {
-            value = "join:" + join.trim();
-        }
+        String value = pendingCookieValue(invitation, join);
         if (value != null) {
             cookieService.setOAuth2PendingCookie(response, value);
+        } else {
+            cookieService.clearOAuth2PendingCookie(response);
+        }
+    }
+
+    private static String pendingCookieValue(String invitation, String join) {
+        // Presence is tested with isEmpty (not isBlank) so a whitespace-only invitation counts as
+        // PRESENT-but-invalid and is dropped, never falling back to join — matching the frontend
+        // resolver and this method's "an invitation never falls back to join" contract.
+        if (invitation != null && !invitation.isEmpty()) {
+            UUID token = parseUuidOrNull(invitation);
+            return token == null ? null : "invitation:" + token;
+        }
+        if (join != null && !join.isEmpty()) {
+            UUID token = parseUuidOrNull(join);
+            return token == null ? null : "join:" + token;
+        }
+        return null;
+    }
+
+    /** Parse a UUID, returning {@code null} instead of throwing on a malformed value. */
+    private static UUID parseUuidOrNull(String raw) {
+        try {
+            return UUID.fromString(raw.trim());
+        } catch (IllegalArgumentException invalid) {
+            return null;
         }
     }
 
@@ -306,11 +343,8 @@ public class OAuth2Controller {
         if (kind == PendingAccept.Kind.NONE) {
             return PendingAccept.NONE;
         }
-        try {
-            return new PendingAccept(kind, UUID.fromString(raw.substring(sep + 1)));
-        } catch (IllegalArgumentException badUuid) {
-            return PendingAccept.NONE;
-        }
+        UUID token = parseUuidOrNull(raw.substring(sep + 1));
+        return token == null ? PendingAccept.NONE : new PendingAccept(kind, token);
     }
 
     private String generateAndStoreState(HttpServletResponse response) {

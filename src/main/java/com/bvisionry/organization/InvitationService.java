@@ -236,6 +236,12 @@ public class InvitationService {
                         "This invitation was sent to " + invitation.getEmail()
                                 + ". Sign in with that Google account to accept it.");
             }
+            // Reject acceptance into a suspended org (mirrors the join-link SSO path): otherwise a
+            // pending invitee could complete sign-in and get an active, org-scoped session for an
+            // organization the platform has locked out.
+            if (!invitation.getOrganization().isActive()) {
+                throw new BadRequestException("This organization is no longer active");
+            }
 
             User user = authService.resolveSsoUser(invitation.getEmail(), avatarUrl, provider);
             boolean isNewMembership = user.getOrganization() == null;

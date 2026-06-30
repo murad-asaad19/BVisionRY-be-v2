@@ -174,6 +174,15 @@ public class JoinLinkService {
 
         User user = authService.resolveSsoUser(email, avatarUrl, provider);
 
+        // SUPER_ADMIN is a platform-level (org-less) account. Binding it here would force it into a
+        // tenant org and overwrite its role with MEMBER (see below), silently demoting the platform
+        // admin — the join-link analogue of the guard InvitationService.requireInvitationBindable
+        // already enforces on the invitation path. Reject outright.
+        if (user.getRole() == UserRole.SUPER_ADMIN) {
+            throw new BadRequestException(
+                    "This is a platform account and cannot join an organization.");
+        }
+
         // An account already bound to a different org keeps its membership — silently re-homing it
         // would move its history to a new tenant. Steer it to switch accounts instead.
         if (user.getOrganization() != null && !user.getOrganization().getId().equals(org.getId())) {

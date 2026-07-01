@@ -25,7 +25,6 @@ import com.bvisionry.notification.EmailService;
 import com.bvisionry.organization.OrgAuditActions;
 import com.bvisionry.organization.OrganizationRepository;
 import com.bvisionry.organization.entity.Organization;
-import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.Pipeline;
 import com.bvisionry.pipeline.repository.PipelineRepository;
 import com.bvisionry.reporting.dto.PersonalInfoEntry;
@@ -41,7 +40,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -330,14 +328,25 @@ public class AssignmentService {
         return assignmentId + ":" + (userId == null ? "" : userId);
     }
 
-    @Transactional
-    public void cancelAssignment(UUID orgId, UUID assignmentId) {
+    /**
+     * Loads an assignment and enforces that it belongs to {@code orgId}. A
+     * missing id and a cross-org id are both reported as "not found" (never
+     * "forbidden") so an Org Admin can't probe which assignment ids exist
+     * outside their own organization. All org-scoped assignment operations
+     * funnel through here so the authorization contract lives in one place.
+     */
+    private Assignment requireAssignmentInOrg(UUID orgId, UUID assignmentId) {
         Assignment assignment = assignmentRepository.findById(assignmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-
         if (!assignment.getOrganization().getId().equals(orgId)) {
             throw new ResourceNotFoundException("Assignment", assignmentId.toString());
         }
+        return assignment;
+    }
+
+    @Transactional
+    public void cancelAssignment(UUID orgId, UUID assignmentId) {
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
 
         long completedCount = assignmentRepository.countCompletedSubmissions(assignmentId);
         if (completedCount > 0) {
@@ -371,11 +380,7 @@ public class AssignmentService {
 
     @Transactional(readOnly = true)
     public AssignmentDetailResponse getAssignmentDetail(UUID orgId, UUID assignmentId) {
-        Assignment assignment = assignmentRepository.findById(assignmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-        if (!assignment.getOrganization().getId().equals(orgId)) {
-            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
-        }
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
         Submission submission = submissionRepository
                 .findTopByAssignmentIdAndUserIdOrderByCreatedAtDesc(assignment.getId(), assignment.getUser().getId())
                 .orElse(null);
@@ -446,11 +451,7 @@ public class AssignmentService {
      */
     @Transactional(readOnly = true)
     public AssessmentDetailResponse getAssignmentAnswers(UUID orgId, UUID assignmentId) {
-        Assignment assignment = assignmentRepository.findById(assignmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-        if (!assignment.getOrganization().getId().equals(orgId)) {
-            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
-        }
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
         Submission submission = submissionRepository.requireLatestForAssignment(
                 assignment, "No submission exists for this assignment yet.");
         return assessmentService.getAssessmentForAdmin(submission.getId());
@@ -464,13 +465,10 @@ public class AssignmentService {
      */
     @Transactional(readOnly = true)
     public List<PillarSummaryResponse> getAssignmentPillars(UUID orgId, UUID assignmentId) {
-        Assignment assignment = assignmentRepository.findById(assignmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-        if (!assignment.getOrganization().getId().equals(orgId)) {
-            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
-        }
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
+        // Pillars arrive pre-ordered from Hibernate via Pipeline#pillars'
+        // @OrderBy("displayOrder"), so no explicit re-sort is needed here.
         return assignment.getPipeline().getPillars().stream()
-                .sorted(Comparator.comparingInt(Pillar::getDisplayOrder))
                 .map(p -> new PillarSummaryResponse(p.getId(), p.getName(), p.getType().name()))
                 .toList();
     }
@@ -482,11 +480,7 @@ public class AssignmentService {
      */
     @Transactional(readOnly = true)
     public void sendReminder(UUID orgId, UUID assignmentId) {
-        Assignment assignment = assignmentRepository.findById(assignmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-        if (!assignment.getOrganization().getId().equals(orgId)) {
-            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
-        }
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
         Submission submission = submissionRepository.requireLatestForAssignment(
                 assignment, "Cannot send reminder — no submission exists for this assignment yet.");
         if (submission.getStatus() != SubmissionStatus.IN_PROGRESS) {
@@ -512,11 +506,7 @@ public class AssignmentService {
      */
     @Transactional
     public void retryEvaluation(UUID orgId, UUID assignmentId) {
-        Assignment assignment = assignmentRepository.findById(assignmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-        if (!assignment.getOrganization().getId().equals(orgId)) {
-            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
-        }
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
         Submission submission = submissionRepository.requireLatestForAssignment(
                 assignment, "No submission exists for this assignment.");
         evaluationService.retryFailedSubmission(submission.getId());

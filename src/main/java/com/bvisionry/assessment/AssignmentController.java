@@ -23,6 +23,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -47,8 +48,10 @@ public class AssignmentController {
     }
 
     @GetMapping
-    public ResponseEntity<List<AssignmentResponse>> listAssignments(@PathVariable UUID orgId) {
-        return ResponseEntity.ok(assignmentService.listAssignments(orgId));
+    public ResponseEntity<List<AssignmentResponse>> listAssignments(
+            @PathVariable UUID orgId,
+            @RequestParam(required = false) AssignmentService.AssignmentListScope scope) {
+        return ResponseEntity.ok(assignmentService.listAssignments(orgId, scope));
     }
 
     @GetMapping("/{id}")
@@ -130,8 +133,12 @@ public class AssignmentController {
         return ResponseEntity.noContent().build();
     }
 
+    // Extending a deadline is an ordinary lifecycle action an org admin performs
+    // for their own members (like reminder/retry/cancel), so it inherits the
+    // class-level authorization (SUPER_ADMIN or ORG_ADMIN scoped to #orgId)
+    // rather than the SUPER_ADMIN-only override the answer-override/re-evaluate
+    // endpoints keep. The service further pins the submission to #orgId.
     @PatchMapping("/{assignmentId}/submissions/{submissionId}/deadline")
-    @PreAuthorize("hasAuthority('SUPER_ADMIN')")
     public ResponseEntity<Void> extendDeadline(
             @PathVariable UUID orgId,
             @PathVariable UUID submissionId,

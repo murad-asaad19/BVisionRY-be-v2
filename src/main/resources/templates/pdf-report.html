@@ -2,124 +2,71 @@
 <html xmlns:th="http://www.thymeleaf.org">
 <head>
     <meta charset="UTF-8"/>
+    <th:block th:replace="~{fragments/pdf-base :: pdfStyles}"></th:block>
     <style>
-        @page { size: A4; margin: 32px 44px; }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: 'Dosis', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 10.5pt; color: #212529; line-height: 1.5; }
-        .page { page-break-after: always; position: relative; }
-        .page:last-child { page-break-after: avoid; }
-        h1 { font-family: 'Dosis', sans-serif; font-size: 26pt; color: #0F3460; font-weight: 700; }
-        h2 { font-family: 'Dosis', sans-serif; font-size: 18pt; color: #0F3460; margin-bottom: 6px; font-weight: 700; }
-        h3 { font-family: 'Dosis', sans-serif; font-size: 13pt; color: #0F3460; margin-bottom: 4px; font-weight: 600; }
-        h4 { font-family: 'Dosis', sans-serif; font-size: 11pt; color: #0F3460; margin-bottom: 4px; font-weight: 600; }
-        p { margin: 0; }
-        .gold { color: #FFC107; }
-        .navy { color: #0F3460; }
-        .muted { color: #94A3B8; }
-        .gold-underline { display: inline-block; border-bottom: 3px solid #FFC107; padding-bottom: 3px; }
-        .text-center { text-align: center; }
-        .mt-2 { margin-top: 8px; }
-        .mt-4 { margin-top: 14px; }
-        .mt-6 { margin-top: 20px; }
-        .mt-8 { margin-top: 28px; }
-
-        /* Score circle -- centered via line-height equal to inner height */
-        .score-circle {
-            display: inline-block;
-            width: 110px; height: 110px;
-            border-radius: 55px;
-            border: 4px solid #FFC107;
-            text-align: center;
-            line-height: 100px;
-            font-size: 26pt; font-weight: 700; color: #0F3460;
-            background: #ffffff;
+        /* ===== Member-results specific ===== */
+        /* Pillar banner: rounded card with number badge + gold name + score */
+        .pillar-banner {
+            display: table; width: 100%;
+            background: #ffffff; border: 1px solid #dce3ee;
+            border-radius: 14px; padding: 12px 18px; margin-bottom: 14px;
         }
-
-        /* Pillar header -- table layout for reliable vertical alignment */
-        .pillar-header { display: table; width: 100%; margin-bottom: 12px; }
-        .pillar-header-cell { display: table-cell; vertical-align: middle; }
+        .pillar-banner-cell { display: table-cell; vertical-align: middle; }
         .pillar-number {
-            display: inline-block;
-            width: 38px; height: 38px;
-            border-radius: 19px;
-            background: #0F3460; color: #FFC107;
-            font-size: 16pt; font-weight: 700;
-            text-align: center; line-height: 38px;
+            display: inline-block; width: 34px; height: 34px;
+            border-radius: 17px; background: #00174a; color: #e2ac53;
+            font-size: 13pt; font-weight: 700; text-align: center; line-height: 34px;
         }
-        .pillar-title { padding-left: 14px; }
-        .pillar-meta { text-align: right; }
-        .pillar-score { font-size: 22pt; font-weight: 700; color: #0F3460; line-height: 1; }
-        .pillar-maturity { font-size: 9.5pt; font-weight: 600; color: #0F3460; margin-top: 2px; }
-
-        .section-title {
-            font-size: 10.5pt; font-weight: 700; color: #0F3460;
-            border-bottom: 2px solid #FFC107; padding-bottom: 2px;
-            display: inline-block; margin: 12px 0 6px;
+        .pillar-name {
+            padding-left: 13px; font-size: 16pt; font-weight: 700; color: #cf9b43;
+            letter-spacing: -0.01em;
         }
-
-        /* Bullet lists -- real dot bullets (closer to the web view) */
-        .bullet-list { list-style: none; padding: 0; margin: 0; }
-        .bullet-list li {
-            padding: 2px 0 2px 14px;
-            font-size: 10pt;
-            position: relative;
-            page-break-inside: avoid;
-        }
-        .bullet-list li:before {
-            content: "\2022";
-            position: absolute; left: 0; top: 1px;
-            font-size: 12pt; line-height: 1;
-            color: #FFC107;
-        }
-        .bullet-strength li:before { color: #16A34A; }
-        .bullet-improve li:before { color: #F59E0B; }
-
-        .business-box {
-            background: #FFF8E1; border: 1px solid #FFC107;
-            border-radius: 8px; padding: 12px; margin-top: 10px;
-            page-break-inside: avoid;
-        }
+        .pillar-meta { text-align: right; width: 130px; }
+        .pillar-score { font-size: 20pt; font-weight: 700; color: #00174a; line-height: 1; }
+        .pillar-maturity { font-size: 9pt; font-weight: 600; color: #55647d; margin-top: 3px; }
 
         .gap-box {
-            background: #FEF3C7; border: 1px solid #F59E0B;
-            border-radius: 8px; padding: 9px 12px; margin-bottom: 12px;
-            font-size: 9.5pt;
-            page-break-inside: avoid;
+            background: #faf2e2; border: 1px solid #e2ac53;
+            border-radius: 12px; padding: 11px 16px; margin-bottom: 14px;
+            font-size: 9.5pt; page-break-inside: avoid;
         }
-
-        /* Keep the sign-off (excited / website / brand) together --
-           if the preceding "What's Next" copy is long, this whole block
-           moves to the next page instead of getting split. */
-        .closing-block { page-break-inside: avoid; }
-
-        /* Cover */
-        .cover { text-align: center; padding-top: 90px; }
-        .cover .brand { font-size: 22pt; font-weight: 700; }
-        .cover .assessment-title {
-            font-size: 32pt; font-weight: 700; color: #0F3460;
-            margin-top: 70px; line-height: 1.2;
-        }
-        .cover .name { font-size: 22pt; font-weight: 600; color: #0F3460; margin-top: 32px; }
-        .cover .date { font-size: 11pt; color: #94A3B8; margin-top: 22px; }
-        .cover .confidential { font-size: 10pt; color: #94A3B8; margin-top: 90px; letter-spacing: 4px; }
     </style>
 </head>
 <body>
 
-<!-- PAGE 1: Cover -->
+<!-- ============ PAGE 1: Cover ============ -->
 <div class="page cover">
-    <p class="brand">
-        <span class="gold">B</span><span class="navy">VisionRY</span>
-    </p>
-    <h1 class="assessment-title" th:text="${assessmentTitle}">Founder Mindset Assessment</h1>
-    <p class="name" th:text="${participantName}">Name</p>
-    <p class="date" th:text="${reportDate}">January 2026</p>
-    <p class="confidential">CONFIDENTIAL</p>
+    <div class="watermark" style="top: 70px; right: -120px;">
+        <img th:src="${brandWatermark}" style="width: 360px;" alt=""/>
+    </div>
+
+    <div style="position: relative; z-index: 1;">
+        <p class="cover-eyebrow">Personal Assessment Report</p>
+        <h1 class="cover-title">
+            <span th:text="${assessmentTitle}">Founder Mindset Assessment</span>
+        </h1>
+        <span class="accent-rule" style="width: 78px; margin-top: 20px;"></span>
+
+        <p class="cover-name" th:text="${participantName}">Name</p>
+        <p class="cover-date" th:text="${reportDate}">January 2026</p>
+        <p class="cover-confidential">Confidential</p>
+    </div>
+
+    <div class="cover-foot">
+        <div style="display: table; width: 100%;">
+            <div class="cover-foot-cell">
+                <img class="cover-logo" th:src="${brandLogo}" alt="BVisionRY"/>
+            </div>
+            <div class="cover-foot-cell cover-url">www.bvisionry.com</div>
+        </div>
+    </div>
 </div>
 
-<!-- PAGE 2: Welcome -->
+<!-- ============ PAGE 2: Welcome ============ -->
 <div class="page">
-    <h2><span class="gold-underline">Welcome</span></h2>
+    <p class="page-heading">Welcome</p>
+    <span class="accent-rule"></span>
+
     <p class="mt-6" style="font-size: 11.5pt;">
         Hi <strong th:text="${participantName}">Name</strong>,
     </p>
@@ -132,148 +79,158 @@
         Everything you see here is based entirely on the data you shared with us. Some of it
         will resonate immediately. Some may surprise you. Both are equally valuable.
     </p>
-    <p class="mt-6"><strong>An important note:</strong></p>
-    <p class="mt-2">
-        This is BVisionRY's interpretation of your data &mdash; not an absolute truth about who you are.
-        It is a snapshot of your current patterns, habits, and mindset readiness. Patterns can
-        change. That's exactly why we measure them.
-    </p>
+
+    <div class="card-cream mt-6">
+        <p class="card-label">An important note</p>
+        <p>
+            This is BVisionRY's interpretation of your data &mdash; not an absolute truth about who you are.
+            It is a snapshot of your current patterns, habits, and mindset readiness. Patterns can
+            change. That's exactly why we measure them.
+        </p>
+    </div>
+
     <p class="mt-6"><strong>What comes next:</strong></p>
     <p class="mt-2">
         The BVisionRY cohort will give you the tools to build on your strengths and close the gaps
         identified here. After the program, we'll re-assess to show you exactly how far you've moved.
     </p>
+
     <p class="mt-8">With respect and partnership,</p>
     <p><strong>The BVisionRY Team</strong></p>
 </div>
 
-<!-- General Information (Personal pillar answers the member filled in).
-     Shown only when the pipeline collected any personal info. -->
+<!-- ============ General Information (optional) ============ -->
 <div th:if="${not #lists.isEmpty(personalInfo)}" class="page">
-    <h2><span class="gold-underline">Personal Information</span></h2>
-    <p class="muted mt-2" style="font-size: 10pt;">
+    <p class="page-heading">Personal Information</p>
+    <span class="accent-rule"></span>
+    <p class="muted mt-3" style="font-size: 10pt;">
         The information you shared with us when starting this assessment.
     </p>
-    <table class="info-table mt-6" style="width: 100%; border-collapse: collapse;">
-        <tr th:each="entry, iter : ${personalInfo}"
-            th:style="${iter.odd} ? 'background: #F8FAFC;' : ''">
-            <td class="info-label" th:text="${entry.label}"
-                style="padding: 8px 12px; font-weight: 600; color: #0F3460; vertical-align: top; width: 40%; border-bottom: 1px solid #E2E8F0;">
-                Question
-            </td>
-            <td class="info-value" th:text="${entry.value}"
-                style="padding: 8px 12px; color: #212529; vertical-align: top; border-bottom: 1px solid #E2E8F0;">
-                Answer
-            </td>
-        </tr>
-    </table>
+    <div class="card mt-6" style="padding: 4px 8px;">
+        <table class="info-table">
+            <tr th:each="entry, iter : ${personalInfo}"
+                th:style="${iter.odd} ? 'background: #f8f9fc;' : ''">
+                <td class="info-label" th:text="${entry.label}">Question</td>
+                <td class="info-value" th:text="${entry.value}">Answer</td>
+            </tr>
+        </table>
+    </div>
 </div>
 
-<!-- PAGE 3: Executive Summary -->
+<!-- ============ Executive Summary ============ -->
 <div class="page">
     <div class="text-center">
-        <h2><span class="gold-underline">EXECUTIVE SUMMARY</span></h2>
+        <p class="page-heading">Executive Summary</p>
+        <span class="accent-rule" style="margin: 8px auto 0;"></span>
     </div>
-    <div class="mt-6 text-center">
+
+    <div class="mt-8 text-center">
         <div class="score-circle" th:text="${overallScore + '%'}">63%</div>
-        <p class="mt-4" style="font-size: 16pt; font-weight: 700; color: #0F3460;">
-            <span class="gold-underline" th:text="${overallCategory}">Strong Mindset</span>
-        </p>
+        <div>
+            <span class="category-chip" th:text="${overallCategory}">Strong Mindset</span>
+        </div>
     </div>
-    <p class="mt-8" style="font-size: 10.5pt; color: #212529;" th:text="${summaryNarrative}">Summary narrative here.</p>
+
+    <div class="card mt-8">
+        <p style="font-size: 10.5pt;" th:text="${summaryNarrative}">Summary narrative here.</p>
+    </div>
 </div>
 
-<!-- The Full Picture Intro -->
-<div class="page" style="padding-top: 60px;">
-    <div class="text-center">
-        <span style="font-size: 44pt; color: #FFC107;">&#9678;</span>
-        <h2 class="mt-4">The Full Picture</h2>
-        <p class="muted"><span class="gold-underline">Your Strengths and Growth Areas</span></p>
+<!-- ============ The Full Picture Intro ============ -->
+<div class="page">
+    <div class="text-center" style="padding-top: 40px;">
+        <p class="page-heading">The Full Picture</p>
+        <span class="accent-rule" style="margin: 8px auto 0;"></span>
+        <p class="muted mt-3" style="font-size: 11pt;">Your strengths and growth areas</p>
     </div>
-    <div class="mt-8" style="max-width: 440px; margin: 0 auto;">
+
+    <div class="card mt-8" style="max-width: 460px; margin-left: auto; margin-right: auto;">
         <p>For each area, you'll see:</p>
-        <ul class="bullet-list mt-4">
+        <ul class="bullet-list mt-2">
             <li><strong>Your score</strong> &mdash; where you stand today</li>
             <li><strong>What this score means</strong> &mdash; in plain language</li>
             <li><strong>What's working</strong> &mdash; your current strengths</li>
             <li><strong>What can improve</strong> &mdash; your growth edges</li>
             <li><strong>Why this matters</strong> &mdash; the business impact</li>
         </ul>
-        <p class="mt-6">
-            Remember: You already have strong foundations. This assessment shows you
-            where focused work creates the most momentum.
-        </p>
-        <p class="mt-4" style="font-weight: 700; color: #0F3460;">Let's dive in!</p>
     </div>
+    <p class="mt-6 text-center muted" style="max-width: 460px; margin-left: auto; margin-right: auto;">
+        Remember: you already have strong foundations. This assessment shows you
+        where focused work creates the most momentum.
+    </p>
+    <p class="mt-4 text-center" style="font-weight: 700; color: #00174a; font-size: 12pt;">Let's dive in!</p>
 </div>
 
-<!-- Individual Pillar Pages -->
+<!-- ============ Individual Pillar Pages ============ -->
 <div th:each="pillar, iter : ${pillarDetails}" class="page">
-    <div class="pillar-header">
-        <div class="pillar-header-cell" style="width: 50px;">
+    <div class="pillar-banner">
+        <div class="pillar-banner-cell" style="width: 46px;">
             <div class="pillar-number" th:text="${iter.count}">1</div>
         </div>
-        <div class="pillar-header-cell pillar-title">
-            <h2 style="margin: 0;">
-                <span class="gold-underline" th:text="${pillar.pillarName()}">Vision Clarity</span>
-            </h2>
-        </div>
-        <div class="pillar-header-cell pillar-meta" style="width: 110px;">
+        <div class="pillar-banner-cell pillar-name" th:text="${pillar.pillarName()}">Vision Clarity</div>
+        <div class="pillar-banner-cell pillar-meta">
             <div class="pillar-score" th:text="${pillar.scorePercentage().intValue() + '%'}">75%</div>
             <div class="pillar-maturity" th:text="${pillar.maturityLabel()}">Architectural Operator</div>
         </div>
     </div>
 
-    <div th:if="${pillar.selfAssessmentGap() != null and #numbers.abs(pillar.selfAssessmentGap()) >= 20}"
+    <div th:if="${pillar.selfAssessmentGap() != null and (pillar.selfAssessmentGap() >= 20 or pillar.selfAssessmentGap() <= -20)}"
          class="gap-box">
         <strong>Self-Assessment Gap:</strong>
         You rated yourself
         <span th:if="${pillar.selfAssessmentGap() > 0}" th:text="${pillar.selfAssessmentGap() + '% higher'}">20% higher</span>
-        <span th:if="${pillar.selfAssessmentGap() <= 0}" th:text="${#numbers.abs(pillar.selfAssessmentGap()) + '% lower'}">20% lower</span>
+        <span th:if="${pillar.selfAssessmentGap() <= 0}" th:text="${(0 - pillar.selfAssessmentGap()) + '% lower'}">20% lower</span>
         than your actual score. This gap is worth exploring.
     </div>
 
-    <div class="section-title">What this score means</div>
-    <p th:text="${pillar.whatThisScoreMeans()}" style="font-size: 10pt;">Score explanation</p>
+    <div class="card-cream">
+        <p class="card-label">What this score means</p>
+        <p th:text="${pillar.whatThisScoreMeans()}" style="font-size: 10pt;">Score explanation</p>
+    </div>
 
-    <div class="section-title">What's working</div>
-    <ul class="bullet-list bullet-strength">
-        <li th:each="item : ${pillar.whatsWorking()}" th:text="${item}">Strength item</li>
-    </ul>
+    <div class="card-cream mt-4">
+        <p class="card-label">What's working</p>
+        <ul class="bullet-list bullet-strength">
+            <li th:each="item : ${pillar.whatsWorking()}" th:text="${item}">Strength item</li>
+        </ul>
+    </div>
 
-    <div class="section-title">What can improve</div>
-    <ul class="bullet-list bullet-improve">
-        <li th:each="item : ${pillar.whatCanImprove()}" th:text="${item}">Improvement item</li>
-    </ul>
+    <div class="card-cream mt-4">
+        <p class="card-label">What can improve</p>
+        <ul class="bullet-list bullet-improve">
+            <li th:each="item : ${pillar.whatCanImprove()}" th:text="${item}">Improvement item</li>
+        </ul>
+    </div>
 
-    <div class="business-box">
-        <h4>Why this matters for your business</h4>
-        <p th:text="${pillar.whyThisMattersForBusiness()}" style="font-size: 10pt; margin-top: 4px;">Business impact</p>
+    <div class="card mt-4">
+        <p class="card-label">Why this matters for your business</p>
+        <p th:text="${pillar.whyThisMattersForBusiness()}" style="font-size: 10pt;">Business impact</p>
     </div>
 </div>
 
-<!-- Moving Forward -->
+<!-- ============ Moving Forward ============ -->
 <div class="page">
-    <h2><span class="gold-underline">Moving Forward</span></h2>
-    <h3 class="mt-4">Your Foundation Is Solid</h3>
+    <p class="page-heading">Moving Forward</p>
+    <span class="accent-rule"></span>
+    <h3 class="mt-6">Your Foundation Is Solid</h3>
 
-    <div class="mt-6">
-        <h4 style="color: #15803d;">Top Strengths</h4>
-        <ul class="bullet-list bullet-strength mt-2">
+    <div class="card-cream mt-4">
+        <p class="card-label" style="color: #2c7a52;">Top Strengths</p>
+        <ul class="bullet-list bullet-strength">
             <li th:each="s : ${strengths}" th:text="${s}">Strength</li>
         </ul>
     </div>
 
-    <div class="mt-6">
-        <h4 style="color: #d97706;">Growth Edges</h4>
-        <ul class="bullet-list bullet-improve mt-2">
+    <div class="card-cream mt-4">
+        <p class="card-label" style="color: #b07d18;">Growth Edges</p>
+        <ul class="bullet-list bullet-improve">
             <li th:each="d : ${developmentAreas}" th:text="${d}">Growth edge</li>
         </ul>
     </div>
 
-    <div th:if="${corePattern != null}" class="mt-6 business-box">
-        <h4>Your Core Pattern</h4>
-        <p class="mt-2" style="font-size: 11pt; font-weight: 600; color: #0F3460;" th:text="${corePattern}">Pattern</p>
+    <div th:if="${corePattern != null}" class="card mt-4">
+        <p class="card-label">Your Core Pattern</p>
+        <p style="font-size: 11pt; font-weight: 600; color: #00174a;" th:text="${corePattern}">Pattern</p>
     </div>
 
     <div th:if="${movingForward != null}" class="mt-6">
@@ -281,36 +238,41 @@
     </div>
 </div>
 
-<!-- What's Next + Closing -->
+<!-- ============ What's Next + Closing ============ -->
 <div class="page">
-    <h2><span class="gold-underline">Moving Forward</span></h2>
-    <h3 class="mt-4">WHAT'S NEXT WITH BVISIONRY</h3>
-    <p class="mt-6">
-        The BVisionRY cohort is designed to help you build on the strengths identified in this
-        assessment while systematically closing the gaps in your growth edges.
-    </p>
-    <p class="mt-4">
-        Through targeted exercises, peer learning, and coaching, you'll develop the mindset
-        infrastructure that turns awareness into execution. Every pillar in this assessment has
-        a corresponding practice module in the program.
-    </p>
-    <p class="mt-6">
-        Your "after camera shot" &mdash; the post-cohort re-assessment &mdash; will show you exactly
-        how far you've moved. The distance between where you are today and where you'll be
-        is the proof that growth is a practice, not a destination.
-    </p>
+    <div class="watermark" style="top: 520px; right: -110px;">
+        <img th:src="${brandWatermark}" style="width: 320px;" alt=""/>
+    </div>
 
-    <div class="mt-8 text-center closing-block">
-        <p class="muted" style="font-size: 10.5pt;">
-            We're excited to work with you on building the mindset that
-            turns your vision into reality.
+    <div style="position: relative; z-index: 1;">
+        <p class="page-heading">What's Next With BVisionRY</p>
+        <span class="accent-rule"></span>
+
+        <p class="mt-6">
+            The BVisionRY cohort is designed to help you build on the strengths identified in this
+            assessment while systematically closing the gaps in your growth edges.
         </p>
-        <p class="mt-4" style="font-size: 11pt; font-weight: 600;">
-            <a href="https://www.bvisionry.com" style="color: #0F3460; text-decoration: none;">www.bvisionry.com</a>
+        <p class="mt-4">
+            Through targeted exercises, peer learning, and coaching, you'll develop the mindset
+            infrastructure that turns awareness into execution. Every pillar in this assessment has
+            a corresponding practice module in the program.
         </p>
-        <p class="mt-4" style="font-size: 16pt;">
-            <span class="gold">B</span><span class="navy">VisionRY</span>
+        <p class="mt-4">
+            Your "after camera shot" &mdash; the post-cohort re-assessment &mdash; will show you exactly
+            how far you've moved. The distance between where you are today and where you'll be
+            is the proof that growth is a practice, not a destination.
         </p>
+
+        <div class="card-cream mt-8 closing-block">
+            <p style="font-size: 10.5pt; color: #18233f;">
+                We're excited to work with you on building the mindset that
+                turns your vision into reality.
+            </p>
+            <p class="mt-4" style="font-size: 11pt; font-weight: 600;">
+                <a href="https://www.bvisionry.com" style="color: #00174a; text-decoration: none;">www.bvisionry.com</a>
+            </p>
+            <img class="closing-brand mt-4" th:src="${brandLogo}" alt="BVisionRY"/>
+        </div>
     </div>
 </div>
 

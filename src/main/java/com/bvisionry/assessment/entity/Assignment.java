@@ -18,8 +18,10 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * One pipeline assigned to one member. Multi-member "assign all" batches are
- * represented as N of these rows — there is no aggregate per-organization row.
+ * A pipeline assigned within an organization. When {@link #user} is null the row
+ * is an org-level provision (super admin assigned the pipeline to the org; org
+ * admin distributes to members). When {@link #user} is set, the row is one
+ * pipeline×member assignment — bulk "assign all" creates N such rows.
  */
 @Entity
 @Table(name = "assignments")
@@ -37,7 +39,7 @@ public class Assignment extends BaseEntity {
     private Organization organization;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "user_id", nullable = false)
+    @JoinColumn(name = "user_id")
     private User user;
 
     @Column(name = "assigned_by", nullable = false)

@@ -15,12 +15,52 @@ public interface AssignmentRepository extends JpaRepository<Assignment, UUID> {
 
     @Query("""
             SELECT a FROM Assignment a
-            JOIN FETCH a.user
+            LEFT JOIN FETCH a.user
             JOIN FETCH a.pipeline
             WHERE a.organization.id = :organizationId
             ORDER BY a.createdAt DESC
             """)
     List<Assignment> findByOrganizationIdOrderByCreatedAtDesc(@Param("organizationId") UUID organizationId);
+
+    @Query("""
+            SELECT a FROM Assignment a
+            LEFT JOIN FETCH a.user
+            JOIN FETCH a.pipeline
+            WHERE a.organization.id = :organizationId
+              AND a.user IS NULL
+            ORDER BY a.createdAt DESC
+            """)
+    List<Assignment> findProvisionsByOrganizationIdOrderByCreatedAtDesc(
+            @Param("organizationId") UUID organizationId);
+
+    @Query("""
+            SELECT a FROM Assignment a
+            JOIN FETCH a.user
+            JOIN FETCH a.pipeline
+            WHERE a.organization.id = :organizationId
+              AND a.user IS NOT NULL
+            ORDER BY a.createdAt DESC
+            """)
+    List<Assignment> findMemberAssignmentsByOrganizationIdOrderByCreatedAtDesc(
+            @Param("organizationId") UUID organizationId);
+
+    /** True when a super admin has provisioned this pipeline to the org. */
+    boolean existsByOrganizationIdAndPipelineIdAndUserIsNull(UUID organizationId, UUID pipelineId);
+
+    /**
+     * The org-level provision row (user == null) for a (org, pipeline) pair, if
+     * one exists. At most one can exist per the {@code uq_assignments_org_pipeline_provision}
+     * partial unique index. Org admins distribute members against it; its
+     * {@code deadline}/{@code maxCheckIns} are the defaults members inherit.
+     */
+    @Query("""
+            SELECT a FROM Assignment a
+            WHERE a.organization.id = :orgId
+              AND a.pipeline.id = :pipelineId
+              AND a.user IS NULL
+            """)
+    Optional<Assignment> findProvision(@Param("orgId") UUID orgId,
+                                       @Param("pipelineId") UUID pipelineId);
 
     @Query("SELECT a FROM Assignment a WHERE a.organization.id = :orgId AND a.pipeline.id = :pipelineId")
     List<Assignment> findByOrganizationIdAndPipelineId(

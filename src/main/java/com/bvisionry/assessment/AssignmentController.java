@@ -6,6 +6,7 @@ import com.bvisionry.assessment.dto.AssignmentResponse;
 import com.bvisionry.assessment.dto.CreateAssignmentRequest;
 import com.bvisionry.assessment.dto.ExtendDeadlineRequest;
 import com.bvisionry.assessment.dto.OverrideAnswersRequest;
+import com.bvisionry.assessment.dto.PillarSummaryResponse;
 import com.bvisionry.evaluation.PillarReeditService;
 import com.bvisionry.evaluation.dto.PillarUnlockSummary;
 import com.bvisionry.evaluation.dto.UnlockPillarsRequest;
@@ -60,11 +61,29 @@ public class AssignmentController {
         return ResponseEntity.ok(assignmentService.getAssignmentDetail(orgId, id));
     }
 
+    /**
+     * Raw per-question answers for a member's submission. Restricted to the
+     * platform Super Admin — Org Admins manage assignments but must not be
+     * able to read the verbatim content of a member's answers.
+     */
     @GetMapping("/{id}/answers")
+    @PreAuthorize("hasAuthority('SUPER_ADMIN')")
     public ResponseEntity<AssessmentDetailResponse> getAssignmentAnswers(
             @PathVariable UUID orgId,
             @PathVariable UUID id) {
         return ResponseEntity.ok(assignmentService.getAssignmentAnswers(orgId, id));
+    }
+
+    /**
+     * Pillar list (id/name/type) for the unlock-pillars picker — structure
+     * only, no answer content, so it stays available to Org Admins under the
+     * class-level org-scoped check (unlike {@link #getAssignmentAnswers}).
+     */
+    @GetMapping("/{id}/pillars")
+    public ResponseEntity<List<PillarSummaryResponse>> getAssignmentPillars(
+            @PathVariable UUID orgId,
+            @PathVariable UUID id) {
+        return ResponseEntity.ok(assignmentService.getAssignmentPillars(orgId, id));
     }
 
     @PostMapping("/{id}/reminder")

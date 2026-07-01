@@ -5,6 +5,7 @@ import com.bvisionry.assessment.dto.AssessmentSummaryResponse;
 import com.bvisionry.assessment.dto.AssignmentDetailResponse;
 import com.bvisionry.assessment.dto.AssignmentResponse;
 import com.bvisionry.assessment.dto.CreateAssignmentRequest;
+import com.bvisionry.assessment.dto.PillarSummaryResponse;
 import com.bvisionry.assessment.entity.Assignment;
 import com.bvisionry.assessment.entity.PipelineAutoAssignment;
 import com.bvisionry.assessment.entity.Submission;
@@ -451,14 +452,25 @@ public class AssignmentService {
         return assignmentId + ":" + (userId == null ? "" : userId);
     }
 
-    @Transactional
-    public void cancelAssignment(UUID orgId, UUID assignmentId) {
+    /**
+     * Loads an assignment and enforces that it belongs to {@code orgId}. A
+     * missing id and a cross-org id are both reported as "not found" (never
+     * "forbidden") so an Org Admin can't probe which assignment ids exist
+     * outside their own organization. All org-scoped assignment operations
+     * funnel through here so the authorization contract lives in one place.
+     */
+    private Assignment requireAssignmentInOrg(UUID orgId, UUID assignmentId) {
         Assignment assignment = assignmentRepository.findById(assignmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-
         if (!assignment.getOrganization().getId().equals(orgId)) {
             throw new ResourceNotFoundException("Assignment", assignmentId.toString());
         }
+        return assignment;
+    }
+
+    @Transactional
+    public void cancelAssignment(UUID orgId, UUID assignmentId) {
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
 
         // Removing an org-level provision (user == null) is a super-admin act:
         // the provision is the platform's grant to the org. Org admins may only
@@ -501,11 +513,7 @@ public class AssignmentService {
 
     @Transactional(readOnly = true)
     public AssignmentDetailResponse getAssignmentDetail(UUID orgId, UUID assignmentId) {
-        Assignment assignment = assignmentRepository.findById(assignmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-        if (!assignment.getOrganization().getId().equals(orgId)) {
-            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
-        }
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
         Submission submission = null;
         if (assignment.getUser() != null) {
             submission = submissionRepository
@@ -580,11 +588,7 @@ public class AssignmentService {
      */
     @Transactional(readOnly = true)
     public AssessmentDetailResponse getAssignmentAnswers(UUID orgId, UUID assignmentId) {
-        Assignment assignment = assignmentRepository.findById(assignmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-        if (!assignment.getOrganization().getId().equals(orgId)) {
-            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
-        }
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
         if (assignment.getUser() == null) {
             throw new BadRequestException("This provision has not been assigned to a member yet.");
         }
@@ -594,17 +598,29 @@ public class AssignmentService {
     }
 
     /**
+     * Pillar structure (id/name/type) for the assignment's pipeline — no
+     * question or answer content, so unlike {@link #getAssignmentAnswers} this
+     * is safe for Org Admins. Powers the unlock-pillars picker, which only
+     * needs to know which pillars exist.
+     */
+    @Transactional(readOnly = true)
+    public List<PillarSummaryResponse> getAssignmentPillars(UUID orgId, UUID assignmentId) {
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
+        // Pillars arrive pre-ordered from Hibernate via Pipeline#pillars'
+        // @OrderBy("displayOrder"), so no explicit re-sort is needed here.
+        return assignment.getPipeline().getPillars().stream()
+                .map(p -> new PillarSummaryResponse(p.getId(), p.getName(), p.getType().name()))
+                .toList();
+    }
+
+    /**
      * Re-sends the "you have an assessment to complete" email for a submission
      * that's still IN_PROGRESS. Rejects completed/failed submissions because a
      * reminder no longer applies to those states.
      */
     @Transactional(readOnly = true)
     public void sendReminder(UUID orgId, UUID assignmentId) {
-        Assignment assignment = assignmentRepository.findById(assignmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-        if (!assignment.getOrganization().getId().equals(orgId)) {
-            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
-        }
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
         if (assignment.getUser() == null) {
             throw new BadRequestException("Cannot send a reminder for an org-level provision.");
         }
@@ -633,11 +649,7 @@ public class AssignmentService {
      */
     @Transactional
     public void retryEvaluation(UUID orgId, UUID assignmentId) {
-        Assignment assignment = assignmentRepository.findById(assignmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-        if (!assignment.getOrganization().getId().equals(orgId)) {
-            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
-        }
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
         if (assignment.getUser() == null) {
             throw new BadRequestException("Cannot retry evaluation for an org-level provision.");
         }

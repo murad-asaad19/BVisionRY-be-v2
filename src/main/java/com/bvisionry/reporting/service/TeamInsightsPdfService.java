@@ -4,7 +4,7 @@ import com.bvisionry.assessment.AnswerRepository;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.assessment.entity.Submission;
 import com.bvisionry.common.enums.SubmissionStatus;
-import com.bvisionry.common.exception.ReportGenerationException;
+import com.bvisionry.common.pdf.PdfRenderer;
 import com.bvisionry.evaluation.OverallSummaryRepository;
 import com.bvisionry.evaluation.PillarEvaluationRepository;
 import com.bvisionry.evaluation.entity.OverallSummary;
@@ -15,11 +15,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.thymeleaf.TemplateEngine;
 import org.thymeleaf.context.Context;
-import org.xhtmlrenderer.pdf.ITextRenderer;
 
-import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -55,7 +52,7 @@ public class TeamInsightsPdfService {
     private final OverallSummaryRepository overallSummaryRepository;
     private final AnswerRepository answerRepository;
     private final PersonalInfoResolver personalInfoResolver;
-    private final TemplateEngine templateEngine;
+    private final PdfRenderer pdfRenderer;
 
     @Transactional(readOnly = true)
     public byte[] generateReport(UUID orgId, UUID pipelineId, List<UUID> memberIds, boolean showNames) {
@@ -139,24 +136,10 @@ public class TeamInsightsPdfService {
                 buildMemberSections(evaluatedSubmissions, summaryBySubmission, evaluationsBySubmission,
                         genderBySubmission, personalAnswersBySubmission, identity));
 
-        String html = templateEngine.process("team-insights-report", ctx);
-
-        try (ByteArrayOutputStream os = new ByteArrayOutputStream()) {
-            ITextRenderer renderer = new ITextRenderer();
-            registerFont(renderer, "fonts/Dosis-Regular.ttf");
-            registerFont(renderer, "fonts/Dosis-SemiBold.ttf");
-            registerFont(renderer, "fonts/Dosis-Bold.ttf");
-            renderer.setDocumentFromString(html);
-            renderer.layout();
-            renderer.createPDF(os);
-            log.info("Generated team insights PDF for org {} pipeline {} ({} members, {} bytes)",
-                    orgId, pipelineId, evaluatedSubmissions.size(), os.size());
-            return os.toByteArray();
-        } catch (Exception e) {
-            log.error("Failed to generate team insights PDF for org {} pipeline {}: {}",
-                    orgId, pipelineId, e.getMessage(), e);
-            throw new ReportGenerationException("Team insights PDF generation failed", e);
-        }
+        byte[] pdf = pdfRenderer.renderTemplate("team-insights-report", ctx);
+        log.info("Generated team insights PDF for org {} pipeline {} ({} members, {} bytes)",
+                orgId, pipelineId, evaluatedSubmissions.size(), pdf.length);
+        return pdf;
     }
 
     private List<Map<String, Object>> buildPillarAverages(
@@ -250,18 +233,5 @@ public class TeamInsightsPdfService {
 
     private long countByStatus(List<Submission> submissions, SubmissionStatus status) {
         return submissions.stream().filter(s -> s.getStatus() == status).count();
-    }
-
-    private void registerFont(ITextRenderer renderer, String resourcePath) {
-        try {
-            var resource = getClass().getClassLoader().getResource(resourcePath);
-            if (resource != null) {
-                renderer.getFontResolver().addFont(
-                        resource.toExternalForm(), "Dosis",
-                        com.lowagie.text.pdf.BaseFont.IDENTITY_H, true, null);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to register font {}: {}", resourcePath, e.getMessage());
-        }
     }
 }

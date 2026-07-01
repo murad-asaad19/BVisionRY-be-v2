@@ -6,6 +6,7 @@ import com.bvisionry.assessment.dto.AssignmentResponse;
 import com.bvisionry.assessment.dto.CreateAssignmentRequest;
 import com.bvisionry.assessment.dto.ExtendDeadlineRequest;
 import com.bvisionry.assessment.dto.OverrideAnswersRequest;
+import com.bvisionry.assessment.dto.PillarSummaryResponse;
 import com.bvisionry.evaluation.PillarReeditService;
 import com.bvisionry.evaluation.dto.PillarUnlockSummary;
 import com.bvisionry.evaluation.dto.UnlockPillarsRequest;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -46,8 +48,10 @@ public class AssignmentController {
     }
 
     @GetMapping
-    public ResponseEntity<List<AssignmentResponse>> listAssignments(@PathVariable UUID orgId) {
-        return ResponseEntity.ok(assignmentService.listAssignments(orgId));
+    public ResponseEntity<List<AssignmentResponse>> listAssignments(
+            @PathVariable UUID orgId,
+            @RequestParam(required = false) AssignmentService.AssignmentListScope scope) {
+        return ResponseEntity.ok(assignmentService.listAssignments(orgId, scope));
     }
 
     @GetMapping("/{id}")
@@ -57,11 +61,29 @@ public class AssignmentController {
         return ResponseEntity.ok(assignmentService.getAssignmentDetail(orgId, id));
     }
 
+    /**
+     * Raw per-question answers for a member's submission. Restricted to the
+     * platform Super Admin — Org Admins manage assignments but must not be
+     * able to read the verbatim content of a member's answers.
+     */
     @GetMapping("/{id}/answers")
+    @PreAuthorize("hasAuthority('SUPER_ADMIN')")
     public ResponseEntity<AssessmentDetailResponse> getAssignmentAnswers(
             @PathVariable UUID orgId,
             @PathVariable UUID id) {
         return ResponseEntity.ok(assignmentService.getAssignmentAnswers(orgId, id));
+    }
+
+    /**
+     * Pillar list (id/name/type) for the unlock-pillars picker — structure
+     * only, no answer content, so it stays available to Org Admins under the
+     * class-level org-scoped check (unlike {@link #getAssignmentAnswers}).
+     */
+    @GetMapping("/{id}/pillars")
+    public ResponseEntity<List<PillarSummaryResponse>> getAssignmentPillars(
+            @PathVariable UUID orgId,
+            @PathVariable UUID id) {
+        return ResponseEntity.ok(assignmentService.getAssignmentPillars(orgId, id));
     }
 
     @PostMapping("/{id}/reminder")
@@ -111,8 +133,12 @@ public class AssignmentController {
         return ResponseEntity.noContent().build();
     }
 
+    // Extending a deadline is an ordinary lifecycle action an org admin performs
+    // for their own members (like reminder/retry/cancel), so it inherits the
+    // class-level authorization (SUPER_ADMIN or ORG_ADMIN scoped to #orgId)
+    // rather than the SUPER_ADMIN-only override the answer-override/re-evaluate
+    // endpoints keep. The service further pins the submission to #orgId.
     @PatchMapping("/{assignmentId}/submissions/{submissionId}/deadline")
-    @PreAuthorize("hasAuthority('SUPER_ADMIN')")
     public ResponseEntity<Void> extendDeadline(
             @PathVariable UUID orgId,
             @PathVariable UUID submissionId,

@@ -5,6 +5,7 @@ import com.bvisionry.assessment.dto.AssessmentSummaryResponse;
 import com.bvisionry.assessment.dto.AssignmentDetailResponse;
 import com.bvisionry.assessment.dto.AssignmentResponse;
 import com.bvisionry.assessment.dto.CreateAssignmentRequest;
+import com.bvisionry.assessment.dto.PillarSummaryResponse;
 import com.bvisionry.assessment.entity.Assignment;
 import com.bvisionry.assessment.entity.PipelineAutoAssignment;
 import com.bvisionry.assessment.entity.Submission;
@@ -50,6 +51,16 @@ import java.util.UUID;
 @Slf4j
 public class AssignmentService {
 
+    /** Filters the org assignment list (see {@link #listAssignments}). */
+    public enum AssignmentListScope {
+        /** Rows with {@code user_id IS NULL} — pipeline provisioned to the org only. */
+        PROVISIONS,
+        /** Rows with a member — per-user assignments. */
+        MEMBERS,
+        /** Every assignment row for the org. */
+        ALL
+    }
+
     private final AssignmentRepository assignmentRepository;
     private final SubmissionRepository submissionRepository;
     private final AnswerRepository answerRepository;
@@ -73,6 +84,10 @@ public class AssignmentService {
      */
     @Transactional
     public List<AssignmentResponse> createAssignment(UUID orgId, CreateAssignmentRequest request) {
+        if (request.assignToOrganization()) {
+            return List.of(createOrganizationProvision(orgId, request));
+        }
+
         // Auto-assign is fundamentally an "all members" operation — picking a
         // specific subset and then asking the system to extend that to future
         // joiners has no coherent meaning. Reject early with a clear message
@@ -91,6 +106,19 @@ public class AssignmentService {
 
         if (pipeline.getStatus() != PipelineStatus.PUBLISHED) {
             throw new BadRequestException("Pipeline must be published before it can be assigned");
+        }
+
+        // An org provision (user == null) is the platform's grant of this
+        // pipeline to the org. Org admins may only distribute against an existing
+        // provision; super admins may assign directly — and we create the missing
+        // provision below so the org keeps access afterwards.
+        Assignment provision = assignmentRepository
+                .findProvision(orgId, pipeline.getId())
+                .orElse(null);
+        if (!SecurityUtils.isSuperAdmin() && provision == null) {
+            throw new BadRequestException(
+                    "This pipeline has not been provisioned to your organization. "
+                            + "Contact your platform administrator.");
         }
 
         List<User> members = resolveTargetMembers(orgId, request);
@@ -126,20 +154,103 @@ public class AssignmentService {
         // client-supplied {@code assignedBy} field for audit attribution.
         UUID assignerId = SecurityUtils.getCurrentUserId();
 
-        int maxCheckIns = request.maxCheckInsOrDefault();
+        // Members inherit the provision's defaults: an org admin's explicit
+        // deadline still wins, but when they leave it blank the super admin's
+        // provisioned "Default deadline" applies. Org admins can't set check-ins,
+        // so they always take the provisioned count (see resolveMaxCheckIns).
+        int maxCheckIns = resolveMaxCheckIns(request, provision);
+        Instant deadline = request.deadline() != null
+                ? request.deadline()
+                : (provision != null ? provision.getDeadline() : null);
+
+        // Maintain the invariant V112 backfilled — every member row implies an
+        // org provision. A super admin assigning members to a not-yet-provisioned
+        // pipeline auto-creates the provision (seeded with these same defaults)
+        // so org admins can keep distributing it afterwards.
+        if (provision == null) {
+            provision = provisionPipeline(org, pipeline, assignerId, deadline, maxCheckIns);
+        }
+
         List<AssignmentResponse> responses = new ArrayList<>();
         for (User member : newMembers) {
             AssignmentCreated created = createAssignmentForMember(
-                    org, pipeline, member, assignerId, request.deadline(), maxCheckIns);
+                    org, pipeline, member, assignerId, deadline, maxCheckIns);
             responses.add(toAssignmentResponse(created.assignment(), created.submission(), 1));
         }
 
         if (request.autoAssignFutureMembers()) {
             pipelineAutoAssignmentService.upsertRule(
-                    org, pipeline, request.userType(), request.deadline(), assignerId, maxCheckIns);
+                    org, pipeline, request.userType(), deadline, assignerId, maxCheckIns);
         }
 
         return responses;
+    }
+
+    /**
+     * Super-admin flow: assign a published pipeline to an organization without
+     * picking members. Org admins see the provision and distribute it to members.
+     */
+    private AssignmentResponse createOrganizationProvision(UUID orgId, CreateAssignmentRequest request) {
+        if (!SecurityUtils.isSuperAdmin()) {
+            throw new BadRequestException("Only super admins can provision pipelines to organizations.");
+        }
+        if (request.autoAssignFutureMembers()) {
+            throw new BadRequestException(
+                    "Organization provisioning cannot be combined with auto-assign rules.");
+        }
+        if (!request.isAssignAll()) {
+            throw new BadRequestException(
+                    "Organization provisioning cannot target specific members.");
+        }
+
+        Organization org = organizationRepository.findById(orgId)
+                .orElseThrow(() -> new ResourceNotFoundException("Organization", orgId.toString()));
+
+        Pipeline pipeline = pipelineRepository.findById(request.pipelineId())
+                .orElseThrow(() -> new ResourceNotFoundException("Pipeline", request.pipelineId().toString()));
+
+        if (pipeline.getStatus() != PipelineStatus.PUBLISHED) {
+            throw new BadRequestException("Pipeline must be published before it can be assigned");
+        }
+
+        if (assignmentRepository.existsByOrganizationIdAndPipelineIdAndUserIsNull(orgId, pipeline.getId())) {
+            throw new BadRequestException(
+                    "This pipeline is already provisioned to this organization.");
+        }
+
+        UUID assignerId = SecurityUtils.getCurrentUserId();
+        int maxCheckIns = resolveMaxCheckIns(request, null);
+
+        Assignment saved = provisionPipeline(org, pipeline, assignerId, request.deadline(), maxCheckIns);
+
+        log.info("Provisioned pipeline {} to org {}", pipeline.getId(), orgId);
+        return toAssignmentResponse(saved, null, 0);
+    }
+
+    /**
+     * Create, persist, and audit the org-level provision row (user == null). The
+     * {@code uq_assignments_org_pipeline_provision} partial index allows at most
+     * one per (org, pipeline); callers ensure one doesn't already exist. Shared by
+     * explicit super-admin provisioning and the auto-provision that backs a super
+     * admin's direct member assignment, so "member rows imply a provision" holds
+     * on every write path.
+     */
+    private Assignment provisionPipeline(Organization org, Pipeline pipeline, UUID assignerId,
+                                         Instant deadline, int maxCheckIns) {
+        Assignment provision = new Assignment();
+        provision.setPipeline(pipeline);
+        provision.setOrganization(org);
+        provision.setUser(null);
+        provision.setAssignedBy(assignerId);
+        provision.setDeadline(deadline);
+        provision.setMaxCheckIns(maxCheckIns);
+        Assignment saved = assignmentRepository.save(provision);
+
+        auditService.log(assignerId, org.getId(), OrgAuditActions.ASSESSMENT_PROVISIONED,
+                OrgAuditActions.ENTITY_ORGANIZATION, org.getId(),
+                Map.of("pipelineName", pipeline.getName(),
+                       "pipelineId", pipeline.getId().toString()));
+        return saved;
     }
 
     /**
@@ -247,6 +358,22 @@ public class AssignmentService {
                 rule.getPipeline().getId(), userId, rule.getOrganization().getId(), rule.getId());
     }
 
+    /**
+     * The check-in count to stamp on the assignments being created. Super admins
+     * set it explicitly; org admins can't, so they inherit the provision's count
+     * (the value the super admin chose when provisioning, defaulting to 1 when
+     * there is no provision yet).
+     */
+    private int resolveMaxCheckIns(CreateAssignmentRequest request, Assignment provision) {
+        if (SecurityUtils.isSuperAdmin()) {
+            return request.maxCheckInsOrDefault();
+        }
+        if (request.maxCheckIns() != null && request.maxCheckIns() != 1) {
+            throw new BadRequestException("Only super admins can configure max check-ins.");
+        }
+        return provision != null ? provision.getMaxCheckIns() : 1;
+    }
+
     private List<User> resolveTargetMembers(UUID orgId, CreateAssignmentRequest request) {
         String userType = request.userType();
         // Reject unknown codes up-front so the caller gets a clear error instead
@@ -279,8 +406,16 @@ public class AssignmentService {
     }
 
     @Transactional(readOnly = true)
-    public List<AssignmentResponse> listAssignments(UUID orgId) {
-        List<Assignment> assignments = assignmentRepository.findByOrganizationIdOrderByCreatedAtDesc(orgId);
+    public List<AssignmentResponse> listAssignments(UUID orgId, AssignmentListScope scope) {
+        AssignmentListScope effectiveScope = scope != null
+                ? scope
+                : (SecurityUtils.isSuperAdmin() ? AssignmentListScope.ALL : AssignmentListScope.PROVISIONS);
+
+        List<Assignment> assignments = switch (effectiveScope) {
+            case PROVISIONS -> assignmentRepository.findProvisionsByOrganizationIdOrderByCreatedAtDesc(orgId);
+            case MEMBERS -> assignmentRepository.findMemberAssignmentsByOrganizationIdOrderByCreatedAtDesc(orgId);
+            case ALL -> assignmentRepository.findByOrganizationIdOrderByCreatedAtDesc(orgId);
+        };
         if (assignments.isEmpty()) {
             return List.of();
         }
@@ -317,13 +452,32 @@ public class AssignmentService {
         return assignmentId + ":" + (userId == null ? "" : userId);
     }
 
-    @Transactional
-    public void cancelAssignment(UUID orgId, UUID assignmentId) {
+    /**
+     * Loads an assignment and enforces that it belongs to {@code orgId}. A
+     * missing id and a cross-org id are both reported as "not found" (never
+     * "forbidden") so an Org Admin can't probe which assignment ids exist
+     * outside their own organization. All org-scoped assignment operations
+     * funnel through here so the authorization contract lives in one place.
+     */
+    private Assignment requireAssignmentInOrg(UUID orgId, UUID assignmentId) {
         Assignment assignment = assignmentRepository.findById(assignmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-
         if (!assignment.getOrganization().getId().equals(orgId)) {
             throw new ResourceNotFoundException("Assignment", assignmentId.toString());
+        }
+        return assignment;
+    }
+
+    @Transactional
+    public void cancelAssignment(UUID orgId, UUID assignmentId) {
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
+
+        // Removing an org-level provision (user == null) is a super-admin act:
+        // the provision is the platform's grant to the org. Org admins may only
+        // cancel their own member assignments, not undo the provision itself.
+        if (assignment.getUser() == null && !SecurityUtils.isSuperAdmin()) {
+            throw new BadRequestException(
+                    "Only super admins can remove an organization provision.");
         }
 
         long completedCount = assignmentRepository.countCompletedSubmissions(assignmentId);
@@ -342,6 +496,7 @@ public class AssignmentService {
                 a.getId(),
                 a.getPipeline().getId(),
                 a.getPipeline().getName(),
+                a.getPipeline().getStatus(),
                 a.getOrganization().getId(),
                 user != null ? user.getId() : null,
                 user != null ? user.getName() : null,
@@ -358,14 +513,14 @@ public class AssignmentService {
 
     @Transactional(readOnly = true)
     public AssignmentDetailResponse getAssignmentDetail(UUID orgId, UUID assignmentId) {
-        Assignment assignment = assignmentRepository.findById(assignmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-        if (!assignment.getOrganization().getId().equals(orgId)) {
-            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
+        Submission submission = null;
+        if (assignment.getUser() != null) {
+            submission = submissionRepository
+                    .findTopByAssignmentIdAndUserIdOrderByCreatedAtDesc(
+                            assignment.getId(), assignment.getUser().getId())
+                    .orElse(null);
         }
-        Submission submission = submissionRepository
-                .findTopByAssignmentIdAndUserIdOrderByCreatedAtDesc(assignment.getId(), assignment.getUser().getId())
-                .orElse(null);
 
         Pipeline pipeline = assignment.getPipeline();
         int totalQuestions = pipeline.getPillars() != null
@@ -433,14 +588,29 @@ public class AssignmentService {
      */
     @Transactional(readOnly = true)
     public AssessmentDetailResponse getAssignmentAnswers(UUID orgId, UUID assignmentId) {
-        Assignment assignment = assignmentRepository.findById(assignmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-        if (!assignment.getOrganization().getId().equals(orgId)) {
-            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
+        if (assignment.getUser() == null) {
+            throw new BadRequestException("This provision has not been assigned to a member yet.");
         }
         Submission submission = submissionRepository.requireLatestForAssignment(
                 assignment, "No submission exists for this assignment yet.");
         return assessmentService.getAssessmentForAdmin(submission.getId());
+    }
+
+    /**
+     * Pillar structure (id/name/type) for the assignment's pipeline — no
+     * question or answer content, so unlike {@link #getAssignmentAnswers} this
+     * is safe for Org Admins. Powers the unlock-pillars picker, which only
+     * needs to know which pillars exist.
+     */
+    @Transactional(readOnly = true)
+    public List<PillarSummaryResponse> getAssignmentPillars(UUID orgId, UUID assignmentId) {
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
+        // Pillars arrive pre-ordered from Hibernate via Pipeline#pillars'
+        // @OrderBy("displayOrder"), so no explicit re-sort is needed here.
+        return assignment.getPipeline().getPillars().stream()
+                .map(p -> new PillarSummaryResponse(p.getId(), p.getName(), p.getType().name()))
+                .toList();
     }
 
     /**
@@ -450,10 +620,9 @@ public class AssignmentService {
      */
     @Transactional(readOnly = true)
     public void sendReminder(UUID orgId, UUID assignmentId) {
-        Assignment assignment = assignmentRepository.findById(assignmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-        if (!assignment.getOrganization().getId().equals(orgId)) {
-            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
+        if (assignment.getUser() == null) {
+            throw new BadRequestException("Cannot send a reminder for an org-level provision.");
         }
         Submission submission = submissionRepository.requireLatestForAssignment(
                 assignment, "Cannot send reminder — no submission exists for this assignment yet.");
@@ -480,10 +649,9 @@ public class AssignmentService {
      */
     @Transactional
     public void retryEvaluation(UUID orgId, UUID assignmentId) {
-        Assignment assignment = assignmentRepository.findById(assignmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Assignment", assignmentId.toString()));
-        if (!assignment.getOrganization().getId().equals(orgId)) {
-            throw new ResourceNotFoundException("Assignment", assignmentId.toString());
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
+        if (assignment.getUser() == null) {
+            throw new BadRequestException("Cannot retry evaluation for an org-level provision.");
         }
         Submission submission = submissionRepository.requireLatestForAssignment(
                 assignment, "No submission exists for this assignment.");

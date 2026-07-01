@@ -108,6 +108,18 @@ class AssignmentServiceTest {
         caller.setRole(UserRole.ORG_ADMIN);
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(caller, null, List.of()));
+
+        // Org-admin member assignment requires an existing org-level provision,
+        // which the service also reads to inherit deadline/check-in defaults.
+        // Default to a 1-check-in, no-deadline provision so existing assertions
+        // (maxCheckIns == 1) hold; individual tests override as needed.
+        Assignment provision = new Assignment();
+        provision.setOrganization(organization);
+        provision.setPipeline(pipeline);
+        provision.setUser(null);
+        provision.setMaxCheckIns(1);
+        lenient().when(assignmentRepository.findProvision(any(), any()))
+                .thenReturn(Optional.of(provision));
     }
 
     @AfterEach
@@ -132,7 +144,7 @@ class AssignmentServiceTest {
             return s;
         });
 
-        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, null);
+        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null);
         List<AssignmentResponse> responses = assignmentService.createAssignment(orgId, request);
 
         assertThat(responses).hasSize(2);
@@ -160,7 +172,7 @@ class AssignmentServiceTest {
         });
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, List.of(member1.getId()), null, null, false, null);
+                pipelineId, List.of(member1.getId()), null, null, false, false, null);
         List<AssignmentResponse> responses = assignmentService.createAssignment(orgId, request);
 
         assertThat(responses).hasSize(1);
@@ -187,7 +199,7 @@ class AssignmentServiceTest {
             return s;
         });
 
-        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, null);
+        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null);
         List<AssignmentResponse> responses = assignmentService.createAssignment(orgId, request);
 
         assertThat(responses).hasSize(1);
@@ -203,7 +215,7 @@ class AssignmentServiceTest {
         when(assignmentRepository.findExistingAssignedUserIdsIn(eq(orgId), eq(pipelineId), any()))
                 .thenReturn(List.of(member1.getId()));
 
-        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, null);
+        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null);
 
         assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
                 .isInstanceOf(BadRequestException.class)
@@ -216,7 +228,7 @@ class AssignmentServiceTest {
         when(organizationRepository.findById(orgId)).thenReturn(Optional.of(organization));
         when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
 
-        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, null);
+        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null);
 
         assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
                 .isInstanceOf(BadRequestException.class)
@@ -227,7 +239,7 @@ class AssignmentServiceTest {
     void createAssignment_orgNotFound_throwsNotFound() {
         when(organizationRepository.findById(orgId)).thenReturn(Optional.empty());
 
-        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, null);
+        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null);
 
         assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
                 .isInstanceOf(ResourceNotFoundException.class);
@@ -251,7 +263,7 @@ class AssignmentServiceTest {
         });
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, null, null, null, true, null);
+                pipelineId, null, null, null, false, true, null);
         assignmentService.createAssignment(orgId, request);
 
         verify(pipelineAutoAssignmentService).upsertRule(
@@ -263,13 +275,61 @@ class AssignmentServiceTest {
         // Auto-assign is incoherent with explicit memberIds — reject up-front.
         // Service should NOT touch any other dependency before rejecting.
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, List.of(member1.getId()), null, null, true, null);
+                pipelineId, List.of(member1.getId()), null, null, false, true, null);
 
         assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("all members");
 
         verifyNoInteractions(pipelineAutoAssignmentService);
+    }
+
+    @Test
+    void createAssignment_orgAdminRequestsCustomMaxCheckIns_throwsBadRequest() {
+        // Caller seeded in setUp() is ORG_ADMIN — only SUPER_ADMIN may configure
+        // maxCheckIns above the single-check-in default.
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(organization));
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+        when(userRepository.findByOrganizationIdAndStatus(orgId, UserStatus.ACTIVE))
+                .thenReturn(List.of(member1));
+
+        CreateAssignmentRequest request = new CreateAssignmentRequest(
+                pipelineId, null, null, null, false, false, 3);
+
+        assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("super admin");
+        verify(assignmentRepository, never()).save(any(Assignment.class));
+    }
+
+    @Test
+    void createAssignment_superAdminRequestsCustomMaxCheckIns_isHonored() {
+        User superAdminCaller = new User();
+        superAdminCaller.setId(assignedBy);
+        superAdminCaller.setRole(UserRole.SUPER_ADMIN);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(superAdminCaller, null, List.of()));
+
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(organization));
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+        when(userRepository.findByOrganizationIdAndStatus(orgId, UserStatus.ACTIVE))
+                .thenReturn(List.of(member1));
+        when(assignmentRepository.save(any(Assignment.class))).thenAnswer(inv -> {
+            Assignment a = inv.getArgument(0);
+            a.setId(UUID.randomUUID());
+            return a;
+        });
+        when(submissionRepository.save(any(Submission.class))).thenAnswer(inv -> {
+            Submission s = inv.getArgument(0);
+            s.setId(UUID.randomUUID());
+            return s;
+        });
+
+        CreateAssignmentRequest request = new CreateAssignmentRequest(
+                pipelineId, null, null, null, false, false, 3);
+        assignmentService.createAssignment(orgId, request);
+
+        verify(assignmentRepository).save(argThat(a -> a.getMaxCheckIns() == 3));
     }
 
     @Test
@@ -283,7 +343,7 @@ class AssignmentServiceTest {
                 .thenReturn(List.of());
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, null, null, null, true, null);
+                pipelineId, null, null, null, false, true, null);
         List<AssignmentResponse> responses = assignmentService.createAssignment(orgId, request);
 
         assertThat(responses).isEmpty();
@@ -303,7 +363,7 @@ class AssignmentServiceTest {
         when(userRepository.findByOrganizationIdAndStatus(orgId, UserStatus.ACTIVE))
                 .thenReturn(List.of());
 
-        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, null);
+        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null);
 
         assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
                 .isInstanceOf(BadRequestException.class)
@@ -322,7 +382,7 @@ class AssignmentServiceTest {
                 .thenReturn(List.of(member1.getId()));
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, null, null, null, true, null);
+                pipelineId, null, null, null, false, true, null);
         List<AssignmentResponse> responses = assignmentService.createAssignment(orgId, request);
 
         assertThat(responses).isEmpty();
@@ -336,6 +396,9 @@ class AssignmentServiceTest {
         Assignment assignment = new Assignment();
         assignment.setId(assignmentId);
         assignment.setOrganization(organization);
+        // A member assignment (user set) — any org admin may cancel it; only the
+        // provision-removal path is super-admin gated.
+        assignment.setUser(member1);
 
         when(assignmentRepository.findById(assignmentId)).thenReturn(Optional.of(assignment));
         when(assignmentRepository.countCompletedSubmissions(assignmentId)).thenReturn(0L);
@@ -351,6 +414,7 @@ class AssignmentServiceTest {
         Assignment assignment = new Assignment();
         assignment.setId(assignmentId);
         assignment.setOrganization(organization);
+        assignment.setUser(member1);
 
         when(assignmentRepository.findById(assignmentId)).thenReturn(Optional.of(assignment));
         when(assignmentRepository.countCompletedSubmissions(assignmentId)).thenReturn(3L);
@@ -358,6 +422,25 @@ class AssignmentServiceTest {
         assertThatThrownBy(() -> assignmentService.cancelAssignment(orgId, assignmentId))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("completed submissions");
+    }
+
+    @Test
+    void cancelAssignment_provisionByNonSuperAdmin_throwsBadRequest() {
+        // Removing an org-level provision (user == null) is super-admin only.
+        // The @BeforeEach caller is an ORG_ADMIN, so this exercises the guard.
+        UUID assignmentId = UUID.randomUUID();
+        Assignment provision = new Assignment();
+        provision.setId(assignmentId);
+        provision.setOrganization(organization);
+        provision.setUser(null);
+
+        when(assignmentRepository.findById(assignmentId)).thenReturn(Optional.of(provision));
+
+        assertThatThrownBy(() -> assignmentService.cancelAssignment(orgId, assignmentId))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("super admins");
+
+        verify(assignmentRepository, never()).delete(any());
     }
 
     // ---------- applyAutoAssignRule (listener path) ------------------------
@@ -479,6 +562,144 @@ class AssignmentServiceTest {
         verify(submissionRepository).save(any(Submission.class));
     }
 
+    @Test
+    void createAssignment_orgAdminWithoutProvision_throwsBadRequest() {
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(organization));
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+        when(assignmentRepository.findProvision(orgId, pipelineId))
+                .thenReturn(Optional.empty());
+
+        CreateAssignmentRequest request = new CreateAssignmentRequest(
+                pipelineId, List.of(member1.getId()), null, null, false, false, null);
+
+        assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("provisioned");
+
+        // Org admins never auto-provision — the request is rejected outright.
+        verify(assignmentRepository, never()).save(any(Assignment.class));
+    }
+
+    @Test
+    void createAssignment_superAdminDirectAssign_autoCreatesProvision() {
+        // Finding #2: a super admin assigning members to a not-yet-provisioned
+        // pipeline auto-creates the org provision so org admins keep access to it
+        // afterwards (member rows must imply a provision, as V112 backfilled).
+        User superAdminCaller = new User();
+        superAdminCaller.setId(assignedBy);
+        superAdminCaller.setRole(UserRole.SUPER_ADMIN);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(superAdminCaller, null, List.of()));
+
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(organization));
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+        when(assignmentRepository.findProvision(orgId, pipelineId)).thenReturn(Optional.empty());
+        when(userRepository.findAllById(List.of(member1.getId()))).thenReturn(List.of(member1));
+        when(assignmentRepository.save(any(Assignment.class))).thenAnswer(inv -> {
+            Assignment a = inv.getArgument(0);
+            a.setId(UUID.randomUUID());
+            return a;
+        });
+        when(submissionRepository.save(any(Submission.class))).thenAnswer(inv -> {
+            Submission s = inv.getArgument(0);
+            s.setId(UUID.randomUUID());
+            return s;
+        });
+
+        CreateAssignmentRequest request = new CreateAssignmentRequest(
+                pipelineId, List.of(member1.getId()), null, null, false, false, null);
+        assignmentService.createAssignment(orgId, request);
+
+        // One provision row (user == null) plus one member row (user == member1).
+        verify(assignmentRepository).save(argThat(a -> a.getUser() == null));
+        verify(assignmentRepository).save(argThat(a -> member1.equals(a.getUser())));
+    }
+
+    @Test
+    void createAssignment_orgAdminWithoutDeadline_inheritsProvisionDeadline() {
+        // Finding #7: members inherit the provision's deadline as a default when
+        // the org admin doesn't supply one of their own.
+        Instant provisionDeadline = Instant.parse("2026-12-31T23:59:59Z");
+        Assignment provision = new Assignment();
+        provision.setOrganization(organization);
+        provision.setPipeline(pipeline);
+        provision.setUser(null);
+        provision.setMaxCheckIns(1);
+        provision.setDeadline(provisionDeadline);
+        when(assignmentRepository.findProvision(orgId, pipelineId)).thenReturn(Optional.of(provision));
+
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(organization));
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+        when(userRepository.findAllById(List.of(member1.getId()))).thenReturn(List.of(member1));
+        when(assignmentRepository.save(any(Assignment.class))).thenAnswer(inv -> {
+            Assignment a = inv.getArgument(0);
+            a.setId(UUID.randomUUID());
+            return a;
+        });
+        when(submissionRepository.save(any(Submission.class))).thenAnswer(inv -> {
+            Submission s = inv.getArgument(0);
+            s.setId(UUID.randomUUID());
+            return s;
+        });
+
+        CreateAssignmentRequest request = new CreateAssignmentRequest(
+                pipelineId, List.of(member1.getId()), null, null, false, false, null);
+        assignmentService.createAssignment(orgId, request);
+
+        verify(assignmentRepository).save(argThat(a ->
+                member1.equals(a.getUser()) && provisionDeadline.equals(a.getDeadline())));
+    }
+
+    @Test
+    void createOrganizationProvision_superAdmin_createsProvisionRow() {
+        User superAdminCaller = new User();
+        superAdminCaller.setId(assignedBy);
+        superAdminCaller.setRole(UserRole.SUPER_ADMIN);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(superAdminCaller, null, List.of()));
+
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(organization));
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+        when(assignmentRepository.existsByOrganizationIdAndPipelineIdAndUserIsNull(orgId, pipelineId))
+                .thenReturn(false);
+        when(assignmentRepository.save(any(Assignment.class))).thenAnswer(inv -> {
+            Assignment a = inv.getArgument(0);
+            a.setId(UUID.randomUUID());
+            a.setCreatedAt(Instant.now());
+            return a;
+        });
+
+        CreateAssignmentRequest request = new CreateAssignmentRequest(
+                pipelineId, null, null, null, true, false, null);
+        List<AssignmentResponse> responses = assignmentService.createAssignment(orgId, request);
+
+        assertThat(responses).hasSize(1);
+        assertThat(responses.get(0).userId()).isNull();
+        assertThat(responses.get(0).status()).isNull();
+        verify(assignmentRepository).save(argThat(a -> a.getUser() == null));
+        verify(submissionRepository, never()).save(any(Submission.class));
+    }
+
+    @Test
+    void listAssignments_orgAdminDefaultsToProvisionsOnly() {
+        Assignment provision = new Assignment();
+        provision.setId(UUID.randomUUID());
+        provision.setPipeline(pipeline);
+        provision.setOrganization(organization);
+        provision.setUser(null);
+        provision.setAssignedBy(assignedBy);
+        provision.setCreatedAt(Instant.now());
+
+        when(assignmentRepository.findProvisionsByOrganizationIdOrderByCreatedAtDesc(orgId))
+                .thenReturn(List.of(provision));
+
+        List<AssignmentResponse> result = assignmentService.listAssignments(orgId, null);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).userId()).isNull();
+        verify(assignmentRepository, never()).findByOrganizationIdOrderByCreatedAtDesc(any());
+    }
+
     private static PipelineAutoAssignment ruleFor(Pipeline pipeline, Organization org, String userType) {
         PipelineAutoAssignment rule = new PipelineAutoAssignment();
         rule.setOrganization(org);
@@ -522,7 +743,7 @@ class AssignmentServiceTest {
         when(submissionRepository.findByAssignmentIdIn(List.of(assignment.getId())))
                 .thenReturn(List.of(submission));
 
-        List<AssignmentResponse> result = assignmentService.listAssignments(orgId);
+        List<AssignmentResponse> result = assignmentService.listAssignments(orgId, AssignmentService.AssignmentListScope.ALL);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).userName()).isEqualTo("Member One");

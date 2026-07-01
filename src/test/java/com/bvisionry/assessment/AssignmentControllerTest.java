@@ -155,4 +155,25 @@ class AssignmentControllerTest {
 
         verify(assignmentService).cancelAssignment(orgId, assignmentId);
     }
+
+    @Test
+    void extendDeadline_returns204AndDelegatesOrgScoped() throws Exception {
+        // The endpoint is a normal org-admin lifecycle action (no SUPER_ADMIN-only
+        // override); it binds orgId + submissionId and pins the update to the org.
+        UUID orgId = UUID.randomUUID();
+        UUID assignmentId = UUID.randomUUID();
+        UUID submissionId = UUID.randomUUID();
+        Instant newDeadline = Instant.parse("2030-12-31T23:59:59Z");
+
+        String body = "{\"newDeadline\":\"" + newDeadline + "\"}";
+
+        mockMvc.perform(patch(
+                        "/api/organizations/{orgId}/assignments/{assignmentId}/submissions/{submissionId}/deadline",
+                        orgId, assignmentId, submissionId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isNoContent());
+
+        verify(assignmentService).extendDeadline(orgId, submissionId, newDeadline);
+    }
 }

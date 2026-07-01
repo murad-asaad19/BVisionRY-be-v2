@@ -1,6 +1,7 @@
 package com.bvisionry.common.pdf;
 
 import com.bvisionry.common.exception.ReportGenerationException;
+import com.lowagie.text.DocumentException;
 import com.lowagie.text.pdf.BaseFont;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -9,6 +10,7 @@ import org.thymeleaf.context.Context;
 import org.xhtmlrenderer.pdf.ITextRenderer;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.Base64;
 
@@ -98,34 +100,45 @@ public class PdfRenderer {
         }
     }
 
+    /**
+     * Register every brand weight on the renderer. A missing or unreadable font
+     * would make Flying Saucer silently fall back to a default serif, shipping an
+     * off-brand PDF; since the brand typeface is a hard requirement, any failure
+     * aborts the render (surfaced as a {@link ReportGenerationException}) instead.
+     */
     private void registerBrandFonts(ITextRenderer renderer) {
         for (String resourcePath : BRAND_FONT_RESOURCES) {
+            var resource = getClass().getClassLoader().getResource(resourcePath);
+            if (resource == null) {
+                throw new IllegalStateException(
+                        "Required brand font resource not found on classpath: " + resourcePath);
+            }
             try {
-                var resource = getClass().getClassLoader().getResource(resourcePath);
-                if (resource != null) {
-                    renderer.getFontResolver().addFont(
-                            resource.toExternalForm(), BRAND_FONT_FAMILY,
-                            BaseFont.IDENTITY_H, true, null);
-                } else {
-                    log.warn("Brand font resource not found: {}", resourcePath);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to register brand font {}: {}", resourcePath, e.getMessage());
+                renderer.getFontResolver().addFont(
+                        resource.toExternalForm(), BRAND_FONT_FAMILY,
+                        BaseFont.IDENTITY_H, true, null);
+            } catch (IOException | DocumentException e) {
+                throw new IllegalStateException("Failed to register brand font " + resourcePath, e);
             }
         }
     }
 
+    /**
+     * Resolve a bundled brand image to a base64 {@code data:} URI. Brand imagery
+     * is a hard requirement of every report, so a missing or unreadable resource
+     * fails fast (at bean construction) rather than silently degrading to an
+     * empty {@code src} that would ship an un-branded PDF to the customer.
+     */
     private String loadImageDataUri(String resourcePath) {
         try (InputStream in = getClass().getClassLoader().getResourceAsStream(resourcePath)) {
             if (in == null) {
-                log.warn("Brand image resource not found: {}", resourcePath);
-                return "";
+                throw new IllegalStateException(
+                        "Required brand image resource not found on classpath: " + resourcePath);
             }
             byte[] bytes = in.readAllBytes();
             return "data:image/png;base64," + Base64.getEncoder().encodeToString(bytes);
-        } catch (Exception e) {
-            log.warn("Failed to load brand image {}: {}", resourcePath, e.getMessage());
-            return "";
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to load brand image " + resourcePath, e);
         }
     }
 }

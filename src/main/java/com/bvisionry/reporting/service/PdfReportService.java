@@ -1,7 +1,6 @@
 package com.bvisionry.reporting.service;
 
 import com.bvisionry.common.pdf.PdfRenderer;
-import com.bvisionry.evaluation.PillarEvaluationRepository;
 import com.bvisionry.reporting.dto.MemberResultsResponse;
 import com.bvisionry.reporting.dto.PillarDetailResponse;
 import lombok.RequiredArgsConstructor;
@@ -21,7 +20,6 @@ import java.util.regex.Pattern;
 public class PdfReportService {
 
     private final MemberResultsService memberResultsService;
-    private final PillarEvaluationRepository pillarEvaluationRepository;
     private final PdfRenderer pdfRenderer;
 
     // Strips inline references like "(qid: <uuid>)", "qid: <uuid>", "(Q: <hex>)",

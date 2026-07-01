@@ -2,12 +2,17 @@ package com.bvisionry.common.pdf;
 
 import com.bvisionry.reporting.dto.PersonalInfoEntry;
 import com.bvisionry.reporting.dto.PillarDetailResponse;
+import com.lowagie.text.pdf.PdfDictionary;
+import com.lowagie.text.pdf.PdfName;
+import com.lowagie.text.pdf.PdfObject;
+import com.lowagie.text.pdf.PdfReader;
 import org.junit.jupiter.api.Test;
 import org.thymeleaf.context.Context;
 import org.thymeleaf.spring6.SpringTemplateEngine;
 import org.thymeleaf.templatemode.TemplateMode;
 import org.thymeleaf.templateresolver.ClassLoaderTemplateResolver;
 
+import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
@@ -41,10 +46,51 @@ class PdfTemplateRenderTest {
         return engine;
     }
 
-    private static void assertValidPdf(byte[] pdf) {
+    /**
+     * Assert the bytes are a well-formed, branded PDF. Beyond the {@code %PDF-}
+     * header and a non-trivial size, this inspects the document's objects to prove
+     * the brand assets actually embedded — the two failure modes a plain header
+     * check misses: a missing/renamed brand image degrades to an empty {@code src}
+     * (no image XObject), and a font-registration failure silently falls back off
+     * Inter to a default serif (no embedded Inter {@code FontFile2}). Both still
+     * produce a valid, &gt;5KB PDF, so only reading the objects can catch them.
+     */
+    private static void assertBrandedPdf(byte[] pdf) throws IOException {
         assertTrue(pdf != null && pdf.length > 5000, "PDF should be non-trivial");
         String header = new String(pdf, 0, 5, StandardCharsets.ISO_8859_1);
         assertTrue(header.equals("%PDF-"), "Output should be a PDF document");
+
+        PdfReader reader = new PdfReader(pdf);
+        try {
+            boolean interFontEmbedded = false;
+            boolean imageEmbedded = false;
+            for (int i = 1; i < reader.getXrefSize(); i++) {
+                PdfObject obj = reader.getPdfObject(i);
+                // Image XObjects are streams; font descriptors are plain dictionaries.
+                // PdfStream extends PdfDictionary, so both expose their keys this way.
+                if (obj == null || !(obj.isDictionary() || obj.isStream())) {
+                    continue;
+                }
+                PdfDictionary dict = (PdfDictionary) obj;
+                if (PdfName.IMAGE.equals(dict.getAsName(PdfName.SUBTYPE))) {
+                    imageEmbedded = true;
+                }
+                if (dict.contains(PdfName.FONTFILE2)) {
+                    PdfName fontName = dict.getAsName(PdfName.FONTNAME);
+                    if (fontName != null && fontName.toString().contains("Inter")) {
+                        interFontEmbedded = true;
+                    }
+                }
+            }
+            assertTrue(imageEmbedded,
+                    "Brand imagery (logo/watermark) should embed as an image XObject; "
+                            + "an empty data URI would ship an un-branded report");
+            assertTrue(interFontEmbedded,
+                    "Brand typeface 'Inter' should embed as a FontFile2; a registration "
+                            + "failure would silently fall back to a default serif");
+        } finally {
+            reader.close();
+        }
     }
 
     private static PillarDetailResponse pillar(String name, int score, String maturity, Integer gap) {
@@ -62,7 +108,7 @@ class PdfTemplateRenderTest {
     }
 
     @Test
-    void rendersMemberResultsReport() {
+    void rendersMemberResultsReport() throws IOException {
         Context ctx = new Context();
         ctx.setVariable("participantName", "Sarah Al-Founder");
         ctx.setVariable("assessmentTitle", "Founder Mindset Assessment");
@@ -92,11 +138,11 @@ class PdfTemplateRenderTest {
                 new PersonalInfoEntry("Role", "Co-founder & CEO"),
                 new PersonalInfoEntry("Stage", "Seed")));
 
-        assertValidPdf(new PdfRenderer(engine()).renderTemplate("pdf-report", ctx));
+        assertBrandedPdf(new PdfRenderer(engine()).renderTemplate("pdf-report", ctx));
     }
 
     @Test
-    void rendersOrgInsightsReport() {
+    void rendersOrgInsightsReport() throws IOException {
         Context ctx = new Context();
         ctx.setVariable("orgName", "Horizon Ventures");
         ctx.setVariable("pipelineName", "2026 Founder Cohort");
@@ -116,11 +162,11 @@ class PdfTemplateRenderTest {
         ctx.setVariable("outlierPillars", List.of("Delegation", "Focus Management"));
         ctx.setVariable("rawResponse", null);
 
-        assertValidPdf(new PdfRenderer(engine()).renderTemplate("org-insights-report", ctx));
+        assertBrandedPdf(new PdfRenderer(engine()).renderTemplate("org-insights-report", ctx));
     }
 
     @Test
-    void rendersTeamInsightsReport() {
+    void rendersTeamInsightsReport() throws IOException {
         Context ctx = new Context();
         ctx.setVariable("pipelineName", "2026 Founder Cohort");
         ctx.setVariable("reportDate", "June 2026");
@@ -169,6 +215,6 @@ class PdfTemplateRenderTest {
         member.put("pillars", List.of(pillar));
         ctx.setVariable("members", List.of(member));
 
-        assertValidPdf(new PdfRenderer(engine()).renderTemplate("team-insights-report", ctx));
+        assertBrandedPdf(new PdfRenderer(engine()).renderTemplate("team-insights-report", ctx));
     }
 }

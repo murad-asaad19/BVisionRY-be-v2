@@ -3,6 +3,7 @@ package com.bvisionry.publicassessment;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.publicassessment.repository.PublicAssessmentLinkRepository;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -47,9 +48,14 @@ public class PublicSubmissionReaper {
         this.batchLimit = batchLimit;
     }
 
+    // Hourly cadence; one bounded, status-guarded batch DELETE (<=200 rows) + slot
+    // decrements in a single transaction completes in seconds — 5m ceiling is ample and
+    // still far under the 1h interval, 1m floor covers clock skew between replicas.
     @Scheduled(
             fixedDelayString = "${bvisionry.public-assessment.abandoned-session.interval-ms:3600000}",
             initialDelayString = "${bvisionry.public-assessment.abandoned-session.initial-delay-ms:600000}")
+    @SchedulerLock(name = "PublicSubmissionReaper_reapAbandonedSessions",
+            lockAtMostFor = "PT5M", lockAtLeastFor = "PT1M")
     @Transactional
     public void reapAbandonedSessions() {
         if (ttlSeconds <= 0) {

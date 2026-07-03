@@ -4,6 +4,7 @@ import com.bvisionry.assessment.SubmissionRepository;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -70,9 +71,14 @@ public class EvaluationReaper {
      * bounded batch of stranded rows. Fully guarded — a failure here must never kill
      * the scheduler thread.
      */
+    // 90s cadence; the sweep only counts + fire-and-forget re-dispatches a bounded batch,
+    // so it finishes in seconds — 2m ceiling covers a slow DB tick, 30s floor stops a
+    // second replica racing the same tick on clock skew.
     @Scheduled(
             fixedDelayString = "${bvisionry.evaluation.reaper.interval-ms:90000}",
             initialDelayString = "${bvisionry.evaluation.reaper.interval-ms:90000}")
+    @SchedulerLock(name = "EvaluationReaper_recoverStrandedSubmissions",
+            lockAtMostFor = "PT2M", lockAtLeastFor = "PT30S")
     public void recoverStrandedSubmissions() {
         try {
             long stuck = submissionRepository.countStrandedSubmitted(graceSeconds);

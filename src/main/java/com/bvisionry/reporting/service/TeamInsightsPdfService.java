@@ -51,6 +51,7 @@ public class TeamInsightsPdfService {
     private final PillarEvaluationRepository pillarEvaluationRepository;
     private final OverallSummaryRepository overallSummaryRepository;
     private final AnswerRepository answerRepository;
+    private final MemberIdentityFactory memberIdentityFactory;
     private final PersonalInfoResolver personalInfoResolver;
     private final PdfRenderer pdfRenderer;
 
@@ -105,14 +106,18 @@ public class TeamInsightsPdfService {
                                 AssessmentAnswerFormatter::answerLabel,
                                 (a, b) -> a));
 
-        MemberIdentity identity = MemberIdentity.of(evaluatedSubmissions, showNames);
+        MemberIdentity identity = memberIdentityFactory.identityFor(evaluatedSubmissions, showNames);
 
         // Personal-pillar answers per member — these are the demographic / "general
         // information" fields the user filled in on the assessment (job title,
         // years of experience, etc. plus the system FIRST_NAME / LAST_NAME / GENDER).
         // Surfaced per-member so the PDF reader sees who each subject is at a glance.
-        Map<UUID, List<PersonalInfoEntry>> personalAnswersBySubmission =
-                personalInfoResolver.resolveBatch(evaluatedIds);
+        // When names are hidden this block is exactly what would re-identify a
+        // member, so it is suppressed entirely (empty map → the template's
+        // not-empty guard hides the "Personal Information" section per member).
+        Map<UUID, List<PersonalInfoEntry>> personalAnswersBySubmission = showNames
+                ? personalInfoResolver.resolveBatch(evaluatedIds)
+                : Map.of();
 
         Context ctx = new Context();
         ctx.setVariable("pipelineName", pipelineName.isBlank() ? "Pipeline" : pipelineName);
@@ -179,6 +184,7 @@ public class TeamInsightsPdfService {
         List<Map<String, Object>> sections = new ArrayList<>();
         for (Submission sub : evaluatedSubmissions) {
             OverallSummary summary = summaryBySubmission.get(sub.getId());
+            NarrativeRedactor redactor = identity.redactor(sub);
             List<PillarEvaluation> evals = evalsBySubmission.getOrDefault(sub.getId(), List.of()).stream()
                     .sorted(Comparator.comparing(e -> e.getPillar().getName(), String.CASE_INSENSITIVE_ORDER))
                     .toList();
@@ -189,8 +195,8 @@ public class TeamInsightsPdfService {
                 p.put("pillarName", eval.getPillar().getName());
                 p.put("score", TeamInsightsFormatter.wholePercent(eval.getScorePercentage()));
                 p.put("maturityLabel", eval.getMaturityLabel() == null ? "" : eval.getMaturityLabel());
-                p.put("whatsWorking", eval.getAiWhatsWorking() == null ? List.of() : eval.getAiWhatsWorking());
-                p.put("whatCanImprove", eval.getAiWhatCanImprove() == null ? List.of() : eval.getAiWhatCanImprove());
+                p.put("whatsWorking", eval.getAiWhatsWorking() == null ? List.of() : redactor.redact(eval.getAiWhatsWorking()));
+                p.put("whatCanImprove", eval.getAiWhatCanImprove() == null ? List.of() : redactor.redact(eval.getAiWhatCanImprove()));
                 pillars.add(p);
             }
 
@@ -202,9 +208,9 @@ public class TeamInsightsPdfService {
             section.put("evaluatedAt", sub.getEvaluatedAt());
             section.put("overallScore", summary == null ? "—" : TeamInsightsFormatter.wholePercent(summary.getOverallScorePercentage()));
             section.put("summaryNarrative", summary == null || summary.getSummaryNarrative() == null
-                    ? "" : summary.getSummaryNarrative());
-            section.put("strengths", summary == null || summary.getStrengths() == null ? List.of() : summary.getStrengths());
-            section.put("developmentAreas", summary == null || summary.getDevelopmentAreas() == null ? List.of() : summary.getDevelopmentAreas());
+                    ? "" : redactor.redact(summary.getSummaryNarrative()));
+            section.put("strengths", summary == null || summary.getStrengths() == null ? List.of() : redactor.redact(summary.getStrengths()));
+            section.put("developmentAreas", summary == null || summary.getDevelopmentAreas() == null ? List.of() : redactor.redact(summary.getDevelopmentAreas()));
             section.put("personalInfo", personalAnswersBySubmission.getOrDefault(sub.getId(), List.of()));
             section.put("pillars", pillars);
             sections.add(section);

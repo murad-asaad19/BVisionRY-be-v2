@@ -207,17 +207,14 @@ class EndpointAuthorizationMatrixIntegrationTest extends AbstractPostgresIntegra
         }
 
         @Test
-        void dashboardOverview_missingRequiredParam_returns500_currentBehavior() throws Exception {
-            // AUTHZ-ADJACENT FINDING (not a security hole): a missing required @RequestParam
-            // throws MissingServletRequestParameterException, which the GlobalExceptionHandler
-            // does not map, so it falls through to a generic 500 instead of the conventional
-            // 400 Bad Request. Also note @RequestParam resolution pre-empts @PreAuthorize, so
-            // an unauthorized caller omitting the param still learns nothing (still non-2xx).
-            // Asserting CURRENT behavior; the ProblemDetail error-contract work should add a
-            // 400 handler for this exception.
+        void dashboardOverview_missingRequiredParam_returns400() throws Exception {
+            // A missing required @RequestParam is a client error; the GlobalExceptionHandler
+            // maps MissingServletRequestParameterException to a 400 ProblemDetail. Note
+            // @RequestParam resolution pre-empts @PreAuthorize, so this fires before authz —
+            // an unauthorized caller omitting the param still learns nothing (non-2xx).
             TestAuthentication.authenticateAsSuperAdmin(userRepository);
             mockMvc.perform(get("/api/organizations/{orgId}/dashboard/overview", ownOrg.getId()))
-                    .andExpect(status().isInternalServerError());
+                    .andExpect(status().isBadRequest());
         }
     }
 

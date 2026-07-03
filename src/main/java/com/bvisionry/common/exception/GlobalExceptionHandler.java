@@ -98,6 +98,20 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * A required query parameter that was not supplied — e.g. omitting
+     * {@code pipelineId} on the dashboard endpoints. Argument resolution runs
+     * before {@code @PreAuthorize}, so without this handler the exception fell
+     * through to the 500 catch-all; a missing parameter is a client error.
+     */
+    @ExceptionHandler(org.springframework.web.bind.MissingServletRequestParameterException.class)
+    public ProblemDetail handleMissingParameter(
+            org.springframework.web.bind.MissingServletRequestParameterException ex) {
+        log.warn("Missing required parameter '{}'", ex.getParameterName());
+        return problem(HttpStatus.BAD_REQUEST,
+                "Required parameter '" + ex.getParameterName() + "' is missing.");
+    }
+
+    /**
      * A path/query parameter that fails type conversion — e.g. a non-UUID
      * string in a {@code {id}} segment ("Invalid UUID string: invitations").
      * Same reasoning as {@link #handleUnreadableBody}: client error, 400.

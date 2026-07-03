@@ -81,8 +81,9 @@ public record CourseDetailDto(
             String id,
             @Schema(example = "Welcome & course overview") String title,
             @Schema(description = "Lesson content type.",
-                    allowableValues = {"VIDEO", "PDF", "QUIZ", "CERTIFICATION",
-                            "PAGE", "DOCUMENT", "SCORM", "LINK", "IMAGE"},
+                    allowableValues = {"VIDEO", "ARTICLE", "QUIZ", "DOCUMENT",
+                            "SCORM", "ASSIGNMENT", "WEBPAGE", "PDF", "CERTIFICATION",
+                            "PAGE", "LINK", "IMAGE"},
                     example = "VIDEO")
             String type,
             @Schema(description = "Length in minutes.", example = "8") int durationMin,

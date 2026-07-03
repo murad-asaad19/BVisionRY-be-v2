@@ -3,6 +3,13 @@
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
     <springProfile name="local,default,dev,e2e">
+        <!-- Surface the RequestCorrelationFilter's "requestId" MDC value in the dev
+             console. Spring Boot's CONSOLE_LOG_PATTERN already reserves a
+             ${LOG_CORRELATION_PATTERN:-} slot (this is exactly where micrometer-tracing
+             injects [traceId,spanId] once OTel lands), so we reuse that slot rather than
+             rebuild the whole pattern. Must be defined BEFORE the console-appender
+             include so the pattern picks it up. -->
+        <property scope="context" name="LOG_CORRELATION_PATTERN" value="[%X{requestId:-}] "/>
         <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
         <root level="INFO">
             <appender-ref ref="CONSOLE"/>
@@ -15,7 +22,14 @@
 
     <springProfile name="prod">
         <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-            <encoder class="ch.qos.logback.classic.encoder.JsonEncoder"/>
+            <!-- The native JsonEncoder emits the full MDC map under a top-level "mdc"
+                 object (key "mdc"), so the RequestCorrelationFilter's "requestId" is
+                 carried as mdc.requestId in every prod log line — the cross-service
+                 correlation field. withMDC defaults to true; set explicitly to lock the
+                 intent so a future field-trimming edit can't silently drop correlation. -->
+            <encoder class="ch.qos.logback.classic.encoder.JsonEncoder">
+                <withMDC>true</withMDC>
+            </encoder>
         </appender>
         <root level="INFO">
             <appender-ref ref="JSON_CONSOLE"/>

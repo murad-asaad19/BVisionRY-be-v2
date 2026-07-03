@@ -18,7 +18,6 @@ import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAPac
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.library.GeneralCodingRules.NO_CLASSES_SHOULD_USE_FIELD_INJECTION;
-import static com.tngtech.archunit.library.dependencies.SlicesRuleDefinition.slices;
 import static com.tngtech.archunit.library.freeze.FreezingArchRule.freeze;
 
 /**
@@ -37,13 +36,12 @@ import static com.tngtech.archunit.library.freeze.FreezingArchRule.freeze;
  * <p>These are plain-JVM ArchUnit tests: no Spring context is started, so they
  * run inside the normal {@code mvn test} loop and stay fast.
  *
- * <p>Rules 4 and 5 are the "must pass outright" guards. Rule 4 (shared kernel
- * isolation) is genuinely clean today and is intentionally <em>not</em> frozen,
- * so it fails loudly the moment {@code common} reaches into a feature. Rule 5
- * (no field injection) has a handful of intentional exceptions in production
- * code (lazy self-injection for {@code @Async}/{@code @Cacheable} proxies and an
- * optional Redis template), so it is frozen to pin exactly those and forbid any
- * new field injection.
+ * <p>Rule 3 (shared-kernel isolation) is genuinely clean today and is
+ * intentionally <em>not</em> frozen, so it fails loudly the moment {@code common}
+ * reaches into a feature. Rule 4 (no field injection) has a handful of
+ * intentional exceptions in production code (lazy self-injection for
+ * {@code @Async}/{@code @Cacheable} proxies and an optional Redis template), so
+ * it is frozen to pin exactly those and forbid any new field injection.
  */
 @AnalyzeClasses(packages = "com.bvisionry", importOptions = DoNotIncludeTests.class)
 class ArchitectureRulesTest {
@@ -60,36 +58,25 @@ class ArchitectureRulesTest {
     private static final Set<String> SHARED_FEATURES = Set.of("common", "config");
 
     // ---------------------------------------------------------------------
-    // Rule 1 (FROZEN): feature packages must be free of cycles.
-    // Freezes the ~22 existing bidirectional package pairs; a NEW cycle fails.
-    // ---------------------------------------------------------------------
-    @ArchTest
-    static final ArchRule featurePackagesShouldBeFreeOfCycles =
-            freeze(slices().matching("com.bvisionry.(*)..")
-                    .should().beFreeOfCycles());
-
-    // ---------------------------------------------------------------------
-    // Rule 2 (FROZEN): no cross-feature repository access.
-    // A class in feature A must not depend on a *Repository owned by feature B.
-    // Expressed as a custom condition that compares the first package segment
-    // after com.bvisionry of the accessor vs the target repository, because a
-    // per-feature "same feature" target set cannot be expressed as one fluent
-    // slice rule. Robust and produces stable, freezable violation text.
+    // Rule 1 (FROZEN): no cross-feature dependencies.
+    // Freezes every existing feature->feature type dependency; a NEW one fails,
+    // so inter-feature coupling (and therefore any cycle) can only shrink.
     //
-    // NOTE: this uses classes().should(condition), NOT noClasses(): the custom
-    // condition already emits a `violated` event for each forbidden dependency,
-    // and noClasses() would negate the condition (turning violations into
-    // "satisfied" and reporting nothing). The .as() supplies the human-readable
-    // (prohibitive) rule description used for the report and the freeze key.
+    // This deliberately replaces a slices().beFreeOfCycles() freeze: cycle
+    // detection is capped (archunit cycles.maxNumberToDetect, default 100), so
+    // with far more than 100 cycles present it enumerates a different truncated
+    // SAMPLE each run and the frozen baseline never matches. Dependency EDGES are
+    // uncapped and deterministic, freeze cleanly, and are a strictly stronger
+    // ratchet (they catch new coupling even when it forms no cycle).
     // ---------------------------------------------------------------------
     @ArchTest
-    static final ArchRule noCrossFeatureRepositoryAccess =
+    static final ArchRule noCrossFeatureDependencies =
             freeze(classes()
-                    .should(dependOnRepositoriesOfAnotherFeature())
-                    .as("no class in a feature package should depend on a *Repository owned by another feature"));
+                    .should(dependOnAnotherFeature())
+                    .as("no class in a feature package should depend on another feature package"));
 
     // ---------------------------------------------------------------------
-    // Rule 3 (FROZEN): @RestController classes are leaves — they may only be
+    // Rule 2 (FROZEN): @RestController classes are leaves — they may only be
     // depended on by classes in their own package. Freezes any existing fan-in.
     // ---------------------------------------------------------------------
     @ArchTest
@@ -100,7 +87,7 @@ class ArchitectureRulesTest {
                     .as("@RestController classes should only be depended on by classes in their own package"));
 
     // ---------------------------------------------------------------------
-    // Rule 4 (NOT FROZEN — must pass outright): shared-kernel isolation.
+    // Rule 3 (NOT FROZEN — must pass outright): shared-kernel isolation.
     // No class in com.bvisionry.common may depend on any com.bvisionry package
     // other than common itself (java/spring/library deps are ignored because
     // they are outside com.bvisionry). Verified clean today.
@@ -116,7 +103,7 @@ class ArchitectureRulesTest {
                     .as("classes in com.bvisionry.common should not depend on any com.bvisionry feature package other than common");
 
     // ---------------------------------------------------------------------
-    // Rule 5 (FROZEN — see class Javadoc): no field injection.
+    // Rule 4 (FROZEN — see class Javadoc): no field injection.
     // Constructor injection is the norm; the few intentional lazy self-injection
     // / optional-bean fields are pinned so no NEW field injection can appear.
     // ---------------------------------------------------------------------
@@ -146,35 +133,27 @@ class ArchitectureRulesTest {
         return dot < 0 ? rest : rest.substring(0, dot);
     }
 
-    /** A repository owned by this codebase: a {@code com.bvisionry} class whose simple name ends with {@code Repository}. */
-    private static boolean isFeatureRepository(JavaClass javaClass) {
-        String pkg = javaClass.getPackageName();
-        return javaClass.getSimpleName().endsWith("Repository")
-                && (pkg.equals(ROOT_PACKAGE) || pkg.startsWith(ROOT_PREFIX));
-    }
-
-    private static ArchCondition<JavaClass> dependOnRepositoriesOfAnotherFeature() {
-        return new ArchCondition<>("depend on a *Repository owned by another feature") {
+    private static ArchCondition<JavaClass> dependOnAnotherFeature() {
+        return new ArchCondition<>("depend on another feature package") {
             @Override
             public void check(JavaClass origin, ConditionEvents events) {
                 String originFeature = featureOf(origin);
-                // Classes outside com.bvisionry are never analysed here; the
-                // shared kernel is allowed to wire any repository.
-                if (originFeature == null || SHARED_FEATURES.contains(originFeature)) {
+                // Only real feature classes are constrained; the shared kernel
+                // (common/config) is the wiring layer and may cross features.
+                if (originFeature == null || originFeature.isEmpty()
+                        || SHARED_FEATURES.contains(originFeature)) {
                     return;
                 }
                 for (Dependency dependency : origin.getDirectDependenciesFromSelf()) {
-                    JavaClass target = dependency.getTargetClass();
-                    if (!isFeatureRepository(target)) {
+                    String targetFeature = featureOf(dependency.getTargetClass());
+                    // Ignore JDK/library targets (null), the app root (""), the
+                    // shared kernel, and same-feature dependencies.
+                    if (targetFeature == null || targetFeature.isEmpty()
+                            || SHARED_FEATURES.contains(targetFeature)
+                            || originFeature.equals(targetFeature)) {
                         continue;
                     }
-                    String targetFeature = featureOf(target);
-                    if (targetFeature == null || SHARED_FEATURES.contains(targetFeature)) {
-                        continue;
-                    }
-                    if (!originFeature.equals(targetFeature)) {
-                        events.add(SimpleConditionEvent.violated(dependency, dependency.getDescription()));
-                    }
+                    events.add(SimpleConditionEvent.violated(dependency, dependency.getDescription()));
                 }
             }
         };

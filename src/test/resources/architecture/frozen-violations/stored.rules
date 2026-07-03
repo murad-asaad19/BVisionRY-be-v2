@@ -1,6 +1,5 @@
 #
-#Fri Jul 03 19:00:32 EEST 2026
-@RestController\ classes\ should\ only\ be\ depended\ on\ by\ classes\ in\ their\ own\ package=5072b858-8a91-449f-baad-793648759003
-no\ class\ in\ a\ feature\ package\ should\ depend\ on\ a\ *Repository\ owned\ by\ another\ feature=02f1e0b0-071a-40a9-8d61-c37f41526ce5
-no\ classes\ should\ use\ field\ injection,\ because\ field\ injection\ is\ considered\ harmful;\ use\ constructor\ injection\ or\ setter\ injection\ instead;\ see\ https\://stackoverflow.com/q/39890849\ for\ detailed\ explanations=14c19d96-30dc-4ece-a990-1a3c64fa3a9f
-slices\ matching\ 'com.bvisionry.(*)..'\ should\ be\ free\ of\ cycles=6719d875-689a-4a58-a53e-779ebe190d67
+#Fri Jul 03 19:29:00 EEST 2026
+@RestController\ classes\ should\ only\ be\ depended\ on\ by\ classes\ in\ their\ own\ package=b8709953-1140-4394-ad81-20fef2bd616a
+no\ class\ in\ a\ feature\ package\ should\ depend\ on\ another\ feature\ package=7472acec-8069-407e-a267-48b3bc492e34
+no\ classes\ should\ use\ field\ injection,\ because\ field\ injection\ is\ considered\ harmful;\ use\ constructor\ injection\ or\ setter\ injection\ instead;\ see\ https\://stackoverflow.com/q/39890849\ for\ detailed\ explanations=9dce5455-ef16-4b6d-b187-f1a50c23ff51

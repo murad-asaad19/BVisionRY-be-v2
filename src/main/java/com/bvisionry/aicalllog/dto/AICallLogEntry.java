@@ -16,6 +16,7 @@ public record AICallLogEntry(
         String pillarName,
         UUID submissionId,
         UUID pipelineId,
+        String requestId,
         String model,
         Instant calledAt,
         int elapsedMs,

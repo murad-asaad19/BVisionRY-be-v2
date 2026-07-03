@@ -270,6 +270,29 @@ public interface SubmissionRepository extends JpaRepository<Submission, UUID> {
     int refreshEvaluationClaim(@Param("id") UUID id);
 
     /**
+     * Marks a submission FAILED (SYSTEM kind) only while it is still SUBMITTED,
+     * releasing the claim. Enforces the same status invariant
+     * {@link #claimForEvaluation} gates on, so the failure path can never overwrite
+     * a result another worker already persisted: {@code persistEvaluationOutcome}
+     * flips the status away from SUBMITTED in the same transaction as the result
+     * rows, so once a winner has committed, this guarded UPDATE matches 0 rows and
+     * a late-failing loser (from a stale-claim double-run) leaves the persisted
+     * EVALUATED/NEEDS_REVIEW row untouched. Returns the number of rows updated
+     * (1 = marked, 0 = no longer SUBMITTED, so the mark was correctly skipped).
+     *
+     * <p>Native so the write uses the <em>database</em> clock and stores the status
+     * as text (EnumType.STRING), consistent with {@link #claimForEvaluation}.
+     */
+    @Transactional
+    @Modifying
+    @Query(value = """
+            UPDATE submissions SET status = 'FAILED', failure_reason = :reason,
+                   failure_kind = 'SYSTEM', evaluation_claimed_at = NULL
+            WHERE id = :id AND status = 'SUBMITTED'
+            """, nativeQuery = true)
+    int markFailedIfStillSubmitted(@Param("id") UUID id, @Param("reason") String reason);
+
+    /**
      * IDs of submissions stranded in SUBMITTED — committed for evaluation but not
      * picked up (executor overflow) or abandoned by a crashed/redeployed worker.
      * Drives {@link com.bvisionry.evaluation.EvaluationReaper}'s recovery sweep.
@@ -296,15 +319,23 @@ public interface SubmissionRepository extends JpaRepository<Submission, UUID> {
 
     /**
      * Backlog size for the {@code bvisionry.ai.evaluation_backlog} gauge: how many
-     * submissions are stuck in SUBMITTED past the grace window. A non-zero, growing
-     * value means evaluation intake is outrunning drain — the launch-day alert.
+     * submissions are stuck in SUBMITTED past the grace window <em>and</em> not held
+     * by a live worker. Applies the same claim-freshness exclusion as
+     * {@link #findStrandedSubmittedIds}, so the gauge counts only rows no worker is
+     * heart-beating — a healthy in-flight evaluation (which legitimately runs for
+     * minutes while its heartbeat keeps {@code evaluation_claimed_at} fresh) must not
+     * read as backlog, or the launch-day alert cries wolf on every traffic spike. A
+     * non-zero, growing value then genuinely means intake is outrunning drain.
      */
     @Query(value = """
             SELECT COUNT(*) FROM submissions
             WHERE status = 'SUBMITTED'
               AND submitted_at < now() - (:graceSeconds * interval '1 second')
+              AND (evaluation_claimed_at IS NULL
+                   OR evaluation_claimed_at < now() - (:staleSeconds * interval '1 second'))
             """, nativeQuery = true)
-    long countStrandedSubmitted(@Param("graceSeconds") long graceSeconds);
+    long countStrandedSubmitted(@Param("graceSeconds") long graceSeconds,
+                                @Param("staleSeconds") long staleSeconds);
 
     /**
      * Abandoned anonymous sessions: public submissions left IN_PROGRESS past the TTL.

@@ -58,6 +58,7 @@ public class PillarReeditService {
 
     public static final String ARCHIVE_REASON_PILLAR_REEVAL = "PILLAR_REEVAL";
     public static final String ARCHIVE_REASON_FULL_REEVAL = "FULL_REEVAL";
+    public static final String ARCHIVE_REASON_DEGRADED_RETRY = "DEGRADED_RETRY";
 
     private final AssignmentRepository assignmentRepository;
     private final SubmissionRepository submissionRepository;

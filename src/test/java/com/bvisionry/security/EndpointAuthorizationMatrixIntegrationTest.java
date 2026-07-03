@@ -2,6 +2,7 @@ package com.bvisionry.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.bvisionry.auth.UserRepository;
@@ -270,9 +271,30 @@ class EndpointAuthorizationMatrixIntegrationTest extends AbstractPostgresIntegra
         }
 
         @Test
+        void retryResponse_orgAdmin_returns403() throws Exception {
+            TestAuthentication.authenticateAsOrgAdmin(userRepository, ownOrg);
+            expectForbidden(post("/api/admin/public-assessments/{linkId}/responses/{submissionId}/retry",
+                    UUID.randomUUID(), UUID.randomUUID()));
+        }
+
+        @Test
+        void retryResponse_member_returns403() throws Exception {
+            TestAuthentication.authenticateAsMember(userRepository, ownOrg);
+            expectForbidden(post("/api/admin/public-assessments/{linkId}/responses/{submissionId}/retry",
+                    UUID.randomUUID(), UUID.randomUUID()));
+        }
+
+        @Test
         void linkList_superAdmin_clearsGate() throws Exception {
             TestAuthentication.authenticateAsSuperAdmin(userRepository);
             expectGateCleared(get("/api/admin/public-assessments"));
+        }
+
+        @Test
+        void retryResponse_superAdmin_clearsGate() throws Exception {
+            TestAuthentication.authenticateAsSuperAdmin(userRepository);
+            expectGateCleared(post("/api/admin/public-assessments/{linkId}/responses/{submissionId}/retry",
+                    UUID.randomUUID(), UUID.randomUUID()));
         }
     }
 }

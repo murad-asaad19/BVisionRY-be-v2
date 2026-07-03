@@ -5,22 +5,27 @@ import java.util.UUID;
 /**
  * Correlation context that travels with every AI call so the logger can tie
  * the persisted row back to a specific pipeline, submission, and pillar. All
- * fields are nullable — {@link #NONE} covers ad-hoc calls (e.g. team
+ * reference fields are nullable — {@link #NONE} covers ad-hoc calls (e.g. team
  * insights, test harnesses) that have no submission context.
+ *
+ * @param escalationSample true for a borderline-confidence re-sample. Escalation re-samples exist
+ *                         to obtain INDEPENDENT opinions, so the evaluation cache must bypass them
+ *                         (a cached hit would return the primary call's result, defeating the point).
  */
 public record CallMetadata(
         UUID submissionId,
         UUID pipelineId,
-        String pillarName
+        String pillarName,
+        boolean escalationSample
 ) {
-    public static final CallMetadata NONE = new CallMetadata(null, null, null);
+    public static final CallMetadata NONE = new CallMetadata(null, null, null, false);
 
     public static CallMetadata forPillar(UUID submissionId, UUID pipelineId, String pillarName) {
-        return new CallMetadata(submissionId, pipelineId, pillarName);
+        return new CallMetadata(submissionId, pipelineId, pillarName, false);
     }
 
     public static CallMetadata forSummary(UUID submissionId, UUID pipelineId) {
-        return new CallMetadata(submissionId, pipelineId, null);
+        return new CallMetadata(submissionId, pipelineId, null, false);
     }
 
     /**
@@ -34,6 +39,6 @@ public record CallMetadata(
     public static CallMetadata forEscalationSample(CallMetadata base, int sampleIndex) {
         String name = base.pillarName() == null ? "escalation" : base.pillarName();
         return new CallMetadata(base.submissionId(), base.pipelineId(),
-                name + " [escalation-sample-" + sampleIndex + "]");
+                name + " [escalation-sample-" + sampleIndex + "]", true);
     }
 }

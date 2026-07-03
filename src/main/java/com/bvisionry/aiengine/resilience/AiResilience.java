@@ -44,16 +44,21 @@ public class AiResilience {
     public AiResilience(
             MeterRegistry meterRegistry,
             @Value("${bvisionry.ai.cb.failure-rate-threshold:50}") float failureRateThreshold,
+            @Value("${bvisionry.ai.cb.slow-call-rate-threshold:80}") float slowCallRateThreshold,
             @Value("${bvisionry.ai.cb.slow-call-duration-seconds:120}") long slowCallDurationSeconds,
             @Value("${bvisionry.ai.cb.wait-duration-open-seconds:30}") long waitDurationOpenSeconds,
             @Value("${bvisionry.ai.cb.sliding-window-size:20}") int slidingWindowSize,
             @Value("${bvisionry.ai.cb.minimum-calls:8}") int minimumCalls,
-            @Value("${bvisionry.ai.bulkhead.max-concurrent:24}") int maxConcurrent,
+            @Value("${bvisionry.ai.bulkhead.max-concurrent:32}") int maxConcurrent,
             @Value("${bvisionry.ai.bulkhead.max-wait-millis:3000}") long bulkheadMaxWaitMillis) {
 
         CircuitBreakerConfig cbConfig = CircuitBreakerConfig.custom()
                 .failureRateThreshold(failureRateThreshold)
-                .slowCallRateThreshold(100)
+                // Opens when >=80% of the sliding window exceeds slowCallDurationThreshold
+                // — a brown-out signature — while tolerating a slow minority under mixed
+                // load. At 100% the breaker could only trip if EVERY call were slow, so a
+                // provider brown-out where most-but-not-all calls hang never opened it.
+                .slowCallRateThreshold(slowCallRateThreshold)
                 .slowCallDurationThreshold(Duration.ofSeconds(slowCallDurationSeconds))
                 .waitDurationInOpenState(Duration.ofSeconds(waitDurationOpenSeconds))
                 .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
@@ -66,11 +71,12 @@ public class AiResilience {
                 .build();
         this.circuitBreaker = CircuitBreaker.of("ai-provider", cbConfig);
 
-        // Size the bulkhead ABOVE the pillar fan-out pool (pillarExecutor maxPoolSize=16)
-        // plus the borderline-escalation budget, and give it a short wait window. Without
-        // headroom + wait, brief LOCAL contention (the pool momentarily full) was rejected
-        // immediately → AIServiceException → false NEEDS_REVIEW that had nothing to do with
-        // provider health. A few seconds of queueing lets transient bursts drain instead.
+        // Size the bulkhead ABOVE the concurrent provider-call demand, and give it a short
+        // wait window: pillar fan-out (16) + escalation budget (8) + summary calls on eval
+        // threads (8) = 32. Without headroom + wait, brief LOCAL contention (the pool
+        // momentarily full) was rejected immediately → AIServiceException → false
+        // NEEDS_REVIEW that had nothing to do with provider health. A few seconds of
+        // queueing lets transient bursts drain instead.
         BulkheadConfig bhConfig = BulkheadConfig.custom()
                 .maxConcurrentCalls(maxConcurrent)
                 .maxWaitDuration(Duration.ofMillis(bulkheadMaxWaitMillis))
@@ -107,7 +113,7 @@ public class AiResilience {
 
     /** Test/convenience factory with production-like defaults. */
     public static AiResilience withDefaults(MeterRegistry meterRegistry) {
-        return new AiResilience(meterRegistry, 50f, 120, 30, 20, 8, 24, 3000);
+        return new AiResilience(meterRegistry, 50f, 80f, 120, 30, 20, 8, 32, 3000);
     }
 
     /** Current circuit state — for tests and health/observability. */

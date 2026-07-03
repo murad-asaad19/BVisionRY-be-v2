@@ -248,7 +248,14 @@ public class PublicAssessmentService {
         if (submission.getStatus() == SubmissionStatus.EVALUATED) {
             throw new BadRequestException("Assessment has already been evaluated.");
         }
-        // Re-submit from FAILED is allowed, mirroring the member flow.
+        if (submission.getStatus() == SubmissionStatus.NEEDS_REVIEW) {
+            throw new BadRequestException(
+                    "This assessment is pending review and can't be resubmitted. "
+                            + "An administrator can re-run the evaluation.");
+        }
+        // Re-submit from FAILED is allowed, mirroring the member flow. NEEDS_REVIEW is
+        // blocked above (gated to the admin re-evaluation path), consistent with retake()'s
+        // deliberate FAILED-only respondent gate.
 
         // A disabled/archived link accepts no new evaluations, even from a respondent
         // who already has an open session — mirror retake() and createSession() so the
@@ -614,6 +621,32 @@ public class PublicAssessmentService {
     public PillarDetailResponse getResponsePillarDetail(UUID linkId, UUID submissionId, UUID pillarId) {
         loadLinkSubmission(linkId, submissionId);
         return memberResultsService.getPillarDetail(submissionId, pillarId);
+    }
+
+    /**
+     * Admin recovery path for a public response stuck in FAILED or NEEDS_REVIEW. Closes the
+     * anonymous-submission dead-end where a NEEDS_REVIEW response had no entry point to
+     * re-run its evaluation — the respondent retake is FAILED-only by design. Delegates to
+     * the shared {@link EvaluationService#retryFailedSubmission}, which handles the
+     * →SUBMITTED flip and the post-commit async dispatch (and, via the degraded-retry path,
+     * reuses the healthy pillars of a NEEDS_REVIEW submission rather than re-billing them).
+     */
+    @Transactional
+    public SubmissionStatusResponse retryResponseEvaluation(UUID linkId, UUID submissionId) {
+        Submission submission = loadLinkSubmission(linkId, submissionId);
+        SubmissionStatus status = submission.getStatus();
+        if (status != SubmissionStatus.FAILED && status != SubmissionStatus.NEEDS_REVIEW) {
+            throw new BadRequestException(
+                    "Only failed or pending-review responses can be re-evaluated (was "
+                            + status + ").");
+        }
+        evaluationService.retryFailedSubmission(submissionId);
+        // The shared retry deterministically flips the submission to SUBMITTED and queues the
+        // re-run; report that explicitly rather than reading it back off the managed instance,
+        // mirroring retake()'s response style. SUBMITTED → the admin polls for the re-run.
+        return new SubmissionStatusResponse(
+                submission.getId(), SubmissionStatus.SUBMITTED,
+                submission.getSubmittedAt(), submission.getEvaluatedAt());
     }
 
     /**

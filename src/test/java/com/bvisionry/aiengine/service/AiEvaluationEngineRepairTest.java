@@ -5,8 +5,8 @@ import com.bvisionry.aiengine.mock.MockLangChainChatModel;
 import com.bvisionry.aiengine.resilience.AiResilience;
 import com.bvisionry.aiengine.transport.Lc4jChatModelProvider;
 import com.bvisionry.aiengine.transport.ModelCapabilityRegistry;
+import com.bvisionry.aiengine.guardrail.SchemaValidationException;
 import com.bvisionry.common.dto.PillarEvaluationResult;
-import dev.langchain4j.guardrail.OutputGuardrailException;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.service.Result;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -55,16 +55,21 @@ class AiEvaluationEngineRepairTest {
     }
 
     @Test
-    void noRepairBudget_malformedResponse_failsHard() {
+    void noRepairBudget_malformedResponse_failsHard_withRawOutputAttached() {
         MockLangChainChatModel model = new MockLangChainChatModel()
                 .enqueue("I'm sorry, I cannot produce a score for this.");
 
         AiEvaluationEngine engine = engineWith(model, 0);
 
+        // The content failure surfaces as SchemaValidationException (not the raw
+        // OutputGuardrailException) so the offending model output travels with it for
+        // audit persistence; the circuit breaker still ignores the ORIGINAL type.
         assertThatThrownBy(() -> engine.evaluatePillar(
                 "You are an evaluator. Return scorePercentage.",
                 "assessment data",
                 "anthropic/claude-sonnet-4", 0.3, 1024))
-                .isInstanceOf(OutputGuardrailException.class);
+                .isInstanceOf(SchemaValidationException.class)
+                .satisfies(ex -> assertThat(((SchemaValidationException) ex).getRawModelOutput())
+                        .isEqualTo("I'm sorry, I cannot produce a score for this."));
     }
 }

@@ -3,6 +3,7 @@ package com.bvisionry.evaluation;
 import com.bvisionry.aiconfig.entity.AIConfiguration;
 import com.bvisionry.aiconfig.service.AIConfigService;
 import com.bvisionry.aiconfig.service.PromptTemplateService;
+import com.bvisionry.aiconfig.service.RateLimitService;
 import com.bvisionry.assessment.AnswerRepository;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.assessment.entity.Answer;
@@ -69,6 +70,7 @@ class EvaluationServiceTest {
     @Mock(answer = Answers.RETURNS_DEEP_STUBS) private MeterRegistry meterRegistry;
     @Mock private com.bvisionry.audit.AuditService auditService;
     @Mock private PillarReeditService pillarReeditService;
+    @Mock private RateLimitService rateLimitService;
 
     @InjectMocks
     private EvaluationService evaluationService;
@@ -255,14 +257,71 @@ class EvaluationServiceTest {
 
     @Test
     void evaluateSubmission_alreadyClaimedByAnotherWorker_skipsEvaluation() {
-        // 0 rows updated = another worker already holds the claim (or the row is
-        // no longer SUBMITTED) → the AI evaluation must NOT run a second time.
+        // The claim is the authoritative duplicate gate: 0 rows updated = another worker
+        // already holds it (or the row is no longer SUBMITTED) → the AI evaluation must NOT
+        // run a second time. The submission is loaded first now (for the fairness key), but
+        // nothing past the claim runs.
+        when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
         when(submissionRepository.claimForEvaluation(eq(submissionId), anyLong())).thenReturn(0);
 
         evaluationService.evaluateSubmission(submissionId);
 
-        verify(submissionRepository, never()).findByIdWithAllRelations(any());
         verifyNoInteractions(evaluationEngine);
+        verify(pillarEvaluationRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void evaluateSubmission_orgFairnessThrottleReached_defersLeavingSubmitted() {
+        // The per-org fairness throttle is a dispatch DEFERRAL, not a user-facing failure:
+        // when it trips we return BEFORE claiming, so the row stays SUBMITTED with a null
+        // claim for the reaper to re-dispatch. The AI evaluation must not run.
+        when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
+        doThrow(new com.bvisionry.common.exception.RateLimitExceededException("rate limit"))
+                .when(rateLimitService).checkEvaluationLimit(anyString());
+
+        evaluationService.evaluateSubmission(submissionId);
+
+        // Deferred before the claim — no claim stamped, no AI run, submission untouched.
+        verify(submissionRepository, never()).claimForEvaluation(any(), anyLong());
+        verifyNoInteractions(evaluationEngine);
+        assertThat(submission.getStatus()).isEqualTo(SubmissionStatus.SUBMITTED);
+    }
+
+    @Test
+    void retryFailedSubmission_needsReview_dispatchesWithReuseHealthyPillars() {
+        // A NEEDS_REVIEW retry with no open unlock window reuses the healthy pillar rows —
+        // it re-runs as a DEGRADED_RETRY (reuseHealthyPillars=true) rather than re-billing
+        // every pillar.
+        EvaluationService selfMock = mock(EvaluationService.class);
+        ReflectionTestUtils.setField(evaluationService, "self", selfMock);
+
+        submission.setStatus(SubmissionStatus.NEEDS_REVIEW);
+        when(submissionRepository.findById(submissionId)).thenReturn(Optional.of(submission));
+        when(pillarReeditService.findUnlockedPillarIds(submissionId)).thenReturn(List.of());
+
+        evaluationService.retryFailedSubmission(submissionId);
+
+        assertThat(submission.getStatus()).isEqualTo(SubmissionStatus.SUBMITTED);
+        // AfterCommit.dispatch runs immediately outside a transaction; the reuse hint is true.
+        verify(selfMock).evaluateSubmissionAsync(submissionId, true);
+    }
+
+    @Test
+    void retryFailedSubmission_failed_dispatchesFullRun() {
+        // A FAILED retry never reuses prior rows (a FAILED usually persisted nothing, and an
+        // INPUT retake may have changed the answers) → full run (reuseHealthyPillars=false),
+        // and it never consults the NEEDS_REVIEW-only unlock guard.
+        EvaluationService selfMock = mock(EvaluationService.class);
+        ReflectionTestUtils.setField(evaluationService, "self", selfMock);
+
+        submission.setStatus(SubmissionStatus.FAILED);
+        when(submissionRepository.findById(submissionId)).thenReturn(Optional.of(submission));
+
+        evaluationService.retryFailedSubmission(submissionId);
+
+        assertThat(submission.getStatus()).isEqualTo(SubmissionStatus.SUBMITTED);
+        verify(selfMock).evaluateSubmissionAsync(submissionId, false);
+        verify(pillarReeditService, never()).findUnlockedPillarIds(any());
     }
 
     @Test

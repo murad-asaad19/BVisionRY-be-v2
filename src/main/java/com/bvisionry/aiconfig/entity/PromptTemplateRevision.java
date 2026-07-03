@@ -1,10 +1,7 @@
 package com.bvisionry.aiconfig.entity;
 
-import com.bvisionry.common.enums.PromptType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -17,38 +14,37 @@ import lombok.Setter;
 import java.time.Instant;
 import java.util.UUID;
 
+/**
+ * An immutable point-in-time snapshot of a {@link PromptTemplate}'s content. Every edit
+ * appends one; {@code PromptTemplate.currentRevisionId} points at the latest. Evaluations
+ * persist the revision id in their provenance, so a stored evaluation always resolves to the
+ * exact prompt text that produced it — even after later edits mutate the template row.
+ */
 @Entity
-@Table(name = "prompt_templates")
+@Table(name = "prompt_template_revisions")
 @Getter
 @Setter
 @NoArgsConstructor
-public class PromptTemplate {
+public class PromptTemplateRevision {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     @Column(updatable = false, nullable = false)
     private UUID id;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "prompt_type", nullable = false)
-    private PromptType promptType;
+    @Column(name = "template_id", nullable = false, updatable = false)
+    private UUID templateId;
 
     @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
-
-    /**
-     * Points at the latest {@link PromptTemplateRevision} (soft reference — no FK, mirroring
-     * ai_system_prompt_version_id). Every edit appends a revision and repoints this, so a stored
-     * evaluation's provenance id resolves to the exact prompt text that produced it.
-     */
-    @Column(name = "current_revision_id")
-    private UUID currentRevisionId;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
     @PrePersist
     protected void onCreate() {
-        createdAt = Instant.now();
+        if (createdAt == null) {
+            createdAt = Instant.now();
+        }
     }
 }

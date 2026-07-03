@@ -20,7 +20,7 @@ class AiResilienceTest {
 
     /** Small window so a few failures are enough to open the circuit in-test. */
     private AiResilience lowThreshold() {
-        return new AiResilience(new SimpleMeterRegistry(), 50f, 120, 30, 4, 4, 16, 3000);
+        return new AiResilience(new SimpleMeterRegistry(), 50f, 80f, 120, 30, 4, 4, 16, 3000);
     }
 
     @Test
@@ -74,7 +74,7 @@ class AiResilienceTest {
     @Test
     void briefContention_queuesAndSucceeds_insteadOfFailing() throws InterruptedException {
         // bulkhead size 1, 3s max wait.
-        AiResilience resilience = new AiResilience(new SimpleMeterRegistry(), 50f, 120, 30, 20, 8, 1, 3000);
+        AiResilience resilience = new AiResilience(new SimpleMeterRegistry(), 50f, 80f, 120, 30, 20, 8, 1, 3000);
 
         CountDownLatch holderStarted = new CountDownLatch(1);
         CountDownLatch releaseHolder = new CountDownLatch(1);

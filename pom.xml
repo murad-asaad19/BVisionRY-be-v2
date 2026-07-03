@@ -265,6 +265,20 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- Architecture-freeze tests (ArchUnit). Plain JVM tests, no Spring
+             context, so they run in the default `mvn test` loop and stay fast.
+             The FreezingArchRule "ratchet" pins today's module-boundary
+             violations in a committed violation store so they can only shrink;
+             any NEW cross-feature cycle / repository access / controller fan-in
+             fails the build. archunit-junit5 pulls in archunit core + the
+             JUnit 5 test engine that discovers @ArchTest rules. -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>1.4.2</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <dependencyManagement>

@@ -1,29 +1,28 @@
 package com.bvisionry.common.exception;
 
-import com.bvisionry.reporting.dto.PremiumErrorResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
+import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-import java.util.stream.Collectors;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @RestControllerAdvice
 @Slf4j
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(AuthenticationException.class)
-    public ResponseEntity<ErrorResponse> handleAuthentication(AuthenticationException ex) {
-        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                .body(new ErrorResponse(401, ex.getMessage()));
+    public ProblemDetail handleAuthentication(AuthenticationException ex) {
+        return problem(HttpStatus.UNAUTHORIZED, ex.getMessage());
     }
 
     @ExceptionHandler(ResourceNotFoundException.class)
-    public ResponseEntity<ErrorResponse> handleResourceNotFound(ResourceNotFoundException ex) {
-        return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(new ErrorResponse(404, ex.getMessage()));
+    public ProblemDetail handleResourceNotFound(ResourceNotFoundException ex) {
+        return problem(HttpStatus.NOT_FOUND, ex.getMessage());
     }
 
     /**
@@ -35,29 +34,25 @@ public class GlobalExceptionHandler {
      * 404. Logged at DEBUG so a probing/scanner request doesn't spam ERROR.
      */
     @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
-    public ResponseEntity<ErrorResponse> handleNoResourceFound(
+    public ProblemDetail handleNoResourceFound(
             org.springframework.web.servlet.resource.NoResourceFoundException ex) {
         log.debug("No resource for request: {}", ex.getMessage());
-        return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(new ErrorResponse(404, "The requested resource was not found."));
+        return problem(HttpStatus.NOT_FOUND, "The requested resource was not found.");
     }
 
     @ExceptionHandler(BadRequestException.class)
-    public ResponseEntity<ErrorResponse> handleBadRequest(BadRequestException ex) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(new ErrorResponse(400, ex.getMessage()));
+    public ProblemDetail handleBadRequest(BadRequestException ex) {
+        return problem(HttpStatus.BAD_REQUEST, ex.getMessage());
     }
 
     @ExceptionHandler(DuplicateResourceException.class)
-    public ResponseEntity<ErrorResponse> handleDuplicateResource(DuplicateResourceException ex) {
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(new ErrorResponse(409, ex.getMessage()));
+    public ProblemDetail handleDuplicateResource(DuplicateResourceException ex) {
+        return problem(HttpStatus.CONFLICT, ex.getMessage());
     }
 
     @ExceptionHandler(IllegalOperationException.class)
-    public ResponseEntity<ErrorResponse> handleIllegalOperation(IllegalOperationException ex) {
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(new ErrorResponse(409, ex.getMessage()));
+    public ProblemDetail handleIllegalOperation(IllegalOperationException ex) {
+        return problem(HttpStatus.CONFLICT, ex.getMessage());
     }
 
     /**
@@ -69,20 +64,23 @@ public class GlobalExceptionHandler {
      * The DB message is deliberately not echoed (it can leak schema details).
      */
     @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
-    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(
+    public ProblemDetail handleDataIntegrityViolation(
             org.springframework.dao.DataIntegrityViolationException ex) {
         log.warn("Data integrity violation: {}", ex.getMostSpecificCause().getMessage());
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(new ErrorResponse(409, "This change conflicts with a concurrent update. Please retry."));
+        return problem(HttpStatus.CONFLICT, "This change conflicts with a concurrent update. Please retry.");
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
-        String message = ex.getBindingResult().getFieldErrors().stream()
-                .map(e -> e.getField() + ": " + e.getDefaultMessage())
-                .collect(Collectors.joining(", "));
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(new ErrorResponse(400, message));
+    public ProblemDetail handleValidation(MethodArgumentNotValidException ex) {
+        // First-wins: if a field has multiple violations, keep the first reported message.
+        Map<String, String> fieldErrors = new LinkedHashMap<>();
+        for (var fieldError : ex.getBindingResult().getFieldErrors()) {
+            fieldErrors.putIfAbsent(fieldError.getField(), fieldError.getDefaultMessage());
+        }
+        ProblemDetail problem = problem(HttpStatus.BAD_REQUEST,
+                "Validation failed for " + fieldErrors.size() + " field(s).");
+        problem.setProperty("fieldErrors", fieldErrors);
+        return problem;
     }
 
     /**
@@ -93,11 +91,10 @@ public class GlobalExceptionHandler {
      * catch-all, and log at WARN without the multi-page stack trace.
      */
     @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
-    public ResponseEntity<ErrorResponse> handleUnreadableBody(
+    public ProblemDetail handleUnreadableBody(
             org.springframework.http.converter.HttpMessageNotReadableException ex) {
         log.warn("Unreadable request body: {}", ex.getMessage());
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(new ErrorResponse(400, "Request body is malformed or has a field in an unexpected format."));
+        return problem(HttpStatus.BAD_REQUEST, "Request body is malformed or has a field in an unexpected format.");
     }
 
     /**
@@ -106,60 +103,63 @@ public class GlobalExceptionHandler {
      * Same reasoning as {@link #handleUnreadableBody}: client error, 400.
      */
     @ExceptionHandler(org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class)
-    public ResponseEntity<ErrorResponse> handleTypeMismatch(
+    public ProblemDetail handleTypeMismatch(
             org.springframework.web.method.annotation.MethodArgumentTypeMismatchException ex) {
         log.warn("Parameter type mismatch for '{}': {}", ex.getName(), ex.getMessage());
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(new ErrorResponse(400, "Invalid value for parameter '" + ex.getName() + "'."));
+        return problem(HttpStatus.BAD_REQUEST, "Invalid value for parameter '" + ex.getName() + "'.");
     }
 
     @ExceptionHandler(AIServiceException.class)
-    public ResponseEntity<ErrorResponse> handleAIServiceException(AIServiceException ex) {
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(new ErrorResponse(503, ex.getMessage()));
+    public ProblemDetail handleAIServiceException(AIServiceException ex) {
+        return problem(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage());
     }
 
     @ExceptionHandler(EmailDeliveryException.class)
-    public ResponseEntity<ErrorResponse> handleEmailDeliveryException(EmailDeliveryException ex) {
-        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(new ErrorResponse(503, ex.getMessage()));
+    public ProblemDetail handleEmailDeliveryException(EmailDeliveryException ex) {
+        return problem(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage());
     }
 
     @ExceptionHandler(RateLimitExceededException.class)
-    public ResponseEntity<ErrorResponse> handleRateLimitExceeded(RateLimitExceededException ex) {
-        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
-                .body(new ErrorResponse(429, ex.getMessage()));
+    public ProblemDetail handleRateLimitExceeded(RateLimitExceededException ex) {
+        return problem(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage());
     }
 
     @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
-    public ResponseEntity<ErrorResponse> handleResponseStatus(
+    public ProblemDetail handleResponseStatus(
             org.springframework.web.server.ResponseStatusException ex) {
-        int code = ex.getStatusCode().value();
         String message = ex.getReason() != null ? ex.getReason() : ex.getMessage();
-        return ResponseEntity.status(code).body(new ErrorResponse(code, message));
+        return problem(HttpStatus.valueOf(ex.getStatusCode().value()), message);
     }
 
     @ExceptionHandler(PremiumRequiredException.class)
-    public ResponseEntity<PremiumErrorResponse> handlePremiumRequired(PremiumRequiredException ex) {
-        return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(PremiumErrorResponse.of(ex.getFeature()));
+    public ProblemDetail handlePremiumRequired(PremiumRequiredException ex) {
+        ProblemDetail problem = problem(HttpStatus.FORBIDDEN,
+                "This feature requires a Premium subscription. Upgrade your organization to access "
+                        + ex.getFeature() + ".");
+        problem.setProperty("error", "premium_required");
+        problem.setProperty("feature", ex.getFeature());
+        return problem;
     }
 
     @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
-    public ResponseEntity<ErrorResponse> handleAccessDenied(
+    public ProblemDetail handleAccessDenied(
             org.springframework.security.access.AccessDeniedException ex) {
         // Catches both AccessDeniedException (service-layer SecurityUtils.requireOrgAccess)
         // and AuthorizationDeniedException (@PreAuthorize method security), which extends it.
         // Use a generic message so we don't leak the failing authority/expression.
         log.warn("Access denied: {}", ex.getMessage());
-        return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(new ErrorResponse(403, "You do not have permission to perform this action."));
+        return problem(HttpStatus.FORBIDDEN, "You do not have permission to perform this action.");
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleGeneral(Exception ex) {
+    public ProblemDetail handleGeneral(Exception ex) {
         log.error("Unhandled exception", ex);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(new ErrorResponse(500, "An unexpected error occurred. Please try again later."));
+        return problem(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred. Please try again later.");
+    }
+
+    private static ProblemDetail problem(HttpStatus status, String detail) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
+        problem.setProperty("timestamp", Instant.now());
+        return problem;
     }
 }

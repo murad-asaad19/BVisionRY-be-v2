@@ -135,9 +135,10 @@ public class SecurityConfig {
                 )
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint((request, response, authException) -> {
-                            response.setContentType("application/json");
+                            response.setContentType("application/problem+json");
                             response.setStatus(401);
-                            response.getWriter().write("{\"status\":401,\"message\":\"Unauthorized\"}");
+                            response.getWriter().write("{\"type\":\"about:blank\",\"title\":\"Unauthorized\","
+                                    + "\"status\":401,\"detail\":\"Authentication is required to access this resource.\"}");
                         })
                 )
                 // Order: download-token (?token= URL auth) → cookie/Bearer JWT → rate-limit.

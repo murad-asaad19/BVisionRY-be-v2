@@ -62,6 +62,9 @@ public final class OrgAuditActions {
     /** A SUPER_ADMIN edited the Contact Us notification recipient list. */
     public static final String CONTACT_RECIPIENTS_UPDATED = "CONTACT_RECIPIENTS_UPDATED";
 
+    /** A SUPER_ADMIN edited the demo-request (lead) notification recipient list. */
+    public static final String LEAD_RECIPIENTS_UPDATED = "LEAD_RECIPIENTS_UPDATED";
+
     /** A SUPER_ADMIN uploaded, replaced, or cleared the lead-magnet PDF. */
     public static final String LEAD_MAGNET_PDF_UPDATED = "LEAD_MAGNET_PDF_UPDATED";
 

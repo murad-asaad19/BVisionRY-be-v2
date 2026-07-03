@@ -29,6 +29,7 @@ public final class EmailTemplateMetadata {
             case TRIAL_EXPIRED                  -> "Trial Expired";
             case UPGRADE_REQUESTED              -> "Upgrade Requested";
             case CONTACT_US                     -> "Contact Message";
+            case DEMO_REQUEST                   -> "Demo Request";
             case SURVEY_GIFT_ASSESSMENT         -> "Survey Gift Assessment";
             case LEAD_MAGNET                    -> "Lead Magnet (Science PDF)";
         };
@@ -45,6 +46,7 @@ public final class EmailTemplateMetadata {
             case TRIAL_EXPIRED                  -> "Sent to org admins once their Premium trial has ended.";
             case UPGRADE_REQUESTED              -> "Sent to platform admins when a member of a Free-tier org requests an upgrade to Premium.";
             case CONTACT_US                     -> "Sent to platform admins when someone submits the website contact form.";
+            case DEMO_REQUEST                   -> "Sent to platform admins when someone requests a free trial through the website Book-a-Demo form.";
             case SURVEY_GIFT_ASSESSMENT         -> "Sent to a respondent who completes a survey (via its public link) that is configured to gift a public assessment, with a link to take it.";
             case LEAD_MAGNET                    -> "Sent to a website visitor who requests the research PDF from the \"science behind the 11 pillars\" CTA on the Platform page. The PDF is delivered as an attachment.";
         };
@@ -109,6 +111,16 @@ public final class EmailTemplateMetadata {
                     new TemplateVariable("company",     "Visitor's company / organization (may be empty)"),
                     new TemplateVariable("inquiry",     "What the message is about (the selected topic)"),
                     new TemplateVariable("message",     "The message the visitor wrote")
+            );
+            case DEMO_REQUEST -> List.of(
+                    new TemplateVariable("senderName",   "Name the visitor entered in the demo-request form"),
+                    new TemplateVariable("senderEmail",  "Visitor's email address (for direct reply)"),
+                    new TemplateVariable("organization", "Organization requesting the demo"),
+                    new TemplateVariable("role",         "Visitor's role at the organization"),
+                    new TemplateVariable("programType",  "Program type they selected in the form"),
+                    new TemplateVariable("cohortSize",   "Cohort / team size bucket (may be empty)"),
+                    new TemplateVariable("source",       "Website surface that submitted the lead (may be empty)"),
+                    new TemplateVariable("message",      "The message the visitor wrote")
             );
             case SURVEY_GIFT_ASSESSMENT -> List.of(
                     new TemplateVariable("respondentName",  "Name the respondent entered on the survey (may be empty)"),
@@ -185,6 +197,16 @@ public final class EmailTemplateMetadata {
                     "company",     "Acme Accelerator",
                     "inquiry",     "Partnership",
                     "message",     "We run a 12-week accelerator and would love to explore using the Founder Readiness Index with our next cohort."
+            );
+            case DEMO_REQUEST -> Map.of(
+                    "senderName",   "Jordan Rivera",
+                    "senderEmail",  "jordan@example.com",
+                    "organization", "Acme Accelerator",
+                    "role",         "Program Director",
+                    "programType",  "Accelerator",
+                    "cohortSize",   "1-50",
+                    "source",       "book-demo-modal",
+                    "message",      "We'd love to see how the Founder Readiness Index fits our next cohort."
             );
             case SURVEY_GIFT_ASSESSMENT -> Map.of(
                     "respondentName",  "Alex Johnson",

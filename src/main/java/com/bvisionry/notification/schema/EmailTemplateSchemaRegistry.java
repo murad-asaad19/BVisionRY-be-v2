@@ -33,6 +33,7 @@ public class EmailTemplateSchemaRegistry {
             case TRIAL_EXPIRED                  -> trialExpired();
             case UPGRADE_REQUESTED              -> upgradeRequested();
             case CONTACT_US                     -> contactMessage();
+            case DEMO_REQUEST                   -> demoRequest();
             case SURVEY_GIFT_ASSESSMENT         -> surveyGiftAssessment();
             case LEAD_MAGNET                    -> leadMagnet();
         };
@@ -729,6 +730,61 @@ public class EmailTemplateSchemaRegistry {
                         NO_VARS,
                         "Message details",
                         3, "Message Card", false, null),
+                new EmailTemplateField(
+                        "ctaLabel", "Button label",
+                        "Text on the main action button.",
+                        EmailTemplateField.Kind.CTA_LABEL, 40,
+                        NO_VARS,
+                        "Reply by email",
+                        4, "Call to Action", false, null),
+                new EmailTemplateField(
+                        "footerNote", "Closing note",
+                        "Closing note at the bottom of the email.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 240,
+                        NO_VARS,
+                        "Recipients of this notification can be customized in the platform admin settings.",
+                        5, "Closing", false, null)
+        );
+    }
+
+    private List<EmailTemplateField> demoRequest() {
+        List<String> orgVars = List.of("organization");
+        return List.of(
+                new EmailTemplateField(
+                        "subject", "Subject line",
+                        "The line recipients see in their inbox.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("senderName", "organization"),
+                        "New demo request: {{organization}}",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "heading", "Heading",
+                        "The large title at the top of the email body.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "New demo request",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "introLine", "Intro line",
+                        "Short line introducing what happened. Use {{organization}} to insert the organization.",
+                        EmailTemplateField.Kind.RICH_TEXT, 240,
+                        orgVars,
+                        "Someone requested a free trial through the website for <strong>{{organization}}</strong>.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "mainMessage", "Body paragraph",
+                        "Paragraph below the card encouraging the recipient to follow up.",
+                        EmailTemplateField.Kind.RICH_TEXT, 600,
+                        NO_VARS,
+                        "Reply directly to this person to schedule the demo.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "cardHeading", "Card heading",
+                        "Headline shown at the top of the request details card.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "Request details",
+                        3, "Request Card", false, null),
                 new EmailTemplateField(
                         "ctaLabel", "Button label",
                         "Text on the main action button.",

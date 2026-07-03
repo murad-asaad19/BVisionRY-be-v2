@@ -1,10 +1,11 @@
 package com.bvisionry.lead;
 
-import com.bvisionry.notification.transport.MailTransport;
+import com.bvisionry.notification.EmailService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -12,15 +13,14 @@ import java.util.UUID;
 @Slf4j
 public class LeadService {
 
-    private static final String NOTIFY_TO = "hello@bvisionry.com";
-    private static final String NOTIFY_FROM = "no-reply@bvisionry.local";
-
     private final LeadRepository leadRepository;
-    private final MailTransport mailTransport;
+    private final LeadRecipientService leadRecipientService;
+    private final EmailService emailService;
 
     /**
-     * Persists the lead and fires a notification email to the sales inbox.
-     * Mail failure is caught and logged — it never rolls back the lead save.
+     * Persists the lead and fires a notification email to each configured
+     * demo-request recipient (with super-admin fallback). Mail failure is
+     * caught and logged — it never rolls back the lead save.
      *
      * @return the generated lead id
      */
@@ -39,7 +39,7 @@ public class LeadService {
         log.info("Lead saved: id={} org={}", saved.getId(), saved.getOrganization());
 
         try {
-            sendNotification(saved);
+            notifyRecipients(saved);
         } catch (Exception e) {
             log.warn("Demo-request notification email failed (lead {} still saved): {}",
                     saved.getId(), e.getMessage());
@@ -48,46 +48,30 @@ public class LeadService {
         return saved.getId();
     }
 
-    private void sendNotification(Lead lead) {
-        String subject = "New demo request: " + lead.getOrganization();
-        String body = buildEmailBody(lead);
-        mailTransport.send(NOTIFY_TO, subject, body);
-    }
+    /**
+     * If no recipients are configured and no super-admins exist, the
+     * notification is dropped with a warning — the lead itself is already
+     * persisted, so nothing is lost.
+     */
+    private void notifyRecipients(Lead lead) {
+        List<String> recipients = leadRecipientService.resolveRecipients();
+        if (recipients.isEmpty()) {
+            log.warn("Demo-request notification for lead {} dropped: no recipients configured and no super-admins exist",
+                    lead.getId());
+            return;
+        }
 
-    private String buildEmailBody(Lead lead) {
-        return """
-                <html><body style="font-family:sans-serif;color:#1a1a1a;line-height:1.6">
-                <h2 style="color:#060021">New Book-a-Demo Request</h2>
-                <table cellpadding="6" cellspacing="0">
-                  <tr><th align="left">Name</th><td>%s</td></tr>
-                  <tr><th align="left">Email</th><td><a href="mailto:%s">%s</a></td></tr>
-                  <tr><th align="left">Organization</th><td>%s</td></tr>
-                  <tr><th align="left">Role</th><td>%s</td></tr>
-                  <tr><th align="left">Program Type</th><td>%s</td></tr>
-                  <tr><th align="left">Cohort Size</th><td>%s</td></tr>
-                  <tr><th align="left">Source</th><td>%s</td></tr>
-                </table>
-                <h3 style="margin-top:16px">Message</h3>
-                <p style="white-space:pre-wrap">%s</p>
-                </body></html>
-                """.formatted(
-                escape(lead.getName()),
-                escape(lead.getEmail()), escape(lead.getEmail()),
-                escape(lead.getOrganization()),
-                escape(lead.getRole()),
-                escape(lead.getProgramType()),
-                lead.getCohortSize() != null ? escape(lead.getCohortSize()) : "—",
-                lead.getSource() != null ? escape(lead.getSource()) : "—",
-                escape(lead.getMessage())
-        );
-    }
-
-    /** Minimal HTML escaping — prevents XSS in internal notification emails. */
-    private static String escape(String s) {
-        if (s == null) return "";
-        return s.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-                .replace("\"", "&quot;");
+        for (String to : recipients) {
+            emailService.sendDemoRequestAsync(
+                    to,
+                    lead.getName(),
+                    lead.getEmail(),
+                    lead.getOrganization(),
+                    lead.getRole(),
+                    lead.getProgramType(),
+                    lead.getCohortSize(),
+                    lead.getSource(),
+                    lead.getMessage());
+        }
     }
 }

@@ -4,6 +4,9 @@ import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.contact.ContactRecipientService;
 import com.bvisionry.contact.dto.ContactRecipientsRequest;
 import com.bvisionry.contact.dto.ContactRecipientsResponse;
+import com.bvisionry.lead.LeadRecipientService;
+import com.bvisionry.lead.dto.LeadRecipientsRequest;
+import com.bvisionry.lead.dto.LeadRecipientsResponse;
 import com.bvisionry.organization.AttentionThresholdsService;
 import com.bvisionry.platform.dto.AttentionThresholdsRequest;
 import com.bvisionry.platform.dto.AttentionThresholdsResponse;
@@ -34,6 +37,7 @@ public class PlatformSettingsController {
     private final AttentionThresholdsService attentionThresholdsService;
     private final UpgradeRequestRecipientService upgradeRequestRecipientService;
     private final ContactRecipientService contactRecipientService;
+    private final LeadRecipientService leadRecipientService;
     private final UpgradePromptService upgradePromptService;
     private final LeadMagnetSettingsService leadMagnetSettingsService;
 
@@ -78,6 +82,22 @@ public class PlatformSettingsController {
                 req.recipients(), SecurityUtils.getCurrentUserId());
         return ResponseEntity.ok(
                 new ContactRecipientsResponse(view.recipients(), view.fallbackToSuperAdmins()));
+    }
+
+    @GetMapping("/lead-recipients")
+    public ResponseEntity<LeadRecipientsResponse> getLeadRecipients() {
+        var view = leadRecipientService.get();
+        return ResponseEntity.ok(
+                new LeadRecipientsResponse(view.recipients(), view.fallbackToSuperAdmins()));
+    }
+
+    @PutMapping("/lead-recipients")
+    public ResponseEntity<LeadRecipientsResponse> setLeadRecipients(
+            @Valid @RequestBody LeadRecipientsRequest req) {
+        var view = leadRecipientService.setRecipients(
+                req.recipients(), SecurityUtils.getCurrentUserId());
+        return ResponseEntity.ok(
+                new LeadRecipientsResponse(view.recipients(), view.fallbackToSuperAdmins()));
     }
 
     @GetMapping("/upgrade-prompt")

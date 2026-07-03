@@ -10,6 +10,7 @@ public enum EmailTemplateKey {
     TRIAL_EXPIRED,
     UPGRADE_REQUESTED,
     CONTACT_US,
+    DEMO_REQUEST,
     SURVEY_GIFT_ASSESSMENT,
     LEAD_MAGNET
 }

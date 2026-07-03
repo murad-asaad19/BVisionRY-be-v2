@@ -297,6 +297,49 @@ public class EmailService {
     }
 
     /**
+     * Send the platform-side notification when a visitor submits the website
+     * Book-a-Demo / free-trial form. Recipients are resolved upstream — a
+     * custom address list configured in platform settings, falling back to
+     * every SUPER_ADMIN.
+     */
+    public void sendDemoRequest(String toEmail, String senderName, String senderEmail,
+                                 String organization, String role, String programType,
+                                 String cohortSize, String source, String message) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("senderName", senderName);
+        vars.put("senderEmail", senderEmail);
+        vars.put("organization", organization);
+        vars.put("role", role);
+        vars.put("programType", programType);
+        // Mustache hides the {{#cohortSize}}…{{/cohortSize}} and
+        // {{#source}}…{{/source}} rows when the value is null or empty, so
+        // blank optional fields produce a clean card rather than empty rows.
+        vars.put("cohortSize", cohortSize == null || cohortSize.isBlank() ? null : cohortSize);
+        vars.put("source", source == null || source.isBlank() ? null : source);
+        vars.put("message", message);
+
+        // Reply-To = the visitor so admins can reply directly from their inbox.
+        // From stays the configured platform address (no spoofing/open-relay risk).
+        send(toEmail, EmailTemplateKey.DEMO_REQUEST, vars, senderEmail);
+    }
+
+    /**
+     * Fire-and-forget variant. Called from the lead-capture flow so SMTP
+     * latency or failure can't block the HTTP response or roll back the lead.
+     */
+    @Async("emailExecutor")
+    public void sendDemoRequestAsync(String toEmail, String senderName, String senderEmail,
+                                      String organization, String role, String programType,
+                                      String cohortSize, String source, String message) {
+        try {
+            sendDemoRequest(toEmail, senderName, senderEmail, organization, role,
+                    programType, cohortSize, source, message);
+        } catch (Exception e) {
+            log.warn("Async demo-request email to {} failed: {}", toEmail, e.getMessage());
+        }
+    }
+
+    /**
      * Send the lead-magnet email to a website visitor who requested the research
      * PDF (the "science behind the 11 pillars" CTA on the Platform page). The PDF
      * is delivered as a real attachment — the caller loads the bytes from the

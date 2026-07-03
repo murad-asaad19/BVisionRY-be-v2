@@ -50,6 +50,7 @@ class AssessmentServiceTest {
     @Mock private EvaluationService evaluationService;
     @Mock private PostCompletionLinkResolver postCompletionLinkResolver;
     @Mock private com.bvisionry.audit.AuditService auditService;
+    @Mock private com.bvisionry.notification.push.PushNotificationService pushNotificationService;
 
     @InjectMocks
     private AssessmentService assessmentService;

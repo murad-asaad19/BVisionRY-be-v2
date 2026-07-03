@@ -52,6 +52,7 @@ class AssignmentServiceTest {
     @Mock private OrganizationRepository organizationRepository;
     @Mock private UserRepository userRepository;
     @Mock private EmailService emailService;
+    @Mock private com.bvisionry.notification.push.PushNotificationService pushNotificationService;
     @Mock private AuditService auditService;
     @Mock private com.bvisionry.membertype.MemberTypeService memberTypeService;
     @Mock private PipelineAutoAssignmentService pipelineAutoAssignmentService;

@@ -23,6 +23,8 @@ import com.bvisionry.evaluation.EvaluationEngine.PipelineEvaluationResult;
 import com.bvisionry.evaluation.entity.OverallSummary;
 import com.bvisionry.evaluation.entity.PillarEvaluation;
 import com.bvisionry.notification.EmailService;
+import com.bvisionry.notification.push.NotificationType;
+import com.bvisionry.notification.push.PushNotificationService;
 import com.bvisionry.organization.OrgAuditActions;
 import com.bvisionry.pipeline.SystemQuestion;
 import com.bvisionry.pipeline.dto.PostCompletionLinkDto;
@@ -108,6 +110,7 @@ public class EvaluationService {
     private final AIConfigService aiConfigService;
     private final PromptTemplateService promptTemplateService;
     private final EmailService emailService;
+    private final PushNotificationService pushNotificationService;
     private final PostCompletionLinkResolver postCompletionLinkResolver;
     private final MeterRegistry meterRegistry;
     private final AuditService auditService;
@@ -508,6 +511,10 @@ public class EvaluationService {
                     .resolveForCompletionEmail(pipeline, submissionId)
                     .orElse(null);
             sendCompletionEmails(pipeline, submissionId, memberEmail, memberName, resultsUrl, postCompletion);
+            pushNotificationService.notifyUser(submission.getUser().getId(), NotificationType.RESULTS_READY,
+                    "Your results are ready",
+                    "Your \"" + pipeline.getName() + "\" results are available.",
+                    "/my/assessments/" + submissionId + "/results");
         }
     }
 

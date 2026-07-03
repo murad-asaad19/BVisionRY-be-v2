@@ -18,6 +18,8 @@ import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.tx.AfterCommit;
 import com.bvisionry.evaluation.EvaluationService;
 import com.bvisionry.evaluation.SubmissionPillarUnlockRepository;
+import com.bvisionry.notification.push.NotificationType;
+import com.bvisionry.notification.push.PushNotificationService;
 import com.bvisionry.organization.OrgAuditActions;
 import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.Pipeline;
@@ -50,6 +52,7 @@ public class AssessmentService {
     private final EvaluationService evaluationService;
     private final PostCompletionLinkResolver postCompletionLinkResolver;
     private final AuditService auditService;
+    private final PushNotificationService pushNotificationService;
 
     @Transactional(readOnly = true)
     public List<AssessmentSummaryResponse> listAssessments(UUID userId) {
@@ -326,9 +329,20 @@ public class AssessmentService {
                 OrgAuditActions.ENTITY_SUBMISSION, submissionId,
                 Map.of("pipelineName", submission.getAssignment().getPipeline().getName()));
 
+        // Capture plain values for the post-commit lambda — the entities are
+        // detached once the transaction closes.
+        UUID orgId = submission.getAssignment().getOrganization().getId();
+        String memberName = submission.getUser().getName();
+        String pipelineName = submission.getAssignment().getPipeline().getName();
+
         AfterCommit.dispatch(() -> {
             log.info("Transaction committed for submission {}, dispatching async evaluation", submissionId);
             evaluationService.evaluateSubmissionAsync(submissionId);
+            pushNotificationService.notifyOrgAdmins(orgId, NotificationType.MEMBER_SUBMITTED,
+                    "Assessment completed",
+                    memberName + " completed \"" + pipelineName + "\".",
+                    "/app/admin/assignments",
+                    "/app/admin/organizations/" + orgId + "/assignments");
         });
 
         log.info("Submission {} submitted and enqueued for evaluation", submissionId);

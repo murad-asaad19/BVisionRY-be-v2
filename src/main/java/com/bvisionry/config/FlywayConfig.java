@@ -15,10 +15,22 @@ public class FlywayConfig {
                 .dataSource(dataSource)
                 .locations("classpath:db/migration")
                 .baselineOnMigrate(true)
-                // Tolerate migrations that were applied to the DB but have since been
-                // intentionally removed from source (e.g. V84). Without this, validate
-                // fails with "applied migration not resolved locally" and the app won't
-                // boot. Only "missing" is ignored — checksum mismatches still fail.
+                // Tolerate applied-but-missing migrations. Flyway's ignoreMigrationPatterns
+                // only accepts a "type:status" format (type = repeatable|versioned|*,
+                // status = missing|pending|ignored|future|*); it cannot target a specific
+                // version, so we cannot narrow this to V84 alone.
+                //
+                // V84 is the SINGLE known-deleted version: it revoked the seeded "admin123"
+                // SUPER_ADMIN and was intentionally removed from source (the sequence jumps
+                // V83 -> V85). Its intent now lives durably in V113__remove_seeded_super_admin.sql,
+                // which re-applies the revocation for databases that never ran V84. We do NOT
+                // restore a V84 file, because its checksum would mismatch in environments that
+                // already applied the original.
+                //
+                // Because this pattern is version-agnostic, ANY OTHER missing migration is a
+                // bug (an accidental deletion, not an intentional one) and must be investigated
+                // rather than silently tolerated. Only "missing" is ignored here —
+                // checksum mismatches still fail validation.
                 .ignoreMigrationPatterns("*:missing")
                 .load();
     }

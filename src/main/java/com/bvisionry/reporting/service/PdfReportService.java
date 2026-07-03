@@ -43,12 +43,14 @@ public class PdfReportService {
      */
     public byte[] generateReport(UUID submissionId, String participantName,
                                  NarrativeRedactor redactor) {
-        MemberResultsResponse results = memberResultsService.getResults(submissionId);
+        // Redact the member's name out of every narrative field once, up front
+        // (a no-op when names are shown), so the writes below never repeat it.
+        MemberResultsResponse results = memberResultsService.getResults(submissionId).redacted(redactor);
 
-        // Build per-pillar detail list for pillar pages, stripping qid references.
+        // Build per-pillar detail list for pillar pages: redact, then strip qids.
         List<PillarDetailResponse> pillarDetails = results.pillarScores().stream()
-                .map(ps -> memberResultsService.getPillarDetail(submissionId, ps.pillarId()))
-                .map(p -> sanitizePillar(p, redactor))
+                .map(ps -> memberResultsService.getPillarDetail(submissionId, ps.pillarId()).redacted(redactor))
+                .map(this::stripQids)
                 .toList();
 
         // Derive overall category from score
@@ -61,13 +63,13 @@ public class PdfReportService {
         ctx.setVariable("reportDate", LocalDate.now().format(DateTimeFormatter.ofPattern("MMMM yyyy")));
         ctx.setVariable("overallScore", results.overallScore().intValue());
         ctx.setVariable("overallCategory", overallCategory);
-        ctx.setVariable("summaryNarrative", clean(results.summaryNarrative(), redactor));
+        ctx.setVariable("summaryNarrative", stripQids(results.summaryNarrative()));
         ctx.setVariable("pillarScores", results.pillarScores());
         ctx.setVariable("pillarDetails", pillarDetails);
-        ctx.setVariable("strengths", clean(results.strengths(), redactor));
-        ctx.setVariable("developmentAreas", clean(results.developmentAreas(), redactor));
-        ctx.setVariable("corePattern", clean(results.corePattern(), redactor));
-        ctx.setVariable("movingForward", clean(results.movingForwardNarrative(), redactor));
+        ctx.setVariable("strengths", stripQids(results.strengths()));
+        ctx.setVariable("developmentAreas", stripQids(results.developmentAreas()));
+        ctx.setVariable("corePattern", stripQids(results.corePattern()));
+        ctx.setVariable("movingForward", stripQids(results.movingForwardNarrative()));
         // Personal info is the member's general info (name, contact, DOB, …) —
         // exactly what anonymisation suppresses, so it is omitted when names are
         // hidden. The template's not-empty guard hides the section on an empty list.
@@ -94,27 +96,27 @@ public class PdfReportService {
         return QID_PATTERN.matcher(text).replaceAll("").replaceAll("\\s+", " ").trim();
     }
 
-    /** Strip qid references, then scrub the member name (when redaction is on). */
-    private String clean(String text, NarrativeRedactor redactor) {
-        return redactor.redact(stripQids(text));
-    }
-
-    private List<String> clean(List<String> texts, NarrativeRedactor redactor) {
+    private List<String> stripQids(List<String> texts) {
         if (texts == null) return null;
-        return texts.stream().map(t -> clean(t, redactor)).toList();
+        return texts.stream().map(this::stripQids).toList();
     }
 
-    private PillarDetailResponse sanitizePillar(PillarDetailResponse p, NarrativeRedactor redactor) {
+    /**
+     * Strip inline qid references from an already-redacted pillar detail. The
+     * name scrubbing happens in {@link PillarDetailResponse#redacted}; qid removal
+     * is PDF-only, so it stays here.
+     */
+    private PillarDetailResponse stripQids(PillarDetailResponse p) {
         return new PillarDetailResponse(
                 p.pillarId(),
                 p.pillarName(),
                 p.iconKey(),
                 p.scorePercentage(),
                 p.maturityLabel(),
-                clean(p.whatThisScoreMeans(), redactor),
-                clean(p.whatsWorking(), redactor),
-                clean(p.whatCanImprove(), redactor),
-                clean(p.whyThisMattersForBusiness(), redactor),
+                stripQids(p.whatThisScoreMeans()),
+                stripQids(p.whatsWorking()),
+                stripQids(p.whatCanImprove()),
+                stripQids(p.whyThisMattersForBusiness()),
                 p.selfAssessmentGap(),
                 p.aiFailed()
         );

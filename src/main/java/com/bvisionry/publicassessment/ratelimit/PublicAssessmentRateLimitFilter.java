@@ -1,19 +1,15 @@
 package com.bvisionry.publicassessment.ratelimit;
 
 import com.bvisionry.aiconfig.service.RateLimitService;
-import com.bvisionry.common.exception.ErrorResponse;
 import com.bvisionry.common.exception.RateLimitExceededException;
 import com.bvisionry.common.web.ClientIpResolver;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.bvisionry.common.web.ProblemDetailResponseWriter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.AntPathMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -45,9 +41,6 @@ public class PublicAssessmentRateLimitFilter extends OncePerRequestFilter {
     // by the much tighter session-create/submit limit.
     private static final String SAVE_PATTERN = "/api/public/assessments/sessions/*/answers/batch";
     private static final AntPathMatcher MATCHER = new AntPathMatcher();
-    private static final ObjectMapper JSON = new ObjectMapper()
-            .registerModule(new JavaTimeModule())
-            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     private final RateLimitService rateLimitService;
     private final ClientIpResolver clientIpResolver;
@@ -107,9 +100,6 @@ public class PublicAssessmentRateLimitFilter extends OncePerRequestFilter {
     }
 
     private void writeTooManyRequests(HttpServletResponse response, String message) throws IOException {
-        response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        JSON.writeValue(response.getWriter(),
-                new ErrorResponse(HttpStatus.TOO_MANY_REQUESTS.value(), message));
+        ProblemDetailResponseWriter.write(response, HttpStatus.TOO_MANY_REQUESTS, message);
     }
 }

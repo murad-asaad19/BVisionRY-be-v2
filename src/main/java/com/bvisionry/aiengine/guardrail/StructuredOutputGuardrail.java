@@ -37,14 +37,27 @@ public class StructuredOutputGuardrail implements OutputGuardrail {
     private final List<String> requiredFields;
     private final String scoreField; // nullable — only score-bearing schemas set this
 
+    /**
+     * The raw text of the most recent response validated. Instances are built per AI
+     * call (see {@link com.bvisionry.aiengine.service.AiEvaluationEngine} — one guardrail
+     * per AiServices build), so this is effectively call-scoped; retained so the caller
+     * can persist the offending output when the retry budget is exhausted.
+     */
+    private volatile String lastResponseText;
+
     public StructuredOutputGuardrail(ObjectMapper mapper, List<String> requiredFields, String scoreField) {
         this.mapper = mapper;
         this.requiredFields = requiredFields == null ? List.of() : List.copyOf(requiredFields);
         this.scoreField = scoreField;
     }
 
+    public String lastResponseText() {
+        return lastResponseText;
+    }
+
     @Override
     public OutputGuardrailResult validate(AiMessage responseFromLLM) {
+        this.lastResponseText = responseFromLLM.text();
         String json = JsonExtraction.extract(responseFromLLM.text());
         if (json == null) {
             return reprompt(

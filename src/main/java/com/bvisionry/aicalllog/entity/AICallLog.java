@@ -33,6 +33,9 @@ public class AICallLog extends BaseEntity {
     @Column(name = "pipeline_id")
     private UUID pipelineId;
 
+    @Column(name = "request_id", length = 64)
+    private String requestId;
+
     @Column(nullable = false)
     private String model;
 

@@ -1,5 +1,6 @@
 package com.bvisionry.publicassessment.controller;
 
+import com.bvisionry.assessment.dto.SubmissionStatusResponse;
 import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.publicassessment.dto.CreatePublicAssessmentLinkRequest;
 import com.bvisionry.publicassessment.dto.PublicAssessmentLinkDto;
@@ -97,5 +98,18 @@ public class AdminPublicAssessmentController {
             @PathVariable UUID submissionId) {
         publicAssessmentService.deleteResponse(linkId, submissionId);
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Admin re-evaluation of a FAILED or NEEDS_REVIEW public response — closes the
+     * anonymous-submission dead-end where NEEDS_REVIEW had no recovery entry point (the
+     * respondent retake is FAILED-only by design). SUPER_ADMIN-only via the class guard.
+     */
+    @PostMapping("/{linkId}/responses/{submissionId}/retry")
+    public ResponseEntity<SubmissionStatusResponse> retryResponseEvaluation(
+            @PathVariable UUID linkId,
+            @PathVariable UUID submissionId) {
+        return ResponseEntity.ok(
+                publicAssessmentService.retryResponseEvaluation(linkId, submissionId));
     }
 }

@@ -3,6 +3,7 @@ package com.bvisionry.config;
 import com.bvisionry.auth.jwt.DownloadTokenAuthenticationFilter;
 import com.bvisionry.auth.jwt.JwtAuthenticationFilter;
 import com.bvisionry.businesscard.ratelimit.BusinessCardRateLimitFilter;
+import com.bvisionry.common.web.ProblemDetailResponseWriter;
 import com.bvisionry.publicassessment.ratelimit.PublicAssessmentRateLimitFilter;
 import com.bvisionry.survey.ratelimit.SurveySubmitRateLimitFilter;
 import lombok.RequiredArgsConstructor;
@@ -10,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -134,11 +136,12 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(ex -> ex
-                        .authenticationEntryPoint((request, response, authException) -> {
-                            response.setContentType("application/json");
-                            response.setStatus(401);
-                            response.getWriter().write("{\"status\":401,\"message\":\"Unauthorized\"}");
-                        })
+                        // Reuse the shared writer so the 401 body matches every other
+                        // error surface ({type,status,detail,timestamp}); the web client
+                        // reads only `detail`.
+                        .authenticationEntryPoint((request, response, authException) ->
+                                ProblemDetailResponseWriter.write(response, HttpStatus.UNAUTHORIZED,
+                                        "Authentication is required to access this resource."))
                 )
                 // Order: download-token (?token= URL auth) → cookie/Bearer JWT → rate-limit.
                 // The download filter is a no-op when there's no ?token, so cookie auth

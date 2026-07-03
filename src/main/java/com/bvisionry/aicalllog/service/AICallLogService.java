@@ -54,6 +54,7 @@ public class AICallLogService {
             e.setPillarName(entry.pillarName());
             e.setSubmissionId(entry.submissionId());
             e.setPipelineId(entry.pipelineId());
+            e.setRequestId(entry.requestId());
             e.setModel(entry.model());
             e.setCalledAt(entry.calledAt());
             e.setElapsedMs(entry.elapsedMs());

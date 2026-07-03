@@ -4,10 +4,10 @@ import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.pipeline.repository.PipelineRepository;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
+import com.bvisionry.testsupport.EnabledIfDockerAvailable;
 import com.bvisionry.testsupport.TestAuthentication;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -23,10 +23,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc(addFilters = false)
 @ActiveProfiles("test")
-@Disabled("Integration test — needs Docker for Testcontainers Postgres. "
-        + "Skipped on Windows + Docker Desktop where named-pipe API returns a "
-        + "400 redirect docker-java can't follow. Run on Linux/CI where "
-        + "Testcontainers connects via /var/run/docker.sock automatically.")
+@EnabledIfDockerAvailable
 class PipelineControllerTest extends AbstractPostgresIntegrationTest {
 
     @Autowired private MockMvc mockMvc;

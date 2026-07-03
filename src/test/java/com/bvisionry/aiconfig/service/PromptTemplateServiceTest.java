@@ -3,12 +3,15 @@ package com.bvisionry.aiconfig.service;
 import com.bvisionry.aiconfig.dto.PromptTemplateResponse;
 import com.bvisionry.aiconfig.dto.PromptTemplateUpdateRequest;
 import com.bvisionry.aiconfig.entity.PromptTemplate;
+import com.bvisionry.aiconfig.entity.PromptTemplateRevision;
 import com.bvisionry.aiconfig.repository.PromptTemplateRepository;
+import com.bvisionry.aiconfig.repository.PromptTemplateRevisionRepository;
 import com.bvisionry.audit.AuditService;
 import com.bvisionry.common.enums.PromptType;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -28,6 +31,9 @@ class PromptTemplateServiceTest {
 
     @Mock
     private PromptTemplateRepository promptRepository;
+
+    @Mock
+    private PromptTemplateRevisionRepository revisionRepository;
 
     @Mock
     private AuditService auditService;
@@ -79,6 +85,7 @@ class PromptTemplateServiceTest {
         when(promptRepository.findByPromptType(PromptType.TEAM_INSIGHT))
                 .thenReturn(Optional.of(existing));
         when(promptRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(revisionRepository.save(any())).thenAnswer(inv -> withRandomId(inv.getArgument(0)));
 
         PromptTemplateUpdateRequest request = new PromptTemplateUpdateRequest(
                 "Updated prompt content for evaluation"
@@ -88,6 +95,40 @@ class PromptTemplateServiceTest {
 
         assertThat(response.content()).isEqualTo("Updated prompt content for evaluation");
         verify(promptRepository).save(existing);
+    }
+
+    @Test
+    void updatePrompt_appendsImmutableRevisionAndRepointsTemplate() {
+        PromptTemplate existing = createTemplate(PromptType.SYSTEM_PROMPT);
+        UUID revisionId = UUID.randomUUID();
+        when(promptRepository.findByPromptType(PromptType.SYSTEM_PROMPT))
+                .thenReturn(Optional.of(existing));
+        when(promptRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(revisionRepository.save(any())).thenAnswer(inv -> {
+            PromptTemplateRevision r = inv.getArgument(0);
+            r.setId(revisionId);
+            return r;
+        });
+
+        PromptTemplateUpdateRequest request = new PromptTemplateUpdateRequest("Fresh prompt content here");
+
+        PromptTemplateResponse response = promptService.updatePrompt(PromptType.SYSTEM_PROMPT, request);
+
+        // The new revision captures the exact edited content and belongs to this template.
+        ArgumentCaptor<PromptTemplateRevision> revision = ArgumentCaptor.forClass(PromptTemplateRevision.class);
+        verify(revisionRepository).save(revision.capture());
+        assertThat(revision.getValue().getContent()).isEqualTo("Fresh prompt content here");
+        assertThat(revision.getValue().getTemplateId()).isEqualTo(existing.getId());
+
+        // The template now points at the new revision, and that id surfaces on the response so
+        // evaluations persist a provenance id that resolves to this exact prompt text.
+        assertThat(existing.getCurrentRevisionId()).isEqualTo(revisionId);
+        assertThat(response.revisionId()).isEqualTo(revisionId);
+    }
+
+    private static PromptTemplateRevision withRandomId(PromptTemplateRevision revision) {
+        revision.setId(UUID.randomUUID());
+        return revision;
     }
 
     private PromptTemplate createTemplate(PromptType type) {

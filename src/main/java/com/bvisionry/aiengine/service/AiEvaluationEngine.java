@@ -1,5 +1,6 @@
 package com.bvisionry.aiengine.service;
 
+import com.bvisionry.aiengine.guardrail.SchemaValidationException;
 import com.bvisionry.aiengine.guardrail.StructuredOutputGuardrail;
 import com.bvisionry.aiengine.resilience.AiResilience;
 import com.bvisionry.aiengine.transport.Lc4jChatModelProvider;
@@ -7,6 +8,7 @@ import com.bvisionry.common.dto.OverallSummaryResult;
 import com.bvisionry.common.dto.PillarEvaluationResult;
 import com.bvisionry.common.dto.TeamInsightResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.guardrail.OutputGuardrailException;
 import dev.langchain4j.guardrail.config.OutputGuardrailsConfig;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.service.AiServices;
@@ -51,6 +53,15 @@ public class AiEvaluationEngine {
     private static final List<String> PILLAR_REQUIRED_FIELDS =
             List.of("whatThisScoreMeans", "whatsWorking", "whatCanImprove");
 
+    /**
+     * Narrative fields an overall summary must carry to be useful. Listed as guardrail
+     * required-fields so a model that returns only a bare {@code overallScorePercentage}
+     * (and lets the DTO compact constructor backfill empty narrative) is repromptted rather
+     * than silently accepted and rendered as blank sections under a clean EVALUATED.
+     */
+    private static final List<String> SUMMARY_REQUIRED_FIELDS =
+            List.of("summaryNarrative", "strengths", "developmentAreas", "corePattern", "movingForward");
+
     public AiEvaluationEngine(Lc4jChatModelProvider modelProvider,
                               AiResilience aiResilience,
                               @Value("${bvisionry.ai.repair-retries:2}") int repairRetries) {
@@ -61,35 +72,71 @@ public class AiEvaluationEngine {
 
     public Result<PillarEvaluationResult> evaluatePillar(String systemPrompt, String userMessage,
                                                          String model, double temperature, int maxTokens) {
+        StructuredOutputGuardrail guardrail =
+                new StructuredOutputGuardrail(MAPPER, PILLAR_REQUIRED_FIELDS, "scorePercentage");
         PillarEvaluator service = AiServices.builder(PillarEvaluator.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
                 .systemMessageProvider(memoryId -> systemPrompt)
-                .outputGuardrails(new StructuredOutputGuardrail(MAPPER, PILLAR_REQUIRED_FIELDS, "scorePercentage"))
+                .outputGuardrails(guardrail)
                 .outputGuardrailsConfig(retryConfig())
                 .build();
-        return aiResilience.execute(() -> service.evaluate(userMessage));
+        // Translate a content failure into SchemaValidationException so the offending
+        // model output travels to the caller for audit persistence. The catch MUST stay
+        // OUTSIDE aiResilience.execute (around it), never inside the supplier: AiResilience's
+        // circuit breaker is configured with ignoreExceptions(OutputGuardrailException.class)
+        // and must keep seeing the ORIGINAL exception type so content failures don't trip
+        // the circuit.
+        try {
+            return aiResilience.execute(() -> service.evaluate(userMessage));
+        } catch (OutputGuardrailException ge) {
+            throw new SchemaValidationException(ge.getMessage(), guardrail.lastResponseText(), ge);
+        }
     }
 
     public Result<OverallSummaryResult> generateOverallSummary(String systemPrompt, String userMessage,
                                                               String model, double temperature, int maxTokens) {
+        StructuredOutputGuardrail guardrail =
+                new StructuredOutputGuardrail(MAPPER, SUMMARY_REQUIRED_FIELDS, "overallScorePercentage");
         SummaryGenerator service = AiServices.builder(SummaryGenerator.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
                 .systemMessageProvider(memoryId -> systemPrompt)
-                .outputGuardrails(new StructuredOutputGuardrail(MAPPER, List.of(), "overallScorePercentage"))
+                .outputGuardrails(guardrail)
                 .outputGuardrailsConfig(retryConfig())
                 .build();
-        return aiResilience.execute(() -> service.generate(userMessage));
+        // Translate a content failure into SchemaValidationException so the offending
+        // model output travels to the caller for audit persistence. The catch MUST stay
+        // OUTSIDE aiResilience.execute (around it), never inside the supplier: AiResilience's
+        // circuit breaker is configured with ignoreExceptions(OutputGuardrailException.class)
+        // and must keep seeing the ORIGINAL exception type so content failures don't trip
+        // the circuit.
+        try {
+            return aiResilience.execute(() -> service.generate(userMessage));
+        } catch (OutputGuardrailException ge) {
+            throw new SchemaValidationException(ge.getMessage(), guardrail.lastResponseText(), ge);
+        }
     }
 
     public Result<TeamInsightResult> generateTeamInsight(String systemPrompt, String userMessage,
                                                         String model, double temperature, int maxTokens) {
+        StructuredOutputGuardrail guardrail =
+                new StructuredOutputGuardrail(MAPPER, List.of("teamThemes"), null);
         TeamInsightGenerator service = AiServices.builder(TeamInsightGenerator.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
                 .systemMessageProvider(memoryId -> systemPrompt)
-                .outputGuardrails(new StructuredOutputGuardrail(MAPPER, List.of("teamThemes"), null))
+                .outputGuardrails(guardrail)
                 .outputGuardrailsConfig(retryConfig())
                 .build();
-        return aiResilience.execute(() -> service.generate(userMessage));
+        // Translate a content failure into SchemaValidationException so the offending
+        // model output travels to the caller for audit persistence. The catch MUST stay
+        // OUTSIDE aiResilience.execute (around it), never inside the supplier: AiResilience's
+        // circuit breaker is configured with ignoreExceptions(OutputGuardrailException.class)
+        // and must keep seeing the ORIGINAL exception type so content failures don't trip
+        // the circuit.
+        try {
+            return aiResilience.execute(() -> service.generate(userMessage));
+        } catch (OutputGuardrailException ge) {
+            throw new SchemaValidationException(ge.getMessage(), guardrail.lastResponseText(), ge);
+        }
     }
 
     private ChatModel modelFor(String model, double temperature, int maxTokens) {

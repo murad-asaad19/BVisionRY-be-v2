@@ -36,6 +36,14 @@ public class PromptTemplate {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
 
+    /**
+     * Points at the latest {@link PromptTemplateRevision} (soft reference — no FK, mirroring
+     * ai_system_prompt_version_id). Every edit appends a revision and repoints this, so a stored
+     * evaluation's provenance id resolves to the exact prompt text that produced it.
+     */
+    @Column(name = "current_revision_id")
+    private UUID currentRevisionId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

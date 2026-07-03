@@ -79,9 +79,9 @@ class PromptTemplateControllerTest {
     @Test
     void getAllActivePrompts_returnsList() throws Exception {
         List<PromptTemplateResponse> prompts = List.of(
-                new PromptTemplateResponse(UUID.randomUUID(), PromptType.SYSTEM_PROMPT,
+                new PromptTemplateResponse(UUID.randomUUID(), UUID.randomUUID(), PromptType.SYSTEM_PROMPT,
                         "content", Instant.now()),
-                new PromptTemplateResponse(UUID.randomUUID(), PromptType.TEAM_INSIGHT,
+                new PromptTemplateResponse(UUID.randomUUID(), UUID.randomUUID(), PromptType.TEAM_INSIGHT,
                         "content", Instant.now())
         );
 
@@ -95,7 +95,7 @@ class PromptTemplateControllerTest {
     @Test
     void getActivePromptByType_returnsPrompt() throws Exception {
         PromptTemplateResponse response = new PromptTemplateResponse(
-                UUID.randomUUID(), PromptType.SYSTEM_PROMPT,
+                UUID.randomUUID(), UUID.randomUUID(), PromptType.SYSTEM_PROMPT,
                 "Evaluation content", Instant.now()
         );
 
@@ -113,7 +113,7 @@ class PromptTemplateControllerTest {
         );
 
         PromptTemplateResponse response = new PromptTemplateResponse(
-                UUID.randomUUID(), PromptType.SYSTEM_PROMPT,
+                UUID.randomUUID(), UUID.randomUUID(), PromptType.SYSTEM_PROMPT,
                 "Updated evaluation prompt content that is long enough",
                 Instant.now()
         );

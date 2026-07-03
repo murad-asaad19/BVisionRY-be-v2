@@ -184,19 +184,20 @@ public class TeamInsightsPdfService {
         List<Map<String, Object>> sections = new ArrayList<>();
         for (Submission sub : evaluatedSubmissions) {
             OverallSummary summary = summaryBySubmission.get(sub.getId());
-            NarrativeRedactor redactor = identity.redactor(sub);
-            List<PillarEvaluation> evals = evalsBySubmission.getOrDefault(sub.getId(), List.of()).stream()
-                    .sorted(Comparator.comparing(e -> e.getPillar().getName(), String.CASE_INSENSITIVE_ORDER))
-                    .toList();
+            // One redacted view of the member's prose, shared with the Excel export.
+            TeamMemberNarrative narrative = TeamMemberNarrative.from(
+                    summary,
+                    evalsBySubmission.getOrDefault(sub.getId(), List.of()),
+                    identity.redactor(sub));
 
             List<Map<String, Object>> pillars = new ArrayList<>();
-            for (PillarEvaluation eval : evals) {
+            for (TeamMemberNarrative.PillarNarrative pv : narrative.pillars()) {
                 Map<String, Object> p = new LinkedHashMap<>();
-                p.put("pillarName", eval.getPillar().getName());
-                p.put("score", TeamInsightsFormatter.wholePercent(eval.getScorePercentage()));
-                p.put("maturityLabel", eval.getMaturityLabel() == null ? "" : eval.getMaturityLabel());
-                p.put("whatsWorking", eval.getAiWhatsWorking() == null ? List.of() : redactor.redact(eval.getAiWhatsWorking()));
-                p.put("whatCanImprove", eval.getAiWhatCanImprove() == null ? List.of() : redactor.redact(eval.getAiWhatCanImprove()));
+                p.put("pillarName", pv.pillarName());
+                p.put("score", TeamInsightsFormatter.wholePercent(pv.score()));
+                p.put("maturityLabel", pv.maturityLabel() == null ? "" : pv.maturityLabel());
+                p.put("whatsWorking", pv.whatsWorking() == null ? List.of() : pv.whatsWorking());
+                p.put("whatCanImprove", pv.whatCanImprove() == null ? List.of() : pv.whatCanImprove());
                 pillars.add(p);
             }
 
@@ -207,10 +208,9 @@ public class TeamInsightsPdfService {
             section.put("gender", genderBySubmission.getOrDefault(sub.getId(), ""));
             section.put("evaluatedAt", sub.getEvaluatedAt());
             section.put("overallScore", summary == null ? "—" : TeamInsightsFormatter.wholePercent(summary.getOverallScorePercentage()));
-            section.put("summaryNarrative", summary == null || summary.getSummaryNarrative() == null
-                    ? "" : redactor.redact(summary.getSummaryNarrative()));
-            section.put("strengths", summary == null || summary.getStrengths() == null ? List.of() : redactor.redact(summary.getStrengths()));
-            section.put("developmentAreas", summary == null || summary.getDevelopmentAreas() == null ? List.of() : redactor.redact(summary.getDevelopmentAreas()));
+            section.put("summaryNarrative", narrative.summaryNarrative() == null ? "" : narrative.summaryNarrative());
+            section.put("strengths", narrative.strengths() == null ? List.of() : narrative.strengths());
+            section.put("developmentAreas", narrative.developmentAreas() == null ? List.of() : narrative.developmentAreas());
             section.put("personalInfo", personalAnswersBySubmission.getOrDefault(sub.getId(), List.of()));
             section.put("pillars", pillars);
             sections.add(section);

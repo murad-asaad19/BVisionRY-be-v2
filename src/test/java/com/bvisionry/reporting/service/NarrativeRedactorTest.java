@@ -80,6 +80,41 @@ class NarrativeRedactorTest {
     }
 
     @Test
+    void commonWordFirstNameMatchesOnlyTheCapitalisedName() {
+        // "Will" is a common English word, so only the capitalised name is a
+        // redaction target — the lowercase modal verb "will" must survive.
+        NarrativeRedactor redactor = NarrativeRedactor.forNames("Member", List.of("Will"));
+        assertThat(redactor.redact("Will, you will build momentum"))
+                .isEqualTo("Member, you will build momentum");
+    }
+
+    @Test
+    void commonWordNameStillRedactsEveryCapitalisedOccurrence() {
+        NarrativeRedactor redactor = NarrativeRedactor.forNames("Member", List.of("Grace"));
+        assertThat(redactor.redact("Grace leads with grace; Grace inspires."))
+                .isEqualTo("Member leads with grace; Member inspires.");
+    }
+
+    @Test
+    void nonCommonNameStaysCaseInsensitiveEvenWhenLowercase() {
+        // A normal name is not in the common-word set, so it is still scrubbed
+        // regardless of case (existing behaviour must be preserved).
+        NarrativeRedactor redactor = NarrativeRedactor.forNames("Member", List.of("Ashraf"));
+        assertThat(redactor.redact("ASHRAF and ashraf are both Ashraf"))
+                .isEqualTo("Member and Member are both Member");
+    }
+
+    @Test
+    void fullNameTermRedactsWhileLowercaseCommonWordSurvives() {
+        // First name "Will" is a common word; the full-name term "Will Smith"
+        // still collapses to one label, and lowercase "will" is left intact.
+        NarrativeRedactor redactor = NarrativeRedactor.forMember(
+                "Member 1", "Will", "Smith", null, null);
+        assertThat(redactor.redact("Will Smith is driven. This will help. Smith excels."))
+                .isEqualTo("Member 1 is driven. This will help. Member 1 excels.");
+    }
+
+    @Test
     void redactsListOfNarrativesNullSafe() {
         NarrativeRedactor redactor = NarrativeRedactor.forNames("Member", List.of("Murad"));
         List<String> out = redactor.redact(List.of("Murad grows fast", "No name here"));

@@ -96,9 +96,10 @@ public class TeamDashboardController {
             @RequestParam(defaultValue = "download") String mode,
             @RequestParam(defaultValue = "true") boolean showNames) {
         verifySubmissionBelongsToOrg(submissionId, orgId);
-        String name = memberDisplayNameResolver.resolve(submissionId, showNames);
-        byte[] pdf = pdfReportService.generateReport(submissionId, name);
-        String filename = "Member_Report_" + safeFilename(name) + ".pdf";
+        MemberDisplayNameResolver.ReportIdentity identity =
+                memberDisplayNameResolver.resolveIdentity(submissionId, showNames);
+        byte[] pdf = pdfReportService.generateReport(submissionId, identity.displayName(), identity.redactor());
+        String filename = "Member_Report_" + safeFilename(identity.displayName()) + ".pdf";
         String disposition = "preview".equals(mode)
                 ? "inline; filename=\"" + filename + "\""
                 : "attachment; filename=\"" + filename + "\"";
@@ -120,9 +121,11 @@ public class TeamDashboardController {
             @RequestParam(defaultValue = "download") String mode,
             @RequestParam(defaultValue = "true") boolean showNames) {
         verifySubmissionBelongsToOrg(submissionId, orgId);
-        String name = memberDisplayNameResolver.resolve(submissionId, showNames);
-        byte[] xlsx = memberResultsExcelService.generateReport(submissionId, name);
-        String filename = "Member_Report_" + XlsxResponse.sanitizeFilename(name) + ".xlsx";
+        MemberDisplayNameResolver.ReportIdentity identity =
+                memberDisplayNameResolver.resolveIdentity(submissionId, showNames);
+        byte[] xlsx = memberResultsExcelService.generateReport(
+                submissionId, identity.displayName(), identity.redactor());
+        String filename = "Member_Report_" + XlsxResponse.sanitizeFilename(identity.displayName()) + ".xlsx";
         return XlsxResponse.build(xlsx, filename, mode);
     }
 

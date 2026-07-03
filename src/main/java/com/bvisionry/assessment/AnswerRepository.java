@@ -52,6 +52,21 @@ public interface AnswerRepository extends JpaRepository<Answer, UUID> {
             @Param("systemKey") String systemKey);
 
     /**
+     * Fetch several system-managed answers (e.g. FIRST_NAME + LAST_NAME) for a batch
+     * of submissions in one round-trip. The question is fetched eagerly so callers
+     * can split the rows by system key.
+     */
+    @Query("""
+            SELECT a FROM Answer a
+            JOIN FETCH a.question q
+            WHERE a.submission.id IN :submissionIds
+            AND q.systemKey IN :systemKeys
+            """)
+    List<Answer> findBySubmissionIdsAndSystemKeys(
+            @Param("submissionIds") List<UUID> submissionIds,
+            @Param("systemKeys") List<String> systemKeys);
+
+    /**
      * All answers for a batch of submissions with question + pillar eagerly fetched --
      * used by the Team Insights Excel export to build the Q&A sheet.
      */

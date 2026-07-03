@@ -64,10 +64,11 @@ public class MemberResultsController {
         verifySubmissionOwnership(submissionId);
         UUID orgId = getOrgIdFromSubmission(submissionId);
         premiumFeatureGuard.checkPremium(orgId, "pdf_report");
-        String displayName = displayNameResolver.resolve(submissionId, showNames);
-        byte[] pdf = pdfReportService.generateReport(submissionId, displayName);
+        MemberDisplayNameResolver.ReportIdentity identity =
+                displayNameResolver.resolveIdentity(submissionId, showNames);
+        byte[] pdf = pdfReportService.generateReport(submissionId, identity.displayName(), identity.redactor());
         String filename = "Founder_Mindset_Assessment_"
-                + XlsxResponse.sanitizeFilename(displayName) + ".pdf";
+                + XlsxResponse.sanitizeFilename(identity.displayName()) + ".pdf";
         String disposition = "preview".equals(mode)
                 ? "inline; filename=\"" + filename + "\""
                 : "attachment; filename=\"" + filename + "\"";
@@ -85,10 +86,12 @@ public class MemberResultsController {
         verifySubmissionOwnership(submissionId);
         UUID orgId = getOrgIdFromSubmission(submissionId);
         premiumFeatureGuard.checkPremium(orgId, "pdf_report");
-        String displayName = displayNameResolver.resolve(submissionId, showNames);
-        byte[] xlsx = memberResultsExcelService.generateReport(submissionId, displayName);
+        MemberDisplayNameResolver.ReportIdentity identity =
+                displayNameResolver.resolveIdentity(submissionId, showNames);
+        byte[] xlsx = memberResultsExcelService.generateReport(
+                submissionId, identity.displayName(), identity.redactor());
         String filename = "Founder_Mindset_Assessment_"
-                + XlsxResponse.sanitizeFilename(displayName) + ".xlsx";
+                + XlsxResponse.sanitizeFilename(identity.displayName()) + ".xlsx";
         return XlsxResponse.build(xlsx, filename, mode);
     }
 

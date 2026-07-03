@@ -20,7 +20,16 @@ public class MemberResultsExcelService {
 
     private final MemberResultsService memberResultsService;
 
-    public byte[] generateReport(UUID submissionId, String participantName) {
+    /**
+     * @param redactor anonymisation for this report: scrubs the member's name out
+     *                 of the AI narratives and, when
+     *                 {@link NarrativeRedactor#isAnonymized() anonymised}, drops
+     *                 the Personal information sheet (the member's general info:
+     *                 name, contact, DOB, …) entirely — that section is exactly
+     *                 what anonymisation suppresses
+     */
+    public byte[] generateReport(UUID submissionId, String participantName,
+                                 NarrativeRedactor redactor) {
         MemberResultsResponse results = memberResultsService.getResults(submissionId);
         Map<UUID, PillarDetailResponse> pillarDetails =
                 memberResultsService.getAllPillarDetails(submissionId);
@@ -28,11 +37,13 @@ public class MemberResultsExcelService {
         try (ExcelWorkbookBuilder wb = new ExcelWorkbookBuilder();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
-            writeOverviewSheet(wb, participantName, results);
-            writePersonalInformationSheet(wb, results.personalInfo());
-            writeHighlightsSheet(wb, results);
+            writeOverviewSheet(wb, participantName, results, redactor);
+            if (!redactor.isAnonymized()) {
+                writePersonalInformationSheet(wb, results.personalInfo());
+            }
+            writeHighlightsSheet(wb, results, redactor);
             for (PillarScoreSummary pillar : results.pillarScores()) {
-                writePillarSheet(wb, pillar, pillarDetails.get(pillar.pillarId()));
+                writePillarSheet(wb, pillar, pillarDetails.get(pillar.pillarId()), redactor);
             }
 
             wb.write(out);
@@ -59,19 +70,19 @@ public class MemberResultsExcelService {
     }
 
     private void writeOverviewSheet(ExcelWorkbookBuilder wb, String participantName,
-                                     MemberResultsResponse r) {
+                                     MemberResultsResponse r, NarrativeRedactor redactor) {
         ExcelWorkbookBuilder.SheetBuilder s = wb.newSheet("Overview");
         s.headers("Field", "Value");
         s.labeledRow("Participant", participantName);
         s.labeledRow("Pipeline", r.pipelineName());
         s.labeledRow("Overall score", ExcelWorkbookBuilder.formatPercent(r.overallScore()));
         s.labeledRow("Evaluated at", r.evaluatedAt());
-        s.labeledRow("Summary narrative", r.summaryNarrative());
+        s.labeledRow("Summary narrative", redactor.redact(r.summaryNarrative()));
         if (r.corePattern() != null) {
-            s.labeledRow("Core pattern", r.corePattern());
+            s.labeledRow("Core pattern", redactor.redact(r.corePattern()));
         }
         if (r.movingForwardNarrative() != null) {
-            s.labeledRow("Moving forward", r.movingForwardNarrative());
+            s.labeledRow("Moving forward", redactor.redact(r.movingForwardNarrative()));
         }
         s.autoSize();
 
@@ -86,12 +97,13 @@ public class MemberResultsExcelService {
         scoresSheet.autoSize();
     }
 
-    private void writeHighlightsSheet(ExcelWorkbookBuilder wb, MemberResultsResponse r) {
+    private void writeHighlightsSheet(ExcelWorkbookBuilder wb, MemberResultsResponse r,
+                                      NarrativeRedactor redactor) {
         ExcelWorkbookBuilder.SheetBuilder s = wb.newSheet("Highlights");
         s.headers("Strengths", "Development areas");
 
-        List<String> strengths = nullToEmpty(r.strengths());
-        List<String> dev = nullToEmpty(r.developmentAreas());
+        List<String> strengths = redactor.redact(nullToEmpty(r.strengths()));
+        List<String> dev = redactor.redact(nullToEmpty(r.developmentAreas()));
         int rowCount = Math.max(strengths.size(), dev.size());
         for (int i = 0; i < rowCount; i++) {
             s.row(
@@ -103,7 +115,7 @@ public class MemberResultsExcelService {
     }
 
     private void writePillarSheet(ExcelWorkbookBuilder wb, PillarScoreSummary summary,
-                                   PillarDetailResponse detail) {
+                                   PillarDetailResponse detail, NarrativeRedactor redactor) {
         ExcelWorkbookBuilder.SheetBuilder s = wb.newSheet(summary.pillarName());
         s.headers("Field", "Value");
         s.labeledRow("Pillar", summary.pillarName());
@@ -114,16 +126,16 @@ public class MemberResultsExcelService {
                 s.labeledRow("Self-assessment gap", detail.selfAssessmentGap());
             }
             if (detail.whatThisScoreMeans() != null) {
-                s.labeledRow("What this score means", detail.whatThisScoreMeans());
+                s.labeledRow("What this score means", redactor.redact(detail.whatThisScoreMeans()));
             }
             if (detail.whatsWorking() != null && !detail.whatsWorking().isEmpty()) {
-                s.labeledRow("What's working", ExcelWorkbookBuilder.bullets(detail.whatsWorking()));
+                s.labeledRow("What's working", ExcelWorkbookBuilder.bullets(redactor.redact(detail.whatsWorking())));
             }
             if (detail.whatCanImprove() != null && !detail.whatCanImprove().isEmpty()) {
-                s.labeledRow("What can improve", ExcelWorkbookBuilder.bullets(detail.whatCanImprove()));
+                s.labeledRow("What can improve", ExcelWorkbookBuilder.bullets(redactor.redact(detail.whatCanImprove())));
             }
             if (detail.whyThisMattersForBusiness() != null) {
-                s.labeledRow("Why this matters for business", detail.whyThisMattersForBusiness());
+                s.labeledRow("Why this matters for business", redactor.redact(detail.whyThisMattersForBusiness()));
             }
         }
         s.autoSize();

@@ -51,6 +51,7 @@ public class TeamInsightsExcelService {
     private final PillarEvaluationRepository pillarEvaluationRepository;
     private final OverallSummaryRepository overallSummaryRepository;
     private final AnswerRepository answerRepository;
+    private final MemberIdentityFactory memberIdentityFactory;
 
     /**
      * Backwards-compatible overload — exports every evaluated submission in the
@@ -116,10 +117,11 @@ public class TeamInsightsExcelService {
                                 AssessmentAnswerFormatter::answerLabel,
                                 (a, b) -> a));
 
-        // When showNames is false, the same submission renders as "Member N" everywhere
-        // and its email is blanked. Both lookups go through MemberIdentity so callers
-        // never touch sub.getUser() directly and can't accidentally leak a real name.
-        MemberIdentity identity = MemberIdentity.of(evaluatedSubmissions, showNames);
+        // When showNames is false, the same submission renders as "Member N" everywhere,
+        // its email is blanked, and its name is scrubbed from every narrative. All three
+        // go through MemberIdentity so callers never touch sub.getUser() directly and
+        // can't accidentally leak a real name.
+        MemberIdentity identity = memberIdentityFactory.identityFor(evaluatedSubmissions, showNames);
 
         try (ExcelWorkbookBuilder wb = new ExcelWorkbookBuilder();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
@@ -128,7 +130,14 @@ public class TeamInsightsExcelService {
                     summaryBySubmission, evaluationsBySubmission, pillarOrder, genderBySubmission);
             writeSummarySheet(wb, evaluatedSubmissions, summaryBySubmission,
                     evaluationsBySubmission, pillarOrder, genderBySubmission, identity);
-            writeProfilesSheet(wb, evaluatedSubmissions, genderBySubmission, identity);
+            // The Profiles sheet exists solely to surface who each member is
+            // (their personal-pillar answers: name, contact, DOB, …). That's
+            // exactly the information anonymisation suppresses, so when names are
+            // hidden the sheet is dropped entirely rather than leaking identity
+            // through the answer columns.
+            if (showNames) {
+                writeProfilesSheet(wb, evaluatedSubmissions, genderBySubmission, identity);
+            }
             writeHighlightsSheet(wb, evaluatedSubmissions, summaryBySubmission, identity);
             writePillarDetailsSheet(wb, evaluatedSubmissions, evaluationsBySubmission, identity);
 
@@ -364,11 +373,12 @@ public class TeamInsightsExcelService {
                 s.row(identity.name(sub), "", "", "");
                 continue;
             }
+            NarrativeRedactor redactor = identity.redactor(sub);
             s.row(
                     identity.name(sub),
-                    summary.getSummaryNarrative(),
-                    ExcelWorkbookBuilder.bullets(summary.getStrengths()),
-                    ExcelWorkbookBuilder.bullets(summary.getDevelopmentAreas())
+                    redactor.redact(summary.getSummaryNarrative()),
+                    ExcelWorkbookBuilder.bullets(redactor.redact(summary.getStrengths())),
+                    ExcelWorkbookBuilder.bullets(redactor.redact(summary.getDevelopmentAreas()))
             );
         }
         s.autoSize();
@@ -381,6 +391,7 @@ public class TeamInsightsExcelService {
         ExcelWorkbookBuilder.SheetBuilder s = wb.newSheet("Pillar Details");
         s.headers("Member", "Pillar", "Score", "Maturity", "What's working", "What can improve");
         for (Submission sub : submissions) {
+            NarrativeRedactor redactor = identity.redactor(sub);
             List<PillarEvaluation> evals = evalsBySubmission.getOrDefault(sub.getId(), List.of());
             evals.stream()
                     .sorted(Comparator.comparing(e -> e.getPillar().getName(), String.CASE_INSENSITIVE_ORDER))
@@ -389,8 +400,8 @@ public class TeamInsightsExcelService {
                             eval.getPillar().getName(),
                             ExcelWorkbookBuilder.formatPercent(eval.getScorePercentage()),
                             eval.getMaturityLabel(),
-                            ExcelWorkbookBuilder.bullets(eval.getAiWhatsWorking()),
-                            ExcelWorkbookBuilder.bullets(eval.getAiWhatCanImprove())
+                            ExcelWorkbookBuilder.bullets(redactor.redact(eval.getAiWhatsWorking())),
+                            ExcelWorkbookBuilder.bullets(redactor.redact(eval.getAiWhatCanImprove()))
                     ));
         }
         s.autoSize();

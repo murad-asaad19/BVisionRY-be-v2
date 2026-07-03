@@ -123,6 +123,18 @@ public class TeamInsightsExcelService {
         // can't accidentally leak a real name.
         MemberIdentity identity = memberIdentityFactory.identityFor(evaluatedSubmissions, showNames);
 
+        // One redacted narrative view per member, shared by the Highlights and
+        // Pillar Details sheets so the member's name is scrubbed in exactly one
+        // place (the PDF export builds the same view the same way).
+        Map<UUID, TeamMemberNarrative> narratives = new LinkedHashMap<>();
+        for (Submission sub : evaluatedSubmissions) {
+            UUID id = sub.getId();
+            narratives.put(id, TeamMemberNarrative.from(
+                    summaryBySubmission.get(id),
+                    evaluationsBySubmission.getOrDefault(id, List.of()),
+                    identity.redactor(sub)));
+        }
+
         try (ExcelWorkbookBuilder wb = new ExcelWorkbookBuilder();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
@@ -138,8 +150,8 @@ public class TeamInsightsExcelService {
             if (showNames) {
                 writeProfilesSheet(wb, evaluatedSubmissions, genderBySubmission, identity);
             }
-            writeHighlightsSheet(wb, evaluatedSubmissions, summaryBySubmission, identity);
-            writePillarDetailsSheet(wb, evaluatedSubmissions, evaluationsBySubmission, identity);
+            writeHighlightsSheet(wb, evaluatedSubmissions, narratives, identity);
+            writePillarDetailsSheet(wb, evaluatedSubmissions, narratives, identity);
 
             wb.write(out);
             return out.toByteArray();
@@ -363,22 +375,21 @@ public class TeamInsightsExcelService {
 
     private void writeHighlightsSheet(ExcelWorkbookBuilder wb,
                                       List<Submission> submissions,
-                                      Map<UUID, OverallSummary> summaryBySubmission,
+                                      Map<UUID, TeamMemberNarrative> narratives,
                                       MemberIdentity identity) {
         ExcelWorkbookBuilder.SheetBuilder s = wb.newSheet("Highlights");
         s.headers("Member", "Summary", "Strengths", "Development areas");
         for (Submission sub : submissions) {
-            OverallSummary summary = summaryBySubmission.get(sub.getId());
-            if (summary == null) {
+            TeamMemberNarrative narrative = narratives.get(sub.getId());
+            if (narrative == null) {
                 s.row(identity.name(sub), "", "", "");
                 continue;
             }
-            NarrativeRedactor redactor = identity.redactor(sub);
             s.row(
                     identity.name(sub),
-                    redactor.redact(summary.getSummaryNarrative()),
-                    ExcelWorkbookBuilder.bullets(redactor.redact(summary.getStrengths())),
-                    ExcelWorkbookBuilder.bullets(redactor.redact(summary.getDevelopmentAreas()))
+                    narrative.summaryNarrative(),
+                    ExcelWorkbookBuilder.bullets(narrative.strengths()),
+                    ExcelWorkbookBuilder.bullets(narrative.developmentAreas())
             );
         }
         s.autoSize();
@@ -386,23 +397,23 @@ public class TeamInsightsExcelService {
 
     private void writePillarDetailsSheet(ExcelWorkbookBuilder wb,
                                          List<Submission> submissions,
-                                         Map<UUID, List<PillarEvaluation>> evalsBySubmission,
+                                         Map<UUID, TeamMemberNarrative> narratives,
                                          MemberIdentity identity) {
         ExcelWorkbookBuilder.SheetBuilder s = wb.newSheet("Pillar Details");
         s.headers("Member", "Pillar", "Score", "Maturity", "What's working", "What can improve");
         for (Submission sub : submissions) {
-            NarrativeRedactor redactor = identity.redactor(sub);
-            List<PillarEvaluation> evals = evalsBySubmission.getOrDefault(sub.getId(), List.of());
-            evals.stream()
-                    .sorted(Comparator.comparing(e -> e.getPillar().getName(), String.CASE_INSENSITIVE_ORDER))
-                    .forEach(eval -> s.row(
-                            identity.name(sub),
-                            eval.getPillar().getName(),
-                            ExcelWorkbookBuilder.formatPercent(eval.getScorePercentage()),
-                            eval.getMaturityLabel(),
-                            ExcelWorkbookBuilder.bullets(redactor.redact(eval.getAiWhatsWorking())),
-                            ExcelWorkbookBuilder.bullets(redactor.redact(eval.getAiWhatCanImprove()))
-                    ));
+            TeamMemberNarrative narrative = narratives.get(sub.getId());
+            if (narrative == null) continue;
+            for (TeamMemberNarrative.PillarNarrative pv : narrative.pillars()) {
+                s.row(
+                        identity.name(sub),
+                        pv.pillarName(),
+                        ExcelWorkbookBuilder.formatPercent(pv.score()),
+                        pv.maturityLabel(),
+                        ExcelWorkbookBuilder.bullets(pv.whatsWorking()),
+                        ExcelWorkbookBuilder.bullets(pv.whatCanImprove())
+                );
+            }
         }
         s.autoSize();
     }

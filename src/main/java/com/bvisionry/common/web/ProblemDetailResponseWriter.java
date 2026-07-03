@@ -13,10 +13,14 @@ import java.io.IOException;
 /**
  * Writes an RFC-7807 {@link ProblemDetail} body directly to a servlet response, for
  * the handful of places that run before Spring MVC's exception-handling machinery
- * takes over (e.g. rate-limit filters ahead of the security chain), where
+ * takes over (e.g. rate-limit filters ahead of the security chain, and the security
+ * authentication entry point), where
  * {@link com.bvisionry.common.exception.GlobalExceptionHandler} never gets a chance
  * to intervene. A plain static utility (not a Spring bean) so it can be called from
  * filters without pulling an extra constructor dependency into web test slices.
+ *
+ * <p>The body is built via {@link ProblemDetails#of} so it carries the same
+ * {@code {type, status, detail, timestamp}} shape as the MVC exception-handling path.
  *
  * <p>Registers {@link ProblemDetailJacksonMixin} on its own {@link ObjectMapper} so
  * extension properties (set via {@link ProblemDetail#setProperty}) serialize as
@@ -35,11 +39,11 @@ public final class ProblemDetailResponseWriter {
     }
 
     /**
-     * Writes {@code status} + {@code detail} as an {@code application/problem+json}
-     * body to {@code response}.
+     * Writes {@code status} + {@code detail} (plus the canonical {@code timestamp})
+     * as an {@code application/problem+json} body to {@code response}.
      */
     public static void write(HttpServletResponse response, HttpStatus status, String detail) throws IOException {
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
+        ProblemDetail problem = ProblemDetails.of(status, detail);
         response.setStatus(status.value());
         response.setContentType("application/problem+json");
         JSON.writeValue(response.getWriter(), problem);

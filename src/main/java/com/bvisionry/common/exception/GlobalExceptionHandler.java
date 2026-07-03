@@ -1,5 +1,6 @@
 package com.bvisionry.common.exception;
 
+import com.bvisionry.common.web.ProblemDetails;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -7,7 +8,6 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -172,8 +172,8 @@ public class GlobalExceptionHandler {
     }
 
     private static ProblemDetail problem(HttpStatus status, String detail) {
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
-        problem.setProperty("timestamp", Instant.now());
-        return problem;
+        // Delegates to the shared factory so this MVC path emits the same
+        // {type,status,detail,timestamp} shape as the pre-MVC ProblemDetailResponseWriter.
+        return ProblemDetails.of(status, detail);
     }
 }

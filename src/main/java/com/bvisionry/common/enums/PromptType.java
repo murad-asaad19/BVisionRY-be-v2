@@ -7,5 +7,9 @@ public enum PromptType {
     PUBLIC_ASSESSMENT_SYSTEM_PROMPT,
     TEAM_INSIGHT,
     OVERALL_SUMMARY,
-    FREE_TIER_SUMMARY
+    FREE_TIER_SUMMARY,
+    /** System prompt for the Program Flow AI module composer (admin builder). */
+    PROGRAM_COMPOSER,
+    /** System prompt for the Program Flow AI coach hints (learner task player). */
+    PROGRAM_COACH
 }

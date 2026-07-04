@@ -1,0 +1,302 @@
+package com.bvisionry.programflow.web;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.programflow.domain.AudienceMode;
+import com.bvisionry.programflow.domain.FieldType;
+import com.bvisionry.programflow.domain.ProgramModule;
+import com.bvisionry.programflow.domain.ProgramSettings;
+import com.bvisionry.programflow.domain.ProgramSubmission;
+import com.bvisionry.programflow.domain.ProgramTask;
+import com.bvisionry.programflow.domain.ProgramTaskField;
+import com.bvisionry.programflow.domain.SubmissionStatus;
+import com.bvisionry.programflow.dto.AudienceDto;
+import com.bvisionry.programflow.dto.BoardResponse;
+import com.bvisionry.programflow.dto.CreateModuleRequest;
+import com.bvisionry.programflow.dto.FieldUpsert;
+import com.bvisionry.programflow.dto.ModuleDto;
+import com.bvisionry.programflow.dto.ProgramSettingsDto;
+import com.bvisionry.programflow.dto.PulseResponse;
+import com.bvisionry.programflow.dto.PulseResponse.CellState;
+import com.bvisionry.programflow.dto.PulseResponse.PulseColumn;
+import com.bvisionry.programflow.dto.PulseResponse.PulseRow;
+import com.bvisionry.programflow.dto.TaskDto;
+import com.bvisionry.programflow.dto.UpdateAudienceRequest;
+import com.bvisionry.programflow.dto.UpdateModuleRequest;
+import com.bvisionry.programflow.dto.UpdateTaskRequest;
+import com.bvisionry.programflow.repository.OrgMemberRow;
+import com.bvisionry.programflow.repository.ProgramModuleRepository;
+import com.bvisionry.programflow.repository.ProgramSettingsRepository;
+import com.bvisionry.programflow.repository.ProgramSubmissionRepository;
+import com.bvisionry.programflow.repository.ProgramTaskRepository;
+import com.bvisionry.programflow.repository.TeamRepository;
+
+import lombok.RequiredArgsConstructor;
+
+/** Admin (program director) operations: board, modules, tasks, pulse, settings. */
+@Service
+@RequiredArgsConstructor
+@Transactional
+public class ProgramAdminService {
+
+    private final ProgramModuleRepository modules;
+    private final ProgramTaskRepository tasks;
+    private final ProgramSubmissionRepository submissions;
+    private final ProgramSettingsRepository settings;
+    private final TeamRepository teams;
+
+    // ------------------------------------------------------------------ board
+
+    @Transactional(readOnly = true)
+    public BoardResponse getBoard(UUID orgId) {
+        List<ProgramModule> mods = modules.findByOrgIdOrderByPositionAsc(orgId);
+        List<OrgMemberRow> members = teams.findOrgMembers(orgId);
+        List<ModuleDto> moduleDtos = mods.stream()
+                .map(m -> ProgramMapper.toDto(m, reached(m, members)))
+                .toList();
+        int taskCount = mods.stream().mapToInt(m -> m.getTasks().size()).sum();
+        return new BoardResponse(
+                ProgramMapper.toDto(settings.findById(orgId).orElse(null)),
+                moduleDtos,
+                new BoardResponse.BoardStats(mods.size(), taskCount, members.size()));
+    }
+
+    public ProgramSettingsDto updateSettings(UUID orgId, ProgramSettingsDto req) {
+        ProgramSettings s = settings.findById(orgId).orElseGet(() -> {
+            ProgramSettings created = new ProgramSettings();
+            created.setOrgId(orgId);
+            return created;
+        });
+        s.setStageLabel(req.stageLabel());
+        s.setDripEnabled(req.dripEnabled());
+        s.setDueSoonDays(req.dueSoonDays());
+        s.setEndLabel(req.endLabel());
+        s.setEndAt(req.endAt());
+        return ProgramMapper.toDto(settings.save(s));
+    }
+
+    // ---------------------------------------------------------------- modules
+
+    public ModuleDto createModule(UUID orgId, CreateModuleRequest req) {
+        ProgramModule m = new ProgramModule();
+        m.setOrgId(orgId);
+        m.setName(req.name());
+        m.setSummary(req.summary());
+        m.setPosition(modules.findByOrgIdOrderByPositionAsc(orgId).size());
+        return ProgramMapper.toDto(modules.save(m), reached(m, teams.findOrgMembers(orgId)));
+    }
+
+    public ModuleDto updateModule(UUID orgId, UUID moduleId, UpdateModuleRequest req) {
+        ProgramModule m = requireModule(orgId, moduleId);
+        m.setName(req.name());
+        m.setSummary(req.summary());
+        m.setLockMode(req.lockMode());
+        m.setUnlockAt(req.unlockAt());
+        return ProgramMapper.toDto(m, reached(m, teams.findOrgMembers(orgId)));
+    }
+
+    public AudienceDto updateAudience(UUID orgId, UUID moduleId, UpdateAudienceRequest req) {
+        ProgramModule m = requireModule(orgId, moduleId);
+        List<OrgMemberRow> members = teams.findOrgMembers(orgId);
+
+        if (req.mode() == AudienceMode.TEAMS) {
+            var orgTeamIds = teams.findByOrgIdOrderByCreatedAtAsc(orgId).stream()
+                    .map(t -> t.getId()).collect(Collectors.toSet());
+            if (!orgTeamIds.containsAll(req.teamIds())) {
+                throw new BadRequestException("One or more teams do not belong to this organization");
+            }
+        }
+        if (req.mode() == AudienceMode.MEMBERS) {
+            var orgMemberIds = members.stream().map(OrgMemberRow::getId).collect(Collectors.toSet());
+            if (!orgMemberIds.containsAll(req.memberIds())) {
+                throw new BadRequestException("One or more members do not belong to this organization");
+            }
+        }
+
+        m.setAssignMode(req.mode());
+        m.setTeamIds(new LinkedHashSet<>(req.teamIds()));
+        m.setMemberIds(new LinkedHashSet<>(req.memberIds()));
+        return new AudienceDto(m.getAssignMode(), List.copyOf(m.getTeamIds()),
+                List.copyOf(m.getMemberIds()), reached(m, members));
+    }
+
+    // ------------------------------------------------------------------ tasks
+
+    public TaskDto createTask(UUID orgId, UUID moduleId) {
+        ProgramModule m = requireModule(orgId, moduleId);
+        ProgramTask t = new ProgramTask();
+        t.setModule(m);
+        t.setName("Untitled task");
+        t.setPosition(m.getTasks().size());
+        ProgramTaskField intro = new ProgramTaskField();
+        intro.setTask(t);
+        intro.setFieldType(FieldType.INSTRUCTIONS);
+        intro.setRequired(false);
+        intro.setPosition(0);
+        intro.setConfig(new LinkedHashMap<>(Map.of("text", "Describe what the founder needs to do.")));
+        t.getFields().add(intro);
+        m.getTasks().add(t);
+        return ProgramMapper.toDto(tasks.save(t));
+    }
+
+    public TaskDto updateTask(UUID orgId, UUID taskId, UpdateTaskRequest req) {
+        ProgramTask t = requireTask(orgId, taskId);
+        t.setName(req.name());
+        t.setDueDate(req.dueDate());
+        t.setStatus(req.status());
+        t.setAiDraft(req.aiDraft());
+        reconcileFields(t, req.fields());
+        return ProgramMapper.toDto(t);
+    }
+
+    /**
+     * Replaces the task's field list with the submitted one, keeping the
+     * managed entities for ids that survive so learner answers (keyed by field
+     * id) stay attached across edits.
+     */
+    private void reconcileFields(ProgramTask t, List<FieldUpsert> upserts) {
+        var keptIds = upserts.stream().map(FieldUpsert::id).filter(java.util.Objects::nonNull)
+                .collect(Collectors.toSet());
+        t.getFields().removeIf(f -> !keptIds.contains(f.getId()));
+        Map<UUID, ProgramTaskField> byId = t.getFields().stream()
+                .collect(Collectors.toMap(ProgramTaskField::getId, Function.identity()));
+
+        int position = 0;
+        for (FieldUpsert fu : upserts) {
+            ProgramTaskField f = fu.id() == null ? null : byId.get(fu.id());
+            if (f == null) {
+                f = new ProgramTaskField();
+                f.setTask(t);
+                t.getFields().add(f);
+            }
+            f.setFieldType(fu.type());
+            f.setRequired(fu.type().answerable() && fu.required());
+            f.setPosition(position++);
+            f.setConfig(new LinkedHashMap<>(fu.config()));
+        }
+    }
+
+    /** "Add to board": persists an AI-composed draft as a module of AI-draft tasks. */
+    public ModuleDto addDraftModule(UUID orgId, com.bvisionry.programflow.dto.ModuleDraft draft) {
+        ProgramModule m = new ProgramModule();
+        m.setOrgId(orgId);
+        m.setName(draft.name());
+        m.setSummary(draft.summary());
+        m.setPosition(modules.findByOrgIdOrderByPositionAsc(orgId).size());
+
+        int taskPosition = 0;
+        for (var draftTask : draft.tasks()) {
+            ProgramTask t = new ProgramTask();
+            t.setModule(m);
+            t.setName(draftTask.name());
+            t.setDueDate(draftTask.dueDate());
+            t.setAiDraft(true);
+            t.setPosition(taskPosition++);
+            int fieldPosition = 0;
+            for (var draftField : draftTask.fields()) {
+                ProgramTaskField f = new ProgramTaskField();
+                f.setTask(t);
+                f.setFieldType(draftField.type());
+                f.setRequired(draftField.type().answerable() && draftField.required());
+                f.setPosition(fieldPosition++);
+                f.setConfig(new LinkedHashMap<>(draftField.config()));
+                t.getFields().add(f);
+            }
+            m.getTasks().add(t);
+        }
+        m = modules.save(m);
+        return ProgramMapper.toDto(m, reached(m, teams.findOrgMembers(orgId)));
+    }
+
+    // ------------------------------------------------------------------ pulse
+
+    @Transactional(readOnly = true)
+    public PulseResponse getPulse(UUID orgId) {
+        List<ProgramModule> mods = modules.findByOrgIdOrderByPositionAsc(orgId);
+        List<PulseColumn> columns = new ArrayList<>();
+        List<UUID> taskIds = new ArrayList<>();
+        List<ProgramModule> columnModules = new ArrayList<>();
+        for (int mi = 0; mi < mods.size(); mi++) {
+            List<ProgramTask> live = ProgramRules.liveTasks(mods.get(mi));
+            for (int ti = 0; ti < live.size(); ti++) {
+                ProgramTask task = live.get(ti);
+                columns.add(new PulseColumn(task.getId(), mi + 1, ti + 1,
+                        mods.get(mi).getName(), task.getName(), task.getDueDate()));
+                taskIds.add(task.getId());
+                columnModules.add(mods.get(mi));
+            }
+        }
+
+        Map<UUID, Map<UUID, ProgramSubmission>> byUserThenTask = taskIds.isEmpty()
+                ? Map.of()
+                : submissions.findByTaskIdIn(taskIds).stream().collect(Collectors.groupingBy(
+                        ProgramSubmission::getUserId,
+                        Collectors.toMap(ProgramSubmission::getTaskId, Function.identity())));
+
+        Map<UUID, String> teamNames = teams.findByOrgIdOrderByCreatedAtAsc(orgId).stream()
+                .collect(Collectors.toMap(t -> t.getId(), t -> t.getName()));
+
+        List<PulseRow> rows = teams.findOrgMembers(orgId).stream().map(member -> {
+            Map<UUID, ProgramSubmission> mine = byUserThenTask.getOrDefault(member.getId(), Map.of());
+            List<CellState> cells = new ArrayList<>(taskIds.size());
+            int assigned = 0;
+            long done = 0;
+            for (int i = 0; i < taskIds.size(); i++) {
+                // A member outside a module's audience was never given its tasks;
+                // don't score them against work they can't see (mirrors the
+                // learner journey's ProgramRules.includes visibility).
+                if (!ProgramRules.includes(columnModules.get(i), member.getId(), member.getTeamId())) {
+                    cells.add(CellState.NOT_ASSIGNED);
+                    continue;
+                }
+                assigned++;
+                ProgramSubmission s = mine.get(taskIds.get(i));
+                CellState state = s == null
+                        ? CellState.NOT_STARTED
+                        : s.getStatus() == SubmissionStatus.SUBMITTED ? CellState.SUBMITTED : CellState.IN_DRAFT;
+                if (state == CellState.SUBMITTED) {
+                    done++;
+                }
+                cells.add(state);
+            }
+            int pct = assigned == 0 ? 0 : Math.round(done * 100f / assigned);
+            return new PulseRow(member.getId(), member.getName(),
+                    member.getTeamId() == null ? null : teamNames.get(member.getTeamId()), cells, pct);
+        }).toList();
+
+        int dueSoonDays = ProgramMapper.toDto(settings.findById(orgId).orElse(null)).dueSoonDays();
+        return new PulseResponse(columns, rows, dueSoonDays);
+    }
+
+    // ---------------------------------------------------------------- helpers
+
+    private int reached(ProgramModule m, List<OrgMemberRow> members) {
+        return (int) members.stream()
+                .filter(member -> ProgramRules.includes(m, member.getId(), member.getTeamId()))
+                .count();
+    }
+
+    private ProgramModule requireModule(UUID orgId, UUID moduleId) {
+        return modules.findById(moduleId)
+                .filter(m -> m.getOrgId().equals(orgId))
+                .orElseThrow(() -> new ResourceNotFoundException("Module", moduleId.toString()));
+    }
+
+    private ProgramTask requireTask(UUID orgId, UUID taskId) {
+        return tasks.findWithModule(taskId)
+                .filter(t -> t.getModule().getOrgId().equals(orgId))
+                .orElseThrow(() -> new ResourceNotFoundException("Task", taskId.toString()));
+    }
+}

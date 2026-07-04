@@ -4,7 +4,9 @@ import com.bvisionry.aiconfig.service.AIConfigService;
 import com.bvisionry.common.exception.AIServiceException;
 import dev.langchain4j.model.chat.Capability;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
+import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -71,6 +73,7 @@ public class Lc4jChatModelProvider {
     private String routingVariant;
 
     private final Map<String, ChatModel> cache = new ConcurrentHashMap<>();
+    private final Map<String, StreamingChatModel> streamingCache = new ConcurrentHashMap<>();
 
     /**
      * A {@link ChatModel} for {@code modelName} tuned for one call type.
@@ -103,6 +106,38 @@ public class Lc4jChatModelProvider {
                 apiKeyFingerprint(apiKey));
 
         return cache.computeIfAbsent(cacheKey, k -> build(modelName, temperature, maxTokens, apiKey, caps));
+    }
+
+    /**
+     * A {@link StreamingChatModel} for {@code modelName} — same OpenRouter
+     * transport, key handling and headers as {@link #modelFor}, but streaming
+     * (SSE) so callers can forward tokens as they arrive. Structured-output
+     * capability gating is deliberately skipped: streaming callers enforce
+     * shape downstream (a strict schema would buffer, defeating the stream).
+     */
+    public StreamingChatModel streamingModelFor(String modelName, double temperature, int maxTokens) {
+        if (modelName == null || modelName.isBlank()) {
+            throw new AIServiceException("No AI model configured for this call.");
+        }
+        String apiKey = configService.getDecryptedOpenRouterApiKey();
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new AIServiceException("AI provider API key is not configured. Set it in the admin panel.");
+        }
+        String cacheKey = String.join("|",
+                "streaming",
+                modelName,
+                Double.toString(temperature),
+                Integer.toString(maxTokens),
+                apiKeyFingerprint(apiKey));
+        return streamingCache.computeIfAbsent(cacheKey, k -> OpenAiStreamingChatModel.builder()
+                .baseUrl(OPENROUTER_OPENAI_BASE_URL)
+                .apiKey(apiKey)
+                .modelName(applyRoutingVariant(modelName))
+                .temperature(temperature)
+                .maxTokens(maxTokens)
+                .timeout(Duration.ofSeconds(requestTimeoutSeconds))
+                .customHeaders(buildHeaders())
+                .build());
     }
 
     private ChatModel build(String modelName, double temperature, int maxTokens, String apiKey,

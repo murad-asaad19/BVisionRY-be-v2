@@ -6,6 +6,7 @@ import com.bvisionry.businesscard.ratelimit.BusinessCardRateLimitFilter;
 import com.bvisionry.common.web.ProblemDetailResponseWriter;
 import com.bvisionry.publicassessment.ratelimit.PublicAssessmentRateLimitFilter;
 import com.bvisionry.survey.ratelimit.SurveySubmitRateLimitFilter;
+import jakarta.servlet.DispatcherType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -95,6 +96,16 @@ public class SecurityConfig {
                 )
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // ASYNC/ERROR re-dispatches of an ALREADY-authorized request.
+                        // AuthorizationFilter runs on every dispatch type; an SSE
+                        // SseEmitter completion (AI coach/composer) re-dispatches as
+                        // ASYNC on a container thread where the stateless SecurityContext
+                        // isn't re-established (the JWT OncePerRequestFilter skips async),
+                        // so it would be denied as anonymous and tear the stream before
+                        // the terminal event. Permit these internal dispatches — the
+                        // initial REQUEST dispatch and controller @PreAuthorize still
+                        // fully guard access; clients cannot forge an ASYNC dispatch.
+                        .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
                         // Pre-auth entry points only — narrowly scoped so an
                         // expired-session call to /api/auth/me fails fast with
                         // 401 instead of leaking past the filter to a null

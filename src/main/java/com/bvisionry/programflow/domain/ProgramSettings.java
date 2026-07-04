@@ -11,7 +11,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * Per-org program tweakables. Row is optional — absence means defaults
+ * Per-cohort program tweakables. Row is optional — absence means defaults
  * ({@code Week}, drip on, due-soon 3 days, no program-end flag).
  */
 @Entity
@@ -21,8 +21,8 @@ import lombok.Setter;
 public class ProgramSettings {
 
     @Id
-    @Column(name = "org_id", nullable = false, updatable = false)
-    private UUID orgId;
+    @Column(name = "cohort_id", nullable = false, updatable = false)
+    private UUID cohortId;
 
     @Column(name = "stage_label", nullable = false, length = 30)
     private String stageLabel = "Week";

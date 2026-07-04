@@ -7,12 +7,14 @@ import java.util.UUID;
 
 import com.bvisionry.programflow.domain.SubmissionStatus;
 
-/** The learner journey: audience-filtered modules with drip state + my progress. */
+/** The learner journey for one cohort: audience-filtered modules with drip state + my progress. */
 public record JourneyResponse(
         ProgramSettingsDto settings,
         Progress progress,
         GamificationDto gamification,
-        List<JourneyModule> modules) {
+        List<JourneyModule> modules,
+        UUID cohortId,
+        boolean readOnly) {
 
     public record Progress(int done, int total) {
     }

@@ -20,6 +20,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.security.CurrentUser;
 import com.bvisionry.common.security.CurrentUserAccessor;
+import com.bvisionry.programflow.domain.Cohort;
+import com.bvisionry.programflow.domain.CohortStatus;
 import com.bvisionry.programflow.domain.FieldType;
 import com.bvisionry.programflow.domain.ModuleLockMode;
 import com.bvisionry.programflow.domain.ProgramModule;
@@ -30,6 +32,7 @@ import com.bvisionry.programflow.domain.ProgramTaskStatus;
 import com.bvisionry.programflow.domain.SubmissionStatus;
 import com.bvisionry.programflow.dto.GamificationDto;
 import com.bvisionry.programflow.dto.SubmitResponse;
+import com.bvisionry.programflow.repository.CohortRepository;
 import com.bvisionry.programflow.repository.OrgMemberRow;
 import com.bvisionry.programflow.repository.ProgramModuleRepository;
 import com.bvisionry.programflow.repository.ProgramSettingsRepository;
@@ -40,6 +43,8 @@ import com.bvisionry.programflow.repository.TeamRepository;
 @ExtendWith(MockitoExtension.class)
 class MyProgramServiceTest {
 
+    @Mock
+    private CohortRepository cohorts;
     @Mock
     private ProgramModuleRepository modules;
     @Mock
@@ -57,17 +62,26 @@ class MyProgramServiceTest {
 
     private final UUID orgId = UUID.randomUUID();
     private final UUID userId = UUID.randomUUID();
+    private final UUID cohortId = UUID.randomUUID();
+    private Cohort cohort;
     private ProgramModule module;
     private ProgramTask task;
     private ProgramTaskField requiredShort;
 
     @BeforeEach
     void setUp() {
-        service = new MyProgramService(modules, tasks, submissions, settings, teams, currentUser);
+        service = new MyProgramService(cohorts, modules, tasks, submissions, settings, teams, currentUser);
+
+        cohort = new Cohort();
+        cohort.setId(cohortId);
+        cohort.setOrgId(orgId);
+        cohort.setStatus(CohortStatus.ACTIVE);
+        cohort.getMemberIds().add(userId);
 
         module = new ProgramModule();
         module.setId(UUID.randomUUID());
         module.setOrgId(orgId);
+        module.setCohortId(cohortId);
         module.setLockMode(ModuleLockMode.UNLOCKED);
 
         task = new ProgramTask();
@@ -86,12 +100,14 @@ class MyProgramServiceTest {
         module.getTasks().add(task);
 
         when(currentUser.require()).thenReturn(new CurrentUser(userId, orgId, "Yousef Amin", "MEMBER"));
-        when(teams.findOrgMembers(orgId)).thenReturn(List.of(memberRow(userId, "Yousef Amin")));
-        when(modules.findByOrgIdOrderByPositionAsc(orgId)).thenReturn(List.of(module));
-        when(submissions.findByUserId(userId)).thenReturn(List.of());
-        // Not every test path touches these — keep them lenient.
+        // A DRAFT-task path bails before resolving the cohort/board, so keep these
+        // shared stubs lenient — not every test exercises them.
+        org.mockito.Mockito.lenient().when(cohorts.findEnrolled(userId)).thenReturn(List.of(cohort));
+        org.mockito.Mockito.lenient().when(teams.findOrgMembers(orgId)).thenReturn(List.of(memberRow(userId, "Yousef Amin")));
+        org.mockito.Mockito.lenient().when(modules.findByCohortIdOrderByPositionAsc(cohortId)).thenReturn(List.of(module));
+        org.mockito.Mockito.lenient().when(submissions.findByUserId(userId)).thenReturn(List.of());
         org.mockito.Mockito.lenient().when(tasks.findWithModule(task.getId())).thenReturn(Optional.of(task));
-        org.mockito.Mockito.lenient().when(settings.findById(orgId)).thenReturn(Optional.empty());
+        org.mockito.Mockito.lenient().when(settings.findById(cohortId)).thenReturn(Optional.empty());
     }
 
     private static OrgMemberRow memberRow(UUID id, String name) {
@@ -187,7 +203,7 @@ class MyProgramServiceTest {
         mine.setPointsAwarded(55);
         when(submissions.findByUserId(userId)).thenReturn(List.of(mine));
 
-        var journey = service.journey();
+        var journey = service.journey(null);
 
         assertThat(journey.progress().done()).isEqualTo(1);
         assertThat(journey.progress().total()).isEqualTo(1);

@@ -50,6 +50,7 @@ public class ProgramAiService {
     private final ProgramModuleRepository modules;
     private final ProgramSettingsRepository settings;
     private final MyProgramService myProgram;
+    private final CohortService cohortService;
     private final StreamingChatPort chat;
 
     /** Lenient mapper for model output: case-insensitive enums, ignore extras. */
@@ -62,12 +63,16 @@ public class ProgramAiService {
 
     // --------------------------------------------------------------- composer
 
-    public SseEmitter compose(UUID orgId, String prompt) {
+    public SseEmitter compose(UUID orgId, UUID cohortId, String prompt) {
+        // Tenant guard: the cohort must belong to the org in the path (mirrors
+        // every other admin program endpoint) so a foreign cohortId can't leak
+        // another org's curriculum into the composer prompt.
+        cohortService.require(orgId, cohortId);
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         AtomicBoolean drafting = new AtomicBoolean(false);
 
         emit(emitter, "status", "Reading your existing curriculum…");
-        String userMessage = composerMessage(orgId, prompt);
+        String userMessage = composerMessage(cohortId, prompt);
 
         chat.stream(PromptType.PROGRAM_COMPOSER, userMessage, COMPOSER_MAX_TOKENS,
                 new StreamingChatPort.StreamHandler() {
@@ -100,11 +105,11 @@ public class ProgramAiService {
         return emitter;
     }
 
-    private String composerMessage(UUID orgId, String prompt) {
-        String stage = settings.findById(orgId)
+    private String composerMessage(UUID cohortId, String prompt) {
+        String stage = settings.findById(cohortId)
                 .map(s -> s.getStageLabel()).orElse("Week");
         StringBuilder curriculum = new StringBuilder();
-        List<ProgramModule> existing = modules.findByOrgIdOrderByPositionAsc(orgId);
+        List<ProgramModule> existing = modules.findByCohortIdOrderByPositionAsc(cohortId);
         if (existing.isEmpty()) {
             curriculum.append("(no modules yet — this will be the first)");
         }

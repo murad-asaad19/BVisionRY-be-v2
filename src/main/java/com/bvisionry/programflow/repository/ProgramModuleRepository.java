@@ -9,5 +9,5 @@ import com.bvisionry.programflow.domain.ProgramModule;
 
 public interface ProgramModuleRepository extends JpaRepository<ProgramModule, UUID> {
 
-    List<ProgramModule> findByOrgIdOrderByPositionAsc(UUID orgId);
+    List<ProgramModule> findByCohortIdOrderByPositionAsc(UUID cohortId);
 }

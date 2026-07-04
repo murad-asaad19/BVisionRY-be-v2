@@ -27,6 +27,9 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     long countByUserType(String userType);
     Optional<User> findFirstByOrganizationIdAndRole(UUID organizationId, UserRole role);
     List<User> findByRole(UserRole role);
+    // Push-notification recipient resolution: only ACTIVE admins can act on a
+    // notification, mirroring the status-scoped count rationale above.
+    List<User> findByOrganizationIdAndRoleAndStatus(UUID organizationId, UserRole role, UserStatus status);
     long countByRole(UserRole role);
 
     /**

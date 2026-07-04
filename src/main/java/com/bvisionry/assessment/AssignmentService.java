@@ -22,6 +22,8 @@ import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.evaluation.EvaluationService;
 import com.bvisionry.membertype.MemberTypeService;
 import com.bvisionry.notification.EmailService;
+import com.bvisionry.notification.push.NotificationType;
+import com.bvisionry.notification.push.PushNotificationService;
 import com.bvisionry.organization.OrgAuditActions;
 import com.bvisionry.organization.OrganizationRepository;
 import com.bvisionry.organization.entity.Organization;
@@ -68,6 +70,7 @@ public class AssignmentService {
     private final OrganizationRepository organizationRepository;
     private final UserRepository userRepository;
     private final EmailService emailService;
+    private final PushNotificationService pushNotificationService;
     private final AuditService auditService;
     private final EvaluationService evaluationService;
     private final AssessmentService assessmentService;
@@ -288,6 +291,12 @@ public class AssignmentService {
 
         // Fire-and-forget email — don't block the response if SMTP is slow.
         sendAssignmentEmailAsync(member, pipeline, savedAssignment, savedSubmission);
+
+        // Same fire-and-forget contract for the browser-push channel.
+        pushNotificationService.notifyUser(member.getId(), NotificationType.ASSESSMENT_ASSIGNED,
+                "New assessment assigned",
+                "\"" + pipeline.getName() + "\" is ready for you.",
+                "/my/assessments/" + savedSubmission.getId());
 
         return new AssignmentCreated(savedAssignment, savedSubmission);
     }
@@ -638,6 +647,10 @@ public class AssignmentService {
                 assignment.getPipeline().getName(),
                 submission.getEffectiveDeadline(),
                 frontendUrls.path("/my/assessments/" + submission.getId()));
+        pushNotificationService.notifyUser(member.getId(), NotificationType.ASSESSMENT_REMINDER,
+                "Assessment reminder",
+                "\"" + assignment.getPipeline().getName() + "\" is still waiting for you.",
+                "/my/assessments/" + submission.getId());
         // Log user UUID instead of email to keep PII out of application logs
         // — the user can still be looked up via the UUID for support cases.
         log.info("Reminder sent for assignment {} to user {}", assignmentId, member.getId());

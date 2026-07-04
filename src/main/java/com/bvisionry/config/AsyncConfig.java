@@ -130,4 +130,24 @@ public class AsyncConfig {
         executor.initialize();
         return executor;
     }
+
+    /**
+     * Bounded pool for web-push fan-out ({@code @Async("pushExecutor")}).
+     * Separate from {@link #emailExecutor()} so a burst of push sends (one
+     * HTTPS call per subscribed browser) can never delay transactional email
+     * and vice versa. Push is best-effort: on saturation the send runs on the
+     * caller thread rather than throwing into the business flow.
+     */
+    @Bean(name = "pushExecutor")
+    public Executor pushExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(500);
+        executor.setThreadNamePrefix("push-");
+        executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setTaskDecorator(new MdcTaskDecorator());
+        executor.initialize();
+        return executor;
+    }
 }

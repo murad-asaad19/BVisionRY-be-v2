@@ -234,6 +234,46 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- Web Push (VAPID) — browser/desktop notifications. jcommander only
+             serves the library's CLI and async-http-client only its
+             PushAsyncService; we use the synchronous PushService, so both are
+             excluded. BouncyCastle (declared optional upstream) supplies the
+             EC crypto for VAPID signing + RFC 8291 payload encryption. -->
+        <dependency>
+            <groupId>nl.martijndwars</groupId>
+            <artifactId>web-push</artifactId>
+            <version>5.1.2</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.beust</groupId>
+                    <artifactId>jcommander</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.asynchttpclient</groupId>
+                    <artifactId>async-http-client</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.81</version>
+        </dependency>
+        <!-- web-push declares these runtime-scoped, but PushService's API
+             surface leaks them (send returns org.apache.http.HttpResponse and
+             throws org.jose4j.lang.JoseException), so the compiler needs both.
+             Same versions web-push resolves at runtime. -->
+        <dependency>
+            <groupId>org.apache.httpcomponents</groupId>
+            <artifactId>httpasyncclient</artifactId>
+            <version>4.1.5</version>
+        </dependency>
+        <dependency>
+            <groupId>org.bitbucket.b_c</groupId>
+            <artifactId>jose4j</artifactId>
+            <version>0.7.9</version>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

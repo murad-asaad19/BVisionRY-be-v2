@@ -10,11 +10,15 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 import com.bvisionry.programflow.dto.GamificationDto;
 import com.bvisionry.programflow.dto.JourneyResponse;
 import com.bvisionry.programflow.dto.LeaderboardResponse;
+import com.bvisionry.programflow.dto.LearnerCohortDto;
 import com.bvisionry.programflow.dto.PlayerResponse;
 import com.bvisionry.programflow.dto.SaveAnswersRequest;
 import com.bvisionry.programflow.dto.SaveAnswersResponse;
@@ -49,9 +53,15 @@ public class MyProgramController {
         this.aiService = aiService;
     }
 
+    /** The cohorts the learner is enrolled in (for the cohort switcher). */
+    @GetMapping("/cohorts")
+    public List<LearnerCohortDto> cohorts() {
+        return service.myCohorts();
+    }
+
     @GetMapping
-    public JourneyResponse journey() {
-        return service.journey();
+    public JourneyResponse journey(@RequestParam(required = false) UUID cohortId) {
+        return service.journey(cohortId);
     }
 
     @GetMapping("/tasks/{taskId}")
@@ -74,8 +84,8 @@ public class MyProgramController {
     }
 
     @GetMapping("/leaderboard")
-    public LeaderboardResponse leaderboard() {
-        return service.leaderboard();
+    public LeaderboardResponse leaderboard(@RequestParam(required = false) UUID cohortId) {
+        return service.leaderboard(cohortId);
     }
 
     @GetMapping("/gamification")

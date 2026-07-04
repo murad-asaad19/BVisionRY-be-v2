@@ -1,18 +1,15 @@
 package com.bvisionry.programflow.domain;
 
 import java.time.OffsetDateTime;
-import java.util.ArrayList;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
 import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.Generated;
 
-import jakarta.persistence.CascadeType;
-import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
+import jakarta.persistence.CollectionTable;
 import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -20,8 +17,6 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
-import jakarta.persistence.OneToMany;
-import jakarta.persistence.OrderBy;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
@@ -29,15 +24,15 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * A drip-scheduled stage of the program: a kanban column on the admin board,
- * a timeline node on the learner journey. Owns its tasks and its audience
- * (everyone / selected teams / selected members).
+ * A cohort: one program instance within an org. Owns its modules and settings
+ * (both FK cohort_id), carries the enrolled learner set and an ACTIVE / FINISHED
+ * lifecycle. Soft-coupled to identity by UUID, like the rest of the slice.
  */
 @Entity
-@Table(name = "program_modules")
+@Table(name = "cohorts")
 @Getter
 @Setter
-public class ProgramModule {
+public class Cohort {
 
     @Id
     @Generated
@@ -45,46 +40,23 @@ public class ProgramModule {
     @Column(name = "id", nullable = false, updatable = false, insertable = false)
     private UUID id;
 
-    @Column(name = "org_id", nullable = false)
+    @Column(name = "org_id", nullable = false, updatable = false)
     private UUID orgId;
-
-    /** Owning cohort. org_id is kept alongside since audience (teams/members) is org-scoped. */
-    @Column(name = "cohort_id", nullable = false)
-    private UUID cohortId;
 
     @Column(name = "name", nullable = false, length = 200)
     private String name;
-
-    @Column(name = "summary")
-    private String summary;
 
     @Column(name = "position", nullable = false)
     private int position = 0;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "lock_mode", nullable = false, length = 20)
-    private ModuleLockMode lockMode = ModuleLockMode.SEQUENTIAL;
-
-    @Column(name = "unlock_at")
-    private OffsetDateTime unlockAt;
-
-    @Enumerated(EnumType.STRING)
-    @Column(name = "assign_mode", nullable = false, length = 20)
-    private AudienceMode assignMode = AudienceMode.ALL;
+    @Column(name = "status", nullable = false, length = 20)
+    private CohortStatus status = CohortStatus.ACTIVE;
 
     @ElementCollection(fetch = FetchType.LAZY)
-    @CollectionTable(name = "program_module_teams", joinColumns = @JoinColumn(name = "module_id"))
-    @Column(name = "team_id", nullable = false)
-    private Set<UUID> teamIds = new LinkedHashSet<>();
-
-    @ElementCollection(fetch = FetchType.LAZY)
-    @CollectionTable(name = "program_module_members", joinColumns = @JoinColumn(name = "module_id"))
+    @CollectionTable(name = "cohort_members", joinColumns = @JoinColumn(name = "cohort_id"))
     @Column(name = "user_id", nullable = false)
     private Set<UUID> memberIds = new LinkedHashSet<>();
-
-    @OneToMany(mappedBy = "module", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
-    @OrderBy("position ASC")
-    private List<ProgramTask> tasks = new ArrayList<>();
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;

@@ -31,21 +31,22 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 
 /**
- * Admin program-flow endpoints (program board, task builder, cohort pulse).
+ * Admin program-flow endpoints for one cohort (program board, task builder, pulse).
  *
  * <ul>
- *   <li>GET  /api/organizations/{orgId}/program                        — full board</li>
- *   <li>PUT  /api/organizations/{orgId}/program/settings               — tweakables</li>
- *   <li>POST /api/organizations/{orgId}/program/modules                — create module</li>
- *   <li>PUT  /api/organizations/{orgId}/program/modules/{moduleId}     — update module</li>
- *   <li>PUT  /api/organizations/{orgId}/program/modules/{moduleId}/audience — assign</li>
- *   <li>POST /api/organizations/{orgId}/program/modules/{moduleId}/tasks — create task</li>
- *   <li>PUT  /api/organizations/{orgId}/program/tasks/{taskId}         — save task builder</li>
- *   <li>GET  /api/organizations/{orgId}/program/pulse                  — cohort matrix</li>
+ *   <li>GET  …/cohorts/{cohortId}/program                        — full board</li>
+ *   <li>PUT  …/cohorts/{cohortId}/program/settings               — tweakables</li>
+ *   <li>POST …/cohorts/{cohortId}/program/modules                — create module</li>
+ *   <li>PUT  …/cohorts/{cohortId}/program/modules/{moduleId}     — update module</li>
+ *   <li>PUT  …/cohorts/{cohortId}/program/modules/{moduleId}/audience — assign</li>
+ *   <li>POST …/cohorts/{cohortId}/program/modules/{moduleId}/tasks — create task</li>
+ *   <li>PUT  …/cohorts/{cohortId}/program/tasks/{taskId}         — save task builder</li>
+ *   <li>GET  …/cohorts/{cohortId}/program/pulse                  — cohort matrix</li>
  * </ul>
  */
 @RestController
-@RequestMapping(path = "/api/organizations/{orgId}/program", produces = MediaType.APPLICATION_JSON_VALUE)
+@RequestMapping(path = "/api/organizations/{orgId}/cohorts/{cohortId}/program",
+        produces = MediaType.APPLICATION_JSON_VALUE)
 @PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId))")
 @Tag(name = "Program Flow (admin)", description = "Program board, task builder, cohort pulse.")
 public class ProgramAdminController {
@@ -59,68 +60,75 @@ public class ProgramAdminController {
     }
 
     @GetMapping
-    public BoardResponse getBoard(@PathVariable UUID orgId) {
-        return service.getBoard(orgId);
+    public BoardResponse getBoard(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
+        return service.getBoard(orgId, cohortId);
     }
 
     @PutMapping("/settings")
     public ProgramSettingsDto updateSettings(
             @PathVariable UUID orgId,
+            @PathVariable UUID cohortId,
             @Valid @RequestBody ProgramSettingsDto req) {
-        return service.updateSettings(orgId, req);
+        return service.updateSettings(orgId, cohortId, req);
     }
 
     @PostMapping("/modules")
     @ResponseStatus(HttpStatus.CREATED)
     public ModuleDto createModule(
             @PathVariable UUID orgId,
+            @PathVariable UUID cohortId,
             @Valid @RequestBody CreateModuleRequest req) {
-        return service.createModule(orgId, req);
+        return service.createModule(orgId, cohortId, req);
     }
 
     @PutMapping("/modules/{moduleId}")
     public ModuleDto updateModule(
             @PathVariable UUID orgId,
+            @PathVariable UUID cohortId,
             @PathVariable UUID moduleId,
             @Valid @RequestBody UpdateModuleRequest req) {
-        return service.updateModule(orgId, moduleId, req);
+        return service.updateModule(orgId, cohortId, moduleId, req);
     }
 
     @PutMapping("/modules/{moduleId}/audience")
     public AudienceDto updateAudience(
             @PathVariable UUID orgId,
+            @PathVariable UUID cohortId,
             @PathVariable UUID moduleId,
             @Valid @RequestBody UpdateAudienceRequest req) {
-        return service.updateAudience(orgId, moduleId, req);
+        return service.updateAudience(orgId, cohortId, moduleId, req);
     }
 
     @PostMapping("/modules/{moduleId}/tasks")
     @ResponseStatus(HttpStatus.CREATED)
     public TaskDto createTask(
             @PathVariable UUID orgId,
+            @PathVariable UUID cohortId,
             @PathVariable UUID moduleId) {
-        return service.createTask(orgId, moduleId);
+        return service.createTask(orgId, cohortId, moduleId);
     }
 
     @PutMapping("/tasks/{taskId}")
     public TaskDto updateTask(
             @PathVariable UUID orgId,
+            @PathVariable UUID cohortId,
             @PathVariable UUID taskId,
             @Valid @RequestBody UpdateTaskRequest req) {
-        return service.updateTask(orgId, taskId, req);
+        return service.updateTask(orgId, cohortId, taskId, req);
     }
 
     @GetMapping("/pulse")
-    public PulseResponse getPulse(@PathVariable UUID orgId) {
-        return service.getPulse(orgId);
+    public PulseResponse getPulse(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
+        return service.getPulse(orgId, cohortId);
     }
 
     /** AI composer — SSE: {@code status}* then {@code draft} (ModuleDraft JSON) or {@code error}. */
     @PostMapping(value = "/ai/compose", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public org.springframework.web.servlet.mvc.method.annotation.SseEmitter compose(
             @PathVariable UUID orgId,
+            @PathVariable UUID cohortId,
             @Valid @RequestBody ComposeRequest req) {
-        return aiService.compose(orgId, req.prompt());
+        return aiService.compose(orgId, cohortId, req.prompt());
     }
 
     /** "Add to board" — persists a (possibly task-filtered) composer draft. */
@@ -128,7 +136,8 @@ public class ProgramAdminController {
     @ResponseStatus(HttpStatus.CREATED)
     public ModuleDto addDraftModule(
             @PathVariable UUID orgId,
+            @PathVariable UUID cohortId,
             @Valid @RequestBody ModuleDraft draft) {
-        return service.addDraftModule(orgId, draft);
+        return service.addDraftModule(orgId, cohortId, draft);
     }
 }

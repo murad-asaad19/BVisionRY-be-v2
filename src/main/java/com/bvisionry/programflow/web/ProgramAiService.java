@@ -62,12 +62,12 @@ public class ProgramAiService {
 
     // --------------------------------------------------------------- composer
 
-    public SseEmitter compose(UUID orgId, String prompt) {
+    public SseEmitter compose(UUID orgId, UUID cohortId, String prompt) {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         AtomicBoolean drafting = new AtomicBoolean(false);
 
         emit(emitter, "status", "Reading your existing curriculum…");
-        String userMessage = composerMessage(orgId, prompt);
+        String userMessage = composerMessage(cohortId, prompt);
 
         chat.stream(PromptType.PROGRAM_COMPOSER, userMessage, COMPOSER_MAX_TOKENS,
                 new StreamingChatPort.StreamHandler() {
@@ -100,11 +100,11 @@ public class ProgramAiService {
         return emitter;
     }
 
-    private String composerMessage(UUID orgId, String prompt) {
-        String stage = settings.findById(orgId)
+    private String composerMessage(UUID cohortId, String prompt) {
+        String stage = settings.findById(cohortId)
                 .map(s -> s.getStageLabel()).orElse("Week");
         StringBuilder curriculum = new StringBuilder();
-        List<ProgramModule> existing = modules.findByOrgIdOrderByPositionAsc(orgId);
+        List<ProgramModule> existing = modules.findByCohortIdOrderByPositionAsc(cohortId);
         if (existing.isEmpty()) {
             curriculum.append("(no modules yet — this will be the first)");
         }

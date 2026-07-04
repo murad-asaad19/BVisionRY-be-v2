@@ -56,27 +56,30 @@ public class ProgramAdminService {
     private final ProgramSubmissionRepository submissions;
     private final ProgramSettingsRepository settings;
     private final TeamRepository teams;
+    private final CohortService cohortService;
 
     // ------------------------------------------------------------------ board
 
     @Transactional(readOnly = true)
-    public BoardResponse getBoard(UUID orgId) {
-        List<ProgramModule> mods = modules.findByOrgIdOrderByPositionAsc(orgId);
+    public BoardResponse getBoard(UUID orgId, UUID cohortId) {
+        cohortService.require(orgId, cohortId);
+        List<ProgramModule> mods = modules.findByCohortIdOrderByPositionAsc(cohortId);
         List<OrgMemberRow> members = teams.findOrgMembers(orgId);
         List<ModuleDto> moduleDtos = mods.stream()
                 .map(m -> ProgramMapper.toDto(m, reached(m, members)))
                 .toList();
         int taskCount = mods.stream().mapToInt(m -> m.getTasks().size()).sum();
         return new BoardResponse(
-                ProgramMapper.toDto(settings.findById(orgId).orElse(null)),
+                ProgramMapper.toDto(settings.findById(cohortId).orElse(null)),
                 moduleDtos,
                 new BoardResponse.BoardStats(mods.size(), taskCount, members.size()));
     }
 
-    public ProgramSettingsDto updateSettings(UUID orgId, ProgramSettingsDto req) {
-        ProgramSettings s = settings.findById(orgId).orElseGet(() -> {
+    public ProgramSettingsDto updateSettings(UUID orgId, UUID cohortId, ProgramSettingsDto req) {
+        cohortService.require(orgId, cohortId);
+        ProgramSettings s = settings.findById(cohortId).orElseGet(() -> {
             ProgramSettings created = new ProgramSettings();
-            created.setOrgId(orgId);
+            created.setCohortId(cohortId);
             return created;
         });
         s.setStageLabel(req.stageLabel());
@@ -89,17 +92,19 @@ public class ProgramAdminService {
 
     // ---------------------------------------------------------------- modules
 
-    public ModuleDto createModule(UUID orgId, CreateModuleRequest req) {
+    public ModuleDto createModule(UUID orgId, UUID cohortId, CreateModuleRequest req) {
+        cohortService.require(orgId, cohortId);
         ProgramModule m = new ProgramModule();
         m.setOrgId(orgId);
+        m.setCohortId(cohortId);
         m.setName(req.name());
         m.setSummary(req.summary());
-        m.setPosition(modules.findByOrgIdOrderByPositionAsc(orgId).size());
+        m.setPosition(modules.findByCohortIdOrderByPositionAsc(cohortId).size());
         return ProgramMapper.toDto(modules.save(m), reached(m, teams.findOrgMembers(orgId)));
     }
 
-    public ModuleDto updateModule(UUID orgId, UUID moduleId, UpdateModuleRequest req) {
-        ProgramModule m = requireModule(orgId, moduleId);
+    public ModuleDto updateModule(UUID orgId, UUID cohortId, UUID moduleId, UpdateModuleRequest req) {
+        ProgramModule m = requireModule(orgId, cohortId, moduleId);
         m.setName(req.name());
         m.setSummary(req.summary());
         m.setLockMode(req.lockMode());
@@ -107,8 +112,8 @@ public class ProgramAdminService {
         return ProgramMapper.toDto(m, reached(m, teams.findOrgMembers(orgId)));
     }
 
-    public AudienceDto updateAudience(UUID orgId, UUID moduleId, UpdateAudienceRequest req) {
-        ProgramModule m = requireModule(orgId, moduleId);
+    public AudienceDto updateAudience(UUID orgId, UUID cohortId, UUID moduleId, UpdateAudienceRequest req) {
+        ProgramModule m = requireModule(orgId, cohortId, moduleId);
         List<OrgMemberRow> members = teams.findOrgMembers(orgId);
 
         if (req.mode() == AudienceMode.TEAMS) {
@@ -134,8 +139,8 @@ public class ProgramAdminService {
 
     // ------------------------------------------------------------------ tasks
 
-    public TaskDto createTask(UUID orgId, UUID moduleId) {
-        ProgramModule m = requireModule(orgId, moduleId);
+    public TaskDto createTask(UUID orgId, UUID cohortId, UUID moduleId) {
+        ProgramModule m = requireModule(orgId, cohortId, moduleId);
         ProgramTask t = new ProgramTask();
         t.setModule(m);
         t.setName("Untitled task");
@@ -151,8 +156,8 @@ public class ProgramAdminService {
         return ProgramMapper.toDto(tasks.save(t));
     }
 
-    public TaskDto updateTask(UUID orgId, UUID taskId, UpdateTaskRequest req) {
-        ProgramTask t = requireTask(orgId, taskId);
+    public TaskDto updateTask(UUID orgId, UUID cohortId, UUID taskId, UpdateTaskRequest req) {
+        ProgramTask t = requireTask(orgId, cohortId, taskId);
         t.setName(req.name());
         t.setDueDate(req.dueDate());
         t.setStatus(req.status());
@@ -189,12 +194,14 @@ public class ProgramAdminService {
     }
 
     /** "Add to board": persists an AI-composed draft as a module of AI-draft tasks. */
-    public ModuleDto addDraftModule(UUID orgId, com.bvisionry.programflow.dto.ModuleDraft draft) {
+    public ModuleDto addDraftModule(UUID orgId, UUID cohortId, com.bvisionry.programflow.dto.ModuleDraft draft) {
+        cohortService.require(orgId, cohortId);
         ProgramModule m = new ProgramModule();
         m.setOrgId(orgId);
+        m.setCohortId(cohortId);
         m.setName(draft.name());
         m.setSummary(draft.summary());
-        m.setPosition(modules.findByOrgIdOrderByPositionAsc(orgId).size());
+        m.setPosition(modules.findByCohortIdOrderByPositionAsc(cohortId).size());
 
         int taskPosition = 0;
         for (var draftTask : draft.tasks()) {
@@ -223,8 +230,9 @@ public class ProgramAdminService {
     // ------------------------------------------------------------------ pulse
 
     @Transactional(readOnly = true)
-    public PulseResponse getPulse(UUID orgId) {
-        List<ProgramModule> mods = modules.findByOrgIdOrderByPositionAsc(orgId);
+    public PulseResponse getPulse(UUID orgId, UUID cohortId) {
+        cohortService.require(orgId, cohortId);
+        List<ProgramModule> mods = modules.findByCohortIdOrderByPositionAsc(cohortId);
         List<PulseColumn> columns = new ArrayList<>();
         List<UUID> taskIds = new ArrayList<>();
         List<ProgramModule> columnModules = new ArrayList<>();
@@ -276,7 +284,7 @@ public class ProgramAdminService {
                     member.getTeamId() == null ? null : teamNames.get(member.getTeamId()), cells, pct);
         }).toList();
 
-        int dueSoonDays = ProgramMapper.toDto(settings.findById(orgId).orElse(null)).dueSoonDays();
+        int dueSoonDays = ProgramMapper.toDto(settings.findById(cohortId).orElse(null)).dueSoonDays();
         return new PulseResponse(columns, rows, dueSoonDays);
     }
 
@@ -288,15 +296,16 @@ public class ProgramAdminService {
                 .count();
     }
 
-    private ProgramModule requireModule(UUID orgId, UUID moduleId) {
+    private ProgramModule requireModule(UUID orgId, UUID cohortId, UUID moduleId) {
         return modules.findById(moduleId)
-                .filter(m -> m.getOrgId().equals(orgId))
+                .filter(m -> m.getCohortId().equals(cohortId) && m.getOrgId().equals(orgId))
                 .orElseThrow(() -> new ResourceNotFoundException("Module", moduleId.toString()));
     }
 
-    private ProgramTask requireTask(UUID orgId, UUID taskId) {
+    private ProgramTask requireTask(UUID orgId, UUID cohortId, UUID taskId) {
         return tasks.findWithModule(taskId)
-                .filter(t -> t.getModule().getOrgId().equals(orgId))
+                .filter(t -> t.getModule().getCohortId().equals(cohortId)
+                        && t.getModule().getOrgId().equals(orgId))
                 .orElseThrow(() -> new ResourceNotFoundException("Task", taskId.toString()));
     }
 }

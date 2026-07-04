@@ -22,5 +22,6 @@ public record PlayerResponse(
         Map<String, Object> answers,
         SubmissionStatus status,
         OffsetDateTime savedAt,
-        OffsetDateTime submittedAt) {
+        OffsetDateTime submittedAt,
+        boolean readOnly) {
 }

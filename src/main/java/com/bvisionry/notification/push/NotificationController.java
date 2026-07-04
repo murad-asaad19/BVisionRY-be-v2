@@ -2,8 +2,10 @@ package com.bvisionry.notification.push;
 
 import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.auth.entity.User;
+import com.bvisionry.notification.push.dto.NotificationsResponse;
 import com.bvisionry.notification.push.dto.PreferencesResponse;
 import com.bvisionry.notification.push.dto.SubscribeRequest;
+import com.bvisionry.notification.push.dto.UnreadCountResponse;
 import com.bvisionry.notification.push.dto.UpdatePreferenceRequest;
 import com.bvisionry.notification.push.dto.VapidPublicKeyResponse;
 import jakarta.validation.Valid;
@@ -20,6 +22,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 /**
  * Current-user notification endpoints: the VAPID public key for the browser's
  * subscribe call, push-subscription registration, and per-type preferences.
@@ -31,12 +35,40 @@ import org.springframework.web.bind.annotation.RestController;
 public class NotificationController {
 
     private final NotificationSettingsService settingsService;
+    private final NotificationHistoryService historyService;
     private final String vapidPublicKey;
 
     public NotificationController(NotificationSettingsService settingsService,
+                                  NotificationHistoryService historyService,
                                   @Value("${bvisionry.push.vapid.public-key:}") String vapidPublicKey) {
         this.settingsService = settingsService;
+        this.historyService = historyService;
         this.vapidPublicKey = vapidPublicKey;
+    }
+
+    /** Recent history for the bell, newest first. */
+    @GetMapping
+    public ResponseEntity<NotificationsResponse> list(@RequestParam(defaultValue = "20") int limit) {
+        return ResponseEntity.ok(new NotificationsResponse(
+                historyService.list(SecurityUtils.getCurrentUserId(), limit)));
+    }
+
+    @GetMapping("/unread-count")
+    public ResponseEntity<UnreadCountResponse> unreadCount() {
+        return ResponseEntity.ok(new UnreadCountResponse(
+                historyService.unreadCount(SecurityUtils.getCurrentUserId())));
+    }
+
+    @PostMapping("/{id}/read")
+    public ResponseEntity<Void> markRead(@PathVariable UUID id) {
+        historyService.markRead(SecurityUtils.getCurrentUserId(), id);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/read-all")
+    public ResponseEntity<Void> markAllRead() {
+        historyService.markAllRead(SecurityUtils.getCurrentUserId());
+        return ResponseEntity.noContent().build();
     }
 
     /** Empty publicKey means push is not configured; the client hides the enable button. */

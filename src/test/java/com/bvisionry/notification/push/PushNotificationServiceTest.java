@@ -34,6 +34,7 @@ class PushNotificationServiceTest {
 
     @Mock private PushSubscriptionRepository subscriptionRepository;
     @Mock private NotificationOptOutRepository optOutRepository;
+    @Mock private UserNotificationRepository notificationRepository;
     @Mock private UserRepository userRepository;
     @Mock private WebPushSender sender;
 
@@ -45,7 +46,7 @@ class PushNotificationServiceTest {
     @BeforeEach
     void setUp() {
         service = new PushNotificationService(subscriptionRepository, optOutRepository,
-                userRepository, sender);
+                notificationRepository, userRepository, sender);
         when(sender.isEnabled()).thenReturn(true);
         when(optOutRepository.findByTypeAndUserIdIn(any(), anyCollection())).thenReturn(List.of());
         when(subscriptionRepository.findByUserIdIn(anyCollection())).thenReturn(List.of());
@@ -81,7 +82,7 @@ class PushNotificationServiceTest {
     }
 
     @Test
-    void notifyUserSkipsOptedOutUser() {
+    void notifyUserSkipsOptedOutUserEntirely() {
         NotificationOptOut optOut = new NotificationOptOut();
         optOut.setUserId(userId);
         optOut.setType(NotificationType.RESULTS_READY);
@@ -92,6 +93,23 @@ class PushNotificationServiceTest {
 
         verify(sender, never()).send(any(), any());
         verify(subscriptionRepository, never()).findByUserIdIn(anyCollection());
+        // Muted = no push AND no history row.
+        verify(notificationRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void notifyUserWritesHistoryRow() {
+        service.notifyUser(userId, NotificationType.ASSESSMENT_ASSIGNED, "Title", "Body", "/my/x");
+
+        ArgumentCaptor<List<UserNotification>> rows = ArgumentCaptor.forClass(List.class);
+        verify(notificationRepository).saveAll(rows.capture());
+        assertThat(rows.getValue()).hasSize(1);
+        UserNotification row = rows.getValue().get(0);
+        assertThat(row.getUserId()).isEqualTo(userId);
+        assertThat(row.getType()).isEqualTo(NotificationType.ASSESSMENT_ASSIGNED);
+        assertThat(row.getTitle()).isEqualTo("Title");
+        assertThat(row.getUrl()).isEqualTo("/my/x");
+        assertThat(row.getReadAt()).isNull();
     }
 
     @Test
@@ -121,13 +139,14 @@ class PushNotificationServiceTest {
     }
 
     @Test
-    void disabledSenderShortCircuits() {
+    void disabledSenderStillWritesHistoryButSkipsPush() {
         when(sender.isEnabled()).thenReturn(false);
 
         service.notifyUser(userId, NotificationType.ASSESSMENT_ASSIGNED, "Title", "Body", "/my/x");
 
+        verify(notificationRepository).saveAll(any());
         verify(sender, never()).send(any(), any());
-        verify(optOutRepository, never()).findByTypeAndUserIdIn(any(), anyCollection());
+        verify(subscriptionRepository, never()).findByUserIdIn(anyCollection());
     }
 
     @Test

@@ -36,6 +36,7 @@ public class PushNotificationService {
 
     private final PushSubscriptionRepository subscriptionRepository;
     private final NotificationOptOutRepository optOutRepository;
+    private final UserNotificationRepository notificationRepository;
     private final UserRepository userRepository;
     private final WebPushSender sender;
 
@@ -77,7 +78,7 @@ public class PushNotificationService {
     }
 
     private void dispatch(List<UUID> userIds, NotificationType type, String title, String body, String url) {
-        if (!sender.isEnabled() || userIds.isEmpty()) {
+        if (userIds.isEmpty()) {
             return;
         }
         Set<UUID> muted = optOutRepository.findByTypeAndUserIdIn(type, userIds).stream()
@@ -87,10 +88,29 @@ public class PushNotificationService {
         if (recipients.isEmpty()) {
             return;
         }
+        // In-app history first: it exists for every recipient whether or not a
+        // browser is subscribed (or push is configured at all).
+        notificationRepository.saveAll(recipients.stream()
+                .map(id -> historyRow(id, type, title, body, url))
+                .toList());
+        if (!sender.isEnabled()) {
+            return;
+        }
         String payload = toJson(title, body, url);
         for (PushSubscription subscription : subscriptionRepository.findByUserIdIn(recipients)) {
             sender.send(subscription, payload);
         }
+    }
+
+    private static UserNotification historyRow(UUID userId, NotificationType type,
+                                               String title, String body, String url) {
+        UserNotification notification = new UserNotification();
+        notification.setUserId(userId);
+        notification.setType(type);
+        notification.setTitle(title);
+        notification.setBody(body);
+        notification.setUrl(url);
+        return notification;
     }
 
     private String toJson(String title, String body, String url) {

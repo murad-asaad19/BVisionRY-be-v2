@@ -90,41 +90,6 @@ public class InvitationService {
         return responses;
     }
 
-    @Transactional
-    public InvitationResponse acceptInvitation(UUID token) {
-        Invitation invitation = invitationRepository.findByToken(token)
-                .orElseThrow(() -> new ResourceNotFoundException("Invitation", token.toString()));
-        if (!invitation.isAcceptable()) {
-            throw new BadRequestException("Invitation is no longer valid");
-        }
-
-        User existing = userRepository.findByEmail(invitation.getEmail()).orElse(null);
-        boolean isNewMembership = existing == null
-                || existing.getOrganization() == null;
-        if (existing != null) {
-            requireInvitationBindable(existing, invitation);
-        }
-        User user = existing != null ? existing : newUserFor(invitation);
-
-        applyMembership(user, invitation);
-        User savedUser = userRepository.save(user);
-
-        invitation.setStatus(Invitation.InvitationStatus.ACCEPTED);
-        invitation.setAcceptedAt(Instant.now());
-        invitationRepository.save(invitation);
-
-        // Fire only on a genuinely new membership — re-accepts by an existing
-        // member of the same org would otherwise re-trigger auto-assign rules
-        // and materialise duplicate assignments. AFTER_COMMIT phase ensures the
-        // membership write is durably committed before listeners fan out.
-        if (isNewMembership) {
-            eventPublisher.publishEvent(new MemberJoinedEvent(
-                    invitation.getOrganization().getId(), savedUser.getId(), savedUser.getUserType()));
-        }
-
-        return InvitationResponse.from(invitation);
-    }
-
     @Transactional(readOnly = true)
     public InvitationResponse getInvitationByToken(UUID token) {
         Invitation invitation = invitationRepository.findByToken(token)
@@ -295,16 +260,6 @@ public class InvitationService {
                     "This account is already a member of another organization. "
                             + "Sign out of the existing organization before accepting this invitation.");
         }
-    }
-
-    private static User newUserFor(Invitation invitation) {
-        User newUser = new User();
-        newUser.setEmail(invitation.getEmail());
-        newUser.setName(invitation.getEmail().split("@")[0]);
-        newUser.setRole(invitation.getRole());
-        newUser.setStatus(UserStatus.ACTIVE);
-        newUser.setActivatedAt(Instant.now());
-        return newUser;
     }
 
     private static User newUserForRegistration(Invitation invitation) {

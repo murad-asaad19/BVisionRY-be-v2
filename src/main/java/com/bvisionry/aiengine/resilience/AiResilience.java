@@ -111,12 +111,7 @@ public class AiResilience {
         }
     }
 
-    /** Test/convenience factory with production-like defaults. */
-    public static AiResilience withDefaults(MeterRegistry meterRegistry) {
-        return new AiResilience(meterRegistry, 50f, 80f, 120, 30, 20, 8, 32, 3000);
-    }
-
-    /** Current circuit state — for tests and health/observability. */
+    /** Current circuit state — test-only observability. */
     public CircuitBreaker.State circuitState() {
         return circuitBreaker.getState();
     }

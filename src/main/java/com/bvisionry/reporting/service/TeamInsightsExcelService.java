@@ -54,15 +54,6 @@ public class TeamInsightsExcelService {
     private final MemberIdentityFactory memberIdentityFactory;
 
     /**
-     * Backwards-compatible overload — exports every evaluated submission in the
-     * pipeline. Prefer the {@link #generateReport(UUID, UUID, List, boolean)}
-     * variant so callers can scope the export to a specific subset of members.
-     */
-    public byte[] generateReport(UUID orgId, UUID pipelineId, boolean showNames) {
-        return generateReport(orgId, pipelineId, null, showNames);
-    }
-
-    /**
      * Build the workbook restricted to the given {@code memberIds}. A null or
      * empty list means "include every evaluated member" — the legacy behaviour.
      * When a filter is supplied the aggregate counts on the Overview sheet are

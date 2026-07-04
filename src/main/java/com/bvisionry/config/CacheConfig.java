@@ -29,8 +29,6 @@ public class CacheConfig implements CachingConfigurer {
     public static final String DASHBOARD_COMPLETION = "dashboardCompletion";
     public static final String MEMBER_RESULTS = "memberResults";
     public static final String MEMBER_HISTORY = "memberHistory";
-    public static final String PLATFORM_AVERAGES = "platformAverages";
-    public static final String TEAM_PERCENTILE = "teamPercentile";
     public static final String PLATFORM_ANALYTICS = "platformAnalytics";
     public static final String DASHBOARD = "dashboard";
     public static final String PLATFORM_SETTINGS = "platformSettings";
@@ -68,8 +66,6 @@ public class CacheConfig implements CachingConfigurer {
         cacheConfigurations.put(DASHBOARD_COMPLETION, defaultConfig.entryTtl(Duration.ofMinutes(5)));
         cacheConfigurations.put(MEMBER_RESULTS, defaultConfig.entryTtl(Duration.ofMinutes(10)));
         cacheConfigurations.put(MEMBER_HISTORY, defaultConfig.entryTtl(Duration.ofMinutes(10)));
-        cacheConfigurations.put(PLATFORM_AVERAGES, defaultConfig.entryTtl(Duration.ofHours(1)));
-        cacheConfigurations.put(TEAM_PERCENTILE, defaultConfig.entryTtl(Duration.ofHours(1)));
         cacheConfigurations.put(PLATFORM_ANALYTICS, defaultConfig.entryTtl(Duration.ofMinutes(15)));
         cacheConfigurations.put(DASHBOARD, defaultConfig.entryTtl(Duration.ofMinutes(5)));
         cacheConfigurations.put(PLATFORM_SETTINGS, defaultConfig.entryTtl(Duration.ofMinutes(1)));

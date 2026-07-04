@@ -47,18 +47,6 @@ public class CacheInvalidationService {
     }
 
     /**
-     * Invalidate benchmark caches.
-     * Called on an hourly schedule or when significant data changes.
-     */
-    @Caching(evict = {
-            @CacheEvict(value = CacheConfig.PLATFORM_AVERAGES, allEntries = true),
-            @CacheEvict(value = CacheConfig.TEAM_PERCENTILE, allEntries = true)
-    })
-    public void invalidateBenchmarks() {
-        // Annotation-driven -- no body needed
-    }
-
-    /**
      * Invalidate the single member-results cache entry for one submission.
      * Called when a post-assessment survey response is recorded so the
      * embedded survey block on the results view reflects it immediately.

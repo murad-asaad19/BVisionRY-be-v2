@@ -33,7 +33,9 @@ class AiEvaluationEngineRepairTest {
                 return model;
             }
         };
-        return new AiEvaluationEngine(provider, AiResilience.withDefaults(new SimpleMeterRegistry()), repairRetries);
+        // Production-like resilience defaults (thresholds/windows/bulkhead).
+        AiResilience resilience = new AiResilience(new SimpleMeterRegistry(), 50f, 80f, 120, 30, 20, 8, 32, 3000);
+        return new AiEvaluationEngine(provider, resilience, repairRetries);
     }
 
     @Test

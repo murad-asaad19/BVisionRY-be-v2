@@ -35,8 +35,9 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
 
     @BeforeEach
     void setUp() {
-        organizationRepository.deleteAll();
+        // Users FK-reference organizations (users.organization_id), so children go first.
         userRepository.deleteAll();
+        organizationRepository.deleteAll();
         TestAuthentication.authenticateAsSuperAdmin(userRepository);
     }
 

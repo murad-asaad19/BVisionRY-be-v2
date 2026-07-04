@@ -22,13 +22,18 @@ public class MemberJoinedPushHandler {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onMemberJoined(MemberJoinedEvent event) {
-        String memberName = userRepository.findById(event.userId())
-                .map(User::getName)
-                .orElse("A new member");
+        // Name the org explicitly: super admins receive this across every
+        // tenant, so "your organization" is meaningless to them. Fetch-join the
+        // org so getName() is safe outside the (already-committed) transaction.
+        User member = userRepository.findByIdWithOrganization(event.userId()).orElse(null);
+        String memberName = member != null ? member.getName() : "A new member";
+        String orgName = member != null && member.getOrganization() != null
+                ? member.getOrganization().getName()
+                : "your organization";
         pushNotificationService.notifyOrgAdmins(event.organizationId(),
                 NotificationType.MEMBER_JOINED,
                 "New member joined",
-                memberName + " joined your organization.",
+                memberName + " joined " + orgName + ".",
                 "/app/admin/members",
                 "/app/admin/organizations/" + event.organizationId() + "/members");
     }

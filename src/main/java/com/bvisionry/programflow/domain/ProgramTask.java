@@ -65,6 +65,10 @@ public class ProgramTask {
     @Column(name = "position", nullable = false)
     private int position = 0;
 
+    /** When the due-soon reminder went out; null = not yet reminded (send-once). */
+    @Column(name = "due_reminder_sent_at")
+    private OffsetDateTime dueReminderSentAt;
+
     @OneToMany(mappedBy = "task", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @OrderBy("position ASC")
     private List<ProgramTaskField> fields = new ArrayList<>();

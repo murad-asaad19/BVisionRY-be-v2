@@ -11,9 +11,11 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.security.CurrentUser;
@@ -59,6 +61,7 @@ public class MyProgramService {
     private final ProgramSettingsRepository settings;
     private final TeamRepository teams;
     private final CurrentUserAccessor currentUser;
+    private final ApplicationEventPublisher eventPublisher;
 
     // --------------------------------------------------------------- cohorts
 
@@ -182,6 +185,9 @@ public class MyProgramService {
             earned = GamificationDto.POINTS_PER_SUBMIT + (onTime ? GamificationDto.ON_TIME_BONUS : 0);
             sub.setSubmittedAt(now);
             sub.setPointsAwarded(earned);
+            // Admin bell: only on the first submit — revisions stay quiet.
+            eventPublisher.publishEvent(new ProgramFlowEvents.TaskSubmitted(
+                    access.ctx().cohort().getOrgId(), currentUser.require().name(), t.getName()));
         }
         submissions.save(sub);
 

@@ -37,6 +37,26 @@ public enum NotificationType {
     MEMBER_JOINED(
             "New member joined",
             "When a new member joins your organization.",
+            true),
+    COHORT_ENROLLED(
+            "Added to a cohort",
+            "When you are enrolled into a program cohort.",
+            false),
+    PROGRAM_MODULE_ASSIGNED(
+            "Program module assigned",
+            "When a program module is assigned to you.",
+            false),
+    PROGRAM_MODULE_UNLOCKED(
+            "Program module unlocked",
+            "When a scheduled module on your journey unlocks.",
+            false),
+    PROGRAM_TASK_DUE(
+            "Program task due soon",
+            "When a program task you haven't submitted is close to its due date.",
+            false),
+    PROGRAM_TASK_SUBMITTED(
+            "Member completed a program task",
+            "When a member of your organization submits a program task.",
             true);
 
     private final String label;

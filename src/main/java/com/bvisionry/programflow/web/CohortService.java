@@ -14,6 +14,7 @@ import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.programflow.domain.Cohort;
 import com.bvisionry.programflow.dto.CohortDto;
 import com.bvisionry.programflow.dto.CreateCohortRequest;
+import com.bvisionry.programflow.dto.ProgramOrgDto;
 import com.bvisionry.programflow.dto.UpdateCohortMembersRequest;
 import com.bvisionry.programflow.dto.UpdateCohortRequest;
 import com.bvisionry.programflow.repository.CohortRepository;
@@ -36,11 +37,23 @@ public class CohortService {
         return cohorts.findByOrgIdOrderByPositionAsc(orgId).stream().map(CohortDto::of).toList();
     }
 
+    /** Every org with learner + cohort counts (switcher shows cohorted orgs, picker the rest). */
+    @Transactional(readOnly = true)
+    public List<ProgramOrgDto> listOrgs() {
+        return cohorts.findOrgProgramRows().stream()
+                .map(r -> new ProgramOrgDto(r.getId(), r.getName(), r.getDescription(),
+                        (int) r.getMemberCount(), (int) r.getCohortCount()))
+                .toList();
+    }
+
     public CohortDto create(UUID orgId, CreateCohortRequest req) {
         Cohort c = new Cohort();
         c.setOrgId(orgId);
         c.setName(req.name());
         c.setPosition(cohorts.findByOrgIdOrderByPositionAsc(orgId).size());
+        if (req.enrollAllMembers()) {
+            teams.findOrgMembers(orgId).forEach(m -> c.getMemberIds().add(m.getId()));
+        }
         return CohortDto.of(cohorts.save(c));
     }
 

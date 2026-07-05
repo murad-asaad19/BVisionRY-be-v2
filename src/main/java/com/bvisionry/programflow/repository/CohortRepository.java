@@ -22,4 +22,19 @@ public interface CohortRepository extends JpaRepository<Cohort, UUID> {
             ORDER BY c.status ASC, c.position ASC
             """)
     List<Cohort> findEnrolled(@Param("userId") UUID userId);
+
+    /**
+     * Every organization with its active-learner and cohort counts, for the
+     * Program Flow org switcher (cohortCount &gt; 0) and the "add organization"
+     * picker (cohortCount = 0). Soft-coupled by SQL like TeamRepository.
+     */
+    @Query(value = """
+            SELECT o.id AS id, o.name AS name, o.description AS description,
+                   (SELECT count(*) FROM users u WHERE u.organization_id = o.id
+                     AND u.role = 'MEMBER' AND u.status = 'ACTIVE') AS memberCount,
+                   (SELECT count(*) FROM cohorts c WHERE c.org_id = o.id) AS cohortCount
+            FROM organizations o
+            ORDER BY o.name
+            """, nativeQuery = true)
+    List<OrgProgramRow> findOrgProgramRows();
 }

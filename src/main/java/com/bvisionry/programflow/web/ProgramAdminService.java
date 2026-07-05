@@ -9,9 +9,11 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.programflow.domain.AudienceMode;
@@ -57,6 +59,7 @@ public class ProgramAdminService {
     private final ProgramSettingsRepository settings;
     private final TeamRepository teams;
     private final CohortService cohortService;
+    private final ApplicationEventPublisher events;
 
     // ------------------------------------------------------------------ board
 
@@ -130,9 +133,29 @@ public class ProgramAdminService {
             }
         }
 
+        var includedBefore = members.stream()
+                .filter(member -> ProgramRules.includes(m, member.getId(), member.getTeamId()))
+                .map(OrgMemberRow::getId)
+                .collect(Collectors.toSet());
+
         m.setAssignMode(req.mode());
         m.setTeamIds(new LinkedHashSet<>(req.teamIds()));
         m.setMemberIds(new LinkedHashSet<>(req.memberIds()));
+
+        // "New module assigned" for learners the audience newly reaches — only
+        // ones enrolled in this cohort (audience teams/members are org-scoped).
+        var cohort = cohortService.require(orgId, cohortId);
+        List<UUID> newlyAssigned = members.stream()
+                .filter(member -> cohort.getMemberIds().contains(member.getId()))
+                .filter(member -> !includedBefore.contains(member.getId()))
+                .filter(member -> ProgramRules.includes(m, member.getId(), member.getTeamId()))
+                .map(OrgMemberRow::getId)
+                .toList();
+        if (!newlyAssigned.isEmpty()) {
+            events.publishEvent(new ProgramFlowEvents.ModuleAssigned(
+                    orgId, m.getName(), cohort.getName(), newlyAssigned));
+        }
+
         return new AudienceDto(m.getAssignMode(), List.copyOf(m.getTeamIds()),
                 List.copyOf(m.getMemberIds()), reached(m, members));
     }

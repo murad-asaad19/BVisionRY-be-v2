@@ -57,6 +57,8 @@ class MyProgramServiceTest {
     private TeamRepository teams;
     @Mock
     private CurrentUserAccessor currentUser;
+    @Mock
+    private org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     private MyProgramService service;
 
@@ -70,7 +72,8 @@ class MyProgramServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new MyProgramService(cohorts, modules, tasks, submissions, settings, teams, currentUser);
+        service = new MyProgramService(cohorts, modules, tasks, submissions, settings, teams,
+                currentUser, eventPublisher);
 
         cohort = new Cohort();
         cohort.setId(cohortId);

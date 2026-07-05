@@ -68,6 +68,10 @@ public class ProgramModule {
     @Column(name = "unlock_at")
     private OffsetDateTime unlockAt;
 
+    /** When the module-unlocked push went out; null = not yet notified (send-once). */
+    @Column(name = "unlock_notified_at")
+    private OffsetDateTime unlockNotifiedAt;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "assign_mode", nullable = false, length = 20)
     private AudienceMode assignMode = AudienceMode.ALL;

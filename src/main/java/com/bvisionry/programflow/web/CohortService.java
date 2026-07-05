@@ -6,9 +6,11 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.programflow.domain.Cohort;
@@ -31,6 +33,7 @@ public class CohortService {
 
     private final CohortRepository cohorts;
     private final TeamRepository teams;
+    private final ApplicationEventPublisher events;
 
     @Transactional(readOnly = true)
     public List<CohortDto> list(UUID orgId) {
@@ -54,7 +57,12 @@ public class CohortService {
         if (req.enrollAllMembers()) {
             teams.findOrgMembers(orgId).forEach(m -> c.getMemberIds().add(m.getId()));
         }
-        return CohortDto.of(cohorts.save(c));
+        Cohort saved = cohorts.save(c);
+        if (!saved.getMemberIds().isEmpty()) {
+            events.publishEvent(new ProgramFlowEvents.CohortEnrolled(
+                    orgId, saved.getName(), List.copyOf(saved.getMemberIds())));
+        }
+        return CohortDto.of(saved);
     }
 
     public CohortDto update(UUID orgId, UUID cohortId, UpdateCohortRequest req) {
@@ -76,7 +84,13 @@ public class CohortService {
         if (!orgMemberIds.containsAll(req.memberIds())) {
             throw new BadRequestException("One or more learners do not belong to this organization");
         }
+        List<UUID> added = req.memberIds().stream()
+                .filter(id -> !c.getMemberIds().contains(id))
+                .toList();
         c.setMemberIds(new LinkedHashSet<>(req.memberIds()));
+        if (!added.isEmpty()) {
+            events.publishEvent(new ProgramFlowEvents.CohortEnrolled(orgId, c.getName(), added));
+        }
         return CohortDto.of(c);
     }
 

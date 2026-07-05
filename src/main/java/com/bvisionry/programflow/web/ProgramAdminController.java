@@ -5,6 +5,7 @@ import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -20,6 +21,7 @@ import com.bvisionry.programflow.dto.ComposeRequest;
 import com.bvisionry.programflow.dto.CreateModuleRequest;
 import com.bvisionry.programflow.dto.ModuleDraft;
 import com.bvisionry.programflow.dto.ModuleDto;
+import com.bvisionry.programflow.dto.MoveTaskRequest;
 import com.bvisionry.programflow.dto.ProgramSettingsDto;
 import com.bvisionry.programflow.dto.PulseResponse;
 import com.bvisionry.programflow.dto.TaskDto;
@@ -99,6 +101,15 @@ public class ProgramAdminController {
         return service.updateAudience(orgId, cohortId, moduleId, req);
     }
 
+    @DeleteMapping("/modules/{moduleId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteModule(
+            @PathVariable UUID orgId,
+            @PathVariable UUID cohortId,
+            @PathVariable UUID moduleId) {
+        service.deleteModule(orgId, cohortId, moduleId);
+    }
+
     @PostMapping("/modules/{moduleId}/tasks")
     @ResponseStatus(HttpStatus.CREATED)
     public TaskDto createTask(
@@ -115,6 +126,25 @@ public class ProgramAdminController {
             @PathVariable UUID taskId,
             @Valid @RequestBody UpdateTaskRequest req) {
         return service.updateTask(orgId, cohortId, taskId, req);
+    }
+
+    @DeleteMapping("/tasks/{taskId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteTask(
+            @PathVariable UUID orgId,
+            @PathVariable UUID cohortId,
+            @PathVariable UUID taskId) {
+        service.deleteTask(orgId, cohortId, taskId);
+    }
+
+    /** Board drag-and-drop: move a task to a module/index (same module = reorder). */
+    @PutMapping("/tasks/{taskId}/move")
+    public TaskDto moveTask(
+            @PathVariable UUID orgId,
+            @PathVariable UUID cohortId,
+            @PathVariable UUID taskId,
+            @Valid @RequestBody MoveTaskRequest req) {
+        return service.moveTask(orgId, cohortId, taskId, req);
     }
 
     @GetMapping("/pulse")

@@ -29,6 +29,7 @@ import com.bvisionry.programflow.dto.BoardResponse;
 import com.bvisionry.programflow.dto.CreateModuleRequest;
 import com.bvisionry.programflow.dto.FieldUpsert;
 import com.bvisionry.programflow.dto.ModuleDto;
+import com.bvisionry.programflow.dto.MoveTaskRequest;
 import com.bvisionry.programflow.dto.ProgramSettingsDto;
 import com.bvisionry.programflow.dto.PulseResponse;
 import com.bvisionry.programflow.dto.PulseResponse.CellState;
@@ -160,6 +161,19 @@ public class ProgramAdminService {
                 List.copyOf(m.getMemberIds()), reached(m, members));
     }
 
+    /** Deletes the module with its tasks/fields/submissions (DB cascades). */
+    public void deleteModule(UUID orgId, UUID cohortId, UUID moduleId) {
+        ProgramModule m = requireModule(orgId, cohortId, moduleId);
+        modules.delete(m);
+        // Compact positions so createModule's size-based position stays unique.
+        int position = 0;
+        for (ProgramModule other : modules.findByCohortIdOrderByPositionAsc(cohortId)) {
+            if (!other.getId().equals(moduleId)) {
+                other.setPosition(position++);
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ tasks
 
     public TaskDto createTask(UUID orgId, UUID cohortId, UUID moduleId) {
@@ -186,6 +200,49 @@ public class ProgramAdminService {
         t.setStatus(req.status());
         t.setAiDraft(req.aiDraft());
         reconcileFields(t, req.fields());
+        return ProgramMapper.toDto(t);
+    }
+
+    /** Deletes the task with its fields/submissions (orphan removal + DB cascades). */
+    public void deleteTask(UUID orgId, UUID cohortId, UUID taskId) {
+        ProgramTask t = requireTask(orgId, cohortId, taskId);
+        ProgramModule m = t.getModule();
+        m.getTasks().remove(t);
+        int position = 0;
+        for (ProgramTask remaining : m.getTasks()) {
+            remaining.setPosition(position++);
+        }
+    }
+
+    /**
+     * Board drag-and-drop: moves the task to {@code req.moduleId()} at
+     * {@code req.position()} (same module = reorder) and compacts positions on
+     * both sides. Only the owning side ({@code task.module} + positions) is
+     * written — removing from the source collection would orphan-delete the task.
+     */
+    public TaskDto moveTask(UUID orgId, UUID cohortId, UUID taskId, MoveTaskRequest req) {
+        ProgramTask t = requireTask(orgId, cohortId, taskId);
+        ProgramModule source = t.getModule();
+        ProgramModule target = requireModule(orgId, cohortId, req.moduleId());
+
+        if (!source.getId().equals(target.getId())) {
+            int position = 0;
+            for (ProgramTask remaining : source.getTasks()) {
+                if (!remaining.getId().equals(taskId)) {
+                    remaining.setPosition(position++);
+                }
+            }
+        }
+
+        List<ProgramTask> reordered = target.getTasks().stream()
+                .filter(x -> !x.getId().equals(taskId))
+                .collect(Collectors.toCollection(ArrayList::new));
+        reordered.add(Math.min(req.position(), reordered.size()), t);
+        t.setModule(target);
+        int position = 0;
+        for (ProgramTask task : reordered) {
+            task.setPosition(position++);
+        }
         return ProgramMapper.toDto(t);
     }
 

@@ -515,13 +515,11 @@ public class WorkshopAdminService {
     }
 
     /**
-     * Publishing is one-way (DRAFT → ACTIVE); published workshops flip freely
-     * between ACTIVE and FINISHED but never return to DRAFT.
+     * Statuses flip freely except DRAFT → FINISHED. Unpublishing (→ DRAFT)
+     * hides the workshop from members and reopens the builder; existing runs
+     * are kept until a pipeline edit resets them (the usual edit-reset rule).
      */
     private void validateStatusChange(Workshop w, WorkshopStatus next) {
-        if (next == WorkshopStatus.DRAFT && w.getStatus() != WorkshopStatus.DRAFT) {
-            throw new IllegalOperationException("A published workshop cannot go back to draft");
-        }
         if (next == WorkshopStatus.FINISHED && w.getStatus() == WorkshopStatus.DRAFT) {
             throw new IllegalOperationException("Publish the workshop before finishing it");
         }

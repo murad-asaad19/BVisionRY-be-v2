@@ -151,9 +151,21 @@ class PushNotificationServiceTest {
 
     @Test
     void adminOnlyTypesAreHiddenFromMembersAndVisibleToAdmins() {
+        // Pin the exact member-visible set by hand (NOT derived from isAdminOnly,
+        // which is the very flag this test polices): a new type mislabeled as
+        // member-visible — or a member type forgotten here — must break this,
+        // forcing the author to reconcile the adminOnly flag deliberately.
         assertThat(NotificationType.visibleTo(UserRole.MEMBER))
-                .containsExactly(NotificationType.ASSESSMENT_ASSIGNED,
-                        NotificationType.ASSESSMENT_REMINDER, NotificationType.RESULTS_READY);
+                .containsExactly(
+                        NotificationType.ASSESSMENT_ASSIGNED,
+                        NotificationType.ASSESSMENT_REMINDER,
+                        NotificationType.RESULTS_READY,
+                        NotificationType.COHORT_ENROLLED,
+                        NotificationType.PROGRAM_MODULE_ASSIGNED,
+                        NotificationType.PROGRAM_MODULE_UNLOCKED,
+                        NotificationType.PROGRAM_TASK_DUE,
+                        NotificationType.WORKSHOP_RESULTS_SHARED)
+                .noneMatch(NotificationType::isAdminOnly);
         assertThat(NotificationType.visibleTo(UserRole.ORG_ADMIN))
                 .containsExactlyInAnyOrder(NotificationType.values());
         assertThat(NotificationType.visibleTo(UserRole.SUPER_ADMIN))

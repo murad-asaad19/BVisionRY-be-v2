@@ -920,34 +920,10 @@ public class EvaluationEngine {
     }
 
     private static String escapeText(String s) {
-        if (s == null) return "";
-        StringBuilder out = new StringBuilder(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '&' -> out.append("&amp;");
-                case '<' -> out.append("&lt;");
-                case '>' -> out.append("&gt;");
-                default -> out.append(c);
-            }
-        }
-        return out.toString();
+        return com.bvisionry.common.util.XmlEscape.text(s);
     }
 
     private static String escapeAttr(String s) {
-        if (s == null) return "";
-        StringBuilder out = new StringBuilder(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '&' -> out.append("&amp;");
-                case '<' -> out.append("&lt;");
-                case '>' -> out.append("&gt;");
-                case '"' -> out.append("&quot;");
-                case '\'' -> out.append("&apos;");
-                default -> out.append(c);
-            }
-        }
-        return out.toString();
+        return com.bvisionry.common.util.XmlEscape.attr(s);
     }
 }

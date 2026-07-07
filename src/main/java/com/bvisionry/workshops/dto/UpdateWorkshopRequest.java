@@ -11,5 +11,6 @@ import jakarta.validation.constraints.Size;
 public record UpdateWorkshopRequest(
         @NotBlank @Size(max = 200) String name,
         @NotNull WorkshopStatus status,
-        UUID postCompletionSurveyId) {
+        UUID postCompletionSurveyId,
+        UUID preWorkshopSurveyId) {
 }

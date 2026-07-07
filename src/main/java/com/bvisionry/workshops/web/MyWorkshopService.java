@@ -268,6 +268,8 @@ public class MyWorkshopService {
         CurrentUser cu = currentUser.require();
         Workshop w = workshops.findById(workshopId)
                 .filter(x -> x.getOrgId().equals(cu.orgId()))
+                // Drafts don't exist for members until published.
+                .filter(x -> x.getStatus() != WorkshopStatus.DRAFT)
                 .orElseThrow(() -> new ResourceNotFoundException("Workshop", workshopId.toString()));
         var membership = teams.findMembership(workshopId, cu.userId())
                 .orElseThrow(() -> new ResourceNotFoundException("Workshop", workshopId.toString()));
@@ -357,6 +359,21 @@ public class MyWorkshopService {
     private PlayResponse buildPlay(Ctx ctx) {
         String role = ctx.lead() ? "LEAD" : "MEMBER";
         boolean finished = ctx.workshop().getStatus() == WorkshopStatus.FINISHED;
+
+        // Pre-workshop survey gate: a member must complete the paired intro
+        // survey before any tasks unlock. Skipped once the workshop is finished
+        // (the survey window is over) — then we fall through to the thank-you.
+        UUID preSurveyId = ctx.workshop().getPreWorkshopSurveyId();
+        if (!finished && preSurveyId != null
+                && !workshops.hasIntroSurveyResponse(
+                        preSurveyId, ctx.workshop().getId(), ctx.cu().userId())) {
+            return new PlayResponse(
+                    ctx.workshop().getId(), ctx.workshop().getName(), ctx.workshop().getStatus(),
+                    role, ctx.teamId(), ctx.team().getName(),
+                    ctx.team().getCard(), ctx.team().getPosition(), "PRE_SURVEY",
+                    ctx.team().getHelpRequestedAt(), null, null, List.of(), null);
+        }
+
         WorkshopExerciseTask current = finished ? null : currentTask(ctx);
 
         String view;
@@ -388,7 +405,8 @@ public class MyWorkshopService {
 
         return new PlayResponse(
                 ctx.workshop().getId(), ctx.workshop().getName(), ctx.workshop().getStatus(),
-                role, ctx.teamId(), ctx.team().getName(), view,
+                role, ctx.teamId(), ctx.team().getName(),
+                ctx.team().getCard(), ctx.team().getPosition(), view,
                 ctx.team().getHelpRequestedAt(), exerciseInfo, taskView, recap, thankYou);
     }
 

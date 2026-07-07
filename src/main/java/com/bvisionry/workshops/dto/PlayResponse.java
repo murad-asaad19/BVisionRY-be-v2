@@ -24,6 +24,9 @@ public record PlayResponse(
         String role,
         UUID teamId,
         String teamName,
+        /** The team's card key (null = frontend default) and its order, for the member's team-card badge. */
+        String teamCard,
+        int teamPosition,
         String view,
         OffsetDateTime helpRequestedAt,
         ExerciseInfo exercise,

@@ -7,7 +7,9 @@ import com.bvisionry.assessment.dto.CreateAssignmentRequest;
 import com.bvisionry.assessment.dto.ExtendDeadlineRequest;
 import com.bvisionry.assessment.dto.OverrideAnswersRequest;
 import com.bvisionry.assessment.dto.PillarSummaryResponse;
+import com.bvisionry.evaluation.AiUseDetectionService;
 import com.bvisionry.evaluation.PillarReeditService;
+import com.bvisionry.evaluation.dto.AiDetectionResponse;
 import com.bvisionry.evaluation.dto.PillarUnlockSummary;
 import com.bvisionry.evaluation.dto.UnlockPillarsRequest;
 import jakarta.validation.Valid;
@@ -38,6 +40,7 @@ public class AssignmentController {
     private final AssignmentService assignmentService;
     private final PillarReeditService pillarReeditService;
     private final AdminAnswerOverrideService adminAnswerOverrideService;
+    private final AiUseDetectionService aiUseDetectionService;
 
     @PostMapping
     public ResponseEntity<List<AssignmentResponse>> createAssignment(
@@ -84,6 +87,35 @@ public class AssignmentController {
             @PathVariable UUID orgId,
             @PathVariable UUID id) {
         return ResponseEntity.ok(assignmentService.getAssignmentPillars(orgId, id));
+    }
+
+    /**
+     * Stored AI-use detection result for the assignment's latest submission.
+     * 404 when detection has never been run. SUPER_ADMIN only — the result
+     * quotes and reasons about the member's verbatim answers, so it follows
+     * the same restriction as {@link #getAssignmentAnswers}.
+     */
+    @GetMapping("/{id}/ai-detection")
+    @PreAuthorize("hasAuthority('SUPER_ADMIN')")
+    public ResponseEntity<AiDetectionResponse> getAiDetection(
+            @PathVariable UUID orgId,
+            @PathVariable UUID id) {
+        UUID submissionId = assignmentService.requireLatestSubmissionId(orgId, id);
+        return ResponseEntity.ok(aiUseDetectionService.get(submissionId));
+    }
+
+    /**
+     * Runs (or re-runs) the AI-use detector over the latest submission's
+     * free-text answers and stores the result. Synchronous — a single AI call,
+     * unlike the fan-out evaluation pipeline.
+     */
+    @PostMapping("/{id}/ai-detection")
+    @PreAuthorize("hasAuthority('SUPER_ADMIN')")
+    public ResponseEntity<AiDetectionResponse> runAiDetection(
+            @PathVariable UUID orgId,
+            @PathVariable UUID id) {
+        UUID submissionId = assignmentService.requireLatestSubmissionId(orgId, id);
+        return ResponseEntity.ok(aiUseDetectionService.detect(submissionId));
     }
 
     @PostMapping("/{id}/reminder")

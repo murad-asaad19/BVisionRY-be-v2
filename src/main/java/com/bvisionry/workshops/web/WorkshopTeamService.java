@@ -20,6 +20,7 @@ import com.bvisionry.workshops.dto.AssignMemberRequest;
 import com.bvisionry.workshops.dto.TeamNameRequest;
 import com.bvisionry.workshops.dto.WorkshopTeamsResponse;
 import com.bvisionry.workshops.repository.WorkshopExerciseRunRepository;
+import com.bvisionry.workshops.repository.WorkshopRepository;
 import com.bvisionry.workshops.repository.WorkshopTaskSubmissionRepository;
 import com.bvisionry.workshops.repository.WorkshopTeamRepository;
 
@@ -39,6 +40,7 @@ public class WorkshopTeamService {
     private final WorkshopAdminService admin;
     private final WorkshopExerciseRunRepository runs;
     private final WorkshopTaskSubmissionRepository submissions;
+    private final WorkshopRepository workshops;
 
     @Transactional(readOnly = true)
     public WorkshopTeamsResponse teams(UUID orgId, UUID workshopId) {
@@ -127,6 +129,8 @@ public class WorkshopTeamService {
     public void resetMemberAnswers(UUID orgId, UUID workshopId, UUID userId) {
         admin.requireWorkshop(orgId, workshopId);
         submissions.deleteByWorkshopIdAndUserId(workshopId, userId);
+        // Re-lock the intro-survey gate too, so a reset member re-takes it before tasks.
+        workshops.deleteIntroResponseByWorkshopIdAndUserId(workshopId, userId);
         for (WorkshopTeamRepository.WorkshopMemberRow row : teams.findOrgMembers(orgId, workshopId)) {
             if (row.getId().equals(userId) && row.getLead() && row.getTeamId() != null) {
                 List<WorkshopExerciseRun> teamRuns = runs.findByTeamId(row.getTeamId());

@@ -4,6 +4,7 @@ import com.bvisionry.aiengine.guardrail.SchemaValidationException;
 import com.bvisionry.aiengine.guardrail.StructuredOutputGuardrail;
 import com.bvisionry.aiengine.resilience.AiResilience;
 import com.bvisionry.aiengine.transport.Lc4jChatModelProvider;
+import com.bvisionry.common.dto.AiUseDetectionResult;
 import com.bvisionry.common.dto.OverallSummaryResult;
 import com.bvisionry.common.dto.PillarEvaluationResult;
 import com.bvisionry.common.dto.TeamInsightResult;
@@ -134,6 +135,29 @@ public class AiEvaluationEngine {
         // the circuit.
         try {
             return aiResilience.execute(() -> service.generate(userMessage));
+        } catch (OutputGuardrailException ge) {
+            throw new SchemaValidationException(ge.getMessage(), guardrail.lastResponseText(), ge);
+        }
+    }
+
+    public Result<AiUseDetectionResult> detectAiUse(String systemPrompt, String userMessage,
+                                                    String model, double temperature, int maxTokens) {
+        StructuredOutputGuardrail guardrail =
+                new StructuredOutputGuardrail(MAPPER, List.of("answerFindings"), "aiLikelihoodScore");
+        AiUseDetector service = AiServices.builder(AiUseDetector.class)
+                .chatModel(modelFor(model, temperature, maxTokens))
+                .systemMessageProvider(memoryId -> systemPrompt)
+                .outputGuardrails(guardrail)
+                .outputGuardrailsConfig(retryConfig())
+                .build();
+        // Translate a content failure into SchemaValidationException so the offending
+        // model output travels to the caller for audit persistence. The catch MUST stay
+        // OUTSIDE aiResilience.execute (around it), never inside the supplier: AiResilience's
+        // circuit breaker is configured with ignoreExceptions(OutputGuardrailException.class)
+        // and must keep seeing the ORIGINAL exception type so content failures don't trip
+        // the circuit.
+        try {
+            return aiResilience.execute(() -> service.detect(userMessage));
         } catch (OutputGuardrailException ge) {
             throw new SchemaValidationException(ge.getMessage(), guardrail.lastResponseText(), ge);
         }

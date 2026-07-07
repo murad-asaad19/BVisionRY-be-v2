@@ -8,6 +8,7 @@ import com.bvisionry.aiconfig.entity.AIConfiguration;
 import com.bvisionry.aiconfig.validation.AIResponseValidator;
 import com.bvisionry.aiengine.guardrail.SchemaValidationException;
 import com.bvisionry.aiengine.service.AiEvaluationEngine;
+import com.bvisionry.common.dto.AiUseDetectionResult;
 import com.bvisionry.common.dto.OverallSummaryResult;
 import com.bvisionry.common.dto.PillarEvaluationResult;
 import com.bvisionry.common.dto.TeamInsightResult;
@@ -220,6 +221,29 @@ public class OpenRouterChatService {
         return run("team-insight", systemPrompt, aggregatedData, validator::validateTeamInsightResult,
                 provenance, model, metadata,
                 () -> aiEngine.generateTeamInsight(systemPrompt, aggregatedData, model, asDouble(temperature), maxTokens));
+    }
+
+    /**
+     * Runs the AI-use detector over a submission's free-text answers. The system
+     * prompt is the admin-editable {@link PromptType#AI_USE_DETECTION} template;
+     * the user message is the caller-built {@code <assessment_data>} XML. Never
+     * cached — an admin re-run should always be a fresh, independent judgment.
+     */
+    public AIResponse<AiUseDetectionResult> detectAiUse(String assessmentXml, CallMetadata metadata) {
+        AIConfiguration config = configService.getConfigEntity();
+
+        String model = config.getDefaultEvaluationModel();
+        BigDecimal temperature = config.getEvaluationTemperature();
+        int maxTokens = config.getMaxTokensEvaluation();
+
+        PromptTemplateResponse systemPromptTemplate =
+                promptTemplateService.getActivePrompt(PromptType.AI_USE_DETECTION);
+        String systemPrompt = buildAiUseDetectionSystemPrompt(systemPromptTemplate.content());
+
+        Provenance provenance = new Provenance(model, temperature, promptVersionId(systemPromptTemplate));
+        return run("ai-use-detection", systemPrompt, assessmentXml, null,
+                provenance, model, metadata,
+                () -> aiEngine.detectAiUse(systemPrompt, assessmentXml, model, asDouble(temperature), maxTokens));
     }
 
     // ========== Call execution + observability ==========
@@ -442,6 +466,21 @@ public class OpenRouterChatService {
           .append("    \"suggestedActions\": array of strings\n")
           .append("  },\n")
           .append("  \"benchmarking\": { \"teamVsPlatformComparison\": string, \"outlierPillars\": array of strings — pillar names copied VERBATIM from the team data }\n")
+          .append("}\n")
+          .append("</output_contract>\n");
+        return sb.toString();
+    }
+
+    private String buildAiUseDetectionSystemPrompt(String detectorRolePrompt) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<role>\n").append(nullSafe(detectorRolePrompt)).append("\n</role>\n\n");
+        sb.append(SCORING_RULES_BLOCK).append("\n\n");
+        sb.append("<output_contract>\n")
+          .append("Return ONLY valid JSON matching this schema. No preamble, no markdown fences, no trailing text.\n\n")
+          .append("Schema:\n")
+          .append("{\n")
+          .append("  \"aiLikelihoodScore\": integer in [0, 100] — confidence that the free-text answers were AI-generated,\n")
+          .append("  \"answerFindings\": array of { \"qid\": string, \"note\": string } — per-answer signals, only for answers that materially moved the score; each note at most two short sentences\n")
           .append("}\n")
           .append("</output_contract>\n");
         return sb.toString();

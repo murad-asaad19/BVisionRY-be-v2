@@ -33,10 +33,14 @@ public class Workshop extends WorkshopBaseEntity {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
-    private WorkshopStatus status = WorkshopStatus.ACTIVE;
+    private WorkshopStatus status = WorkshopStatus.DRAFT;
 
     @Column(name = "post_completion_survey_id")
     private UUID postCompletionSurveyId;
+
+    /** Optional survey a member must complete before this workshop's tasks unlock. */
+    @Column(name = "pre_workshop_survey_id")
+    private UUID preWorkshopSurveyId;
 
     /** Live-board road style key ('lanes', 'track', …); null = frontend default. */
     @Column(name = "board_style", length = 24)

@@ -11,12 +11,14 @@ public record WorkshopDto(
         int position,
         WorkshopStatus status,
         UUID postCompletionSurveyId,
+        UUID preWorkshopSurveyId,
         String boardStyle,
         long exerciseCount,
         long memberCount) {
 
     public static WorkshopDto from(Workshop w, long exerciseCount, long memberCount) {
         return new WorkshopDto(w.getId(), w.getName(), w.getPosition(), w.getStatus(),
-                w.getPostCompletionSurveyId(), w.getBoardStyle(), exerciseCount, memberCount);
+                w.getPostCompletionSurveyId(), w.getPreWorkshopSurveyId(),
+                w.getBoardStyle(), exerciseCount, memberCount);
     }
 }

@@ -607,6 +607,22 @@ public class AssignmentService {
     }
 
     /**
+     * Resolves the latest submission id for an assignment, org-scoped — the
+     * shared precondition for admin operations over a member's raw answers
+     * (answer view, AI-use detection). Kept as a short read-only transaction so
+     * callers that follow up with a long AI call never hold one open.
+     */
+    @Transactional(readOnly = true)
+    public UUID requireLatestSubmissionId(UUID orgId, UUID assignmentId) {
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
+        if (assignment.getUser() == null) {
+            throw new BadRequestException("This provision has not been assigned to a member yet.");
+        }
+        return submissionRepository.requireLatestForAssignment(
+                assignment, "No submission exists for this assignment yet.").getId();
+    }
+
+    /**
      * Pillar structure (id/name/type) for the assignment's pipeline — no
      * question or answer content, so unlike {@link #getAssignmentAnswers} this
      * is safe for Org Admins. Powers the unlock-pillars picker, which only

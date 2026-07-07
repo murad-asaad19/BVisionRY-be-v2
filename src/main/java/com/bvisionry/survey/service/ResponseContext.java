@@ -17,16 +17,22 @@ import java.util.UUID;
  *   <li>{@link Member} — authenticated submission bound to an assessment
  *       {@link Submission}; identity is taken from the resolved
  *       {@link User} so the request body can never override it.</li>
+ *   <li>{@link WorkshopIntro} — authenticated pre-workshop intro survey,
+ *       bound to a workshop by id; identity comes from the resolved
+ *       {@link User}, same as {@link Member}.</li>
  * </ul>
  *
  * Sealing the type lets {@code persistResponse} branch with an exhaustive
  * {@code switch}, replacing the prior 10-arg method that interleaved nullable
  * fields from both flows.
  */
-public sealed interface ResponseContext permits ResponseContext.Public, ResponseContext.Member {
+public sealed interface ResponseContext
+        permits ResponseContext.Public, ResponseContext.Member, ResponseContext.WorkshopIntro {
 
     record Public(String email, String name, String ipHash, String cookieId,
                   UUID giftToken) implements ResponseContext {}
 
     record Member(Submission submission, User user) implements ResponseContext {}
+
+    record WorkshopIntro(UUID workshopId, User user) implements ResponseContext {}
 }

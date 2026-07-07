@@ -13,11 +13,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.DuplicateResourceException;
+import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.workshops.domain.Workshop;
 import com.bvisionry.workshops.domain.WorkshopExercise;
 import com.bvisionry.workshops.domain.WorkshopExerciseRun;
 import com.bvisionry.workshops.domain.WorkshopExerciseTask;
+import com.bvisionry.workshops.domain.WorkshopStatus;
 import com.bvisionry.workshops.domain.WorkshopTaskAssignee;
 import com.bvisionry.workshops.domain.WorkshopTaskType;
 import com.bvisionry.workshops.domain.WorkshopTeam;
@@ -88,9 +90,11 @@ public class WorkshopAdminService {
 
     public WorkshopDto update(UUID orgId, UUID workshopId, UpdateWorkshopRequest req) {
         Workshop w = requireWorkshop(orgId, workshopId);
+        validateStatusChange(w, req.status());
         w.setName(req.name().trim());
         w.setStatus(req.status());
         w.setPostCompletionSurveyId(req.postCompletionSurveyId());
+        w.setPreWorkshopSurveyId(req.preWorkshopSurveyId());
         Workshop saved = workshops.save(w);
         return WorkshopDto.from(saved,
                 exercises.countByWorkshopId(workshopId),
@@ -113,6 +117,7 @@ public class WorkshopAdminService {
         requireWorkshop(orgId, workshopId);
         submissions.deleteByWorkshopId(workshopId);
         runs.deleteByWorkshopId(workshopId);
+        workshops.deleteIntroResponsesByWorkshopId(workshopId);
         List<WorkshopTeam> all = teams.findByWorkshopIdOrderByPositionAscCreatedAtAsc(workshopId);
         all.forEach(t -> t.setHelpRequestedAt(null));
         teams.saveAll(all);
@@ -135,7 +140,7 @@ public class WorkshopAdminService {
     }
 
     public BuilderResponse.ExerciseDto createExercise(UUID orgId, UUID workshopId, CreateExerciseRequest req) {
-        requireWorkshop(orgId, workshopId);
+        requireDraftWorkshop(orgId, workshopId);
         WorkshopExercise e = new WorkshopExercise();
         e.setWorkshopId(workshopId);
         e.setTitle(req.title().trim());
@@ -154,7 +159,7 @@ public class WorkshopAdminService {
     }
 
     public void reorderExercises(UUID orgId, UUID workshopId, ReorderRequest req) {
-        requireWorkshop(orgId, workshopId);
+        requireDraftWorkshop(orgId, workshopId);
         List<WorkshopExercise> all = exercises.findByWorkshopIdOrderByPositionAscCreatedAtAsc(workshopId);
         applyOrder(req.orderedIds(), all, WorkshopExercise::getId,
                 (e, pos) -> e.setPosition(pos));
@@ -205,7 +210,7 @@ public class WorkshopAdminService {
      * builder so the client can reseed its draft with the new server ids.
      */
     public BuilderResponse updateBuilder(UUID orgId, UUID workshopId, UpdateBuilderRequest req) {
-        requireWorkshop(orgId, workshopId);
+        requireDraftWorkshop(orgId, workshopId);
         Map<UUID, WorkshopExercise> exercisesById = new LinkedHashMap<>();
         for (WorkshopExercise e : exercises.findByWorkshopIdOrderByPositionAscCreatedAtAsc(workshopId)) {
             exercisesById.put(e.getId(), e);
@@ -509,8 +514,32 @@ public class WorkshopAdminService {
         return w;
     }
 
+    /**
+     * Publishing is one-way (DRAFT → ACTIVE); published workshops flip freely
+     * between ACTIVE and FINISHED but never return to DRAFT.
+     */
+    private void validateStatusChange(Workshop w, WorkshopStatus next) {
+        if (next == WorkshopStatus.DRAFT && w.getStatus() != WorkshopStatus.DRAFT) {
+            throw new IllegalOperationException("A published workshop cannot go back to draft");
+        }
+        if (next == WorkshopStatus.FINISHED && w.getStatus() == WorkshopStatus.DRAFT) {
+            throw new IllegalOperationException("Publish the workshop before finishing it");
+        }
+    }
+
+    /** Structural edits (exercises, tasks) are draft-only — publishing freezes the builder. */
+    private Workshop requireDraftWorkshop(UUID orgId, UUID workshopId) {
+        Workshop w = requireWorkshop(orgId, workshopId);
+        if (w.getStatus() != WorkshopStatus.DRAFT) {
+            throw new IllegalOperationException(
+                    "Cannot modify a " + w.getStatus() + " workshop — only drafts are editable");
+        }
+        return w;
+    }
+
+    /** All callers are builder mutations, so this also enforces draft-only editing. */
     private WorkshopExercise requireExercise(UUID orgId, UUID workshopId, UUID exerciseId) {
-        requireWorkshop(orgId, workshopId);
+        requireDraftWorkshop(orgId, workshopId);
         WorkshopExercise e = exercises.findById(exerciseId)
                 .orElseThrow(() -> new ResourceNotFoundException("Exercise", exerciseId.toString()));
         if (!e.getWorkshopId().equals(workshopId)) {

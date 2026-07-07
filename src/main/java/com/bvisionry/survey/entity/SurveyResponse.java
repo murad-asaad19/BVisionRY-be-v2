@@ -79,6 +79,14 @@ public class SurveyResponse extends BaseEntity {
     @Column(name = "respondent_user_id")
     private UUID respondentUserId;
 
+    /**
+     * The workshop this response gates, set for {@link ResponseSource#WORKSHOP_INTRO}
+     * pre-workshop survey submissions. A plain id (not an entity relation) keeps the
+     * survey slice decoupled from the workshops slice. Null for every other flow.
+     */
+    @Column(name = "workshop_id")
+    private UUID workshopId;
+
     @Column(name = "ip_hash", length = 64)
     private String ipHash;
 

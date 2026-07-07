@@ -57,7 +57,11 @@ public enum NotificationType {
     PROGRAM_TASK_SUBMITTED(
             "Member completed a program task",
             "When a member of your organization submits a program task.",
-            true);
+            true),
+    WORKSHOP_RESULTS_SHARED(
+            "Workshop results shared",
+            "When your team lead shares their results and your workshop tasks unlock.",
+            false);
 
     private final String label;
     private final String description;

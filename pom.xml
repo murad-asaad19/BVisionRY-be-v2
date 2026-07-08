@@ -21,6 +21,8 @@
         <java.version>21</java.version>
         <langchain4j.version>1.11.8</langchain4j.version>
         <resilience4j.version>2.2.0</resilience4j.version>
+        <!-- 7.x is the line that targets Spring Boot 4 / Spring 7 and requires JVM 17+. -->
+        <shedlock.version>7.7.0</shedlock.version>
     </properties>
 
     <dependencies>
@@ -100,10 +102,22 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
-        <!-- Scheduling -->
+        <!-- Scheduling: ShedLock guards the @Scheduled reaper/expiry jobs so that
+             when Railway scales past one replica each job runs on at most one instance
+             per tick (no duplicate trial-expiry / reap DB writes). JDBC (Postgres)
+             provider on purpose, NOT Redis: the DB is a hard dependency while Redis is
+             deliberately allowed to degrade (excluded from health checks), so the lock
+             must not hinge on Redis being up. Replaces the previously declared but
+             entirely unused Quartz starter (all scheduling is plain @EnableScheduling). -->
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-quartz</artifactId>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-spring</artifactId>
+            <version>${shedlock.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-provider-jdbc-template</artifactId>
+            <version>${shedlock.version}</version>
         </dependency>
 
         <!-- Mail -->
@@ -206,11 +220,11 @@
             <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
 
-        <!-- API Docs -->
+        <!-- API Docs. The 3.x line is the one that supports Spring Boot 4 (2.x targets Boot 3). -->
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-            <version>2.8.6</version>
+            <version>3.0.3</version>
         </dependency>
 
         <!-- Utility -->
@@ -218,6 +232,46 @@
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
             <optional>true</optional>
+        </dependency>
+
+        <!-- Web Push (VAPID) — browser/desktop notifications. jcommander only
+             serves the library's CLI and async-http-client only its
+             PushAsyncService; we use the synchronous PushService, so both are
+             excluded. BouncyCastle (declared optional upstream) supplies the
+             EC crypto for VAPID signing + RFC 8291 payload encryption. -->
+        <dependency>
+            <groupId>nl.martijndwars</groupId>
+            <artifactId>web-push</artifactId>
+            <version>5.1.2</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.beust</groupId>
+                    <artifactId>jcommander</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.asynchttpclient</groupId>
+                    <artifactId>async-http-client</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.81</version>
+        </dependency>
+        <!-- web-push declares these runtime-scoped, but PushService's API
+             surface leaks them (send returns org.apache.http.HttpResponse and
+             throws org.jose4j.lang.JoseException), so the compiler needs both.
+             Same versions web-push resolves at runtime. -->
+        <dependency>
+            <groupId>org.apache.httpcomponents</groupId>
+            <artifactId>httpasyncclient</artifactId>
+            <version>4.1.5</version>
+        </dependency>
+        <dependency>
+            <groupId>org.bitbucket.b_c</groupId>
+            <artifactId>jose4j</artifactId>
+            <version>0.7.9</version>
         </dependency>
 
         <!-- Test -->
@@ -251,6 +305,20 @@
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- Architecture-freeze tests (ArchUnit). Plain JVM tests, no Spring
+             context, so they run in the default `mvn test` loop and stay fast.
+             The FreezingArchRule "ratchet" pins today's module-boundary
+             violations in a committed violation store so they can only shrink;
+             any NEW cross-feature cycle / repository access / controller fan-in
+             fails the build. archunit-junit5 pulls in archunit core + the
+             JUnit 5 test engine that discovers @ArchTest rules. -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit-junit5</artifactId>
+            <version>1.4.2</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <dependencyManagement>
@@ -265,7 +333,8 @@
             <dependency>
                 <groupId>org.testcontainers</groupId>
                 <artifactId>testcontainers-bom</artifactId>
-                <version>1.20.4</version>
+                <!-- 1.20.x's docker-java can't negotiate with Docker Engine 29+ (min API 1.44). -->
+                <version>1.21.4</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -285,6 +354,46 @@
                         </exclude>
                     </excludes>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.13</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>check</id>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <!-- Coverage ratchet: raise as coverage grows; never lower. -->
+                                            <minimum>0.10</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

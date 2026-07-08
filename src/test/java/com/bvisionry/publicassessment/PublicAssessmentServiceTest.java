@@ -304,6 +304,81 @@ class PublicAssessmentServiceTest {
             assertThat(submission.getEvaluationClaimedAt()).isNull();
             verify(evaluationService).evaluateSubmissionAsync(submissionId);
         }
+
+        @Test
+        void submit_needsReview_throwsBadRequest() {
+            // NEEDS_REVIEW is pending admin review — a respondent resubmit must not overwrite
+            // it; only the admin re-evaluation path can re-run it (mirrors retake()'s gate).
+            submission.setStatus(SubmissionStatus.NEEDS_REVIEW);
+            when(submissionRepository.findByAccessTokenWithPublicLink(accessToken))
+                    .thenReturn(Optional.of(submission));
+
+            assertThatThrownBy(() -> publicAssessmentService.submit(accessToken))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("pending review");
+
+            verify(submissionRepository, never()).save(any());
+            verify(evaluationService, never()).evaluateSubmissionAsync(any());
+        }
+    }
+
+    @Nested
+    class RetryResponseEvaluation {
+
+        @Test
+        void retry_failed_delegatesAndReturnsSubmitted() {
+            submission.setStatus(SubmissionStatus.FAILED);
+            when(submissionRepository.findById(submissionId)).thenReturn(Optional.of(submission));
+
+            SubmissionStatusResponse response =
+                    publicAssessmentService.retryResponseEvaluation(linkId, submissionId);
+
+            // Reports SUBMITTED deterministically (the shared retry flips it) rather than
+            // reading it back off the managed instance — mirrors retake()'s response style.
+            assertThat(response.status()).isEqualTo(SubmissionStatus.SUBMITTED);
+            assertThat(response.submissionId()).isEqualTo(submissionId);
+            verify(evaluationService).retryFailedSubmission(submissionId);
+        }
+
+        @Test
+        void retry_needsReview_delegatesToSharedRetry() {
+            // The admin recovery path is the only entry point for a NEEDS_REVIEW public
+            // response — the respondent retake is FAILED-only by design.
+            submission.setStatus(SubmissionStatus.NEEDS_REVIEW);
+            when(submissionRepository.findById(submissionId)).thenReturn(Optional.of(submission));
+
+            SubmissionStatusResponse response =
+                    publicAssessmentService.retryResponseEvaluation(linkId, submissionId);
+
+            assertThat(response.status()).isEqualTo(SubmissionStatus.SUBMITTED);
+            verify(evaluationService).retryFailedSubmission(submissionId);
+        }
+
+        @Test
+        void retry_evaluated_throwsBadRequest() {
+            submission.setStatus(SubmissionStatus.EVALUATED);
+            when(submissionRepository.findById(submissionId)).thenReturn(Optional.of(submission));
+
+            assertThatThrownBy(() -> publicAssessmentService.retryResponseEvaluation(linkId, submissionId))
+                    .isInstanceOf(BadRequestException.class);
+
+            verify(evaluationService, never()).retryFailedSubmission(any());
+        }
+
+        @Test
+        void retry_submissionOnDifferentLink_throwsNotFound() {
+            // loadLinkSubmission scopes by link — a submission on another link is a 404.
+            submission.setStatus(SubmissionStatus.FAILED);
+            PublicAssessmentLink otherLink = new PublicAssessmentLink();
+            otherLink.setId(UUID.randomUUID());
+            submission.setPublicLink(otherLink);
+            when(submissionRepository.findById(submissionId)).thenReturn(Optional.of(submission));
+
+            assertThatThrownBy(() -> publicAssessmentService.retryResponseEvaluation(linkId, submissionId))
+                    .isInstanceOf(ResourceNotFoundException.class);
+
+            verify(evaluationService, never()).retryFailedSubmission(any());
+        }
     }
 
     @Nested

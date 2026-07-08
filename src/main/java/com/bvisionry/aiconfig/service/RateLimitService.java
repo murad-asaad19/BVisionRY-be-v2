@@ -275,6 +275,11 @@ public class RateLimitService {
                         + " requests per " + windowDesc + ".");
     }
 
+    // Deliberately NOT under @SchedulerLock. Unlike the reaper/expiry jobs, this evicts
+    // this JVM's own in-memory fallback windows (the fields above), never shared DB/Redis
+    // state, so there is nothing to double-process across replicas. A distributed lock
+    // would be actively harmful: only the lock-holder would clean its memory while every
+    // other replica's deques grew unbounded until OOM. Each instance must run this itself.
     @Scheduled(fixedDelay = 60_000)
     void evictStaleWindows() {
         // Per-minute windows: drop entries older than 60s.

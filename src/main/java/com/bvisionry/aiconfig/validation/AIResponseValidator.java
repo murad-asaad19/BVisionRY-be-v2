@@ -63,7 +63,7 @@ public class AIResponseValidator {
 
         TeamInsightResult.TeamThemes themes = new TeamInsightResult.TeamThemes(
                 cleanProseList(result.teamThemes().commonStrengths()),
-                cleanProseList(result.teamThemes().commonWeaknesses()),
+                cleanProseList(result.teamThemes().growthEdges()),
                 cleanProseList(result.teamThemes().patterns()),
                 cleanProseList(result.teamThemes().recommendations())
         );

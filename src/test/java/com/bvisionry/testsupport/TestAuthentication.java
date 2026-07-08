@@ -41,6 +41,16 @@ public final class TestAuthentication {
         return persistAndAuthenticate(userRepository, user);
     }
 
+    public static User authenticateAsMember(UserRepository userRepository, Organization organization) {
+        User user = new User();
+        user.setEmail("test-member@bvisionry.invalid");
+        user.setName("Test Member");
+        user.setRole(UserRole.MEMBER);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setOrganization(organization);
+        return persistAndAuthenticate(userRepository, user);
+    }
+
     private static User persistAndAuthenticate(UserRepository userRepository, User user) {
         User saved = userRepository.save(user);
         var authorities = List.of(new SimpleGrantedAuthority(saved.getRole().name()));

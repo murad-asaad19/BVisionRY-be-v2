@@ -52,7 +52,7 @@ public class OrgInsightPdfService {
 
         // Team themes
         ctx.setVariable("strengths", teamThemes != null ? safeList(teamThemes.get("commonStrengths")) : List.of());
-        ctx.setVariable("weaknesses", teamThemes != null ? safeList(teamThemes.get("commonWeaknesses")) : List.of());
+        ctx.setVariable("weaknesses", teamThemes != null ? growthEdges(teamThemes) : List.of());
         ctx.setVariable("patterns", teamThemes != null ? safeList(teamThemes.get("patterns")) : List.of());
         ctx.setVariable("recommendations", teamThemes != null ? safeList(teamThemes.get("recommendations")) : List.of());
 
@@ -123,5 +123,12 @@ public class OrgInsightPdfService {
     @SuppressWarnings("unchecked")
     private List<Object> safeList(Object obj) {
         return obj instanceof List ? (List<Object>) obj : List.of();
+    }
+
+    // ponytail: reports generated before the commonWeaknesses -> growthEdges
+    // rename still have the old key; drop this fallback once old reports age out.
+    private List<Object> growthEdges(Map<String, Object> teamThemes) {
+        List<Object> edges = safeList(teamThemes.get("growthEdges"));
+        return edges.isEmpty() ? safeList(teamThemes.get("commonWeaknesses")) : edges;
     }
 }

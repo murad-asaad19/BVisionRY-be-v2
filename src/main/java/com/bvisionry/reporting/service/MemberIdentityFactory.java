@@ -7,10 +7,10 @@ import com.bvisionry.pipeline.SystemQuestion;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
  * Builds the {@link MemberIdentity} for a team export. When names are hidden it
@@ -39,13 +39,19 @@ public class MemberIdentityFactory {
                 answersFor(nameAnswers, SystemQuestion.LAST_NAME));
     }
 
-    /** submissionId → answer text for one system question, from the batched rows. */
+    /**
+     * submissionId → answer text for one system question, from the batched rows.
+     * Blank answers are dropped: they must never enter the redaction alias list,
+     * or the display sentinel ("Unspecified") would itself get scrubbed out of
+     * team narratives. (Also, {@code Collectors.toMap} rejects null values.)
+     */
     private static Map<UUID, String> answersFor(List<Answer> answers, String systemKey) {
-        return answers.stream()
-                .filter(a -> systemKey.equals(a.getQuestion().getSystemKey()))
-                .collect(Collectors.toMap(
-                        a -> a.getSubmission().getId(),
-                        AssessmentAnswerFormatter::answerLabel,
-                        (a, b) -> a));
+        Map<UUID, String> byId = new HashMap<>();
+        for (Answer a : answers) {
+            if (!systemKey.equals(a.getQuestion().getSystemKey())) continue;
+            String text = AssessmentAnswerFormatter.answerTextOrNull(a);
+            if (text != null) byId.putIfAbsent(a.getSubmission().getId(), text);
+        }
+        return byId;
     }
 }

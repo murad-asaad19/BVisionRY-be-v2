@@ -31,21 +31,26 @@ public class JoinLinkController {
             @PathVariable UUID orgId,
             @Valid @RequestBody GenerateJoinLinkRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(joinLinkService.generate(orgId, request.expiryDays(), SecurityUtils.getCurrentUserId()));
+                .body(joinLinkService.generate(orgId, request.expiryDays(), request.workshopId(),
+                        SecurityUtils.getCurrentUserId()));
     }
 
     @GetMapping("/api/organizations/{orgId}/join-link")
     @PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId))")
-    public ResponseEntity<JoinLinkResponse> getActive(@PathVariable UUID orgId) {
-        return joinLinkService.getActive(orgId)
+    public ResponseEntity<JoinLinkResponse> getActive(
+            @PathVariable UUID orgId,
+            @RequestParam(required = false) UUID workshopId) {
+        return joinLinkService.getActive(orgId, workshopId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.noContent().build());
     }
 
     @DeleteMapping("/api/organizations/{orgId}/join-link")
     @PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId))")
-    public ResponseEntity<Void> revoke(@PathVariable UUID orgId) {
-        joinLinkService.revoke(orgId, SecurityUtils.getCurrentUserId());
+    public ResponseEntity<Void> revoke(
+            @PathVariable UUID orgId,
+            @RequestParam(required = false) UUID workshopId) {
+        joinLinkService.revoke(orgId, workshopId, SecurityUtils.getCurrentUserId());
         return ResponseEntity.noContent().build();
     }
 

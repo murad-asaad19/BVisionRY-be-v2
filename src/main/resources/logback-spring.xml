@@ -1,5 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
+    <!-- Surface the RequestCorrelationFilter's "requestId" MDC value in the console
+         pattern. Spring Boot's CONSOLE_LOG_PATTERN reserves a
+         ${LOG_CORRELATION_PATTERN:-} slot (this is exactly where micrometer-tracing
+         injects [traceId,spanId] once OTel lands), so we reuse that slot rather than
+         rebuild the whole pattern. Must be defined BEFORE the defaults.xml include:
+         defaults.xml is where CONSOLE_LOG_PATTERN is assembled, and logback
+         substitutes nested variables at that moment — defining this only before the
+         console-appender include (as previously done) leaves the slot empty because
+         the pattern has already been resolved. Context-scoped and unconditional; the
+         prod profile ignores CONSOLE_LOG_PATTERN entirely (JSON encoder below).
+         %esb (Boot's EnclosedInSquareBracketsConverter, registered in defaults.xml)
+         renders "[<id>] " when the MDC value is present and NOTHING when it is
+         absent — so startup/scheduler lines carry no empty-bracket noise, and the
+         trailing space can't be lost to XML/property whitespace trimming. -->
+    <property scope="context" name="LOG_CORRELATION_PATTERN" value="%esb(%X{requestId:-})"/>
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
     <springProfile name="local,default,dev,e2e">
@@ -15,7 +30,14 @@
 
     <springProfile name="prod">
         <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-            <encoder class="ch.qos.logback.classic.encoder.JsonEncoder"/>
+            <!-- The native JsonEncoder emits the full MDC map under a top-level "mdc"
+                 object (key "mdc"), so the RequestCorrelationFilter's "requestId" is
+                 carried as mdc.requestId in every prod log line — the cross-service
+                 correlation field. withMDC defaults to true; set explicitly to lock the
+                 intent so a future field-trimming edit can't silently drop correlation. -->
+            <encoder class="ch.qos.logback.classic.encoder.JsonEncoder">
+                <withMDC>true</withMDC>
+            </encoder>
         </appender>
         <root level="INFO">
             <appender-ref ref="JSON_CONSOLE"/>

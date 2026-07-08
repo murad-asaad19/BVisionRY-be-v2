@@ -113,4 +113,42 @@ class StructuredOutputGuardrailTest {
                 + " \"whatsWorking\": [\"a\"], \"whatCanImprove\": [\"b\"]}";
         assertThat(validate(pillarGuard, complete).isReprompt()).isFalse();
     }
+
+    /**
+     * The guardrail retains the raw offending text on a failing validate so the caller
+     * can persist real evidence when the retry budget is exhausted (see
+     * {@code AiEvaluationEngine} → {@code SchemaValidationException}).
+     */
+    @Test
+    void retainsLastResponseText_onFailingValidate() {
+        String bad = "I'm sorry, I can't help with that.";
+        assertThat(validate(scoreGuard, bad).isReprompt()).isTrue();
+        assertThat(scoreGuard.lastResponseText()).isEqualTo(bad);
+    }
+
+    /**
+     * A truncated overall summary carrying only a bare score must reprompt — the production
+     * summary guardrail requires the narrative fields, so a missing corePattern can't render
+     * as a clean EVALUATED with blank sections. Mirrors the guardrail wired in
+     * {@code AiEvaluationEngine.generateOverallSummary}.
+     */
+    private final StructuredOutputGuardrail summaryGuard = new StructuredOutputGuardrail(
+            mapper, List.of("summaryNarrative", "strengths", "developmentAreas", "corePattern", "movingForward"),
+            "overallScorePercentage");
+
+    @Test
+    void summaryGuard_missingCorePattern_reprompts() {
+        String missingCorePattern = "{\"overallScorePercentage\": 68,"
+                + " \"summaryNarrative\": \"ok\", \"strengths\": [\"a\"],"
+                + " \"developmentAreas\": [\"b\"], \"movingForward\": \"go\"}";
+        assertThat(validate(summaryGuard, missingCorePattern).isReprompt()).isTrue();
+    }
+
+    @Test
+    void summaryGuard_completeResponse_passes() {
+        String complete = "{\"overallScorePercentage\": 68,"
+                + " \"summaryNarrative\": \"ok\", \"strengths\": [\"a\"],"
+                + " \"developmentAreas\": [\"b\"], \"corePattern\": \"p\", \"movingForward\": \"go\"}";
+        assertThat(validate(summaryGuard, complete).isReprompt()).isFalse();
+    }
 }

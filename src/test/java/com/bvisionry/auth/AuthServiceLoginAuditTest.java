@@ -5,7 +5,7 @@ import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
-import org.junit.jupiter.api.Disabled;
+import com.bvisionry.testsupport.EnabledIfDockerAvailable;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -22,9 +22,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-@Disabled("Integration test — needs Docker for Testcontainers Postgres. "
-        + "Skipped on Windows + Docker Desktop; runs on Linux/CI where "
-        + "Testcontainers connects to /var/run/docker.sock automatically.")
+@EnabledIfDockerAvailable
 class AuthServiceLoginAuditTest extends AbstractPostgresIntegrationTest {
 
     @Autowired MockMvc mockMvc;

@@ -21,8 +21,4 @@ public class IconKeyValidator {
             throw new BadRequestException("Invalid icon key: '" + iconKey + "'. Valid keys: " + VALID_ICON_KEYS);
         }
     }
-
-    public static Set<String> getValidIconKeys() {
-        return VALID_ICON_KEYS;
-    }
 }

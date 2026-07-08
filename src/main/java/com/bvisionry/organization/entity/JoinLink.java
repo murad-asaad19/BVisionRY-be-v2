@@ -31,6 +31,14 @@ public class JoinLink extends BaseEntity {
     @Column(name = "is_active", nullable = false)
     private boolean active = true;
 
+    /**
+     * When set, this link belongs to a workshop: accepting it also assigns the
+     * new member to a team of that workshop (via {@code WorkshopEvents.JoinedViaLink}).
+     * Soft UUID reference — the workshops slice owns the table.
+     */
+    @Column(name = "workshop_id")
+    private UUID workshopId;
+
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 

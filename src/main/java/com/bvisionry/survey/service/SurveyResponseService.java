@@ -33,6 +33,7 @@ import com.bvisionry.survey.entity.SurveyStatus;
 import com.bvisionry.survey.entity.SurveyVisibility;
 import com.bvisionry.survey.repository.SurveyRepository;
 import com.bvisionry.survey.repository.SurveyResponseRepository;
+import com.bvisionry.survey.repository.WorkshopIntroSurveyRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -56,6 +57,7 @@ public class SurveyResponseService {
 
     private final SurveyRepository surveyRepository;
     private final SurveyResponseRepository responseRepository;
+    private final WorkshopIntroSurveyRepository workshopIntroRepository;
     private final SurveyMapper mapper;
     private final SubmissionRepository submissionRepository;
     private final UserRepository userRepository;
@@ -233,6 +235,161 @@ public class SurveyResponseService {
 
         AfterCommit.run(() -> cacheInvalidationService.invalidateMemberResultsForSubmission(submissionId));
         return result;
+    }
+
+    // ------------------------------------------------------------ workshop intro
+
+    /**
+     * Resolve the published intro survey a member must complete before a
+     * workshop's tasks unlock. 404 when the caller isn't enrolled in the
+     * workshop, the workshop is still a draft, or no intro survey is paired —
+     * all indistinguishable so neither existence nor membership leaks. 410 when
+     * the survey is closed, 409 once this member has already submitted (so the
+     * client can show the already-done state on load).
+     */
+    @Transactional(readOnly = true)
+    public MemberSurveyDto getForWorkshop(UUID workshopId, UUID currentUserId) {
+        WorkshopIntroSurveyRepository.WorkshopIntroRow row =
+                resolveEnrolledIntro(workshopId, currentUserId);
+        Survey survey = resolvePublishedWorkshopSurvey(row);
+        if (workshopIntroRepository.hasIntroResponse(survey.getId(), workshopId, currentUserId)) {
+            throw new DuplicateResourceException(
+                    "Survey response already submitted for this workshop");
+        }
+        return mapper.toMemberSurveyDto(survey);
+    }
+
+    /**
+     * Submit the pre-workshop intro survey for an authenticated member.
+     * Enforces single-submission per member per workshop; identity is taken from
+     * the current user, not the request body. Availability guards mirror
+     * {@link #getForWorkshop}.
+     */
+    @Transactional
+    public SurveySubmitResponseDto submitForWorkshop(UUID workshopId,
+                                                     UUID currentUserId,
+                                                     SurveySubmitRequest request,
+                                                     String userAgent) {
+        WorkshopIntroSurveyRepository.WorkshopIntroRow row =
+                resolveEnrolledIntro(workshopId, currentUserId);
+        Survey survey = resolvePublishedWorkshopSurvey(row);
+
+        if (workshopIntroRepository.hasIntroResponse(survey.getId(), workshopId, currentUserId)) {
+            throw new DuplicateResourceException(
+                    "Survey response already submitted for this workshop");
+        }
+
+        User user = userRepository.findById(currentUserId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", currentUserId.toString()));
+
+        try {
+            return persistResponse(
+                    survey,
+                    request.answers(),
+                    new ResponseContext.WorkshopIntro(workshopId, user),
+                    userAgent);
+        } catch (DataIntegrityViolationException e) {
+            // The exists-check above is racy under concurrent submits; the unique
+            // partial index ux_survey_responses_workshop_user is the real gate.
+            throw new DuplicateResourceException(
+                    "Survey response already submitted for this workshop");
+        }
+    }
+
+    /**
+     * Resolve the published survey paired to a SURVEY pipeline task the member
+     * plays inline. Same availability contract as {@link #getForWorkshop}:
+     * 404 when not enrolled / draft / no survey paired, 410 closed, 409 already
+     * submitted (responses are keyed per survey+workshop+member, so a survey
+     * answered earlier in this workshop — e.g. as the intro — counts).
+     */
+    @Transactional(readOnly = true)
+    public MemberSurveyDto getForWorkshopTask(UUID workshopId, UUID taskId, UUID currentUserId) {
+        WorkshopIntroSurveyRepository.WorkshopIntroRow row =
+                resolveEnrolledTaskSurvey(workshopId, taskId, currentUserId);
+        Survey survey = resolvePublishedWorkshopSurvey(row);
+        if (workshopIntroRepository.hasIntroResponse(survey.getId(), workshopId, currentUserId)) {
+            throw new DuplicateResourceException(
+                    "Survey response already submitted for this workshop");
+        }
+        return mapper.toMemberSurveyDto(survey);
+    }
+
+    /**
+     * Submit a SURVEY pipeline task's response. Persists with the same
+     * WORKSHOP_INTRO context/keying as the pre-workshop gate — one response per
+     * member per survey per workshop. Completing the workshop task itself is a
+     * separate workshops-slice call, server-verified against this response.
+     */
+    @Transactional
+    public SurveySubmitResponseDto submitForWorkshopTask(UUID workshopId,
+                                                         UUID taskId,
+                                                         UUID currentUserId,
+                                                         SurveySubmitRequest request,
+                                                         String userAgent) {
+        WorkshopIntroSurveyRepository.WorkshopIntroRow row =
+                resolveEnrolledTaskSurvey(workshopId, taskId, currentUserId);
+        Survey survey = resolvePublishedWorkshopSurvey(row);
+
+        if (workshopIntroRepository.hasIntroResponse(survey.getId(), workshopId, currentUserId)) {
+            throw new DuplicateResourceException(
+                    "Survey response already submitted for this workshop");
+        }
+
+        User user = userRepository.findById(currentUserId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", currentUserId.toString()));
+
+        try {
+            return persistResponse(
+                    survey,
+                    request.answers(),
+                    new ResponseContext.WorkshopIntro(workshopId, user),
+                    userAgent);
+        } catch (DataIntegrityViolationException e) {
+            // ux_survey_responses_workshop_user is the real race gate.
+            throw new DuplicateResourceException(
+                    "Survey response already submitted for this workshop");
+        }
+    }
+
+    /** The enrolled, non-draft workshop's SURVEY-task row, or 404 (existence/membership hidden). */
+    private WorkshopIntroSurveyRepository.WorkshopIntroRow resolveEnrolledTaskSurvey(
+            UUID workshopId, UUID taskId, UUID currentUserId) {
+        WorkshopIntroSurveyRepository.WorkshopIntroRow row = workshopIntroRepository
+                .findEnrolledTaskSurvey(workshopId, taskId, currentUserId)
+                .orElseThrow(() -> new ResourceNotFoundException("Workshop", workshopId.toString()));
+        if ("DRAFT".equals(row.getStatus())) {
+            throw new ResourceNotFoundException("Workshop", workshopId.toString());
+        }
+        return row;
+    }
+
+    /** The enrolled, non-draft workshop's intro row, or 404 (existence/membership hidden). */
+    private WorkshopIntroSurveyRepository.WorkshopIntroRow resolveEnrolledIntro(
+            UUID workshopId, UUID currentUserId) {
+        WorkshopIntroSurveyRepository.WorkshopIntroRow row = workshopIntroRepository
+                .findEnrolledIntro(workshopId, currentUserId)
+                .orElseThrow(() -> new ResourceNotFoundException("Workshop", workshopId.toString()));
+        // Drafts are hidden from members, exactly like the play endpoint.
+        if ("DRAFT".equals(row.getStatus())) {
+            throw new ResourceNotFoundException("Workshop", workshopId.toString());
+        }
+        return row;
+    }
+
+    private Survey resolvePublishedWorkshopSurvey(WorkshopIntroSurveyRepository.WorkshopIntroRow row) {
+        if (row.getSurveyId() == null) {
+            throw new ResourceNotFoundException("Survey", "pre-workshop (none paired)");
+        }
+        Survey survey = surveyRepository.findById(row.getSurveyId())
+                .orElseThrow(() -> new ResourceNotFoundException("Survey", row.getSurveyId().toString()));
+        if (survey.getStatus() == SurveyStatus.CLOSED) {
+            throw new ResponseStatusException(HttpStatus.GONE, "Survey is closed");
+        }
+        if (survey.getStatus() != SurveyStatus.PUBLISHED) {
+            throw new ResourceNotFoundException("Survey", row.getSurveyId().toString());
+        }
+        return survey;
     }
 
     /**
@@ -429,6 +586,15 @@ public class SurveyResponseService {
                 response.setRespondentUserId(m.user().getId());
                 response.setRespondentEmail(normalize(m.user().getEmail()));
                 response.setRespondentName(normalize(m.user().getName()));
+                response.setIpHash(null);
+                response.setCookieId(null);
+            }
+            case ResponseContext.WorkshopIntro w -> {
+                response.setSource(ResponseSource.WORKSHOP_INTRO);
+                response.setWorkshopId(w.workshopId());
+                response.setRespondentUserId(w.user().getId());
+                response.setRespondentEmail(normalize(w.user().getEmail()));
+                response.setRespondentName(normalize(w.user().getName()));
                 response.setIpHash(null);
                 response.setCookieId(null);
             }

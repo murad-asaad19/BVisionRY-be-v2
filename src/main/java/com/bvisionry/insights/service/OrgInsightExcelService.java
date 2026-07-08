@@ -74,10 +74,10 @@ public class OrgInsightExcelService {
     private void writeTeamThemes(ExcelWorkbookBuilder wb, Map<String, Object> themes) {
         ExcelWorkbookBuilder.SheetBuilder s = wb.newSheet("Team Themes");
         List<Object> strengths = themes != null ? safeList(themes.get("commonStrengths")) : List.of();
-        List<Object> weaknesses = themes != null ? safeList(themes.get("commonWeaknesses")) : List.of();
+        List<Object> weaknesses = themes != null ? growthEdges(themes) : List.of();
         List<Object> patterns = themes != null ? safeList(themes.get("patterns")) : List.of();
 
-        s.headers("Common strengths", "Common weaknesses", "Recurring patterns");
+        s.headers("Common strengths", "Growth edges", "Recurring patterns");
         int rowCount = Math.max(strengths.size(), Math.max(weaknesses.size(), patterns.size()));
         for (int i = 0; i < rowCount; i++) {
             s.row(
@@ -178,5 +178,12 @@ public class OrgInsightExcelService {
     @SuppressWarnings("unchecked")
     private List<Object> safeList(Object obj) {
         return obj instanceof List ? (List<Object>) obj : List.of();
+    }
+
+    // ponytail: reports generated before the commonWeaknesses -> growthEdges
+    // rename still have the old key; drop this fallback once old reports age out.
+    private List<Object> growthEdges(Map<String, Object> teamThemes) {
+        List<Object> edges = safeList(teamThemes.get("growthEdges"));
+        return edges.isEmpty() ? safeList(teamThemes.get("commonWeaknesses")) : edges;
     }
 }

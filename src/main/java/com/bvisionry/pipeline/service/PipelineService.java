@@ -617,7 +617,9 @@ public class PipelineService {
     }
 
     private PipelineSummaryResponse toSummaryResponse(Pipeline p, List<AssignedOrgSummary> assignedOrganizations) {
-        int pillarCount = p.getPillars() != null ? p.getPillars().size() : 0;
+        int pillarCount = p.getPillars() != null
+                ? (int) p.getPillars().stream().filter(pillar -> pillar.getType() != PillarType.PERSONAL).count()
+                : 0;
         return new PipelineSummaryResponse(
                 p.getId(), p.getName(), p.getDescription(), p.getVersion(),
                 p.getStatus(), p.getCreatedBy(),

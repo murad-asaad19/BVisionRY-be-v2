@@ -22,6 +22,8 @@ import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.evaluation.EvaluationService;
 import com.bvisionry.membertype.MemberTypeService;
 import com.bvisionry.notification.EmailService;
+import com.bvisionry.notification.push.NotificationType;
+import com.bvisionry.notification.push.PushNotificationService;
 import com.bvisionry.organization.OrgAuditActions;
 import com.bvisionry.organization.OrganizationRepository;
 import com.bvisionry.organization.entity.Organization;
@@ -68,6 +70,7 @@ public class AssignmentService {
     private final OrganizationRepository organizationRepository;
     private final UserRepository userRepository;
     private final EmailService emailService;
+    private final PushNotificationService pushNotificationService;
     private final AuditService auditService;
     private final EvaluationService evaluationService;
     private final AssessmentService assessmentService;
@@ -288,6 +291,12 @@ public class AssignmentService {
 
         // Fire-and-forget email — don't block the response if SMTP is slow.
         sendAssignmentEmailAsync(member, pipeline, savedAssignment, savedSubmission);
+
+        // Same fire-and-forget contract for the browser-push channel.
+        pushNotificationService.notifyUser(member.getId(), NotificationType.ASSESSMENT_ASSIGNED,
+                "New assessment assigned",
+                "\"" + pipeline.getName() + "\" is ready for you.",
+                "/my/assessments/" + savedSubmission.getId());
 
         return new AssignmentCreated(savedAssignment, savedSubmission);
     }
@@ -598,6 +607,22 @@ public class AssignmentService {
     }
 
     /**
+     * Resolves the latest submission id for an assignment, org-scoped — the
+     * shared precondition for admin operations over a member's raw answers
+     * (answer view, AI-use detection). Kept as a short read-only transaction so
+     * callers that follow up with a long AI call never hold one open.
+     */
+    @Transactional(readOnly = true)
+    public UUID requireLatestSubmissionId(UUID orgId, UUID assignmentId) {
+        Assignment assignment = requireAssignmentInOrg(orgId, assignmentId);
+        if (assignment.getUser() == null) {
+            throw new BadRequestException("This provision has not been assigned to a member yet.");
+        }
+        return submissionRepository.requireLatestForAssignment(
+                assignment, "No submission exists for this assignment yet.").getId();
+    }
+
+    /**
      * Pillar structure (id/name/type) for the assignment's pipeline — no
      * question or answer content, so unlike {@link #getAssignmentAnswers} this
      * is safe for Org Admins. Powers the unlock-pillars picker, which only
@@ -638,6 +663,10 @@ public class AssignmentService {
                 assignment.getPipeline().getName(),
                 submission.getEffectiveDeadline(),
                 frontendUrls.path("/my/assessments/" + submission.getId()));
+        pushNotificationService.notifyUser(member.getId(), NotificationType.ASSESSMENT_REMINDER,
+                "Assessment reminder",
+                "\"" + assignment.getPipeline().getName() + "\" is still waiting for you.",
+                "/my/assessments/" + submission.getId());
         // Log user UUID instead of email to keep PII out of application logs
         // — the user can still be looked up via the UUID for support cases.
         log.info("Reminder sent for assignment {} to user {}", assignmentId, member.getId());

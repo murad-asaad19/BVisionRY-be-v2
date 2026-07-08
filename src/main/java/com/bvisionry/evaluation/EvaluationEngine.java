@@ -8,6 +8,7 @@ import com.bvisionry.assessment.entity.Answer;
 import com.bvisionry.common.dto.OverallSummaryResult;
 import com.bvisionry.common.dto.PillarEvaluationResult;
 import com.bvisionry.common.enums.PillarType;
+import com.bvisionry.common.exception.AIServiceException;
 import com.bvisionry.common.enums.QuestionType;
 import com.bvisionry.evaluation.entity.PillarEvaluation;
 import com.bvisionry.pipeline.SystemQuestion;
@@ -764,8 +765,24 @@ public class EvaluationEngine {
                                                String userContext,
                                                String modelOverride, boolean publicAssessment,
                                                CallMetadata metadata) {
-        var aiResponse = openRouterChatService.generateOverallSummary(
-                context, overallSummaryPrompt, userContext, modelOverride, publicAssessment, metadata);
+        OpenRouterChatService.AIResponse<OverallSummaryResult> aiResponse;
+        try {
+            aiResponse = openRouterChatService.generateOverallSummary(
+                    context, overallSummaryPrompt, userContext, modelOverride, publicAssessment, metadata);
+        } catch (AIServiceException e) {
+            // A summary transport failure (429/5xx/circuit-open/bulkhead-full) must degrade
+            // to NEEDS_REVIEW with the pillar results persisted — mirroring the per-pillar
+            // isolation in evaluateAllPillars — never escalate to a whole-run FAILED that
+            // discards the N successful pillar calls that precede it. The summary is the LAST
+            // call in the pipeline, so without this catch a transport error would propagate out
+            // of evaluatePipeline and lose every in-memory pillar result. Return the same
+            // failed-shape SummaryResult the parse-failure branch below returns, but with
+            // rawResponse and provenance null — there is no response to retain.
+            log.error("Overall summary transport failure for submission {} (pipeline {}): {}",
+                    metadata.submissionId(), metadata.pipelineId(), e.getMessage(), e);
+            return new SummaryResult(BigDecimal.ZERO, "", List.of(), List.of(),
+                    null, null, null, null, overallSummaryPrompt, true);
+        }
         if (aiResponse.isParsed()) {
             OverallSummaryResult sr = aiResponse.parsed();
             return new SummaryResult(
@@ -903,34 +920,10 @@ public class EvaluationEngine {
     }
 
     private static String escapeText(String s) {
-        if (s == null) return "";
-        StringBuilder out = new StringBuilder(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '&' -> out.append("&amp;");
-                case '<' -> out.append("&lt;");
-                case '>' -> out.append("&gt;");
-                default -> out.append(c);
-            }
-        }
-        return out.toString();
+        return com.bvisionry.common.util.XmlEscape.text(s);
     }
 
     private static String escapeAttr(String s) {
-        if (s == null) return "";
-        StringBuilder out = new StringBuilder(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '&' -> out.append("&amp;");
-                case '<' -> out.append("&lt;");
-                case '>' -> out.append("&gt;");
-                case '"' -> out.append("&quot;");
-                case '\'' -> out.append("&apos;");
-                default -> out.append(c);
-            }
-        }
-        return out.toString();
+        return com.bvisionry.common.util.XmlEscape.attr(s);
     }
 }

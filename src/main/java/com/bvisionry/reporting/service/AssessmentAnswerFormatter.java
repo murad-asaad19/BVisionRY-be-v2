@@ -23,11 +23,22 @@ public final class AssessmentAnswerFormatter {
 
     private AssessmentAnswerFormatter() {}
 
-    /** Raw text the user provided — single-select label or free-text response. */
-    public static String answerLabel(Answer a) {
+    /**
+     * Raw text the user provided (single-select label or free-text response), or
+     * {@code null} when the answer is blank. Callers that must never leak the
+     * "Unspecified" display sentinel into data (e.g. the redaction alias list)
+     * use this instead of {@link #answerLabel}.
+     */
+    public static String answerTextOrNull(Answer a) {
         if (a.getSelectedValue() != null && !a.getSelectedValue().isBlank()) return a.getSelectedValue();
         if (a.getResponseText() != null && !a.getResponseText().isBlank()) return a.getResponseText();
-        return "Unspecified";
+        return null;
+    }
+
+    /** Raw text the user provided, or the {@code "Unspecified"} display sentinel. */
+    public static String answerLabel(Answer a) {
+        String text = answerTextOrNull(a);
+        return text != null ? text : "Unspecified";
     }
 
     /**

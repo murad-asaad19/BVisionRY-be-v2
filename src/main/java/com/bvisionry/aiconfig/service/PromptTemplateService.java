@@ -3,7 +3,9 @@ package com.bvisionry.aiconfig.service;
 import com.bvisionry.aiconfig.dto.PromptTemplateResponse;
 import com.bvisionry.aiconfig.dto.PromptTemplateUpdateRequest;
 import com.bvisionry.aiconfig.entity.PromptTemplate;
+import com.bvisionry.aiconfig.entity.PromptTemplateRevision;
 import com.bvisionry.aiconfig.repository.PromptTemplateRepository;
+import com.bvisionry.aiconfig.repository.PromptTemplateRevisionRepository;
 import com.bvisionry.audit.AuditService;
 import com.bvisionry.common.enums.PromptType;
 import com.bvisionry.common.exception.ResourceNotFoundException;
@@ -11,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +23,7 @@ import java.util.Map;
 public class PromptTemplateService {
 
     private final PromptTemplateRepository promptRepository;
+    private final PromptTemplateRevisionRepository revisionRepository;
     private final AuditService auditService;
 
     @Transactional(readOnly = true)
@@ -39,6 +43,13 @@ public class PromptTemplateService {
                 .toList();
     }
 
+    /**
+     * Updates the active prompt for a type. Every edit APPENDS an immutable
+     * {@link PromptTemplateRevision} capturing this exact content and repoints the template's
+     * {@code currentRevisionId} at it, so evaluations that stored this revision id stay
+     * reproducible — their provenance always resolves to the precise prompt text, even after
+     * later edits mutate the template row in place.
+     */
     @Transactional
     public PromptTemplateResponse updatePrompt(PromptType promptType, PromptTemplateUpdateRequest request) {
         PromptTemplate template = promptRepository.findByPromptType(promptType)
@@ -46,10 +57,17 @@ public class PromptTemplateService {
 
         template.setContent(request.content());
 
+        PromptTemplateRevision revision = new PromptTemplateRevision();
+        revision.setTemplateId(template.getId());
+        revision.setContent(request.content());
+        revision.setCreatedAt(Instant.now());
+        PromptTemplateRevision savedRevision = revisionRepository.save(revision);
+
+        template.setCurrentRevisionId(savedRevision.getId());
         PromptTemplate saved = promptRepository.save(template);
 
         auditService.log(null, null, "PROMPT_UPDATED", "PromptTemplate", saved.getId(),
-                Map.of("promptType", promptType.name()));
+                Map.of("promptType", promptType.name(), "revisionId", savedRevision.getId().toString()));
 
         return toResponse(saved);
     }
@@ -65,6 +83,7 @@ public class PromptTemplateService {
     private PromptTemplateResponse toResponse(PromptTemplate template) {
         return new PromptTemplateResponse(
                 template.getId(),
+                template.getCurrentRevisionId(),
                 template.getPromptType(),
                 template.getContent(),
                 template.getCreatedAt()

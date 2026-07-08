@@ -9,8 +9,8 @@
   classes live in each template's own <style> block after this one.
 
   Palette (Flying Saucer has no CSS var() support, so values are literal):
-    bg #eef2f7 · navy #00174a · ink #18233f · muted #55647d
-    gold (display text) #cf9b43 · gold (fills/rules) #e2ac53
+    bg #eef2f7 · navy #051647 · ink #18233f · muted #55647d
+    gold (display text) #cf9b43 · gold (fills/rules) #d9ad62
     cream card #faf2e2 / border #efe1c4 · white card border #dce3ee
     strength green #2c7a52 · growth amber #b07d18
 -->
@@ -28,7 +28,7 @@
 
     /* Typography */
     h1, h2, h3, h4 {
-        font-family: 'Inter', sans-serif; color: #00174a; font-weight: 700;
+        font-family: 'Inter', sans-serif; color: #051647; font-weight: 700;
         letter-spacing: -0.01em;
     }
     h1 { font-size: 27pt; }
@@ -36,9 +36,9 @@
     h3 { font-size: 13pt; margin-bottom: 4px; }
     h4 { font-size: 11pt; margin: 10px 0 4px; }
     p { margin: 0; }
-    strong { font-weight: 700; color: #00174a; }
+    strong { font-weight: 700; color: #051647; }
 
-    .navy { color: #00174a; }
+    .navy { color: #051647; }
     .gold { color: #cf9b43; }
     .muted { color: #55647d; }
     .text-center { text-align: center; }
@@ -51,10 +51,10 @@
     .mt-8 { margin-top: 30px; }
 
     /* Page heading: bold navy title + short gold accent rule */
-    .page-heading { font-size: 19pt; font-weight: 700; color: #00174a; }
+    .page-heading { font-size: 19pt; font-weight: 700; color: #051647; }
     .accent-rule {
         display: block; width: 46px; height: 4px;
-        background: #e2ac53; border-radius: 2px; margin-top: 8px;
+        background: #d9ad62; border-radius: 2px; margin-top: 8px;
     }
 
     /* Cards */
@@ -67,21 +67,21 @@
         border-radius: 14px; padding: 14px 18px; page-break-inside: avoid;
     }
     .card-label {
-        font-size: 9pt; font-weight: 700; color: #00174a;
+        font-size: 9pt; font-weight: 700; color: #051647;
         letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 5px;
     }
 
     /* Cover */
     .cover { height: 760px; position: relative; }
     .cover-eyebrow {
-        font-size: 10.5pt; font-weight: 600; color: #00174a;
+        font-size: 10.5pt; font-weight: 600; color: #051647;
         letter-spacing: 0.22em; text-transform: uppercase; margin-top: 40px;
     }
     .cover-title {
-        font-size: 38pt; font-weight: 700; color: #00174a;
+        font-size: 38pt; font-weight: 700; color: #051647;
         line-height: 1.08; margin-top: 26px; letter-spacing: -0.02em;
     }
-    .cover-name { font-size: 21pt; font-weight: 600; color: #00174a; margin-top: 40px; }
+    .cover-name { font-size: 21pt; font-weight: 600; color: #051647; margin-top: 40px; }
     .cover-subtitle { font-size: 15pt; font-weight: 600; color: #cf9b43; margin-top: 10px; }
     .cover-date { font-size: 11.5pt; color: #55647d; margin-top: 8px; }
     .cover-confidential {
@@ -91,7 +91,7 @@
     .cover-foot { position: absolute; bottom: 0; left: 0; right: 0; }
     .cover-foot-cell { display: table-cell; vertical-align: bottom; }
     .cover-logo { height: 34px; }
-    .cover-url { font-size: 12pt; color: #00174a; font-weight: 500; text-align: right; }
+    .cover-url { font-size: 12pt; color: #051647; font-weight: 500; text-align: right; }
 
     /* Faint brand-mark watermark bleeding off the page edge */
     .watermark { position: absolute; z-index: 0; }
@@ -105,33 +105,33 @@
     }
     .bullet-list li:before {
         content: "\2022"; position: absolute; left: 0; top: 2px;
-        font-size: 13pt; line-height: 1; color: #00174a;
+        font-size: 13pt; line-height: 1; color: #051647;
     }
     .bullet-strength li:before { color: #2c7a52; }
     .bullet-improve li:before { color: #b07d18; }
 
     /* Div-based lists (org/team) with coloured leading dots */
     .list-item { padding: 3px 0 3px 16px; font-size: 10pt; position: relative; }
-    .list-item:before { content: "\2022"; position: absolute; left: 0; top: 1px; color: #00174a; }
+    .list-item:before { content: "\2022"; position: absolute; left: 0; top: 1px; color: #051647; }
     .list-bullet-green:before { color: #2c7a52; }
     .list-bullet-amber:before { color: #b07d18; }
 
     /* Score circle + category chip (executive summary) */
     .score-circle {
         display: inline-block; width: 116px; height: 116px; border-radius: 58px;
-        border: 5px solid #e2ac53; text-align: center; line-height: 106px;
-        font-size: 27pt; font-weight: 700; color: #00174a; background: #ffffff;
+        border: 5px solid #d9ad62; text-align: center; line-height: 106px;
+        font-size: 27pt; font-weight: 700; color: #051647; background: #ffffff;
     }
     .category-chip {
         display: inline-block; margin-top: 18px;
         background: #faf2e2; border: 1px solid #efe1c4; border-radius: 999px;
-        padding: 7px 20px; font-size: 13pt; font-weight: 700; color: #00174a;
+        padding: 7px 20px; font-size: 13pt; font-weight: 700; color: #051647;
     }
 
     /* Key/value information table */
     .info-table { width: 100%; border-collapse: collapse; }
     .info-table td { padding: 8px 14px; vertical-align: top; border-bottom: 1px solid #dce3ee; }
-    .info-label { font-weight: 600; color: #00174a; width: 40%; }
+    .info-label { font-weight: 600; color: #051647; width: 40%; }
     .info-value { color: #18233f; }
 
     /* Closing block */

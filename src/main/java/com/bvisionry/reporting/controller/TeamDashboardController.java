@@ -150,9 +150,9 @@ public class TeamDashboardController {
     }
 
     /**
-     * Bulk Excel export for Team Insights. Restricted to Super Admin: the export
-     * contains every member's raw answers and narratives, which is broader than
-     * what Org Admins are meant to see.
+     * Bulk Excel export for Team Insights. Governed by the class-level gate
+     * (SUPER_ADMIN, or ORG_ADMIN scoped to their own org) — same access as the
+     * rest of this controller.
      *
      * <p>{@code memberIds} (optional, repeated query param) restricts the export
      * to a chosen subset of evaluated members — useful for orgs with 50+ members
@@ -160,7 +160,6 @@ public class TeamDashboardController {
      * still reflect the whole pipeline roster regardless of the filter.
      */
     @GetMapping("/insights/excel")
-    @PreAuthorize("hasAuthority('SUPER_ADMIN')")
     public ResponseEntity<byte[]> getInsightsExcel(
             @PathVariable UUID orgId,
             @RequestParam UUID pipelineId,
@@ -177,11 +176,10 @@ public class TeamDashboardController {
 
     /**
      * Bulk PDF export for Team Insights. Mirrors the Excel signature — same
-     * super-admin guard, same {@code memberIds} filter. The PDF contains an
+     * class-level gate, same {@code memberIds} filter. The PDF contains an
      * aggregated team summary followed by per-member detail sections.
      */
     @GetMapping("/insights/pdf")
-    @PreAuthorize("hasAuthority('SUPER_ADMIN')")
     public ResponseEntity<byte[]> getInsightsPdf(
             @PathVariable UUID orgId,
             @RequestParam UUID pipelineId,

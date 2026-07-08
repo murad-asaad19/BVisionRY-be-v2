@@ -1,0 +1,5 @@
+#
+#Fri Jul 03 19:29:00 EEST 2026
+@RestController\ classes\ should\ only\ be\ depended\ on\ by\ classes\ in\ their\ own\ package=b8709953-1140-4394-ad81-20fef2bd616a
+no\ class\ in\ a\ feature\ package\ should\ depend\ on\ another\ feature\ package=7472acec-8069-407e-a267-48b3bc492e34
+no\ classes\ should\ use\ field\ injection,\ because\ field\ injection\ is\ considered\ harmful;\ use\ constructor\ injection\ or\ setter\ injection\ instead;\ see\ https\://stackoverflow.com/q/39890849\ for\ detailed\ explanations=9dce5455-ef16-4b6d-b187-f1a50c23ff51

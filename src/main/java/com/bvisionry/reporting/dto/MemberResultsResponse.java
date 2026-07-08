@@ -1,6 +1,7 @@
 package com.bvisionry.reporting.dto;
 
 import com.bvisionry.pipeline.dto.PostCompletionLinkDto;
+import com.bvisionry.reporting.service.NarrativeRedactor;
 import com.bvisionry.survey.dto.SubmissionSurveyResponseDto;
 import com.bvisionry.survey.dto.SurveySummary;
 
@@ -85,5 +86,38 @@ public record MemberResultsResponse(
                 freeTierSummary, topStrengths, maturityIndication, premiumTeaser,
                 corePattern, movingForwardNarrative, postCompletion, surveyResponse,
                 survey, personalInfo, false);
+    }
+
+    /**
+     * A copy with every free-text AI narrative field scrubbed of the member's
+     * name(s). Structural fields (ids, scores, flags, pillar scores, survey and
+     * personal-info payloads) are passed through untouched. Returns {@code this}
+     * when the redactor has nothing to scrub (the names-shown export path), so
+     * exports can redact once up front and never sprinkle {@code redact()} at
+     * each write point — a narrative field added here is scrubbed everywhere.
+     */
+    public MemberResultsResponse redacted(NarrativeRedactor redactor) {
+        if (redactor == null || !redactor.isActive()) return this;
+        return new MemberResultsResponse(
+                submissionId(),
+                pipelineName(),
+                overallScore(),
+                redactor.redact(summaryNarrative()),
+                redactor.redact(strengths()),
+                redactor.redact(developmentAreas()),
+                pillarScores(),
+                premiumFeaturesAvailable(),
+                evaluatedAt(),
+                redactor.redact(freeTierSummary()),
+                redactor.redact(topStrengths()),
+                redactor.redact(maturityIndication()),
+                redactor.redact(premiumTeaser()),
+                redactor.redact(corePattern()),
+                redactor.redact(movingForwardNarrative()),
+                postCompletion(),
+                surveyResponse(),
+                survey(),
+                personalInfo(),
+                premiumDetailUnavailable());
     }
 }

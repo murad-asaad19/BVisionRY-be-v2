@@ -78,7 +78,7 @@ public class CatalogController {
             @ApiResponse(responseCode = "200", description = "Course found"),
             @ApiResponse(responseCode = "404", description = "No published course for that slug",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE,
-                            schema = @Schema(implementation = com.bvisionry.common.exception.ErrorResponse.class)))
+                            schema = @Schema(implementation = org.springframework.http.ProblemDetail.class)))
     })
     public CourseDetailDto getBySlug(
             @Parameter(description = "URL slug, e.g. 'leadership-essentials-new-managers'.")

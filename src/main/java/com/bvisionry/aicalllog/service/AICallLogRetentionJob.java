@@ -2,6 +2,7 @@ package com.bvisionry.aicalllog.service;
 
 import com.bvisionry.aicalllog.repository.AICallLogRepository;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -47,8 +48,13 @@ public class AICallLogRetentionJob {
      * {@code batch-size} rows — i.e. nothing older than the cutoff remains — capped at
      * {@code max-batches} iterations as a safety bound against unbounded looping.
      */
+    // Daily cadence, but the first run can clear a large backlog across many bounded
+    // batches, so the ceiling is set to 1h (overriding the 30m config default) to cover
+    // that worst case while staying far under the 24h interval; 1m floor absorbs skew.
     @Scheduled(fixedDelayString = "${bvisionry.ai-call-log.retention.interval-ms:86400000}",
             initialDelayString = "${bvisionry.ai-call-log.retention.initial-delay-ms:300000}")
+    @SchedulerLock(name = "AICallLogRetentionJob_purgeOldLogs",
+            lockAtMostFor = "PT1H", lockAtLeastFor = "PT1M")
     public void purgeOldLogs() {
         if (retentionDays <= 0) {
             return;

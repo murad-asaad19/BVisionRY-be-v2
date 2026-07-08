@@ -4,6 +4,7 @@ import com.bvisionry.assessment.SubmissionRepository;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -44,7 +45,12 @@ public class EvaluationReaper {
     /** Max rows re-dispatched per tick; overflow self-throttles into later ticks. */
     private final int batchLimit;
 
-    /** Last observed backlog, surfaced as a gauge for alerting (F25). */
+    /**
+     * Last observed backlog, surfaced as a gauge for alerting (F25). Counts only rows no
+     * live worker is heart-beating (see {@link SubmissionRepository#countStrandedSubmitted}),
+     * so a healthy in-flight evaluation — which legitimately runs for minutes — is never
+     * mistaken for backlog and the launch-day alert doesn't cry wolf on every traffic spike.
+     */
     private final AtomicLong backlog = new AtomicLong(0);
 
     public EvaluationReaper(
@@ -60,7 +66,8 @@ public class EvaluationReaper {
         this.staleSeconds = staleSeconds;
         this.batchLimit = batchLimit;
         Gauge.builder("bvisionry.ai.evaluation_backlog", backlog, AtomicLong::get)
-                .description("Submissions stuck in SUBMITTED past the grace window, awaiting (re)evaluation")
+                .description("Submissions stuck in SUBMITTED past the grace window and not held by a "
+                        + "live worker, awaiting (re)evaluation")
                 .register(meterRegistry);
     }
 
@@ -70,12 +77,17 @@ public class EvaluationReaper {
      * bounded batch of stranded rows. Fully guarded — a failure here must never kill
      * the scheduler thread.
      */
+    // 90s cadence; the sweep only counts + fire-and-forget re-dispatches a bounded batch,
+    // so it finishes in seconds — 2m ceiling covers a slow DB tick, 30s floor stops a
+    // second replica racing the same tick on clock skew.
     @Scheduled(
             fixedDelayString = "${bvisionry.evaluation.reaper.interval-ms:90000}",
             initialDelayString = "${bvisionry.evaluation.reaper.interval-ms:90000}")
+    @SchedulerLock(name = "EvaluationReaper_recoverStrandedSubmissions",
+            lockAtMostFor = "PT2M", lockAtLeastFor = "PT30S")
     public void recoverStrandedSubmissions() {
         try {
-            long stuck = submissionRepository.countStrandedSubmitted(graceSeconds);
+            long stuck = submissionRepository.countStrandedSubmitted(graceSeconds, staleSeconds);
             backlog.set(stuck);
             if (stuck == 0) {
                 return;
@@ -91,6 +103,8 @@ public class EvaluationReaper {
             int dispatched = 0;
             for (UUID id : ids) {
                 try {
+                    // Reaper-recovered runs always evaluate FULL: no reuse-healthy-pillars
+                    // hint survives a crash/redeploy, so we re-run the whole pipeline.
                     evaluationService.evaluateSubmissionAsync(id);
                     dispatched++;
                 } catch (RuntimeException e) {

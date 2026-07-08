@@ -45,6 +45,7 @@ public class AsyncConfig {
         // is recovered by the reaper on the next instance.
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
+        executor.setTaskDecorator(new MdcTaskDecorator());
         executor.initialize();
         return executor;
     }
@@ -63,6 +64,7 @@ public class AsyncConfig {
         executor.setMaxPoolSize(16);
         executor.setQueueCapacity(200);
         executor.setThreadNamePrefix("pillar-");
+        executor.setTaskDecorator(new MdcTaskDecorator());
         executor.initialize();
         return executor;
     }
@@ -84,6 +86,7 @@ public class AsyncConfig {
         // Run escalation work on the caller thread when the pool is saturated rather
         // than rejecting — escalation is best-effort accuracy, never a failure source.
         executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setTaskDecorator(new MdcTaskDecorator());
         executor.initialize();
         return executor;
     }
@@ -100,6 +103,11 @@ public class AsyncConfig {
         executor.setMaxPoolSize(4);
         executor.setQueueCapacity(500);
         executor.setThreadNamePrefix("ai-log-");
+        // Run audit-log writes on the caller thread when the pool is saturated rather
+        // than rejecting — audit logging is backpressure-tolerant best-effort; on
+        // saturation, write on the caller thread rather than throwing into the AI call path.
+        executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setTaskDecorator(new MdcTaskDecorator());
         executor.initialize();
         return executor;
     }
@@ -118,6 +126,27 @@ public class AsyncConfig {
         executor.setMaxPoolSize(8);
         executor.setQueueCapacity(200);
         executor.setThreadNamePrefix("email-");
+        executor.setTaskDecorator(new MdcTaskDecorator());
+        executor.initialize();
+        return executor;
+    }
+
+    /**
+     * Bounded pool for web-push fan-out ({@code @Async("pushExecutor")}).
+     * Separate from {@link #emailExecutor()} so a burst of push sends (one
+     * HTTPS call per subscribed browser) can never delay transactional email
+     * and vice versa. Push is best-effort: on saturation the send runs on the
+     * caller thread rather than throwing into the business flow.
+     */
+    @Bean(name = "pushExecutor")
+    public Executor pushExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(500);
+        executor.setThreadNamePrefix("push-");
+        executor.setRejectedExecutionHandler(new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setTaskDecorator(new MdcTaskDecorator());
         executor.initialize();
         return executor;
     }

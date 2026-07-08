@@ -4,10 +4,10 @@ import com.bvisionry.auth.UserRepository;
 import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
+import com.bvisionry.testsupport.EnabledIfDockerAvailable;
 import com.bvisionry.testsupport.TestAuthentication;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -26,9 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc(addFilters = false)
 @ActiveProfiles("test")
-@Disabled("Integration test — needs Docker for Testcontainers Postgres. "
-        + "Skipped on Windows + Docker Desktop; runs on Linux/CI where "
-        + "Testcontainers connects to /var/run/docker.sock automatically.")
+@EnabledIfDockerAvailable
 class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Autowired private MockMvc mockMvc;
@@ -37,8 +35,9 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
 
     @BeforeEach
     void setUp() {
-        organizationRepository.deleteAll();
+        // Users FK-reference organizations (users.organization_id), so children go first.
         userRepository.deleteAll();
+        organizationRepository.deleteAll();
         TestAuthentication.authenticateAsSuperAdmin(userRepository);
     }
 

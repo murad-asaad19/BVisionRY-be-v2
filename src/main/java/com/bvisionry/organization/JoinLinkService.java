@@ -7,6 +7,7 @@ import com.bvisionry.auth.dto.AuthResponse;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.common.event.WorkshopEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.config.FrontendUrls;
@@ -42,16 +43,24 @@ public class JoinLinkService {
     private final FrontendUrls frontendUrls;
 
     @Transactional
-    public JoinLinkResponse generate(UUID orgId, int expiryDays, UUID createdBy) {
+    public JoinLinkResponse generate(UUID orgId, int expiryDays, UUID workshopId, UUID createdBy) {
         Organization org = organizationService.findActiveOrThrow(orgId);
 
-        // Deactivate any existing active link. Must FLUSH the deactivation before
-        // inserting the new link: within one transaction Hibernate orders INSERTs
-        // before UPDATEs, so a plain save() would insert the new active row while
-        // the old one is still active and violate the `uq_join_links_active_org`
-        // partial unique constraint (one active link per org). saveAndFlush forces
-        // the UPDATE to hit the DB first.
-        joinLinkRepository.findByOrganizationIdAndActiveTrue(orgId)
+        // A workshop link may only be bound to a workshop of this org — otherwise
+        // an org admin could mint a link that enrols joiners into another org's
+        // workshop team (the accept flow trusts the link's workshop_id).
+        if (workshopId != null && !joinLinkRepository.workshopBelongsToOrg(orgId, workshopId)) {
+            throw new ResourceNotFoundException("Workshop", workshopId.toString());
+        }
+
+        // Deactivate any existing active link in the same scope (org-wide, or
+        // this workshop). Must FLUSH the deactivation before inserting the new
+        // link: within one transaction Hibernate orders INSERTs before UPDATEs,
+        // so a plain save() would insert the new active row while the old one is
+        // still active and violate the partial unique constraint (one active
+        // link per org / per workshop). saveAndFlush forces the UPDATE to hit
+        // the DB first.
+        findActiveLink(orgId, workshopId)
                 .ifPresent(existing -> {
                     existing.setActive(false);
                     joinLinkRepository.saveAndFlush(existing);
@@ -59,26 +68,36 @@ public class JoinLinkService {
 
         JoinLink link = new JoinLink();
         link.setOrganization(org);
+        link.setWorkshopId(workshopId);
         link.setExpiresAt(Instant.now().plus(expiryDays, ChronoUnit.DAYS));
         link.setCreatedBy(createdBy);
         JoinLink saved = joinLinkRepository.save(link);
 
         auditService.log(createdBy, orgId, "LINK_GENERATED", "JoinLink", saved.getId(),
-                Map.of("expiryDays", String.valueOf(expiryDays)));
+                workshopId == null
+                        ? Map.of("expiryDays", String.valueOf(expiryDays))
+                        : Map.of("expiryDays", String.valueOf(expiryDays),
+                                "workshopId", workshopId.toString()));
 
         return JoinLinkResponse.from(saved);
     }
 
+    private Optional<JoinLink> findActiveLink(UUID orgId, UUID workshopId) {
+        return workshopId == null
+                ? joinLinkRepository.findByOrganizationIdAndWorkshopIdIsNullAndActiveTrue(orgId)
+                : joinLinkRepository.findByOrganizationIdAndWorkshopIdAndActiveTrue(orgId, workshopId);
+    }
+
     @Transactional(readOnly = true)
-    public Optional<JoinLinkResponse> getActive(UUID orgId) {
-        return joinLinkRepository.findByOrganizationIdAndActiveTrue(orgId)
+    public Optional<JoinLinkResponse> getActive(UUID orgId, UUID workshopId) {
+        return findActiveLink(orgId, workshopId)
                 .filter(link -> !link.isExpired())
                 .map(JoinLinkResponse::from);
     }
 
     @Transactional
-    public void revoke(UUID orgId, UUID actorId) {
-        JoinLink link = joinLinkRepository.findByOrganizationIdAndActiveTrue(orgId)
+    public void revoke(UUID orgId, UUID workshopId, UUID actorId) {
+        JoinLink link = findActiveLink(orgId, workshopId)
                 .orElseThrow(() -> new ResourceNotFoundException("JoinLink", "active link for org " + orgId));
         link.setActive(false);
         joinLinkRepository.save(link);
@@ -142,10 +161,23 @@ public class JoinLinkService {
 
         eventPublisher.publishEvent(new MemberJoinedEvent(
                 org.getId(), savedUser.getId(), savedUser.getUserType()));
+        publishWorkshopJoin(link, savedUser.getId());
 
         // Mint a session and persist the refresh-token row, enabling rotation
         // and revocation on subsequent /refresh calls.
         return authService.issueSession(savedUser, null);
+    }
+
+    /**
+     * Workshop-bound links also enrol the joiner into a team of that workshop.
+     * The in-transaction event keeps the team assignment atomic with the join
+     * while the workshops slice stays import-free of this one.
+     */
+    private void publishWorkshopJoin(JoinLink link, UUID userId) {
+        if (link.getWorkshopId() != null) {
+            eventPublisher.publishEvent(
+                    new WorkshopEvents.JoinedViaLink(link.getWorkshopId(), userId));
+        }
     }
 
     /**
@@ -207,6 +239,7 @@ public class JoinLinkService {
                     Map.of("email", savedUser.getEmail()));
             eventPublisher.publishEvent(new MemberJoinedEvent(
                     org.getId(), savedUser.getId(), savedUser.getUserType()));
+            publishWorkshopJoin(link, savedUser.getId());
         }
 
         return authService.issueSession(savedUser, context);

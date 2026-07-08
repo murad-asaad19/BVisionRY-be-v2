@@ -51,7 +51,11 @@ public class MemberDisplayNameResolver {
     public ReportIdentity resolveIdentity(UUID submissionId, boolean showNames) {
         Submission submission = submissionRepository.findById(submissionId)
                 .orElseThrow(() -> new ResourceNotFoundException("Submission", submissionId.toString()));
-        List<Answer> answers = answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId);
+        // Only the first/last name answers are needed here — fetch exactly those
+        // two rows instead of the whole answer graph (question + pillar) just to
+        // read a couple of names.
+        List<Answer> answers = answerRepository.findBySubmissionIdsAndSystemKeys(
+                List.of(submissionId), List.of(SystemQuestion.FIRST_NAME, SystemQuestion.LAST_NAME));
         String first = systemAnswer(answers, SystemQuestion.FIRST_NAME);
         String accountName = submission.getUser() != null ? submission.getUser().getName() : null;
         String respondentName = submission.getRespondentName();
@@ -81,8 +85,10 @@ public class MemberDisplayNameResolver {
         for (Answer a : answers) {
             Question q = a.getQuestion();
             if (q == null || !systemKey.equals(q.getSystemKey())) continue;
-            String text = a.getResponseText();
-            if (text != null && !text.isBlank()) return text.trim();
+            // Delegates the "raw text or null when blank" rule to the shared
+            // formatter so this path and the team-export path stay in lockstep.
+            String text = AssessmentAnswerFormatter.answerTextOrNull(a);
+            if (text != null) return text.trim();
         }
         return null;
     }

@@ -6,7 +6,7 @@
     <style>
         /* ===== Org-insights specific ===== */
         .pattern-item {
-            background: #faf2e2; border-left: 4px solid #e2ac53;
+            background: #faf2e2; border-left: 4px solid #d9ad62;
             padding: 10px 14px; margin-top: 8px; border-radius: 0 10px 10px 0;
             font-size: 10pt; page-break-inside: avoid;
         }
@@ -19,17 +19,17 @@
             background: #ffffff; border: 1px solid #dce3ee; border-radius: 12px;
             padding: 14px 16px; margin-top: 12px; page-break-inside: avoid;
         }
-        .coaching-name { font-weight: 700; color: #00174a; font-size: 11.5pt; }
+        .coaching-name { font-weight: 700; color: #051647; font-size: 11.5pt; }
         .focus-tag {
-            display: inline-block; background: #eef2f7; color: #00174a;
+            display: inline-block; background: #eef2f7; color: #051647;
             border: 1px solid #dce3ee; padding: 2px 10px; border-radius: 999px;
             font-size: 9pt; margin: 2px 3px 0 0;
         }
         .action-item { font-size: 10pt; padding: 2px 0 2px 16px; position: relative; }
-        .action-item:before { content: "\2022"; position: absolute; left: 0; top: 1px; color: #00174a; }
+        .action-item:before { content: "\2022"; position: absolute; left: 0; top: 1px; color: #051647; }
         .outlier-tag {
-            display: inline-block; background: #faf2e2; border: 1px solid #e2ac53;
-            color: #00174a; padding: 4px 14px; border-radius: 999px;
+            display: inline-block; background: #faf2e2; border: 1px solid #d9ad62;
+            color: #051647; padding: 4px 14px; border-radius: 999px;
             font-size: 9.5pt; font-weight: 600; margin: 3px 4px 0 0;
         }
     </style>
@@ -75,7 +75,7 @@
     </div>
 
     <div th:if="${#lists.size(weaknesses) > 0}" class="card-cream mt-4">
-        <p class="card-label" style="color: #b07d18;">Common Weaknesses</p>
+        <p class="card-label" style="color: #b07d18;">Growth Edges</p>
         <div th:each="w : ${weaknesses}" class="list-item list-bullet-amber">
             <span th:text="${w}">Weakness item</span>
         </div>
@@ -159,7 +159,7 @@
                 Thank you for partnering with BVisionRY to develop your founders.
             </p>
             <p class="mt-4" style="font-size: 11pt; font-weight: 600;">
-                <a href="https://www.bvisionry.com" style="color: #00174a; text-decoration: none;">www.bvisionry.com</a>
+                <a href="https://www.bvisionry.com" style="color: #051647; text-decoration: none;">www.bvisionry.com</a>
             </p>
             <img class="closing-brand mt-4" th:src="${brandLogo}" alt="BVisionRY"/>
         </div>

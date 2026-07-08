@@ -397,6 +397,20 @@ public class PipelineService {
 
     @Transactional(readOnly = true)
     public List<PipelineSummaryResponse> getPublishedCatalog() {
+        // Org admins only see assessments assigned to their org; super admins see all.
+        com.bvisionry.auth.entity.User caller = SecurityUtils.getCurrentUser();
+        if (caller.getRole() == com.bvisionry.common.enums.UserRole.ORG_ADMIN) {
+            if (caller.getOrganization() == null) {
+                return List.of();
+            }
+            List<UUID> assignedIds = assignmentRepository
+                    .findDistinctPipelineIdsByOrganizationId(caller.getOrganization().getId());
+            if (assignedIds.isEmpty()) {
+                return List.of();
+            }
+            return toSummaryResponsesWithOrgs(
+                    pipelineRepository.findByStatusAndIdIn(PipelineStatus.PUBLISHED, assignedIds));
+        }
         return toSummaryResponsesWithOrgs(pipelineRepository.findByStatus(PipelineStatus.PUBLISHED));
     }
 

@@ -264,6 +264,18 @@ public class InsightService {
                 .stream()
                 .filter(e -> submissionIds.contains(e.getSubmission().getId()))
                 .toList();
+        // The submissions are EVALUATED but carry no pillar evaluations (partial/failed
+        // evaluation, or the rows were cleared). Without any pillar scores, buildAnonymizedData
+        // emits only a "Team size: N members evaluated." header — a contentless prompt the LLM
+        // fills with a plausible but entirely ungrounded team report (generic themes, invented
+        // "member_001" ids, pillars that don't exist in the assessment). Fail loud and synchronously
+        // — like the empty-submissions guard above — so the caller retries once evaluations land,
+        // instead of persisting a believable hallucination.
+        if (evaluations.isEmpty()) {
+            throw new BadRequestException(
+                    "Evaluated submissions for this pipeline have no pillar evaluations yet; "
+                            + "cannot generate a grounded insight");
+        }
         return buildAnonymizedData(submissions, evaluations);
     }
 

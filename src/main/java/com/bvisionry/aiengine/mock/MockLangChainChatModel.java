@@ -94,7 +94,7 @@ public class MockLangChainChatModel implements ChatModel {
             {
               "teamThemes": {
                 "commonStrengths": ["Shared sense of purpose"],
-                "commonWeaknesses": ["Slow feedback loops"],
+                "growthEdges": ["Slow feedback loops"],
                 "patterns": ["Reflection without rapid follow-through"],
                 "recommendations": ["Shorten retro-to-action cycles."]
               },

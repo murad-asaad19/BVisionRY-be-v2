@@ -19,8 +19,8 @@ public record TeamInsightResult(
             @JsonProperty(required = true, value = "commonStrengths")
             List<String> commonStrengths,
 
-            @JsonProperty(required = true, value = "commonWeaknesses")
-            List<String> commonWeaknesses,
+            @JsonProperty(required = true, value = "growthEdges")
+            List<String> growthEdges,
 
             @JsonProperty(required = true, value = "patterns")
             List<String> patterns,

@@ -456,7 +456,7 @@ public class OpenRouterChatService {
           .append("{\n")
           .append("  \"teamThemes\": {\n")
           .append("    \"commonStrengths\": array of strings,\n")
-          .append("    \"commonWeaknesses\": array of strings,\n")
+          .append("    \"growthEdges\": array of strings,\n")
           .append("    \"patterns\": array of strings,\n")
           .append("    \"recommendations\": array of strings\n")
           .append("  },\n")

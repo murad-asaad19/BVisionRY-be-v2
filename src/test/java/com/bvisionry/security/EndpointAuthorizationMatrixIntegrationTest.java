@@ -193,10 +193,17 @@ class EndpointAuthorizationMatrixIntegrationTest extends AbstractPostgresIntegra
         }
 
         @Test
-        void insightsExcel_orgAdminEvenInOwnOrg_returns403() throws Exception {
-            // Method-level rule tightens the class-level one: insights exports are SUPER_ADMIN only.
+        void insightsExcel_orgAdminOwnOrg_clearsGate() throws Exception {
+            // Governed by the class-level gate — no method-level restriction.
             TestAuthentication.authenticateAsOrgAdmin(userRepository, ownOrg);
-            expectForbidden(get("/api/organizations/{orgId}/dashboard/insights/excel", ownOrg.getId())
+            expectGateCleared(get("/api/organizations/{orgId}/dashboard/insights/excel", ownOrg.getId())
+                    .param("pipelineId", UUID.randomUUID().toString()));
+        }
+
+        @Test
+        void insightsExcel_orgAdminOtherOrg_returns403() throws Exception {
+            TestAuthentication.authenticateAsOrgAdmin(userRepository, ownOrg);
+            expectForbidden(get("/api/organizations/{orgId}/dashboard/insights/excel", otherOrg.getId())
                     .param("pipelineId", UUID.randomUUID().toString()));
         }
 

@@ -75,7 +75,7 @@
     </div>
 
     <div th:if="${#lists.size(weaknesses) > 0}" class="card-cream mt-4">
-        <p class="card-label" style="color: #b07d18;">Common Weaknesses</p>
+        <p class="card-label" style="color: #b07d18;">Growth Edges</p>
         <div th:each="w : ${weaknesses}" class="list-item list-bullet-amber">
             <span th:text="${w}">Weakness item</span>
         </div>

@@ -32,6 +32,17 @@ public record PlayResponse(
         ExerciseInfo exercise,
         TaskView task,
         List<RecapRow> recap,
+        List<SortRecap> sortRecaps,
+        List<TaskAnswers> teamAnswers,
+        /**
+         * Whether this learner had any tasks to perform in this workshop at
+         * all — independent of {@code recap}/{@code sortRecaps}/{@code
+         * teamAnswers}, which only cover TOP/QUESTION/lead-SORT completions.
+         * A pipeline of only WEIGHT/SURVEY/member-SORT tasks leaves all three
+         * empty even though real work was done, so the done screen needs this
+         * to tell "genuinely nothing to do" apart from "nothing to recap".
+         */
+        boolean hasTasks,
         ThankYou thankYou) {
 
     public record ExerciseInfo(UUID id, String title, int index, int total) {
@@ -68,7 +79,7 @@ public record PlayResponse(
             List<ScoredCard> sourceWeightRows,
             // QUESTION
             String prompt,
-            ResponseDto response) {
+            List<AnswerDto> answers) {
     }
 
     /** A sort card as the player sees it — the answer key never leaves the server. */
@@ -82,7 +93,11 @@ public record PlayResponse(
     public record ScoredCard(String id, String text, int weight) {
     }
 
-    public record ResponseDto(String cardId, String text) {
+    public record AnswerDto(String cardId, String text) {
+    }
+
+    /** One answered card: the card + the member's response, in shared-card order. */
+    public record RecapAnswer(String cardId, String cardText, String text) {
     }
 
     /** A member's answered QUESTION task, editable from the done screen. */
@@ -90,10 +105,25 @@ public record PlayResponse(
             UUID taskId,
             String taskTitle,
             String prompt,
-            String cardId,
-            String cardText,
-            String text,
+            List<RecapAnswer> answers,
             List<ScoredCard> topRows) {
+    }
+
+    /** The team's shared sort result — every dealt card under its pile label. */
+    public record SortRecap(
+            UUID taskId,
+            String taskTitle,
+            String leftLabel,
+            String rightLabel,
+            List<CardDto> left,
+            List<CardDto> right) {
+    }
+
+    /** Everyone's completed answers for one QUESTION task — revealed as they arrive. */
+    public record TaskAnswers(UUID taskId, String taskTitle, String prompt, List<MemberAnswers> members) {
+    }
+
+    public record MemberAnswers(UUID userId, String name, boolean lead, List<RecapAnswer> answers) {
     }
 
     public record ThankYou(String surveyName, UUID surveyToken) {

@@ -8,5 +8,7 @@ public enum WorkshopTaskType {
     /** Ranked top-N of the nearest WEIGHT above; the lead's last one shares. */
     TOP,
     /** Pick one card from the nearest TOP above and answer a free-text prompt. */
-    QUESTION
+    QUESTION,
+    /** Complete a paired published survey inline ({@code config.surveyId}). */
+    SURVEY
 }

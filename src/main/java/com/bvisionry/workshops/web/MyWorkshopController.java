@@ -33,6 +33,7 @@ import jakarta.validation.Valid;
  *   <li>POST /api/my/workshops/{workshopId}/tasks/{id}/weights— save scores / re-score</li>
  *   <li>POST /api/my/workshops/{workshopId}/tasks/{id}/complete — finish top task (may share)</li>
  *   <li>POST /api/my/workshops/{workshopId}/tasks/{id}/respond — answer / edit a question</li>
+ *   <li>POST /api/my/workshops/{workshopId}/tasks/{id}/survey-complete — finish a survey task</li>
  *   <li>POST /api/my/workshops/{workshopId}/help                — ping the admin: team needs help</li>
  * </ul>
  */
@@ -78,6 +79,12 @@ public class MyWorkshopController {
     @PostMapping("/{workshopId}/tasks/{taskId}/complete")
     public PlayResponse complete(@PathVariable UUID workshopId, @PathVariable UUID taskId) {
         return service.completeTop(workshopId, taskId);
+    }
+
+    /** Finish a SURVEY task — requires the member's survey response to exist. */
+    @PostMapping("/{workshopId}/tasks/{taskId}/survey-complete")
+    public PlayResponse completeSurvey(@PathVariable UUID workshopId, @PathVariable UUID taskId) {
+        return service.completeSurvey(workshopId, taskId);
     }
 
     @PostMapping("/{workshopId}/help")

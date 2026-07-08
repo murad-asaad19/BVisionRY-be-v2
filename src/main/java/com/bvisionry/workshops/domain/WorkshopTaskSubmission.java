@@ -23,7 +23,7 @@ import lombok.Setter;
  * SORT:     { sorted: {cardId: "left"|"right"}, wrongIds: [cardId…] }
  * WEIGHT:   { weights: {cardId: 0..100} }
  * TOP:      { }
- * QUESTION: { cardId, text }
+ * QUESTION: { answers: [{cardId, text}…] }  (legacy rows: { cardId, text })
  * </pre>
  *
  * {@code startedAt} is set by "Start Task" (the count-up timer origin);

@@ -205,6 +205,36 @@ public class MyWorkshopService {
     }
 
     /**
+     * Completes a SURVEY task. Server-verified: the member must have a persisted
+     * response for the task's survey in this workshop (submitted via the survey
+     * slice's {@code /tasks/{id}/survey} endpoint). The gate is moot — task
+     * completes anyway — when no survey is paired or the paired survey is no
+     * longer published (mirrors the pre-survey gate's graceful degradation, so
+     * a misconfigured task never strands a team).
+     */
+    public PlayResponse completeSurvey(UUID workshopId, UUID taskId) {
+        Ctx ctx = load(workshopId);
+        requireActive(ctx);
+        WorkshopExerciseTask task = requireCurrentTask(ctx, taskId);
+        if (task.getTaskType() != WorkshopTaskType.SURVEY) {
+            throw new BadRequestException("Not a survey task");
+        }
+        WorkshopTaskSubmission sub = requireStarted(ctx, task);
+        String rawSurveyId = str(task.getConfig().get("surveyId"));
+        if (!rawSurveyId.isBlank()) {
+            UUID surveyId = UUID.fromString(rawSurveyId);
+            boolean answered = workshops.hasIntroSurveyResponse(
+                    surveyId, workshopId, ctx.cu().userId());
+            if (!answered && workshops.findPublishedSurvey(surveyId).isPresent()) {
+                throw new BadRequestException("Complete the survey first");
+            }
+        }
+        complete(ctx, task, sub);
+        submissions.save(sub);
+        return buildPlay(ctx);
+    }
+
+    /**
      * The team's "we need help" ping, fired from the overdue task timer.
      * Every ping refreshes the timestamp, so a repeat ping re-alerts the live
      * board even while the previous card is still up. The admin's dismiss
@@ -233,13 +263,27 @@ public class MyWorkshopService {
         }
         // else: editing an existing response from the done screen — allowed.
 
-        boolean known = computeTopRows(ctx, findPrev(ctx, task, WorkshopTaskType.TOP)).stream()
-                .anyMatch(c -> c.id().equals(req.cardId()));
-        if (!known) {
-            throw new BadRequestException("Pick one of the shared cards");
+        List<PlayResponse.ScoredCard> topRows =
+                computeTopRows(ctx, findPrev(ctx, task, WorkshopTaskType.TOP));
+        Map<String, String> byCard = new LinkedHashMap<>();
+        for (RespondRequest.Answer a : req.answers()) {
+            if (topRows.stream().noneMatch(c -> c.id().equals(a.cardId()))) {
+                throw new BadRequestException("Unknown card: " + a.cardId());
+            }
+            byCard.put(a.cardId(), a.text().trim());
         }
-        sub.getPayload().put("cardId", req.cardId());
-        sub.getPayload().put("text", req.text().trim());
+        // Every shared card must be answered — stored in shared-card order.
+        List<Map<String, Object>> answers = new ArrayList<>();
+        for (PlayResponse.ScoredCard c : topRows) {
+            String text = byCard.get(c.id());
+            if (text == null || text.isBlank()) {
+                throw new BadRequestException("Answer every shared card");
+            }
+            answers.add(new LinkedHashMap<>(Map.of("cardId", c.id(), "text", text)));
+        }
+        sub.getPayload().remove("cardId");
+        sub.getPayload().remove("text");
+        sub.getPayload().put("answers", answers);
         if (!sub.isCompleted()) {
             complete(ctx, task, sub);
         }
@@ -371,7 +415,8 @@ public class MyWorkshopService {
                     ctx.workshop().getId(), ctx.workshop().getName(), ctx.workshop().getStatus(),
                     role, ctx.teamId(), ctx.team().getName(),
                     ctx.team().getCard(), ctx.team().getPosition(), "PRE_SURVEY",
-                    ctx.team().getHelpRequestedAt(), null, null, List.of(), null);
+                    ctx.team().getHelpRequestedAt(), null, null,
+                    List.of(), List.of(), List.of(), hasTasks(ctx), null);
         }
 
         WorkshopExerciseTask current = finished ? null : currentTask(ctx);
@@ -407,7 +452,14 @@ public class MyWorkshopService {
                 ctx.workshop().getId(), ctx.workshop().getName(), ctx.workshop().getStatus(),
                 role, ctx.teamId(), ctx.team().getName(),
                 ctx.team().getCard(), ctx.team().getPosition(), view,
-                ctx.team().getHelpRequestedAt(), exerciseInfo, taskView, recap, thankYou);
+                ctx.team().getHelpRequestedAt(), exerciseInfo, taskView, recap,
+                buildSortRecaps(ctx), buildTeamAnswers(ctx), hasTasks(ctx), thankYou);
+    }
+
+    /** Whether this learner performs any task at all in this workshop's pipeline. */
+    private boolean hasTasks(Ctx ctx) {
+        return ctx.exercises().stream()
+                .anyMatch(e -> !myTasksInExercise(ctx, e.getId()).isEmpty());
     }
 
     private PlayResponse.TaskView buildTaskView(Ctx ctx, WorkshopExercise exercise, WorkshopExerciseTask task) {
@@ -431,7 +483,7 @@ public class MyWorkshopService {
         UUID sourceWeightTaskId = null;
         List<PlayResponse.ScoredCard> sourceWeightRows = null;
         String prompt = null;
-        PlayResponse.ResponseDto response = null;
+        List<PlayResponse.AnswerDto> answers = null;
 
         switch (task.getTaskType()) {
             case SORT -> {
@@ -468,9 +520,14 @@ public class MyWorkshopService {
             case QUESTION -> {
                 prompt = str(cfg.getOrDefault("prompt", ""));
                 topRows = computeTopRows(ctx, findPrev(ctx, task, WorkshopTaskType.TOP));
-                if (sub != null && sub.getPayload().get("cardId") != null) {
-                    response = new PlayResponse.ResponseDto(
-                            str(sub.getPayload().get("cardId")), str(sub.getPayload().get("text")));
+                if (sub != null) {
+                    List<Map<String, Object>> mine = answerMaps(sub);
+                    if (!mine.isEmpty()) {
+                        answers = mine.stream()
+                                .map(a -> new PlayResponse.AnswerDto(
+                                        str(a.get("cardId")), str(a.get("text"))))
+                                .toList();
+                    }
                 }
             }
         }
@@ -487,14 +544,14 @@ public class MyWorkshopService {
                 intOf(cfg.get("durationMin"), 0) > 0 ? intOf(cfg.get("durationMin"), 0) : null,
                 instructions, leftLabel, rightLabel, cards, gate,
                 weightRows, topRows, lastLeadTask, sourceWeightTaskId, sourceWeightRows,
-                prompt, response);
+                prompt, answers);
     }
 
     /**
      * The done-screen recap of my own work. For every task I performed and
      * completed: a TOP task becomes a ranked-list row (the lead's shared
      * deliverable, no free-text answer); a QUESTION task becomes an answer row
-     * (the card I picked + my response), editable while the workshop is active.
+     * (my response per shared card), editable while the workshop is active.
      * Because the lead now also runs the member tasks, their recap naturally
      * carries both their shared list and their own answer.
      */
@@ -507,7 +564,7 @@ public class MyWorkshopService {
                 }
                 if (t.getTaskType() == WorkshopTaskType.TOP && ctx.lead()) {
                     out.add(new PlayResponse.RecapRow(t.getId(), t.getTitle(),
-                            "", null, "", "", computeTopRows(ctx, t)));
+                            "", List.of(), computeTopRows(ctx, t)));
                 } else if (t.getTaskType() == WorkshopTaskType.QUESTION) {
                     WorkshopTaskSubmission sub = subFor(ctx, t).orElse(null);
                     if (sub == null) {
@@ -515,18 +572,114 @@ public class MyWorkshopService {
                     }
                     List<PlayResponse.ScoredCard> topRows =
                             computeTopRows(ctx, findPrev(ctx, t, WorkshopTaskType.TOP));
-                    String cardId = str(sub.getPayload().get("cardId"));
-                    String cardText = topRows.stream()
-                            .filter(c -> c.id().equals(cardId))
-                            .map(PlayResponse.ScoredCard::text)
-                            .findFirst().orElse("");
                     out.add(new PlayResponse.RecapRow(t.getId(), t.getTitle(),
                             str(t.getConfig().getOrDefault("prompt", "")),
-                            cardId, cardText, str(sub.getPayload().get("text")), topRows));
+                            recapAnswers(sub, topRows), topRows));
                 }
             }
         }
         return out;
+    }
+
+    /**
+     * The team's shared sort piles, per LEAD SORT task — every dealt card under
+     * its pile label, shown on the done screen so members see the full sort,
+     * not just the top cards the pipeline carried forward. Gated on the
+     * exercise being shared so a lead's in-progress sort never leaks.
+     */
+    private List<PlayResponse.SortRecap> buildSortRecaps(Ctx ctx) {
+        List<PlayResponse.SortRecap> out = new ArrayList<>();
+        for (WorkshopExercise e : ctx.exercises()) {
+            if (!isShared(ctx, e.getId())) {
+                continue;
+            }
+            for (WorkshopExerciseTask t : ctx.tasksByExercise().get(e.getId())) {
+                if (t.getTaskType() != WorkshopTaskType.SORT
+                        || t.getAssignee() != WorkshopTaskAssignee.LEAD
+                        || !isDone(ctx, t)) {
+                    continue;
+                }
+                Map<String, String> sorted = sortedOf(ctx, t);
+                List<PlayResponse.CardDto> all = cardDtos(t.getConfig(), dealtIds(ctx, t));
+                out.add(new PlayResponse.SortRecap(t.getId(), t.getTitle(),
+                        str(t.getConfig().getOrDefault("leftLabel", "Left")),
+                        str(t.getConfig().getOrDefault("rightLabel", "Right")),
+                        all.stream().filter(c -> "left".equals(sorted.get(c.id()))).toList(),
+                        all.stream().filter(c -> "right".equals(sorted.get(c.id()))).toList()));
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Everyone's completed QUESTION answers, per task — revealed as they
+     * arrive (the done screen polls while the workshop is active), so nobody
+     * waits for the whole team before seeing teammates' responses.
+     */
+    private List<PlayResponse.TaskAnswers> buildTeamAnswers(Ctx ctx) {
+        List<PlayResponse.TaskAnswers> out = new ArrayList<>();
+        List<WorkshopTeamRepository.TeamMemberRow> members = null;
+        for (WorkshopExercise e : ctx.exercises()) {
+            for (WorkshopExerciseTask t : ctx.tasksByExercise().get(e.getId())) {
+                if (t.getTaskType() != WorkshopTaskType.QUESTION) {
+                    continue;
+                }
+                List<WorkshopTaskSubmission> subs =
+                        ctx.subsByTask().getOrDefault(t.getId(), List.of()).stream()
+                                .filter(WorkshopTaskSubmission::isCompleted)
+                                .toList();
+                if (subs.isEmpty()) {
+                    continue;
+                }
+                if (members == null) {
+                    members = teams.findTeamMembers(ctx.teamId());
+                }
+                List<PlayResponse.ScoredCard> topRows =
+                        computeTopRows(ctx, findPrev(ctx, t, WorkshopTaskType.TOP));
+                List<PlayResponse.MemberAnswers> rows = new ArrayList<>();
+                for (WorkshopTeamRepository.TeamMemberRow m : members) {
+                    subs.stream()
+                            .filter(s -> s.getUserId().equals(m.getId()))
+                            .findFirst()
+                            .ifPresent(s -> rows.add(new PlayResponse.MemberAnswers(
+                                    m.getId(), m.getName(), m.getLead(),
+                                    recapAnswers(s, topRows))));
+                }
+                out.add(new PlayResponse.TaskAnswers(t.getId(), t.getTitle(),
+                        str(t.getConfig().getOrDefault("prompt", "")), rows));
+            }
+        }
+        return out;
+    }
+
+    /** QUESTION answers of a submission; reads the legacy single {cardId, text} shape too. */
+    private static List<Map<String, Object>> answerMaps(WorkshopTaskSubmission sub) {
+        Object raw = sub.getPayload().get("answers");
+        if (raw instanceof List<?> list) {
+            List<Map<String, Object>> out = new ArrayList<>();
+            for (Object o : list) {
+                if (o instanceof Map<?, ?> m) {
+                    out.add(Map.of("cardId", str(m.get("cardId")), "text", str(m.get("text"))));
+                }
+            }
+            return out;
+        }
+        if (sub.getPayload().get("cardId") != null) {
+            return List.of(Map.of("cardId", str(sub.getPayload().get("cardId")),
+                    "text", str(sub.getPayload().get("text"))));
+        }
+        return List.of();
+    }
+
+    /** A submission's answers with card texts resolved against the shared top cards. */
+    private static List<PlayResponse.RecapAnswer> recapAnswers(
+            WorkshopTaskSubmission sub, List<PlayResponse.ScoredCard> topRows) {
+        Map<String, String> textById = new LinkedHashMap<>();
+        topRows.forEach(c -> textById.put(c.id(), c.text()));
+        return answerMaps(sub).stream()
+                .map(a -> new PlayResponse.RecapAnswer(str(a.get("cardId")),
+                        textById.getOrDefault(str(a.get("cardId")), ""), str(a.get("text"))))
+                .toList();
     }
 
     private PlayResponse.ThankYou thankYou(Ctx ctx) {
@@ -584,9 +737,9 @@ public class MyWorkshopService {
                 .toList();
     }
 
-    /** Dealt cards the performer sorted into the left pile, in dealt order. */
-    private List<PlayResponse.CardDto> leftPile(Ctx ctx, WorkshopExerciseTask sortTask) {
-        Map<String, String> sorted = subFor(ctx, sortTask)
+    /** The performer's {@code cardId → "left"|"right"} choices for a SORT task. */
+    private Map<String, String> sortedOf(Ctx ctx, WorkshopExerciseTask sortTask) {
+        return subFor(ctx, sortTask)
                 .map(s -> {
                     @SuppressWarnings("unchecked")
                     Map<String, String> m = (Map<String, String>) s.getPayload()
@@ -594,6 +747,11 @@ public class MyWorkshopService {
                     return m;
                 })
                 .orElse(Map.of());
+    }
+
+    /** Dealt cards the performer sorted into the left pile, in dealt order. */
+    private List<PlayResponse.CardDto> leftPile(Ctx ctx, WorkshopExerciseTask sortTask) {
+        Map<String, String> sorted = sortedOf(ctx, sortTask);
         return cardDtos(sortTask.getConfig(), dealtIds(ctx, sortTask)).stream()
                 .filter(c -> "left".equals(sorted.get(c.id())))
                 .toList();

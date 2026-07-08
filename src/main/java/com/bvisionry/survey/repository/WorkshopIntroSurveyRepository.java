@@ -39,6 +39,27 @@ public interface WorkshopIntroSurveyRepository extends Repository<SurveyResponse
         String getStatus();
     }
 
+    /**
+     * The survey paired to a SURVEY pipeline task ({@code config->>'surveyId'})
+     * of a workshop the user is enrolled in. Empty when the workshop/task
+     * doesn't exist, the task isn't a SURVEY, or the user isn't enrolled — all
+     * 404 to the caller, same non-leaking contract as {@link #findEnrolledIntro}.
+     * A NULL surveyId (task saved without a pairing) still returns a row so the
+     * caller can distinguish "no survey configured" from "not found".
+     */
+    @Query(value = """
+            SELECT (t.config ->> 'surveyId')::uuid AS surveyId, w.status AS status
+            FROM workshop_exercise_tasks t
+            JOIN workshop_exercises e ON e.id = t.exercise_id
+            JOIN workshops w ON w.id = e.workshop_id
+            JOIN workshop_team_members wtm
+              ON wtm.workshop_id = w.id AND wtm.user_id = :userId
+            WHERE t.id = :taskId AND w.id = :workshopId AND t.task_type = 'SURVEY'
+            """, nativeQuery = true)
+    Optional<WorkshopIntroRow> findEnrolledTaskSurvey(@Param("workshopId") UUID workshopId,
+                                                      @Param("taskId") UUID taskId,
+                                                      @Param("userId") UUID userId);
+
     /** True once this member has submitted the workshop's intro survey (the gate key). */
     @Query(value = """
             SELECT EXISTS (

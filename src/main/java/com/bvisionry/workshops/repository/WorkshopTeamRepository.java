@@ -105,6 +105,22 @@ public interface WorkshopTeamRepository extends JpaRepository<WorkshopTeam, UUID
     @Query(value = "SELECT count(*) FROM workshop_team_members WHERE workshop_id = :workshopId", nativeQuery = true)
     long countWorkshopMembers(@Param("workshopId") UUID workshopId);
 
+    /** All members of a team with names — lead first, then by name. */
+    @Query(value = """
+            SELECT u.id AS id, u.name AS name, wtm.is_lead AS lead
+            FROM workshop_team_members wtm
+            JOIN users u ON u.id = wtm.user_id
+            WHERE wtm.team_id = :teamId
+            ORDER BY wtm.is_lead DESC, u.name
+            """, nativeQuery = true)
+    List<TeamMemberRow> findTeamMembers(@Param("teamId") UUID teamId);
+
+    interface TeamMemberRow {
+        UUID getId();
+        String getName();
+        boolean getLead();
+    }
+
     /** Non-lead member ids of a team (the QUESTION-task audience). */
     @Query(value = """
             SELECT user_id FROM workshop_team_members

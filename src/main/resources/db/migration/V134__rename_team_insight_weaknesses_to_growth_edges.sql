@@ -45,4 +45,4 @@ Return a JSON object with exactly these fields:
     "outlierPillars": ["<pillar where team is notably above or below platform average>"]
   }
 }'
-WHERE prompt_type = 'TEAM_INSIGHT' AND is_active = TRUE;
+WHERE prompt_type = 'TEAM_INSIGHT';

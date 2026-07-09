@@ -80,7 +80,7 @@ class AttentionRuleServiceTest {
     void suspendedTooLong_firesFromAuditWhenAvailable() {
         Organization o = org("Murad", false, SubscriptionTier.FREE, null,
                 Instant.now().minus(2, ChronoUnit.DAYS));
-        when(orgRepo.findAll()).thenReturn(List.of(o));
+        when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));
         when(auditRepo.findFirstByEntityTypeAndEntityIdAndActionTypeOrderByOccurredAtDesc(
                 any(), any(), org.mockito.ArgumentMatchers.eq(OrgAuditActions.ORGANIZATION_SUSPENDED)))
                 .thenReturn(auditAt(Instant.now().minus(30, ChronoUnit.DAYS)));
@@ -99,7 +99,7 @@ class AttentionRuleServiceTest {
         Organization o = org("Murad", false, SubscriptionTier.FREE, null,
                 Instant.now().minus(29, ChronoUnit.DAYS));
         o.setUpdatedAt(Instant.now().minus(1, ChronoUnit.DAYS));
-        when(orgRepo.findAll()).thenReturn(List.of(o));
+        when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));
 
         List<AttentionItem> items = service.evaluate();
 
@@ -110,7 +110,7 @@ class AttentionRuleServiceTest {
     void suspendedRecently_doesNotFire() {
         Organization o = org("Fresh", false, SubscriptionTier.FREE, null,
                 Instant.now().minus(2, ChronoUnit.DAYS));
-        when(orgRepo.findAll()).thenReturn(List.of(o));
+        when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));
 
         List<AttentionItem> items = service.evaluate();
 
@@ -124,7 +124,7 @@ class AttentionRuleServiceTest {
         Organization o = org("Acme", true, SubscriptionTier.PREMIUM,
                 Instant.now().plus(3, ChronoUnit.DAYS),
                 Instant.now().minus(60, ChronoUnit.DAYS));
-        when(orgRepo.findAll()).thenReturn(List.of(o));
+        when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));
         stubStats(o, 5L, Instant.now());
 
         List<AttentionItem> items = service.evaluate();
@@ -139,7 +139,7 @@ class AttentionRuleServiceTest {
                 // Just over 1 day — DAYS.between truncates to 1.
                 Instant.now().plus(36, ChronoUnit.HOURS),
                 Instant.now().minus(60, ChronoUnit.DAYS));
-        when(orgRepo.findAll()).thenReturn(List.of(o));
+        when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));
         stubStats(o, 5L, Instant.now());
 
         List<AttentionItem> items = service.evaluate();
@@ -155,7 +155,7 @@ class AttentionRuleServiceTest {
     void trialJustExpiredOneDayAgo_usesSingularDay() {
         Organization o = org("Test Organization", true, SubscriptionTier.FREE, null,
                 Instant.now().minus(60, ChronoUnit.DAYS));
-        when(orgRepo.findAll()).thenReturn(List.of(o));
+        when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));
         when(auditRepo.findFirstByEntityTypeAndEntityIdAndActionTypeOrderByOccurredAtDesc(
                 any(), any(), org.mockito.ArgumentMatchers.eq(OrgAuditActions.TRIAL_EXPIRED)))
                 .thenReturn(auditAt(Instant.now().minus(36, ChronoUnit.HOURS)));
@@ -173,7 +173,7 @@ class AttentionRuleServiceTest {
     void idle_firesWhenLastLoginOldEnough() {
         Organization o = org("Stale", true, SubscriptionTier.FREE, null,
                 Instant.now().minus(90, ChronoUnit.DAYS));
-        when(orgRepo.findAll()).thenReturn(List.of(o));
+        when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));
         stubStats(o, 3L, Instant.now().minus(20, ChronoUnit.DAYS));
 
         List<AttentionItem> items = service.evaluate();
@@ -193,7 +193,7 @@ class AttentionRuleServiceTest {
         // of the misleading "Idle for over N days".
         Organization o = org("Razan Org", true, SubscriptionTier.PREMIUM, null,
                 Instant.now().minus(26, ChronoUnit.DAYS));
-        when(orgRepo.findAll()).thenReturn(List.of(o));
+        when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));
         stubStats(o, 2L, null);
 
         List<AttentionItem> items = service.evaluate();
@@ -212,7 +212,7 @@ class AttentionRuleServiceTest {
         // immediately misreport as "Idle for over 14 days".
         Organization o = org("Just Created", true, SubscriptionTier.FREE, null,
                 Instant.now().minus(2, ChronoUnit.DAYS));
-        when(orgRepo.findAll()).thenReturn(List.of(o));
+        when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));
         stubStats(o, 2L, null);
 
         List<AttentionItem> items = service.evaluate();
@@ -225,7 +225,7 @@ class AttentionRuleServiceTest {
         Organization o = org("Trialing", true, SubscriptionTier.PREMIUM,
                 Instant.now().plus(10, ChronoUnit.DAYS),
                 Instant.now().minus(60, ChronoUnit.DAYS));
-        when(orgRepo.findAll()).thenReturn(List.of(o));
+        when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));
         stubStats(o, 3L, Instant.now().minus(30, ChronoUnit.DAYS));
 
         List<AttentionItem> items = service.evaluate();
@@ -239,7 +239,7 @@ class AttentionRuleServiceTest {
     void onboardingStalled_firesForRecentEmptyOrg() {
         Organization o = org("Empty", true, SubscriptionTier.FREE, null,
                 Instant.now().minus(2, ChronoUnit.HOURS));
-        when(orgRepo.findAll()).thenReturn(List.of(o));
+        when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));
         stubStats(o, 0L, null);
 
         List<AttentionItem> items = service.evaluate();

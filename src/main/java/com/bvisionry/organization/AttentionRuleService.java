@@ -55,7 +55,9 @@ public class AttentionRuleService {
         }
 
         List<AttentionItem> items = new ArrayList<>();
-        for (Organization o : orgRepo.findAll()) {
+        // Root orgs only — attention rules track customers; sub-orgs surface
+        // through their parent (e.g. a suspended parent cascades to children).
+        for (Organization o : orgRepo.findByParentOrganizationIsNull()) {
             // 1. Suspended too long
             if (!o.isActive()) {
                 AuditLog suspendEvt = auditRepo

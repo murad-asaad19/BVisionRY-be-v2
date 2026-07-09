@@ -208,7 +208,7 @@ public class MemberService {
     @Transactional
     public RemoveMemberResponse removeMember(UUID orgId, UUID memberId,
                                               boolean wipeAssessments, UUID actorId) {
-        organizationService.findActiveOrThrow(orgId);
+        var organization = organizationService.findActiveOrThrow(orgId);
         User user = findMemberInOrg(orgId, memberId);
 
         if (user.getRole() == UserRole.SUPER_ADMIN) {
@@ -221,7 +221,10 @@ public class MemberService {
         // admins — a SUSPENDED/DEACTIVATED ORG_ADMIN keeps the role but can't
         // log in, so a role-only count would let the sole loginable admin be
         // removed while the org still appears to "have" admins.
-        if (user.getRole() == UserRole.ORG_ADMIN
+        // Sub-orgs are exempt: they're governed by the PARENT org's admins, so
+        // a sub-org with zero local ORG_ADMINs is a perfectly normal state.
+        if (!organization.isSubOrganization()
+                && user.getRole() == UserRole.ORG_ADMIN
                 && user.getStatus() == UserStatus.ACTIVE
                 && userRepository.countByOrganizationIdAndRoleAndStatus(
                         orgId, UserRole.ORG_ADMIN, UserStatus.ACTIVE) <= 1) {

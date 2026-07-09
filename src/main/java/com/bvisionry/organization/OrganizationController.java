@@ -42,7 +42,11 @@ public class OrganizationController {
         return ResponseEntity.ok(organizationService.listAll(pageable));
     }
 
+    // Same in-org override pattern as /{id}/activity below. @orgAccess.isInOrg
+    // also grants a parent org's ORG_ADMIN access to its sub-orgs, so this lets
+    // org admins load their own org profile AND any sub-org they govern.
     @GetMapping("/{id}")
+    @PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#id))")
     public ResponseEntity<OrganizationResponse> getById(@PathVariable UUID id) {
         return ResponseEntity.ok(organizationService.getById(id));
     }

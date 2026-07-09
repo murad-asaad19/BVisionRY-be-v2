@@ -36,13 +36,17 @@ public class DashboardService {
         Instant minus30d = now.minus(30, ChronoUnit.DAYS);
         Instant minus7d = now.minus(7, ChronoUnit.DAYS);
 
-        long totalOrgs = orgRepo.count();
-        long activeCount = orgRepo.countByIsActiveTrue();
+        // ROOT orgs only: sub-orgs are internal subdivisions of a customer and
+        // would double-count org totals, retention, and the tier mix (they're
+        // always FREE on their own row — their tier is inherited). Trials can
+        // only exist on root orgs, so those counts need no root filter.
+        long totalOrgs = orgRepo.countByParentOrganizationIsNull();
+        long activeCount = orgRepo.countByIsActiveTrueAndParentOrganizationIsNull();
         long suspendedCount = totalOrgs - activeCount;
         long onTrial = orgRepo.countOnActiveTrial(now);
         long trialsExpiring = orgRepo.countTrialsExpiringWithin(now, in7d);
-        long premiumTotal = orgRepo.countBySubscriptionTier(SubscriptionTier.PREMIUM);
-        long freeTotal = orgRepo.countBySubscriptionTier(SubscriptionTier.FREE);
+        long premiumTotal = orgRepo.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.PREMIUM);
+        long freeTotal = orgRepo.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.FREE);
         long totalMembers = userRepo.count();
 
         long createdLast30d = auditRepo.countByActionTypeAndOccurredAtAfter(

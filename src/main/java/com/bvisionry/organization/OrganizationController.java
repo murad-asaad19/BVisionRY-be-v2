@@ -27,13 +27,17 @@ import java.util.UUID;
 public class OrganizationController {
 
     private final OrganizationService organizationService;
+    private final SubOrganizationService subOrganizationService;
     private final TrialService trialService;
     private final ActivityService activityService;
 
     @PostMapping
     public ResponseEntity<OrganizationResponse> create(@Valid @RequestBody CreateOrganizationRequest request) {
         UUID actorId = SecurityUtils.getCurrentUserId();
-        return ResponseEntity.status(HttpStatus.CREATED).body(organizationService.create(request, actorId));
+        // Root orgs are created together with their default "General" sub-org —
+        // members live in sub-orgs only.
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(subOrganizationService.createRootOrganization(request, actorId));
     }
 
     @GetMapping

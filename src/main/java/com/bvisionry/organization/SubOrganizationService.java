@@ -33,9 +33,30 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class SubOrganizationService {
 
+    /** Every root org owns a default sub-org with this name — members live in sub-orgs only. */
+    public static final String DEFAULT_SUB_ORGANIZATION_NAME = "General";
+
     private final OrganizationRepository organizationRepository;
     private final OrganizationService organizationService;
     private final AuditLogger auditLogger;
+
+    /**
+     * SUPER_ADMIN path: creates a root organization together with its default
+     * "General" sub-organization in one transaction. Lives here (not in
+     * {@link OrganizationService#create}) so the child reuses
+     * {@link #createSubOrganization}'s invariants without adding a collaborator
+     * to {@code OrganizationService}'s ratchet-frozen constructor — and without
+     * a circular bean dependency.
+     */
+    @Transactional
+    public OrganizationResponse createRootOrganization(CreateOrganizationRequest request, UUID actorId) {
+        OrganizationResponse root = organizationService.create(request, actorId);
+        createSubOrganization(root.id(),
+                new CreateOrganizationRequest(DEFAULT_SUB_ORGANIZATION_NAME, "Default sub-organization"),
+                actorId);
+        // Re-derive so the response reflects the General child (subOrganizationCount = 1).
+        return organizationService.getById(root.id());
+    }
 
     /** Direct sub-organizations of {@code parentId}, ordered by name, with per-org member stats. */
     @Transactional(readOnly = true)

@@ -79,6 +79,33 @@ class SubOrganizationServiceTest {
                 eq(OrgAuditActions.ENTITY_ORGANIZATION), any(UUID.class), any());
     }
 
+    /** The SUPER_ADMIN create path provisions the root together with its default "General" child. */
+    @Test
+    void createRootOrganization_alsoCreatesGeneralSubOrg() {
+        when(organizationService.create(any(CreateOrganizationRequest.class), eq(actorId)))
+                .thenReturn(OrganizationResponse.from(parent, 0, null, 0));
+        when(organizationService.findActiveOrThrow(parentId)).thenReturn(parent);
+        when(organizationRepository.save(any(Organization.class))).thenAnswer(inv -> {
+            Organization saved = inv.getArgument(0);
+            saved.setId(UUID.randomUUID());
+            return saved;
+        });
+        when(organizationService.getById(parentId))
+                .thenReturn(OrganizationResponse.from(parent, 0, null, 1));
+
+        OrganizationResponse resp = subOrganizationService.createRootOrganization(
+                new CreateOrganizationRequest("Parent Org", null), actorId);
+
+        assertThat(resp.subOrganizationCount()).isEqualTo(1);
+        var captor = org.mockito.ArgumentCaptor.forClass(Organization.class);
+        verify(organizationRepository).save(captor.capture());
+        assertThat(captor.getValue().getName())
+                .isEqualTo(SubOrganizationService.DEFAULT_SUB_ORGANIZATION_NAME);
+        assertThat(captor.getValue().getParentOrganization()).isSameAs(parent);
+        verify(auditLogger).log(eq(actorId), eq(parentId), eq(OrgAuditActions.SUB_ORG_CREATED),
+                eq(OrgAuditActions.ENTITY_ORGANIZATION), any(UUID.class), any());
+    }
+
     /** The hierarchy is one level deep — a sub-org cannot parent another sub-org. */
     @Test
     void createSubOrganization_underSubOrganization_throws() {

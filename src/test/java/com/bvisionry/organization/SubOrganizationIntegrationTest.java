@@ -383,6 +383,114 @@ class SubOrganizationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // -------------------------------------------------------------------------
+    // Members live in sub-orgs only: root-org restrictions + default "General"
+    // -------------------------------------------------------------------------
+
+    @Test
+    void inviteMemberIntoRootOrg_returns400() throws Exception {
+        User admin = authenticate(UserRole.ORG_ADMIN, parentOrg, "parent-admin@t.invalid");
+
+        mockMvc.perform(post("/api/organizations/{orgId}/members/invite", parentOrg.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"emails\": [\"member@t.invalid\"], \"role\": \"MEMBER\", "
+                                + "\"invitedBy\": \"" + admin.getId() + "\"}"))
+                .andExpect(status().isBadRequest());
+
+        assertThat(invitationRepository.findByOrganizationId(parentOrg.getId())).isEmpty();
+    }
+
+    @Test
+    void inviteOrgAdminIntoRootOrg_returns201() throws Exception {
+        User admin = authenticate(UserRole.ORG_ADMIN, parentOrg, "parent-admin@t.invalid");
+
+        mockMvc.perform(post("/api/organizations/{orgId}/members/invite", parentOrg.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"emails\": [\"new-admin@t.invalid\"], \"role\": \"ORG_ADMIN\", "
+                                + "\"invitedBy\": \"" + admin.getId() + "\"}"))
+                .andExpect(status().isCreated());
+
+        assertThat(invitationRepository.findByOrganizationId(parentOrg.getId())).hasSize(1);
+    }
+
+    @Test
+    void generateJoinLink_onRootOrg_returns400() throws Exception {
+        authenticate(UserRole.ORG_ADMIN, parentOrg, "parent-admin@t.invalid");
+
+        mockMvc.perform(post("/api/organizations/{orgId}/join-link", parentOrg.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expiryDays\": 7}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void generateJoinLink_onSubOrg_returns201() throws Exception {
+        authenticate(UserRole.ORG_ADMIN, parentOrg, "parent-admin@t.invalid");
+
+        mockMvc.perform(post("/api/organizations/{orgId}/join-link", subOrg.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expiryDays\": 7}"))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    void moveMember_toRootOrg_returns400() throws Exception {
+        authenticateSuperAdmin();
+        User member = saveUser(UserRole.MEMBER, subOrg, "movable@t.invalid");
+
+        mockMvc.perform(post("/api/users/{id}/move-organization", member.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"targetOrganizationId\": \"" + otherOrg.getId() + "\"}"))
+                .andExpect(status().isBadRequest());
+
+        assertThat(userRepository.findById(member.getId()).orElseThrow()
+                .getOrganization().getId()).isEqualTo(subOrg.getId());
+    }
+
+    @Test
+    void moveMember_toSubOrgOfAnotherOrg_returns200() throws Exception {
+        authenticateSuperAdmin();
+        Organization otherSub = saveOrg("Other Sub", SubscriptionTier.FREE, otherOrg);
+        User member = saveUser(UserRole.MEMBER, subOrg, "movable@t.invalid");
+
+        mockMvc.perform(post("/api/users/{id}/move-organization", member.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"targetOrganizationId\": \"" + otherSub.getId() + "\"}"))
+                .andExpect(status().isOk());
+
+        assertThat(userRepository.findById(member.getId()).orElseThrow()
+                .getOrganization().getId()).isEqualTo(otherSub.getId());
+    }
+
+    @Test
+    void createOrganization_viaApi_autoCreatesGeneralSubOrg() throws Exception {
+        authenticateSuperAdmin();
+
+        String body = mockMvc.perform(post("/api/organizations")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\": \"Fresh Root\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.subOrganizationCount", is(1)))
+                .andReturn().getResponse().getContentAsString();
+
+        UUID rootId = UUID.fromString(com.jayway.jsonpath.JsonPath.read(body, "$.id"));
+        List<Organization> children =
+                organizationRepository.findByParentOrganizationIdOrderByNameAsc(rootId);
+        assertThat(children).extracting(Organization::getName).containsExactly("General");
+        assertThat(children.get(0).getSubscriptionTier()).isEqualTo(SubscriptionTier.FREE);
+    }
+
+    /** A sub-org member's /me reports the PARENT's (effective) tier, not the FREE sub-org row. */
+    @Test
+    void me_subOrgMember_reportsEffectiveParentTier() throws Exception {
+        authenticate(UserRole.MEMBER, subOrg, "sub-member@t.invalid");
+
+        mockMvc.perform(get("/api/auth/me"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.organizationId", is(subOrg.getId().toString())))
+                .andExpect(jsonPath("$.organizationTier", is("PREMIUM")));
+    }
+
+    // -------------------------------------------------------------------------
     // Fixtures
     // -------------------------------------------------------------------------
 

@@ -37,10 +37,14 @@ class PlatformAnalyticsServiceTest {
     private PlatformAnalyticsService platformAnalyticsService;
 
     @Test
-    void getAnalytics_returnsAggregatedPlatformStats() {
-        when(organizationRepository.count()).thenReturn(15L);
-        when(organizationRepository.countBySubscriptionTier(SubscriptionTier.PREMIUM)).thenReturn(5L);
-        when(organizationRepository.countBySubscriptionTier(SubscriptionTier.FREE)).thenReturn(10L);
+    void getAnalytics_returnsAggregatedPlatformStats_rootOrgsOnly() {
+        // Root-only variants: sub-org rows (always FREE) must not inflate the
+        // org total or the tier mix.
+        when(organizationRepository.countByParentOrganizationIsNull()).thenReturn(15L);
+        when(organizationRepository.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.PREMIUM))
+                .thenReturn(5L);
+        when(organizationRepository.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.FREE))
+                .thenReturn(10L);
         when(userRepository.count()).thenReturn(200L);
         when(submissionRepository.count()).thenReturn(500L);
         when(submissionRepository.countByStatus(SubmissionStatus.EVALUATED)).thenReturn(350L);

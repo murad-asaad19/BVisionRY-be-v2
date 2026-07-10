@@ -24,6 +24,7 @@ public class EmailTemplateDefaults {
             case RESULTS_READY                  -> "Your Assessment Results Are Ready: {{pipelineName}}";
             case POST_ASSESSMENT_SURVEY_INVITE  -> "One last step for {{pipelineName}}: a quick survey";
             case INVITATION                     -> "You've been invited to join {{organizationName}}";
+            case PASSWORD_RESET                 -> "Reset your BVisionRY password";
             case TRIAL_ENDING_SOON              -> "Your {{organizationName}} trial ends in {{daysLeft}} days";
             case TRIAL_EXPIRED                  -> "Your {{organizationName}} trial has ended";
             case UPGRADE_REQUESTED              -> "{{organizationName}} requested a Premium upgrade";
@@ -41,6 +42,7 @@ public class EmailTemplateDefaults {
             case RESULTS_READY                  -> "results-ready.mustache";
             case POST_ASSESSMENT_SURVEY_INVITE  -> "post-assessment-survey-invite.mustache";
             case INVITATION                     -> "invitation.mustache";
+            case PASSWORD_RESET                 -> "password-reset.mustache";
             case TRIAL_ENDING_SOON              -> "trial-ending-soon.mustache";
             case TRIAL_EXPIRED                  -> "trial-expired.mustache";
             case UPGRADE_REQUESTED              -> "upgrade-requested.mustache";

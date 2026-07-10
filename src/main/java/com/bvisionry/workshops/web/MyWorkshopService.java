@@ -257,11 +257,11 @@ public class MyWorkshopService {
         }
         requirePerformer(ctx, task);
         WorkshopTaskSubmission sub = subFor(ctx, task).orElse(null);
-        if (sub == null || !sub.isCompleted()) {
-            requireCurrentTask(ctx, taskId);
-            sub = requireStarted(ctx, task);
+        if (sub != null && sub.isCompleted()) {
+            throw new BadRequestException("Responses can't be changed after completion");
         }
-        // else: editing an existing response from the done screen — allowed.
+        requireCurrentTask(ctx, taskId);
+        sub = requireStarted(ctx, task);
 
         List<PlayResponse.ScoredCard> topRows =
                 computeTopRows(ctx, findPrev(ctx, task, WorkshopTaskType.TOP));
@@ -551,7 +551,7 @@ public class MyWorkshopService {
      * The done-screen recap of my own work. For every task I performed and
      * completed: a TOP task becomes a ranked-list row (the lead's shared
      * deliverable, no free-text answer); a QUESTION task becomes an answer row
-     * (my response per shared card), editable while the workshop is active.
+     * (my response per shared card), read-only once completed.
      * Because the lead now also runs the member tasks, their recap naturally
      * carries both their shared list and their own answer.
      */

@@ -10,6 +10,7 @@ import com.bvisionry.auth.jwt.TokenType;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.exception.AuthenticationException;
+import com.bvisionry.common.exception.SsoFlowException;
 import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -231,6 +232,28 @@ class AuthServiceTest {
         int revoked = authService.revokeAllRefreshTokensForUser(userId);
 
         assertThat(revoked).isEqualTo(3);
+    }
+
+    // ---------- resolveSsoUser ----------
+
+    @Test
+    void resolveSsoUser_autoLinksProviderOntoExistingPasswordAccount() {
+        when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+
+        User resolved = authService.resolveSsoUser("ada@example.com", "http://avatar", "GOOGLE");
+
+        assertThat(resolved.getSsoProvider()).isEqualTo("GOOGLE");
+        assertThat(resolved.getPasswordHash()).isEqualTo("hash");
+    }
+
+    @Test
+    void resolveSsoUser_differentLinkedProvider_throwsWithCode() {
+        user.setSsoProvider("MICROSOFT");
+        when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> authService.resolveSsoUser("ada@example.com", null, "GOOGLE"))
+                .isInstanceOfSatisfying(SsoFlowException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("sso_provider_mismatch"));
     }
 
     // ---------- helpers ----------

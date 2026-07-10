@@ -96,4 +96,18 @@ public class MemberController {
         return ResponseEntity.ok(
                 memberService.removeMember(orgId, memberId, wipeAssessments, actorId));
     }
+
+    /**
+     * Hard delete: permanently erase the user row (vs the anonymize-in-place
+     * {@code DELETE /{memberId}}). Their personal data cascades away and the
+     * email is freed, so the person can sign up or be invited again as a
+     * brand-new account.
+     */
+    @DeleteMapping("/{memberId}/permanent")
+    public ResponseEntity<Void> deleteMemberPermanently(@PathVariable UUID orgId,
+                                                         @PathVariable UUID memberId) {
+        UUID actorId = SecurityUtils.getCurrentUserId();
+        memberService.deleteMemberPermanently(orgId, memberId, actorId);
+        return ResponseEntity.noContent().build();
+    }
 }

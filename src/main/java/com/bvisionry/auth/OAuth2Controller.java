@@ -5,6 +5,7 @@ import com.bvisionry.auth.dto.AuthResponse;
 import com.bvisionry.common.exception.AuthenticationException;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.exception.SsoFlowException;
 import com.bvisionry.common.web.ClientIpResolver;
 import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.organization.InvitationService;
@@ -176,13 +177,27 @@ public class OAuth2Controller {
             } catch (BadRequestException | ResourceNotFoundException | AuthenticationException acceptError) {
                 // EXPECTED membership-binding rejections only (expired/revoked invite, wrong Google
                 // account, suspended/inactive org, link no longer active, …). Surface a code the
-                // accept/join surface can explain. An unexpected fault (NPE, DB constraint, …) is NOT
+                // accept/join surface can explain: guards that know their precise cause throw
+                // SsoFlowException carrying it; anything else falls back to the generic
+                // invitation/link-invalid code. An unexpected fault (NPE, DB constraint, …) is NOT
                 // caught here: it propagates to the outer handler and is logged at ERROR as sso_error,
                 // so a real outage is never masked as a merely "invalid" invitation/link.
                 if (pending.kind() != PendingAccept.Kind.NONE) {
                     log.warn("SSO {} acceptance failed: {}", pending.kind(), acceptError.getMessage());
-                    return redirectToFrontend(pending.kind() == PendingAccept.Kind.INVITATION
-                            ? "invitation_invalid" : "join_invalid");
+                    String errorCode = acceptError instanceof SsoFlowException flowError
+                            ? flowError.getErrorCode()
+                            : (pending.kind() == PendingAccept.Kind.INVITATION
+                                    ? "invitation_invalid" : "join_invalid");
+                    // Land back on the originating join/invite page (not /login) so the
+                    // user sees the error in context and can retry — with a different
+                    // Google account or the email/password form — without re-finding
+                    // the link. The token is a canonical UUID, safe in a path segment.
+                    String page = pending.kind() == PendingAccept.Kind.INVITATION
+                            ? "/invitations/" : "/join/";
+                    return ResponseEntity.status(HttpStatus.FOUND)
+                            .header(HttpHeaders.LOCATION,
+                                    frontendUrls.path(page + pending.token() + "?error=" + enc(errorCode)))
+                            .build();
                 }
                 throw acceptError;
             }
@@ -199,6 +214,9 @@ public class OAuth2Controller {
      * collapses to {@code sso_error} so we never leak internals.
      */
     private String mapSsoError(Exception e) {
+        if (e instanceof SsoFlowException flowError) {
+            return flowError.getErrorCode();
+        }
         if (e instanceof BadRequestException) {
             return "sso_provider_mismatch";
         }

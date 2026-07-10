@@ -10,6 +10,7 @@ import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.event.WorkshopEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.exception.SsoFlowException;
 import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.organization.dto.AcceptJoinLinkRequest;
 import com.bvisionry.organization.dto.JoinLinkInfoResponse;
@@ -201,7 +202,7 @@ public class JoinLinkService {
         }
         Organization org = link.getOrganization();
         if (!org.isActive()) {
-            throw new BadRequestException("This organization is no longer active");
+            throw new SsoFlowException("sso_org_suspended", "This organization is no longer active");
         }
 
         User user = authService.resolveSsoUser(email, avatarUrl, provider);
@@ -211,14 +212,14 @@ public class JoinLinkService {
         // admin — the join-link analogue of the guard InvitationService.requireInvitationBindable
         // already enforces on the invitation path. Reject outright.
         if (user.getRole() == UserRole.SUPER_ADMIN) {
-            throw new BadRequestException(
+            throw new SsoFlowException("sso_platform_account",
                     "This is a platform account and cannot join an organization.");
         }
 
         // An account already bound to a different org keeps its membership — silently re-homing it
         // would move its history to a new tenant. Steer it to switch accounts instead.
         if (user.getOrganization() != null && !user.getOrganization().getId().equals(org.getId())) {
-            throw new BadRequestException(
+            throw new SsoFlowException("sso_other_org",
                     "This account is already a member of another organization.");
         }
 

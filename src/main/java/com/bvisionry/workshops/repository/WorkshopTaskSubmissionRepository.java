@@ -68,7 +68,7 @@ public interface WorkshopTaskSubmissionRepository extends JpaRepository<Workshop
     @Query(value = """
             SELECT s.id AS id, e.title AS exerciseTitle, t.title AS taskTitle,
                    t.task_type AS taskType, t.assignee AS assignee,
-                   u.name AS userName, wt.name AS teamName,
+                   u.id AS userId, u.name AS userName, wt.name AS teamName,
                    s.attempts AS attempts, s.elapsed_ms AS elapsedMs,
                    s.completed_at AS completedAt
             FROM workshop_task_submissions s
@@ -88,6 +88,7 @@ public interface WorkshopTaskSubmissionRepository extends JpaRepository<Workshop
         String getTaskTitle();
         String getTaskType();
         String getAssignee();
+        UUID getUserId();
         String getUserName();
         String getTeamName();
         Integer getAttempts();

@@ -9,6 +9,7 @@ import com.bvisionry.auth.jwt.JwtProvider;
 import com.bvisionry.common.enums.PipelineStatus;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.web.ClientIpResolver;
+import com.bvisionry.evaluation.AiUseDetectionService;
 import com.bvisionry.evaluation.PillarReeditService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -52,6 +53,9 @@ class AssignmentControllerTest {
 
     @MockitoBean
     private AdminAnswerOverrideService adminAnswerOverrideService;
+
+    @MockitoBean
+    private AiUseDetectionService aiUseDetectionService;
 
     @MockitoBean
     private JwtProvider jwtProvider;

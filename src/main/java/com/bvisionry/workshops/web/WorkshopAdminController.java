@@ -22,6 +22,7 @@ import com.bvisionry.workshops.dto.BuilderResponse;
 import com.bvisionry.workshops.dto.CreateExerciseRequest;
 import com.bvisionry.workshops.dto.CreateTaskRequest;
 import com.bvisionry.workshops.dto.CreateWorkshopRequest;
+import com.bvisionry.workshops.dto.MemberAnswersResponse;
 import com.bvisionry.workshops.dto.ReorderRequest;
 import com.bvisionry.workshops.dto.UpdateBuilderRequest;
 import com.bvisionry.workshops.dto.UpdateTaskRequest;
@@ -176,6 +177,13 @@ public class WorkshopAdminController {
     @GetMapping("/{workshopId}/analytics")
     public WorkshopAnalyticsResponse analytics(@PathVariable UUID orgId, @PathVariable UUID workshopId) {
         return service.analytics(orgId, workshopId);
+    }
+
+    /** One member's final-review answers — opened from the completion log. */
+    @GetMapping("/{workshopId}/members/{userId}/answers")
+    public MemberAnswersResponse memberAnswers(@PathVariable UUID orgId, @PathVariable UUID workshopId,
+                                               @PathVariable UUID userId) {
+        return service.memberAnswers(orgId, workshopId, userId);
     }
 
     /** The live results board — polled by the admin analytics surface. */

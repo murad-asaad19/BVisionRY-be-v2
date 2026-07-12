@@ -3,8 +3,10 @@ package com.bvisionry.workshops.web;
 import java.util.List;
 import java.util.UUID;
 
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,8 +15,11 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+
+import com.bvisionry.common.excel.XlsxResponse;
 
 import com.bvisionry.workshops.dto.AssignmentsResponse;
 import com.bvisionry.workshops.dto.BoardStyleRequest;
@@ -45,9 +50,12 @@ import jakarta.validation.Valid;
 public class WorkshopAdminController {
 
     private final WorkshopAdminService service;
+    private final WorkshopAnswersExportService answersExport;
 
-    public WorkshopAdminController(WorkshopAdminService service) {
+    public WorkshopAdminController(WorkshopAdminService service,
+                                   WorkshopAnswersExportService answersExport) {
         this.service = service;
+        this.answersExport = answersExport;
     }
 
     // ------------------------------------------------------------ workshops
@@ -177,6 +185,38 @@ public class WorkshopAdminController {
     @GetMapping("/{workshopId}/analytics")
     public WorkshopAnalyticsResponse analytics(@PathVariable UUID orgId, @PathVariable UUID workshopId) {
         return service.analytics(orgId, workshopId);
+    }
+
+    /** Branded PDF of every team's member answers (scope=all|leads, names maskable). */
+    @GetMapping("/{workshopId}/answers/pdf")
+    public ResponseEntity<byte[]> answersPdf(
+            @PathVariable UUID orgId, @PathVariable UUID workshopId,
+            @RequestParam(defaultValue = "all") String scope,
+            @RequestParam(defaultValue = "false") boolean showNames,
+            @RequestParam(defaultValue = "download") String mode) {
+        byte[] pdf = answersExport.pdf(orgId, workshopId, "leads".equals(scope), showNames);
+        String filename = "Workshop_Answers_" + XlsxResponse.sanitizeFilename(
+                answersExport.workshopName(orgId, workshopId)) + ".pdf";
+        String disposition = "preview".equals(mode)
+                ? "inline; filename=\"" + filename + "\""
+                : "attachment; filename=\"" + filename + "\"";
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition)
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(pdf);
+    }
+
+    /** Excel workbook of every team's member answers (scope=all|leads, names maskable). */
+    @GetMapping("/{workshopId}/answers/excel")
+    public ResponseEntity<byte[]> answersExcel(
+            @PathVariable UUID orgId, @PathVariable UUID workshopId,
+            @RequestParam(defaultValue = "all") String scope,
+            @RequestParam(defaultValue = "false") boolean showNames,
+            @RequestParam(defaultValue = "download") String mode) {
+        byte[] xlsx = answersExport.excel(orgId, workshopId, "leads".equals(scope), showNames);
+        String filename = "Workshop_Answers_" + XlsxResponse.sanitizeFilename(
+                answersExport.workshopName(orgId, workshopId)) + ".xlsx";
+        return XlsxResponse.build(xlsx, filename, mode);
     }
 
     /** One member's final-review answers — opened from the completion log. */

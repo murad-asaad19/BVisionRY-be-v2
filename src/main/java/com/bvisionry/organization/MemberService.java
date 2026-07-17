@@ -13,6 +13,7 @@ import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.tx.AfterCommit;
 import com.bvisionry.membertype.MemberTypeService;
 import com.bvisionry.organization.dto.ChangeMemberRoleRequest;
+import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.organization.dto.ChangeMemberStatusRequest;
 import com.bvisionry.organization.dto.MemberResponse;
 import com.bvisionry.organization.dto.RemoveMemberResponse;
@@ -209,28 +210,7 @@ public class MemberService {
     public RemoveMemberResponse removeMember(UUID orgId, UUID memberId,
                                               boolean wipeAssessments, UUID actorId) {
         var organization = organizationService.findActiveOrThrow(orgId);
-        User user = findMemberInOrg(orgId, memberId);
-
-        if (user.getRole() == UserRole.SUPER_ADMIN) {
-            throw new BadRequestException("Super admins cannot be removed via the org members API");
-        }
-
-        // Don't strand the org without a *usable* admin. The operator should
-        // reassign ORG_ADMIN to another member first; this is the same shape of
-        // guard we use elsewhere for org-level invariants. Count only ACTIVE
-        // admins — a SUSPENDED/DEACTIVATED ORG_ADMIN keeps the role but can't
-        // log in, so a role-only count would let the sole loginable admin be
-        // removed while the org still appears to "have" admins.
-        // Sub-orgs are exempt: they're governed by the PARENT org's admins, so
-        // a sub-org with zero local ORG_ADMINs is a perfectly normal state.
-        if (!organization.isSubOrganization()
-                && user.getRole() == UserRole.ORG_ADMIN
-                && user.getStatus() == UserStatus.ACTIVE
-                && userRepository.countByOrganizationIdAndRoleAndStatus(
-                        orgId, UserRole.ORG_ADMIN, UserStatus.ACTIVE) <= 1) {
-            throw new BadRequestException(
-                    "Cannot remove the only Org Admin. Promote another member to Org Admin first.");
-        }
+        User user = requireRemovableMember(organization, memberId);
 
         int assignmentsDeleted = 0;
         if (wipeAssessments) {
@@ -265,6 +245,65 @@ public class MemberService {
         AfterCommit.run(cacheInvalidationService::invalidateOnNewEvaluation);
 
         return new RemoveMemberResponse(memberId, wipeAssessments, assignmentsDeleted);
+    }
+
+    /**
+     * Permanently erase a member: the user row is hard-deleted. Their personal
+     * data (assignments, submissions, enrollments, team/cohort memberships,
+     * refresh tokens, notifications) is removed by the DB's ON DELETE CASCADE
+     * chains, while content they merely authored/administered (assignments they
+     * assigned, invitations, join links, surveys, unlock/archive attributions —
+     * relaxed to SET NULL in V135, plus V34's pipelines/audit rows) survives
+     * without attribution. Same guards as {@link #removeMember}: never a
+     * SUPER_ADMIN, never the org's last active ORG_ADMIN.
+     */
+    @Transactional
+    public void deleteMemberPermanently(UUID orgId, UUID memberId, UUID actorId) {
+        var organization = organizationService.findActiveOrThrow(orgId);
+        User user = requireRemovableMember(organization, memberId);
+        String email = user.getEmail();
+
+        userRepository.delete(user);
+
+        // The email lands in the audit details on purpose: after a hard delete it is
+        // the only remaining way to answer "who was deleted?" — the row is gone.
+        auditService.log(actorId, orgId, OrgAuditActions.MEMBER_DELETED,
+                OrgAuditActions.ENTITY_USER, memberId, Map.of("email", email));
+
+        log.info("Permanently deleted member {} from org {}", memberId, orgId);
+
+        // Same conservative eviction as removeMember: the org lost a member and
+        // (via cascade) potentially assessments feeding org-scoped reports.
+        AfterCommit.run(cacheInvalidationService::invalidateOnNewEvaluation);
+    }
+
+    /**
+     * Shared removal guards: the target must belong to the org, must not be a
+     * SUPER_ADMIN, and must not be the org's last *usable* admin. Count only
+     * ACTIVE admins — a SUSPENDED/DEACTIVATED ORG_ADMIN keeps the role but
+     * can't log in, so a role-only count would let the sole loginable admin be
+     * removed while the org still appears to "have" admins.
+     * Sub-orgs are exempt from the last-admin guard: they're governed by the
+     * PARENT org's admins, so a sub-org with zero local ORG_ADMINs is a
+     * perfectly normal state.
+     */
+    private User requireRemovableMember(Organization organization, UUID memberId) {
+        UUID orgId = organization.getId();
+        User user = findMemberInOrg(orgId, memberId);
+
+        if (user.getRole() == UserRole.SUPER_ADMIN) {
+            throw new BadRequestException("Super admins cannot be removed via the org members API");
+        }
+
+        if (!organization.isSubOrganization()
+                && user.getRole() == UserRole.ORG_ADMIN
+                && user.getStatus() == UserStatus.ACTIVE
+                && userRepository.countByOrganizationIdAndRoleAndStatus(
+                        orgId, UserRole.ORG_ADMIN, UserStatus.ACTIVE) <= 1) {
+            throw new BadRequestException(
+                    "Cannot remove the only Org Admin. Promote another member to Org Admin first.");
+        }
+        return user;
     }
 
     /**

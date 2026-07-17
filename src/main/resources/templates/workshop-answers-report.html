@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <th:block th:replace="~{fragments/pdf-base :: pdfStyles}"></th:block>
+    <style>
+        /* ===== Workshop-answers specific ===== */
+        .team-heading { font-size: 15pt; font-weight: 700; color: #051647; }
+
+        .sort-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 10pt; }
+        .sort-table th { background: #051647; color: #ffffff; padding: 8px 12px; text-align: left; font-weight: 600; width: 50%; }
+        .sort-table th:first-child { border-radius: 8px 0 0 0; }
+        .sort-table th:last-child { border-radius: 0 8px 0 0; }
+        .sort-table td { padding: 7px 12px; border-bottom: 1px solid #dce3ee; vertical-align: top; }
+        .sort-card { padding: 4px 0; border-bottom: 1px solid #eef1f7; }
+        .sort-card:last-child { border-bottom: none; }
+
+        .member-card {
+            background: #ffffff; border: 1px solid #dce3ee; border-radius: 14px;
+            padding: 18px; margin-top: 16px; page-break-inside: avoid;
+        }
+        .member-header { border-bottom: 2px solid #d9ad62; padding-bottom: 9px; }
+        .member-name { font-size: 13pt; font-weight: 700; color: #051647; }
+        .badge {
+            display: inline-block; background: #051647; color: #ffffff;
+            padding: 2px 10px; border-radius: 999px; font-size: 8.5pt; font-weight: 600;
+            margin-left: 8px;
+        }
+        .badge-muted { background: #eef1f7; color: #55647d; }
+
+        .task-block { margin-top: 12px; page-break-inside: avoid; }
+        .task-title { font-size: 9pt; font-weight: 700; color: #cf9b43; text-transform: uppercase; letter-spacing: 0.08em; }
+        .task-prompt { font-size: 11pt; font-weight: 700; color: #051647; margin-top: 3px; }
+
+        .answer-block {
+            margin-top: 8px; padding: 9px 13px; background: #f8f9fc;
+            border-left: 4px solid #d9ad62; border-radius: 0 10px 10px 0;
+            page-break-inside: avoid;
+        }
+        .answer-card { font-size: 10pt; font-weight: 700; color: #051647; }
+        .answer-text { font-size: 10pt; color: #18233f; line-height: 1.5; margin-top: 3px; white-space: pre-wrap; }
+
+        .rank-row { display: table; width: 100%; margin-top: 6px; }
+        .rank-no { display: table-cell; width: 26px; font-weight: 700; color: #cf9b43; font-size: 10pt; }
+        .rank-text { display: table-cell; font-size: 10pt; color: #18233f; }
+        .rank-weight { display: table-cell; width: 40px; text-align: right; font-weight: 700; color: #051647; font-size: 10pt; }
+
+        .empty-note { font-size: 9.5pt; color: #55647d; font-style: italic; margin-top: 8px; }
+    </style>
+</head>
+<body>
+
+<!-- ============ PAGE 1: Cover ============ -->
+<div class="page cover">
+    <div class="watermark" style="top: 70px; right: -120px;">
+        <img th:src="${brandWatermark}" style="width: 360px;" alt=""/>
+    </div>
+
+    <div style="position: relative; z-index: 1;">
+        <p class="cover-eyebrow">Workshop Answers Report</p>
+        <h1 class="cover-title" th:text="${workshopName}">Workshop Name</h1>
+        <span class="accent-rule" style="width: 78px; margin-top: 20px;"></span>
+
+        <p class="cover-subtitle" th:text="${scopeLabel}">All members</p>
+        <p class="cover-date" th:text="${reportDate}">Date</p>
+        <p th:unless="${showNames}" class="cover-date">Member names anonymised</p>
+        <p class="cover-confidential">Confidential</p>
+    </div>
+
+    <div class="cover-foot">
+        <div style="display: table; width: 100%;">
+            <div class="cover-foot-cell">
+                <img class="cover-logo" th:src="${brandLogo}" alt="BVisionRY"/>
+            </div>
+            <div class="cover-foot-cell cover-url">www.bvisionry.com</div>
+        </div>
+    </div>
+</div>
+
+<!-- ============ One page (or more) per team ============ -->
+<div class="page" th:each="team : ${teams}">
+    <p class="page-heading" th:text="${team.teamName()}">Team</p>
+    <span class="accent-rule"></span>
+
+    <!-- the team's shared sort piles -->
+    <div class="section" th:each="sort : ${team.sortRecaps()}">
+        <p class="task-title" th:text="${sort.taskTitle()}">Sort task</p>
+        <table class="sort-table">
+            <thead>
+            <tr>
+                <th th:text="${sort.leftLabel()}">Left</th>
+                <th th:text="${sort.rightLabel()}">Right</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr>
+                <td>
+                    <p class="sort-card" th:each="card : ${sort.left()}" th:text="${card.text()}">Card</p>
+                </td>
+                <td>
+                    <p class="sort-card" th:each="card : ${sort.right()}" th:text="${card.text()}">Card</p>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- each member's answers -->
+    <div class="member-card" th:each="member : ${team.members()}">
+        <div class="member-header">
+            <span class="member-name" th:text="${member.displayName()}">Member</span>
+            <span class="badge" th:if="${member.lead()}">Team lead</span>
+            <span class="badge badge-muted" th:unless="${member.lead()}">Team member</span>
+        </div>
+
+        <p class="empty-note" th:if="${member.recap().isEmpty()}">No answers recorded.</p>
+
+        <div class="task-block" th:each="row : ${member.recap()}">
+            <p class="task-title" th:text="${row.taskTitle()}">Task</p>
+            <p class="task-prompt" th:if="${!row.prompt().isBlank()}" th:text="${row.prompt()}">Prompt</p>
+
+            <!-- ranked top-card list (no free-text answers) -->
+            <th:block th:if="${row.answers().isEmpty()}">
+                <div class="rank-row" th:each="card, it : ${row.topRows()}">
+                    <span class="rank-no" th:text="${it.count}">1</span>
+                    <span class="rank-text" th:text="${card.text()}">Card</span>
+                    <span class="rank-weight" th:text="${card.weight()}">0</span>
+                </div>
+            </th:block>
+
+            <!-- per-card responses -->
+            <div class="answer-block" th:each="answer : ${row.answers()}">
+                <p class="answer-card" th:text="${answer.cardText()}">Card</p>
+                <p class="answer-text" th:text="${answer.text()}">Response</p>
+            </div>
+        </div>
+    </div>
+
+    <p class="empty-note mt-4" th:if="${team.members().isEmpty()}">No members in scope for this team.</p>
+</div>
+
+</body>
+</html>

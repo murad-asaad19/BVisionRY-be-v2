@@ -17,6 +17,7 @@ public record WorkshopAnalyticsResponse(
             String taskTitle,
             String taskType,
             String role,
+            UUID userId,
             String userName,
             String teamName,
             Integer attempts,

@@ -34,6 +34,8 @@ public final class OrgAuditActions {
     public static final String MEMBER_PROFILE_UPDATED   = "MEMBER_PROFILE_UPDATED";
     public static final String MEMBER_MOVED             = "MEMBER_MOVED";
     public static final String MEMBER_REMOVED           = "MEMBER_REMOVED";
+    /** Hard delete: the user row is permanently erased (vs MEMBER_REMOVED's anonymize-in-place). */
+    public static final String MEMBER_DELETED           = "MEMBER_DELETED";
     /** Platform-level role change (promote to / demote from SUPER_ADMIN) via /api/users. */
     public static final String USER_ROLE_CHANGED        = "USER_ROLE_CHANGED";
     public static final String JOIN_LINK_USED           = "JOIN_LINK_USED";

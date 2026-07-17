@@ -28,6 +28,7 @@ import com.bvisionry.workshops.dto.BuilderResponse;
 import com.bvisionry.workshops.dto.CreateExerciseRequest;
 import com.bvisionry.workshops.dto.CreateTaskRequest;
 import com.bvisionry.workshops.dto.CreateWorkshopRequest;
+import com.bvisionry.workshops.dto.MemberAnswersResponse;
 import com.bvisionry.workshops.dto.ReorderRequest;
 import com.bvisionry.workshops.dto.UpdateBuilderRequest;
 import com.bvisionry.workshops.dto.UpdatePipelineRequest;
@@ -64,6 +65,7 @@ public class WorkshopAdminService {
     private final WorkshopExerciseTaskRepository tasks;
     private final WorkshopExerciseRunRepository runs;
     private final WorkshopTaskSubmissionRepository submissions;
+    private final MyWorkshopService myWorkshops;
 
     // ------------------------------------------------------------ workshops
 
@@ -391,13 +393,20 @@ public class WorkshopAdminService {
                 .map(r -> new WorkshopAnalyticsResponse.Row(
                         r.getId(), r.getExerciseTitle(), r.getTaskTitle(), r.getTaskType(),
                         "LEAD".equals(r.getAssignee()) ? "Team lead" : "Team member",
-                        r.getUserName(), r.getTeamName(),
+                        r.getUserId(), r.getUserName(), r.getTeamName(),
                         "SORT".equals(r.getTaskType()) ? r.getAttempts() : null,
                         r.getElapsedMs(), r.getCompletedAt()))
                 .toList();
         long totalMs = rows.stream().mapToLong(r -> r.elapsedMs() == null ? 0 : r.elapsedMs()).sum();
         return new WorkshopAnalyticsResponse(rows.size(), totalMs,
                 rows.isEmpty() ? 0 : totalMs / rows.size(), rows);
+    }
+
+    /** One member's final-review answers, org-checked here, built by the play service. */
+    @Transactional(readOnly = true)
+    public MemberAnswersResponse memberAnswers(UUID orgId, UUID workshopId, UUID userId) {
+        Workshop w = requireWorkshop(orgId, workshopId);
+        return myWorkshops.memberAnswers(w, userId);
     }
 
     // ------------------------------------------------------------ live board

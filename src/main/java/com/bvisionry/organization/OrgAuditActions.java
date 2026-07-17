@@ -55,6 +55,14 @@ public final class OrgAuditActions {
     public static final String ASSESSMENT_CHECK_IN_STARTED = "ASSESSMENT_CHECK_IN_STARTED";
     public static final String SURVEY_RESPONSE_SUBMITTED = "SURVEY_RESPONSE_SUBMITTED";
 
+    // --- Exercise lifecycle (sheet-like exercises with admin review) --------
+    /** Super admin provisioned an exercise template to an org (no member yet). */
+    public static final String EXERCISE_PROVISIONED       = "EXERCISE_PROVISIONED";
+    public static final String EXERCISE_ASSIGNED          = "EXERCISE_ASSIGNED";
+    public static final String EXERCISE_SUBMITTED         = "EXERCISE_SUBMITTED";
+    public static final String EXERCISE_CHANGES_REQUESTED = "EXERCISE_CHANGES_REQUESTED";
+    public static final String EXERCISE_REVIEWED          = "EXERCISE_REVIEWED";
+
     /** Member on a Free-tier org clicked Request Upgrade. */
     public static final String UPGRADE_REQUESTED                 = "UPGRADE_REQUESTED";
     public static final String UPGRADE_PROMPT_UPDATED            = "UPGRADE_PROMPT_UPDATED";
@@ -74,5 +82,6 @@ public final class OrgAuditActions {
     public static final String ENTITY_PLATFORM     = "Platform";
     public static final String ENTITY_USER         = "User";
     public static final String ENTITY_SUBMISSION   = "Submission";
+    public static final String ENTITY_EXERCISE_SUBMISSION = "ExerciseSubmission";
     public static final String ENTITY_SURVEY       = "Survey";
 }

@@ -72,6 +72,26 @@ public class ExerciseReviewService {
         comment.setAuthor(author);
         comment.setBody(request.body());
 
+        // A reply inherits its root's anchor and thread — explicit anchors
+        // would let a reply drift to a different cell than its thread.
+        if (request.parentId() != null) {
+            if (request.rowId() != null || request.columnId() != null) {
+                throw new BadRequestException("A reply cannot set its own anchor.");
+            }
+            ExerciseComment root = commentRepository.findById(request.parentId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Comment",
+                            request.parentId().toString()));
+            if (!root.getSubmission().getId().equals(submission.getId())) {
+                throw new ResourceNotFoundException("Comment", request.parentId().toString());
+            }
+            if (root.getParent() != null) {
+                throw new BadRequestException("Reply to the thread's root comment.");
+            }
+            comment.setParent(root);
+            comment.setRow(root.getRow());
+            comment.setColumn(root.getColumn());
+        }
+
         if (request.rowId() != null) {
             ExerciseRow row = rowRepository.findById(request.rowId())
                     .orElseThrow(() -> new ResourceNotFoundException("Row", request.rowId().toString()));
@@ -92,8 +112,10 @@ public class ExerciseReviewService {
         }
 
         // Freeze the commented cell's value so the thread stays readable after
-        // the member edits it to address the feedback.
-        if (comment.getRow() != null && comment.getColumn() != null
+        // the member edits it to address the feedback (roots only — replies
+        // inherit their thread's context).
+        if (request.parentId() == null
+                && comment.getRow() != null && comment.getColumn() != null
                 && comment.getRow().getCells() != null) {
             Object value = comment.getRow().getCells().get(comment.getColumn().getId().toString());
             comment.setCellValueSnapshot(value != null ? String.valueOf(value) : null);

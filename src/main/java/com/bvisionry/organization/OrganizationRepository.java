@@ -2,18 +2,78 @@ package com.bvisionry.organization;
 
 import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.organization.entity.Organization;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface OrganizationRepository extends JpaRepository<Organization, UUID> {
     List<Organization> findByIsActiveTrue();
     boolean existsByNameIgnoreCase(String name);
     long countBySubscriptionTier(SubscriptionTier tier);
+
+    // --- Sub-organization hierarchy (one level deep) ----------------------
+
+    /** Tenancy traversal used by OrgHierarchyAdapter: is child a direct sub-org of parent? */
+    boolean existsByIdAndParentOrganizationId(UUID id, UUID parentOrganizationId);
+
+    /** Direct children of a root org, for cascades (toggleActive / hardDelete). */
+    List<Organization> findByParentOrganizationId(UUID parentOrganizationId);
+
+    /** Direct children of a root org for the sub-org listing endpoint. */
+    List<Organization> findByParentOrganizationIdOrderByNameAsc(UUID parentOrganizationId);
+
+    /** Sub-org count for a single-org response (0 for sub-orgs — one level deep). */
+    long countByParentOrganizationId(UUID parentOrganizationId);
+
+    /**
+     * Batch sub-org counts for a page of orgs — rows of [parentId(UUID), count(long)].
+     * Orgs without children simply don't appear; callers default to 0.
+     */
+    @Query("""
+            SELECT o.parentOrganization.id, COUNT(o) FROM Organization o
+            WHERE o.parentOrganization.id IN :parentIds
+            GROUP BY o.parentOrganization.id
+            """)
+    List<Object[]> countSubOrgsByParentIds(@Param("parentIds") List<UUID> parentIds);
+
+    /**
+     * Fetches an org with its parent initialized so
+     * {@link Organization#effectiveSubscriptionTier()} is safe even when the
+     * caller has no open session (OSIV is off) — used by PremiumFeatureGuard.
+     */
+    @Query("""
+            SELECT o FROM Organization o
+            LEFT JOIN FETCH o.parentOrganization
+            WHERE o.id = :id
+            """)
+    Optional<Organization> findWithParentById(@Param("id") UUID id);
+
+    /**
+     * Paginated listing with the parent fetched eagerly so building
+     * {@code OrganizationResponse.parentOrganizationName} for a page of
+     * sub-orgs doesn't lazy-load one parent per row.
+     */
+    @Override
+    @EntityGraph(attributePaths = "parentOrganization")
+    Page<Organization> findAll(Pageable pageable);
+
+    // Root-only counts for the SUPER_ADMIN platform KPIs — sub-orgs are an
+    // internal subdivision of a customer, not a customer, so they must not
+    // inflate org totals, retention, or the tier mix.
+    long countByParentOrganizationIsNull();
+    long countByIsActiveTrueAndParentOrganizationIsNull();
+    long countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier tier);
+
+    /** Root orgs only — the attention rules evaluate customers, not their subdivisions. */
+    List<Organization> findByParentOrganizationIsNull();
 
     /**
      * Aggregate per-org member-count + last-login in a single query.

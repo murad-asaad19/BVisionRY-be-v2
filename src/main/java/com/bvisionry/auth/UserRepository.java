@@ -37,14 +37,20 @@ public interface UserRepository extends JpaRepository<User, UUID> {
      * "Platform Admins" view so {@link com.bvisionry.auth.dto.UserResponse#from}
      * can read the org tier without firing a query per row (N+1).
      */
-    @org.springframework.data.jpa.repository.Query("SELECT u FROM User u LEFT JOIN FETCH u.organization")
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT u FROM User u LEFT JOIN FETCH u.organization o LEFT JOIN FETCH o.parentOrganization")
     List<User> findAllWithOrganization();
 
     @org.springframework.data.jpa.repository.Modifying
     @org.springframework.transaction.annotation.Transactional
     long deleteByOrganizationId(UUID organizationId);
 
-    @org.springframework.data.jpa.repository.Query("SELECT u FROM User u LEFT JOIN FETCH u.organization WHERE u.id = :id")
+    // The parent org is fetched too: users loaded here become detached
+    // @AuthenticationPrincipals (JwtAuthenticationFilter) and UserResponse.from
+    // reads the parent's tier via Organization.effectiveSubscriptionTier().
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT u FROM User u LEFT JOIN FETCH u.organization o LEFT JOIN FETCH o.parentOrganization "
+                    + "WHERE u.id = :id")
     Optional<User> findByIdWithOrganization(@org.springframework.data.repository.query.Param("id") UUID id);
 
     @org.springframework.data.jpa.repository.Query("SELECT MAX(u.lastLoginAt) FROM User u WHERE u.organization.id = :orgId")

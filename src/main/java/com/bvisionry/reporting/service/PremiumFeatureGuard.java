@@ -4,9 +4,7 @@ import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.exception.PremiumRequiredException;
-import com.bvisionry.common.exception.ResourceNotFoundException;
-import com.bvisionry.organization.OrganizationRepository;
-import com.bvisionry.organization.entity.Organization;
+import com.bvisionry.common.security.OrgHierarchyPort;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -18,7 +16,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class PremiumFeatureGuard {
 
-    private final OrganizationRepository organizationRepository;
+    private final OrgHierarchyPort orgHierarchy;
 
     /**
      * Checks if the organization has a Premium subscription.
@@ -33,12 +31,14 @@ public class PremiumFeatureGuard {
     }
 
     /**
-     * Returns true if the organization has a Premium subscription.
+     * Returns true if the organization's EFFECTIVE subscription is Premium —
+     * sub-organizations inherit the parent's plan, so a FREE sub-org under a
+     * PREMIUM parent passes. Resolved through {@link OrgHierarchyPort} (which
+     * throws ResourceNotFoundException for unknown orgs, preserving the
+     * previous findById behaviour).
      */
     public boolean isPremium(UUID orgId) {
-        Organization org = organizationRepository.findById(orgId)
-                .orElseThrow(() -> new ResourceNotFoundException("Organization", orgId.toString()));
-        return org.getSubscriptionTier() == SubscriptionTier.PREMIUM;
+        return orgHierarchy.effectiveTierOf(orgId) == SubscriptionTier.PREMIUM;
     }
 
     /**

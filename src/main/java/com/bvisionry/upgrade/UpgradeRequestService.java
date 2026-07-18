@@ -65,11 +65,18 @@ public class UpgradeRequestService {
         User user = userRepo.findByIdWithOrganization(currentUserId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", currentUserId.toString()));
 
-        validateEligibility(user);
+        // Billing lives on the ROOT org: a sub-org row is permanently FREE, so
+        // eligibility, the request row, the audit entry, and the admin
+        // dashboard link must all target the parent — the only org whose tier
+        // a super admin can actually change.
+        Organization org = user.getOrganization();
+        if (org != null && org.isSubOrganization()) {
+            org = org.getParentOrganization();
+        }
+
+        validateEligibility(user, org);
         Duration window = cooldown();
         enforceCooldown(currentUserId, window);
-
-        Organization org = user.getOrganization();
         UpgradeFeatureContext feature = req.featureContext() == null
                 ? UpgradeFeatureContext.OTHER
                 : req.featureContext();
@@ -93,17 +100,17 @@ public class UpgradeRequestService {
         return UpgradeRequestResponse.from(saved, window);
     }
 
-    private void validateEligibility(User user) {
+    /** {@code billingOrg} is the requester's ROOT org (the parent when they sit in a sub-org). */
+    private void validateEligibility(User user, Organization billingOrg) {
         if (user.getRole() == UserRole.SUPER_ADMIN) {
             throw new BadRequestException("Super admins cannot request upgrades.");
         }
-        Organization org = user.getOrganization();
-        if (org == null) {
+        if (billingOrg == null) {
             throw new BadRequestException("You must belong to an organization to request an upgrade.");
         }
-        if (org.getSubscriptionTier() != SubscriptionTier.FREE) {
+        if (billingOrg.getSubscriptionTier() != SubscriptionTier.FREE) {
             throw new BadRequestException(
-                    "Your organization is already on the " + org.getSubscriptionTier() + " plan.");
+                    "Your organization is already on the " + billingOrg.getSubscriptionTier() + " plan.");
         }
     }
 

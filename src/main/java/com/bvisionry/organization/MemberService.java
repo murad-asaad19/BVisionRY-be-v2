@@ -13,6 +13,7 @@ import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.tx.AfterCommit;
 import com.bvisionry.membertype.MemberTypeService;
 import com.bvisionry.organization.dto.ChangeMemberRoleRequest;
+import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.organization.dto.ChangeMemberStatusRequest;
 import com.bvisionry.organization.dto.MemberResponse;
 import com.bvisionry.organization.dto.RemoveMemberResponse;
@@ -208,8 +209,8 @@ public class MemberService {
     @Transactional
     public RemoveMemberResponse removeMember(UUID orgId, UUID memberId,
                                               boolean wipeAssessments, UUID actorId) {
-        organizationService.findActiveOrThrow(orgId);
-        User user = requireRemovableMember(orgId, memberId);
+        var organization = organizationService.findActiveOrThrow(orgId);
+        User user = requireRemovableMember(organization, memberId);
 
         int assignmentsDeleted = 0;
         if (wipeAssessments) {
@@ -258,8 +259,8 @@ public class MemberService {
      */
     @Transactional
     public void deleteMemberPermanently(UUID orgId, UUID memberId, UUID actorId) {
-        organizationService.findActiveOrThrow(orgId);
-        User user = requireRemovableMember(orgId, memberId);
+        var organization = organizationService.findActiveOrThrow(orgId);
+        User user = requireRemovableMember(organization, memberId);
         String email = user.getEmail();
 
         userRepository.delete(user);
@@ -282,15 +283,20 @@ public class MemberService {
      * ACTIVE admins — a SUSPENDED/DEACTIVATED ORG_ADMIN keeps the role but
      * can't log in, so a role-only count would let the sole loginable admin be
      * removed while the org still appears to "have" admins.
+     * Sub-orgs are exempt from the last-admin guard: they're governed by the
+     * PARENT org's admins, so a sub-org with zero local ORG_ADMINs is a
+     * perfectly normal state.
      */
-    private User requireRemovableMember(UUID orgId, UUID memberId) {
+    private User requireRemovableMember(Organization organization, UUID memberId) {
+        UUID orgId = organization.getId();
         User user = findMemberInOrg(orgId, memberId);
 
         if (user.getRole() == UserRole.SUPER_ADMIN) {
             throw new BadRequestException("Super admins cannot be removed via the org members API");
         }
 
-        if (user.getRole() == UserRole.ORG_ADMIN
+        if (!organization.isSubOrganization()
+                && user.getRole() == UserRole.ORG_ADMIN
                 && user.getStatus() == UserStatus.ACTIVE
                 && userRepository.countByOrganizationIdAndRoleAndStatus(
                         orgId, UserRole.ORG_ADMIN, UserStatus.ACTIVE) <= 1) {

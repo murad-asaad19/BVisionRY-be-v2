@@ -6,6 +6,9 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
+import jakarta.persistence.FetchType;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -34,6 +37,36 @@ public class Organization extends BaseEntity {
 
     @Column(name = "trial_ends_at")
     private Instant trialEndsAt;
+
+    /**
+     * Parent organization when this org is a sub-organization; null for root
+     * orgs. The hierarchy is ONE level deep — the service layer rejects
+     * creating a sub-org under another sub-org.
+     *
+     * <p>LAZY + OSIV is off ({@code spring.jpa.open-in-view=false}), so any
+     * access to the parent (including {@link #effectiveSubscriptionTier()})
+     * must happen inside a transaction or on an instance loaded with the
+     * parent fetched (see {@code OrganizationRepository.findWithParentById}).
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "parent_organization_id")
+    private Organization parentOrganization;
+
+    /** True iff this org is a sub-organization (has a parent). */
+    public boolean isSubOrganization() {
+        return parentOrganization != null;
+    }
+
+    /**
+     * The tier that governs feature access: sub-orgs inherit the parent's
+     * plan (they have no billing identity of their own — tier and trials are
+     * managed on the parent), root orgs use their own.
+     */
+    public SubscriptionTier effectiveSubscriptionTier() {
+        return parentOrganization != null
+                ? parentOrganization.getSubscriptionTier()
+                : subscriptionTier;
+    }
 
     /**
      * True iff this org currently has an active Premium trial.

@@ -82,6 +82,13 @@ public class MoveMemberService {
         // member in a dead-end state where login is blocked org-wide.
         Organization target = organizationService.findActiveOrThrow(targetOrganizationId);
 
+        // Movable users are member-level accounts; members live in sub-orgs
+        // only, so a root org is never a valid destination.
+        if (!target.isSubOrganization()) {
+            throw new BadRequestException(
+                    "Members belong to sub-organizations. Pick a sub-organization as the move target.");
+        }
+
         int movedAssignments = assignmentRepository.reassignToOrganization(
                 memberId, source.getId(), target.getId());
 

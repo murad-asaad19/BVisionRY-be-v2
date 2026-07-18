@@ -164,7 +164,9 @@ class PushNotificationServiceTest {
                         NotificationType.PROGRAM_MODULE_ASSIGNED,
                         NotificationType.PROGRAM_MODULE_UNLOCKED,
                         NotificationType.PROGRAM_TASK_DUE,
-                        NotificationType.WORKSHOP_RESULTS_SHARED)
+                        NotificationType.WORKSHOP_RESULTS_SHARED,
+                        NotificationType.EXERCISE_ASSIGNED,
+                        NotificationType.EXERCISE_FEEDBACK)
                 .noneMatch(NotificationType::isAdminOnly);
         assertThat(NotificationType.visibleTo(UserRole.ORG_ADMIN))
                 .containsExactlyInAnyOrder(NotificationType.values());

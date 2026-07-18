@@ -29,12 +29,12 @@ class DashboardServiceTest {
 
     @Test
     void getDashboard_aggregatesKpisAndAttention() {
-        when(orgRepo.count()).thenReturn(10L);
-        when(orgRepo.countByIsActiveTrue()).thenReturn(7L);
+        when(orgRepo.countByParentOrganizationIsNull()).thenReturn(10L);
+        when(orgRepo.countByIsActiveTrueAndParentOrganizationIsNull()).thenReturn(7L);
         when(orgRepo.countOnActiveTrial(any())).thenReturn(1L);
         when(orgRepo.countTrialsExpiringWithin(any(), any())).thenReturn(1L);
-        when(orgRepo.countBySubscriptionTier(SubscriptionTier.PREMIUM)).thenReturn(5L);
-        when(orgRepo.countBySubscriptionTier(SubscriptionTier.FREE)).thenReturn(5L);
+        when(orgRepo.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.PREMIUM)).thenReturn(5L);
+        when(orgRepo.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.FREE)).thenReturn(5L);
         when(userRepo.count()).thenReturn(213L);
         when(auditRepo.countByActionTypeAndOccurredAtAfter(any(), any())).thenReturn(2L);
         when(attentionService.evaluate()).thenReturn(List.of());

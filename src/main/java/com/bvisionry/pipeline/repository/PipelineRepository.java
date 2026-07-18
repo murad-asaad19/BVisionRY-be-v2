@@ -24,4 +24,6 @@ public interface PipelineRepository extends JpaRepository<Pipeline, UUID> {
     Optional<Integer> findMaxVersionByName(@Param("name") String name);
 
     List<Pipeline> findByStatus(PipelineStatus status);
+
+    List<Pipeline> findByStatusAndIdIn(PipelineStatus status, List<UUID> ids);
 }

@@ -119,6 +119,10 @@ public interface AssignmentRepository extends JpaRepository<Assignment, UUID> {
     @Query("SELECT DISTINCT a.pipeline.id, a.organization.id, a.organization.name FROM Assignment a WHERE a.pipeline.id IN :pipelineIds")
     List<Object[]> findDistinctOrgsByPipelineIds(@Param("pipelineIds") List<UUID> pipelineIds);
 
+    /** Distinct pipelines assigned (provisioned or per-member) to an org. */
+    @Query("SELECT DISTINCT a.pipeline.id FROM Assignment a WHERE a.organization.id = :orgId")
+    List<UUID> findDistinctPipelineIdsByOrganizationId(@Param("orgId") UUID orgId);
+
     @Modifying
     @Transactional
     long deleteByOrganizationId(UUID organizationId);

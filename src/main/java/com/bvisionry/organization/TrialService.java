@@ -68,6 +68,7 @@ public class TrialService {
         Organization org = orgRepo.findById(orgId)
                 .orElseThrow(() -> new ResourceNotFoundException("Organization", orgId.toString()));
 
+        requireRootOrg(org);
         if (!org.isActive()) {
             throw new BadRequestException("Reactivate the organization before starting a trial.");
         }
@@ -98,6 +99,7 @@ public class TrialService {
         Organization org = orgRepo.findById(orgId)
                 .orElseThrow(() -> new ResourceNotFoundException("Organization", orgId.toString()));
 
+        requireRootOrg(org);
         if (!org.isOnTrial()) {
             throw new BadRequestException("Organization has no active trial.");
         }
@@ -123,6 +125,7 @@ public class TrialService {
         Organization org = orgRepo.findById(orgId)
                 .orElseThrow(() -> new ResourceNotFoundException("Organization", orgId.toString()));
 
+        requireRootOrg(org);
         if (!org.isOnTrial()) {
             throw new BadRequestException("Organization has no active trial.");
         }
@@ -274,9 +277,22 @@ public class TrialService {
                 .toList();
     }
 
+    /**
+     * Sub-orgs have no billing identity of their own: tier (and therefore any
+     * trial) lives on the parent. Trials can never be started on a sub-org, so
+     * {@code trialEndsAt} on a sub-org row is impossible and the expiry sweep
+     * needs no hierarchy awareness.
+     */
+    private static void requireRootOrg(Organization org) {
+        if (org.isSubOrganization()) {
+            throw new BadRequestException("Trials are managed by the parent organization");
+        }
+    }
+
     OrganizationResponse toResponse(Organization org) {
         long memberCount = userRepo.countByOrganizationId(org.getId());
         Instant lastActive = userRepo.findMaxLastLoginByOrganizationId(org.getId());
-        return OrganizationResponse.from(org, memberCount, lastActive);
+        int subOrgCount = (int) orgRepo.countByParentOrganizationId(org.getId());
+        return OrganizationResponse.from(org, memberCount, lastActive, subOrgCount);
     }
 }

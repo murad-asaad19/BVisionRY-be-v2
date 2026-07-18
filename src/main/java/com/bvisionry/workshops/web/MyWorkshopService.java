@@ -28,6 +28,7 @@ import com.bvisionry.workshops.domain.WorkshopTaskAssignee;
 import com.bvisionry.workshops.domain.WorkshopTaskSubmission;
 import com.bvisionry.workshops.domain.WorkshopTeam;
 import com.bvisionry.workshops.domain.WorkshopTaskType;
+import com.bvisionry.workshops.dto.MemberAnswersResponse;
 import com.bvisionry.workshops.dto.MyWorkshopDto;
 import com.bvisionry.workshops.dto.PlayResponse;
 import com.bvisionry.workshops.dto.RespondRequest;
@@ -88,6 +89,25 @@ public class MyWorkshopService {
     @Transactional(readOnly = true)
     public PlayResponse play(UUID workshopId) {
         return buildPlay(load(workshopId));
+    }
+
+    /**
+     * One member's final-review answers (recap + team sort piles), built for an
+     * arbitrary member instead of the caller — the admin "view member answers"
+     * read. Org access must already be verified by the caller.
+     */
+    @Transactional(readOnly = true)
+    public MemberAnswersResponse memberAnswers(Workshop workshop, UUID userId) {
+        Ctx ctx = loadFor(workshop, userId);
+        String name = teams.findTeamMembers(ctx.teamId()).stream()
+                .filter(m -> m.getId().equals(userId))
+                .map(WorkshopTeamRepository.TeamMemberRow::getName)
+                .findFirst().orElse("");
+        return new MemberAnswersResponse(
+                workshop.getId(), workshop.getName(),
+                userId, name, ctx.lead(),
+                ctx.teamId(), ctx.team().getName(),
+                buildRecap(ctx), buildSortRecaps(ctx));
     }
 
     // ------------------------------------------------------------ actions
@@ -224,7 +244,7 @@ public class MyWorkshopService {
         if (!rawSurveyId.isBlank()) {
             UUID surveyId = UUID.fromString(rawSurveyId);
             boolean answered = workshops.hasIntroSurveyResponse(
-                    surveyId, workshopId, ctx.cu().userId());
+                    surveyId, workshopId, ctx.userId());
             if (!answered && workshops.findPublishedSurvey(surveyId).isPresent()) {
                 throw new BadRequestException("Complete the survey first");
             }
@@ -257,11 +277,11 @@ public class MyWorkshopService {
         }
         requirePerformer(ctx, task);
         WorkshopTaskSubmission sub = subFor(ctx, task).orElse(null);
-        if (sub == null || !sub.isCompleted()) {
-            requireCurrentTask(ctx, taskId);
-            sub = requireStarted(ctx, task);
+        if (sub != null && sub.isCompleted()) {
+            throw new BadRequestException("Responses can't be changed after completion");
         }
-        // else: editing an existing response from the done screen — allowed.
+        requireCurrentTask(ctx, taskId);
+        sub = requireStarted(ctx, task);
 
         List<PlayResponse.ScoredCard> topRows =
                 computeTopRows(ctx, findPrev(ctx, task, WorkshopTaskType.TOP));
@@ -293,7 +313,7 @@ public class MyWorkshopService {
 
     // ------------------------------------------------------------ context
 
-    private record Ctx(CurrentUser cu, Workshop workshop, WorkshopTeam team, boolean lead,
+    private record Ctx(UUID userId, Workshop workshop, WorkshopTeam team, boolean lead,
                        List<WorkshopExercise> exercises,
                        Map<UUID, List<WorkshopExerciseTask>> tasksByExercise,
                        Map<UUID, List<WorkshopTaskSubmission>> subsByTask,
@@ -315,7 +335,13 @@ public class MyWorkshopService {
                 // Drafts don't exist for members until published.
                 .filter(x -> x.getStatus() != WorkshopStatus.DRAFT)
                 .orElseThrow(() -> new ResourceNotFoundException("Workshop", workshopId.toString()));
-        var membership = teams.findMembership(workshopId, cu.userId())
+        return loadFor(w, cu.userId());
+    }
+
+    /** The play context of one member — the caller in {@link #load}, any member for admin reads. */
+    private Ctx loadFor(Workshop w, UUID userId) {
+        UUID workshopId = w.getId();
+        var membership = teams.findMembership(workshopId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Workshop", workshopId.toString()));
         WorkshopTeam team = teams.findById(membership.getTeamId())
                 .orElseThrow(() -> new ResourceNotFoundException("Workshop", workshopId.toString()));
@@ -340,7 +366,7 @@ public class MyWorkshopService {
         for (WorkshopExerciseRun r : runs.findByTeamId(membership.getTeamId())) {
             runsByEx.put(r.getExerciseId(), r);
         }
-        return new Ctx(cu, w, team, membership.getLead(),
+        return new Ctx(userId, w, team, membership.getLead(),
                 exs, byEx, subsByTask, runsByEx);
     }
 
@@ -350,7 +376,7 @@ public class MyWorkshopService {
         if (task.getAssignee() == WorkshopTaskAssignee.LEAD) {
             return rows.stream().findFirst();
         }
-        return rows.stream().filter(s -> s.getUserId().equals(ctx.cu().userId())).findFirst();
+        return rows.stream().filter(s -> s.getUserId().equals(ctx.userId())).findFirst();
     }
 
     private boolean isDone(Ctx ctx, WorkshopExerciseTask task) {
@@ -410,7 +436,7 @@ public class MyWorkshopService {
         UUID preSurveyId = ctx.workshop().getPreWorkshopSurveyId();
         if (!finished && preSurveyId != null
                 && !workshops.hasIntroSurveyResponse(
-                        preSurveyId, ctx.workshop().getId(), ctx.cu().userId())) {
+                        preSurveyId, ctx.workshop().getId(), ctx.userId())) {
             return new PlayResponse(
                     ctx.workshop().getId(), ctx.workshop().getName(), ctx.workshop().getStatus(),
                     role, ctx.teamId(), ctx.team().getName(),
@@ -551,7 +577,7 @@ public class MyWorkshopService {
      * The done-screen recap of my own work. For every task I performed and
      * completed: a TOP task becomes a ranked-list row (the lead's shared
      * deliverable, no free-text answer); a QUESTION task becomes an answer row
-     * (my response per shared card), editable while the workshop is active.
+     * (my response per shared card), read-only once completed.
      * Because the lead now also runs the member tasks, their recap naturally
      * carries both their shared list and their own answer.
      */
@@ -838,7 +864,7 @@ public class MyWorkshopService {
         WorkshopTaskSubmission sub = new WorkshopTaskSubmission();
         sub.setTaskId(task.getId());
         sub.setTeamId(ctx.teamId());
-        sub.setUserId(ctx.cu().userId());
+        sub.setUserId(ctx.userId());
         ctx.subsByTask().computeIfAbsent(task.getId(), k -> new ArrayList<>()).add(sub);
         return sub;
     }

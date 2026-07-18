@@ -34,7 +34,9 @@ final class CardDealing {
         int per = intOf(cfg.get("dealPerTeam"), 0);
         List<String> all = pool.stream().map(c -> str(c.get("id"))).toList();
         if (per <= 0 || per >= all.size()) {
-            return all;
+            List<String> shuffled = new ArrayList<>(all);
+            Collections.shuffle(shuffled, RANDOM);
+            return shuffled;
         }
         List<String> left = new ArrayList<>();
         List<String> right = new ArrayList<>();

@@ -2,6 +2,8 @@ package com.bvisionry.common.pdf;
 
 import com.bvisionry.reporting.dto.PersonalInfoEntry;
 import com.bvisionry.reporting.dto.PillarDetailResponse;
+import com.bvisionry.workshops.dto.PlayResponse;
+import com.bvisionry.workshops.web.WorkshopAnswersExportService;
 import com.lowagie.text.pdf.PdfDictionary;
 import com.lowagie.text.pdf.PdfName;
 import com.lowagie.text.pdf.PdfObject;
@@ -216,5 +218,39 @@ class PdfTemplateRenderTest {
         ctx.setVariable("members", List.of(member));
 
         assertBrandedPdf(new PdfRenderer(engine()).renderTemplate("team-insights-report", ctx));
+    }
+
+    @Test
+    void rendersWorkshopAnswersReport() throws IOException {
+        Context ctx = new Context();
+        ctx.setVariable("workshopName", "Ctrl + Alt + Own");
+        ctx.setVariable("reportDate", "July 12, 2026");
+        ctx.setVariable("scopeLabel", "All members");
+        ctx.setVariable("showNames", false);
+
+        PlayResponse.SortRecap sort = new PlayResponse.SortRecap(
+                UUID.randomUUID(), "Flip It", "Green", "Red",
+                List.of(new PlayResponse.CardDto("c1", "A noisy neighborhood disrupting your workspace")),
+                List.of(new PlayResponse.CardDto("c2", "Unfair or overly complex online assessments")));
+        WorkshopAnswersExportService.MemberExport lead =
+                new WorkshopAnswersExportService.MemberExport("Member 1", true, List.of(
+                        new PlayResponse.RecapRow(UUID.randomUUID(), "Your Turn to Talk",
+                                "What can I do about it?",
+                                List.of(new PlayResponse.RecapAnswer("c1",
+                                        "A noisy neighborhood disrupting your workspace",
+                                        "Set fixed focus hours and a dedicated space.")),
+                                List.of()),
+                        new PlayResponse.RecapRow(UUID.randomUUID(), "Top Cards", "",
+                                List.of(),
+                                List.of(new PlayResponse.ScoredCard("c1",
+                                        "A noisy neighborhood disrupting your workspace", 90)))));
+        WorkshopAnswersExportService.MemberExport noAnswers =
+                new WorkshopAnswersExportService.MemberExport("Member 2", false, List.of());
+        ctx.setVariable("teams", List.of(
+                new WorkshopAnswersExportService.TeamExport("Team Red", List.of(sort),
+                        List.of(lead, noAnswers)),
+                new WorkshopAnswersExportService.TeamExport("Team Green", List.of(), List.of())));
+
+        assertBrandedPdf(new PdfRenderer(engine()).renderTemplate("workshop-answers-report", ctx));
     }
 }

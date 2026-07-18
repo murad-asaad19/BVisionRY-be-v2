@@ -137,6 +137,44 @@ class TrialServiceTest {
                 .hasMessageContaining("Reactivate");
     }
 
+    /** Sub-orgs inherit the parent's plan — every trial operation must 400 on them. */
+    @Test
+    void startTrial_onSubOrganization_throws() {
+        Organization parent = new Organization();
+        parent.setId(UUID.randomUUID());
+        freeOrg.setParentOrganization(parent);
+        when(orgRepo.findById(orgId)).thenReturn(Optional.of(freeOrg));
+
+        assertThatThrownBy(() -> trialService.startTrial(orgId, 7, actorId))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("parent organization");
+        verifyNoInteractions(auditService);
+    }
+
+    @Test
+    void extendTrial_onSubOrganization_throws() {
+        Organization parent = new Organization();
+        parent.setId(UUID.randomUUID());
+        freeOrg.setParentOrganization(parent);
+        when(orgRepo.findById(orgId)).thenReturn(Optional.of(freeOrg));
+
+        assertThatThrownBy(() -> trialService.extendTrial(orgId, 5, actorId))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("parent organization");
+    }
+
+    @Test
+    void endTrialEarly_onSubOrganization_throws() {
+        Organization parent = new Organization();
+        parent.setId(UUID.randomUUID());
+        freeOrg.setParentOrganization(parent);
+        when(orgRepo.findById(orgId)).thenReturn(Optional.of(freeOrg));
+
+        assertThatThrownBy(() -> trialService.endTrialEarly(orgId, actorId))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("parent organization");
+    }
+
     @Test
     void extendTrial_addsDaysToExisting_logsAudit() {
         Instant currentEnd = Instant.now().plus(3, ChronoUnit.DAYS);

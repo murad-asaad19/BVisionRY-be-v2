@@ -14,6 +14,7 @@ import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.exception.AuthenticationException;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.DuplicateResourceException;
+import com.bvisionry.common.exception.SsoFlowException;
 import com.bvisionry.common.web.RequestContextUtils;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
@@ -106,8 +107,9 @@ public class AuthService {
     /**
      * Resolve (and persist provider-linking / activation side-effects for) the user behind an
      * SSO sign-in WITHOUT minting a session. Auto-creates the account on first sign-in, mirroring
-     * {@link #register}, and runs the same account-takeover / provider-mismatch / suspended-org
-     * guards as {@link #ssoLogin}.
+     * {@link #register} and auto-linking onto an existing password account (the provider-verified
+     * email proves mailbox control), and runs the same provider-mismatch / suspended-org guards
+     * as {@link #ssoLogin}.
      *
      * <p>Split out so invitation / join-link acceptance can bind organization membership onto the
      * returned managed entity <em>before</em> the session is issued — the access token embeds
@@ -121,35 +123,28 @@ public class AuthService {
         User user = userRepository.findByEmail(normalizedEmail)
                 .orElseGet(() -> createSsoUser(normalizedEmail));
 
-        // Account-takeover guard: never auto-link SSO onto a pre-existing LOCAL password
-        // account. If the email already owns a password and has not previously linked an
-        // SSO provider, anyone who completes SSO for that email (e.g. a stale/abandoned
-        // Google account on the same address) would otherwise be silently authenticated as
-        // the password user. Refuse and steer the legitimate owner through the deliberate
-        // link-from-settings flow, which proves password ownership first.
-        if (user.getSsoProvider() == null && user.getPasswordHash() != null) {
-            throw new BadRequestException(
-                    "An account with this email already exists. Sign in with your password, "
-                            + "then link single sign-on from your account settings.");
-        }
-
-        // First SSO sign-in for a passwordless account pins it to this provider; a different
-        // already-linked provider is rejected so neither OAuth account can silently
-        // sign in as the other's user.
+        // First SSO sign-in pins the account to this provider — including a pre-existing
+        // password account: the callback already requires Google's email_verified, which
+        // proves current mailbox control, the same proof a password-reset email grants.
+        // The password stays valid, so the user can sign in either way afterwards.
+        // A different already-linked provider is still rejected so neither OAuth account
+        // can silently sign in as the other's user.
         if (user.getSsoProvider() == null) {
             user.setSsoProvider(provider);
         } else if (!user.getSsoProvider().equals(provider)) {
-            throw new BadRequestException("This email is registered with a different sign-in provider");
+            throw new SsoFlowException("sso_provider_mismatch",
+                    "This email is registered with a different sign-in provider");
         }
         if (avatarUrl != null && user.getAvatarUrl() == null) {
             user.setAvatarUrl(avatarUrl);
         }
 
         if (user.getStatus() != UserStatus.ACTIVE) {
-            throw new AuthenticationException("Account is not active");
+            throw new SsoFlowException("sso_account_inactive", "Account is not active");
         }
         if (user.getOrganization() != null && !user.getOrganization().isActive()) {
-            throw new AuthenticationException("Your organization has been suspended. Contact support for assistance.");
+            throw new SsoFlowException("sso_org_suspended",
+                    "Your organization has been suspended. Contact support for assistance.");
         }
 
         user.setLastLoginAt(Instant.now());

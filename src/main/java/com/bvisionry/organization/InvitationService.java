@@ -9,6 +9,7 @@ import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.exception.SsoFlowException;
 import com.bvisionry.common.tx.AfterCommit;
 import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.EmailService;
@@ -55,6 +56,14 @@ public class InvitationService {
     @Transactional
     public List<InvitationResponse> inviteMembers(UUID orgId, InviteMembersRequest request) {
         Organization org = organizationService.findActiveOrThrow(orgId);
+        // Members live in sub-orgs only: a root org holds ORG_ADMINs and
+        // INSTRUCTORs, so MEMBER/MANAGER invites must target a sub-org.
+        if (!org.isSubOrganization()
+                && request.role() != UserRole.ORG_ADMIN && request.role() != UserRole.INSTRUCTOR) {
+            throw new BadRequestException(
+                    "Members are invited to a sub-organization. Only Org Admins and "
+                            + "Instructors can be invited to the organization itself.");
+        }
         List<InvitationResponse> responses = new ArrayList<>();
 
         // Hoist the inviter lookup out of the loop — same value for every recipient.
@@ -197,7 +206,7 @@ public class InvitationService {
                 throw new BadRequestException("Invitation is expired or no longer valid");
             }
             if (!invitation.getEmail().equalsIgnoreCase(email.trim())) {
-                throw new BadRequestException(
+                throw new SsoFlowException("sso_email_mismatch",
                         "This invitation was sent to " + invitation.getEmail()
                                 + ". Sign in with that Google account to accept it.");
             }
@@ -205,7 +214,7 @@ public class InvitationService {
             // pending invitee could complete sign-in and get an active, org-scoped session for an
             // organization the platform has locked out.
             if (!invitation.getOrganization().isActive()) {
-                throw new BadRequestException("This organization is no longer active");
+                throw new SsoFlowException("sso_org_suspended", "This organization is no longer active");
             }
 
             User user = authService.resolveSsoUser(invitation.getEmail(), avatarUrl, provider);
@@ -251,12 +260,12 @@ public class InvitationService {
      */
     private static void requireInvitationBindable(User existing, Invitation invitation) {
         if (existing.getRole() == UserRole.SUPER_ADMIN) {
-            throw new BadRequestException(
+            throw new SsoFlowException("sso_platform_account",
                     "This is a platform account and cannot accept organization invitations.");
         }
         if (existing.getOrganization() != null
                 && !existing.getOrganization().getId().equals(invitation.getOrganization().getId())) {
-            throw new BadRequestException(
+            throw new SsoFlowException("sso_other_org",
                     "This account is already a member of another organization. "
                             + "Sign out of the existing organization before accepting this invitation.");
         }

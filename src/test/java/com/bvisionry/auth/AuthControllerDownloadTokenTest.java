@@ -32,6 +32,7 @@ class AuthControllerDownloadTokenTest {
 
         AuthController controller = new AuthController(
                 /* authService */ null,
+                /* passwordResetService */ null,
                 /* rateLimitService */ null,
                 /* clientIpResolver */ null,
                 /* cookieService */ null,
@@ -51,7 +52,7 @@ class AuthControllerDownloadTokenTest {
 
     @Test
     void downloadToken_returns401WhenNoPrincipal() {
-        AuthController controller = new AuthController(null, null, null, null, jwtProvider, "https://example.test");
+        AuthController controller = new AuthController(null, null, null, null, null, jwtProvider, "https://example.test");
         var response = controller.downloadToken(null);
         assertThat(response.getStatusCode().value()).isEqualTo(401);
     }

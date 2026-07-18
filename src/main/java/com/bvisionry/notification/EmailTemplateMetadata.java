@@ -25,6 +25,7 @@ public final class EmailTemplateMetadata {
             case RESULTS_READY                  -> "Results Ready";
             case POST_ASSESSMENT_SURVEY_INVITE  -> "Post-assessment Survey Invitation";
             case INVITATION                     -> "Organization Invitation";
+            case PASSWORD_RESET                 -> "Password Reset";
             case TRIAL_ENDING_SOON              -> "Trial Ending Soon";
             case TRIAL_EXPIRED                  -> "Trial Expired";
             case UPGRADE_REQUESTED              -> "Upgrade Requested";
@@ -42,6 +43,7 @@ public final class EmailTemplateMetadata {
             case RESULTS_READY                  -> "Sent once evaluation finishes and the member can view their results.";
             case POST_ASSESSMENT_SURVEY_INVITE  -> "Sent alongside the results email when the pipeline has a paired survey, inviting the member to share feedback.";
             case INVITATION                     -> "Sent to someone invited to join an organization on BVisionRY.";
+            case PASSWORD_RESET                 -> "Sent when a user requests a password reset from the \"Forgot your password?\" link, with a single-use link to choose a new password.";
             case TRIAL_ENDING_SOON              -> "Sent to org admins a few days before their Premium trial expires.";
             case TRIAL_EXPIRED                  -> "Sent to org admins once their Premium trial has ended.";
             case UPGRADE_REQUESTED              -> "Sent to platform admins when a member of a Free-tier org requests an upgrade to Premium.";
@@ -85,6 +87,10 @@ public final class EmailTemplateMetadata {
                     new TemplateVariable("organizationName", "Organization being joined"),
                     new TemplateVariable("acceptUrl",        "Link the recipient clicks to accept"),
                     new TemplateVariable("expiresAt",        "When this invitation expires")
+            );
+            case PASSWORD_RESET -> List.of(
+                    new TemplateVariable("resetUrl",  "Single-use link the recipient opens to choose a new password"),
+                    new TemplateVariable("expiresAt", "When this reset link expires")
             );
             case TRIAL_ENDING_SOON -> List.of(
                     new TemplateVariable("organizationName", "Organization whose trial is ending"),
@@ -171,6 +177,10 @@ public final class EmailTemplateMetadata {
                     "organizationName", "Acme Ventures",
                     "acceptUrl",        urls.path("/invite/sample-token"),
                     "expiresAt",        Instant.parse("2026-05-01T00:00:00Z").toString()
+            );
+            case PASSWORD_RESET -> Map.of(
+                    "resetUrl",  urls.path("/reset-password/sample-token"),
+                    "expiresAt", Instant.parse("2026-05-01T00:00:00Z").toString()
             );
             case TRIAL_ENDING_SOON -> Map.of(
                     "organizationName", "Acme Ventures",

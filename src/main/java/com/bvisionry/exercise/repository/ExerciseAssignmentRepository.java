@@ -35,4 +35,9 @@ public interface ExerciseAssignmentRepository extends JpaRepository<ExerciseAssi
     List<ExerciseAssignment> findMemberAssignmentsByOrganizationId(@Param("orgId") UUID orgId);
 
     long countByTemplateId(UUID templateId);
+
+    /** (templateId, orgId, orgName) for every org-level provision, list-view chips. */
+    @Query("select a.template.id, a.organization.id, a.organization.name from ExerciseAssignment a "
+            + "where a.user is null order by a.organization.name")
+    List<Object[]> findProvisionOrgsGroupByTemplate();
 }

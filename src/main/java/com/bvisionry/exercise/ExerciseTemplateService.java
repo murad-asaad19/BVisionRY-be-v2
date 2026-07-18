@@ -20,6 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -52,14 +53,21 @@ public class ExerciseTemplateService {
         for (Object[] row : columnRepository.countAllGroupByTemplate()) {
             columnCounts.put((UUID) row[0], ((Long) row[1]).intValue());
         }
+        Map<UUID, List<ExerciseTemplateResponse.AssignedOrg>> orgsByTemplate = new HashMap<>();
+        for (Object[] row : assignmentRepository.findProvisionOrgsGroupByTemplate()) {
+            orgsByTemplate.computeIfAbsent((UUID) row[0], k -> new ArrayList<>())
+                    .add(new ExerciseTemplateResponse.AssignedOrg((UUID) row[1], (String) row[2]));
+        }
         return templates.stream()
-                .map(t -> ExerciseTemplateResponse.from(t, columnCounts.getOrDefault(t.getId(), 0)))
+                .map(t -> ExerciseTemplateResponse.from(t,
+                        columnCounts.getOrDefault(t.getId(), 0),
+                        orgsByTemplate.getOrDefault(t.getId(), List.of())))
                 .toList();
     }
 
     @Transactional(readOnly = true)
     public ExerciseTemplateDetailResponse get(UUID id) {
-        return ExerciseTemplateDetailResponse.from(requireTemplateWithColumns(id));
+        return ExerciseTemplateDetailResponse.from(requireTemplateWithColumns(id), isStructureLocked(id));
     }
 
     @Transactional
@@ -68,15 +76,16 @@ public class ExerciseTemplateService {
         template.setName(request.name());
         template.setDescription(request.description());
         template.setCreatedBy(SecurityUtils.getCurrentUserId());
-        return ExerciseTemplateDetailResponse.from(templateRepository.save(template));
+        return ExerciseTemplateDetailResponse.from(templateRepository.save(template), false);
     }
 
     @Transactional
     public ExerciseTemplateDetailResponse update(UUID id, UpsertExerciseTemplateRequest request) {
         ExerciseTemplate template = requireTemplateWithColumns(id);
+        requireNotArchived(template);
         template.setName(request.name());
         template.setDescription(request.description());
-        return ExerciseTemplateDetailResponse.from(template);
+        return ExerciseTemplateDetailResponse.from(template, isStructureLocked(id));
     }
 
     @Transactional
@@ -108,12 +117,13 @@ public class ExerciseTemplateService {
             throw new BadRequestException("Add at least one column before publishing.");
         }
         template.setStatus(target);
-        return ExerciseTemplateDetailResponse.from(template);
+        return ExerciseTemplateDetailResponse.from(template, isStructureLocked(id));
     }
 
     @Transactional
     public ExerciseColumnResponse addColumn(UUID templateId, UpsertExerciseColumnRequest request) {
         ExerciseTemplate template = requireTemplate(templateId);
+        requireNotArchived(template);
         requireStructureEditable(templateId);
 
         ExerciseColumn column = new ExerciseColumn();
@@ -127,6 +137,7 @@ public class ExerciseTemplateService {
     public ExerciseColumnResponse updateColumn(UUID templateId, UUID columnId,
                                                UpsertExerciseColumnRequest request) {
         ExerciseColumn column = requireColumnInTemplate(templateId, columnId);
+        requireNotArchived(column.getTemplate());
         applyColumn(column, request);
         return ExerciseColumnResponse.from(column);
     }
@@ -134,6 +145,7 @@ public class ExerciseTemplateService {
     @Transactional
     public void deleteColumn(UUID templateId, UUID columnId) {
         ExerciseColumn column = requireColumnInTemplate(templateId, columnId);
+        requireNotArchived(column.getTemplate());
         requireStructureEditable(templateId);
         columnRepository.delete(column);
 
@@ -146,6 +158,7 @@ public class ExerciseTemplateService {
 
     @Transactional
     public List<ExerciseColumnResponse> reorderColumns(UUID templateId, ReorderColumnsRequest request) {
+        requireNotArchived(requireTemplate(templateId));
         List<ExerciseColumn> columns = columnRepository.findByTemplateIdOrderByDisplayOrder(templateId);
         Map<UUID, ExerciseColumn> byId = new HashMap<>();
         columns.forEach(c -> byId.put(c.getId(), c));
@@ -176,6 +189,17 @@ public class ExerciseTemplateService {
      * orphan cell values and comment anchors, so structure is frozen once any
      * assignment (provision or member) exists.
      */
+    private boolean isStructureLocked(UUID templateId) {
+        return assignmentRepository.countByTemplateId(templateId) > 0;
+    }
+
+    private void requireNotArchived(ExerciseTemplate template) {
+        if (template.getStatus() == ExerciseTemplateStatus.ARCHIVED) {
+            throw new BadRequestException(
+                    "This exercise is archived and can no longer be edited. Republish it to make changes.");
+        }
+    }
+
     private void requireStructureEditable(UUID templateId) {
         if (assignmentRepository.countByTemplateId(templateId) > 0) {
             throw new BadRequestException(

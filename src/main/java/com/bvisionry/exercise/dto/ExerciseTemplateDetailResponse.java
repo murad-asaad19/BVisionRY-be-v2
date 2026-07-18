@@ -13,16 +13,19 @@ public record ExerciseTemplateDetailResponse(
         String description,
         ExerciseTemplateStatus status,
         List<ExerciseColumnResponse> columns,
+        /** True once the template has any assignment — column add/delete is frozen. */
+        boolean structureLocked,
         Instant createdAt,
         Instant updatedAt
 ) {
-    public static ExerciseTemplateDetailResponse from(ExerciseTemplate template) {
+    public static ExerciseTemplateDetailResponse from(ExerciseTemplate template, boolean structureLocked) {
         return new ExerciseTemplateDetailResponse(
                 template.getId(),
                 template.getName(),
                 template.getDescription(),
                 template.getStatus(),
                 template.getColumns().stream().map(ExerciseColumnResponse::from).toList(),
+                structureLocked,
                 template.getCreatedAt(),
                 template.getUpdatedAt());
     }

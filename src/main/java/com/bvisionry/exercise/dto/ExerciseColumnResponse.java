@@ -13,7 +13,8 @@ public record ExerciseColumnResponse(
         ExerciseColumnType type,
         Map<String, Object> configJson,
         int displayOrder,
-        boolean isRequired
+        boolean isRequired,
+        boolean isLocked
 ) {
     public static ExerciseColumnResponse from(ExerciseColumn column) {
         return new ExerciseColumnResponse(
@@ -23,6 +24,7 @@ public record ExerciseColumnResponse(
                 column.getType(),
                 column.getConfigJson(),
                 column.getDisplayOrder(),
-                column.isRequired());
+                column.isRequired(),
+                column.isLocked());
     }
 }

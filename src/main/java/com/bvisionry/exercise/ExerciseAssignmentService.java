@@ -10,10 +10,12 @@ import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.exercise.dto.CreateExerciseAssignmentRequest;
 import com.bvisionry.exercise.dto.ExerciseAssignmentResponse;
 import com.bvisionry.exercise.entity.ExerciseAssignment;
+import com.bvisionry.exercise.entity.ExerciseRow;
 import com.bvisionry.exercise.entity.ExerciseSubmission;
 import com.bvisionry.exercise.entity.ExerciseTemplate;
 import com.bvisionry.exercise.entity.ExerciseTemplateStatus;
 import com.bvisionry.exercise.repository.ExerciseAssignmentRepository;
+import com.bvisionry.exercise.repository.ExerciseRowRepository;
 import com.bvisionry.exercise.repository.ExerciseSubmissionRepository;
 import com.bvisionry.exercise.repository.ExerciseTemplateRepository;
 import com.bvisionry.membertype.MemberTypeService;
@@ -56,6 +58,7 @@ public class ExerciseAssignmentService {
 
     private final ExerciseAssignmentRepository assignmentRepository;
     private final ExerciseSubmissionRepository submissionRepository;
+    private final ExerciseRowRepository rowRepository;
     private final ExerciseTemplateRepository templateRepository;
     private final ExerciseSubmissionService submissionService;
     private final OrganizationRepository organizationRepository;
@@ -175,6 +178,7 @@ public class ExerciseAssignmentService {
         submission.setAssignment(savedAssignment);
         submission.setUser(member);
         ExerciseSubmission savedSubmission = submissionRepository.save(submission);
+        seedStarterRows(savedSubmission, template);
 
         auditService.log(assignerId, org.getId(), OrgAuditActions.EXERCISE_ASSIGNED,
                 OrgAuditActions.ENTITY_EXERCISE_SUBMISSION, savedSubmission.getId(),
@@ -186,6 +190,23 @@ public class ExerciseAssignmentService {
                 "/app/exercises/" + savedSubmission.getId());
 
         return toResponse(savedAssignment, savedSubmission, 0);
+    }
+
+    /** Materialize the template's starter rows into the fresh submission. */
+    private void seedStarterRows(ExerciseSubmission submission, ExerciseTemplate template) {
+        List<Map<String, Object>> starters = template.getStarterRows();
+        if (starters == null) {
+            return;
+        }
+        int order = 0;
+        for (Map<String, Object> cells : starters) {
+            ExerciseRow row = new ExerciseRow();
+            row.setSubmission(submission);
+            row.setDisplayOrder(order++);
+            row.setCells(cells != null ? cells : Map.of());
+            row.setStarter(true);
+            rowRepository.save(row);
+        }
     }
 
     @Transactional(readOnly = true)

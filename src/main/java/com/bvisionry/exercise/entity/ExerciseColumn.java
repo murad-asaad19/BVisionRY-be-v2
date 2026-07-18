@@ -54,4 +54,11 @@ public class ExerciseColumn extends BaseEntity {
 
     @Column(name = "is_required", nullable = false)
     private boolean isRequired = false;
+
+    /**
+     * Prefilled by the admin (via the template's starter rows) — members see
+     * its values but can't edit them.
+     */
+    @Column(name = "is_locked", nullable = false)
+    private boolean isLocked = false;
 }

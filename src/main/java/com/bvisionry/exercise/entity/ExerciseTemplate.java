@@ -12,9 +12,12 @@ import jakarta.persistence.OneToMany;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -42,6 +45,27 @@ public class ExerciseTemplate extends BaseEntity {
 
     @Column(name = "created_by", nullable = false, updatable = false)
     private UUID createdBy;
+
+    /**
+     * Optional read-only sample row (columnId → value) shown greyed out above
+     * the member's sheet as guidance — never part of their answer.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "example_row", columnDefinition = "jsonb")
+    private Map<String, Object> exampleRow;
+
+    /**
+     * Rows (columnId → value each) seeded into every NEW member submission,
+     * e.g. prefilled "Round 1/2/3" labels. Members can fill their unlocked
+     * cells but never delete these rows.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "starter_rows", columnDefinition = "jsonb")
+    private List<Map<String, Object>> starterRows;
+
+    /** When false the sheet is fixed to its starter rows — no member-added rows. */
+    @Column(name = "allow_add_rows", nullable = false)
+    private boolean allowAddRows = true;
 
     @OneToMany(mappedBy = "template", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("displayOrder")

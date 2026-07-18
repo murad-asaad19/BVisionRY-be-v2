@@ -42,6 +42,10 @@ public class ExerciseRow extends BaseEntity {
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
+    /** Seeded from the template's starter rows — members can't delete it. */
+    @Column(name = "is_starter", nullable = false)
+    private boolean isStarter = false;
+
     public boolean isDeleted() {
         return deletedAt != null;
     }

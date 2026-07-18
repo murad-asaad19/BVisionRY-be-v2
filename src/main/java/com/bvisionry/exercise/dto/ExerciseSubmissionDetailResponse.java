@@ -4,6 +4,7 @@ import com.bvisionry.exercise.entity.ExerciseSubmissionStatus;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -25,6 +26,10 @@ public record ExerciseSubmissionDetailResponse(
         String memberName,
         String memberEmail,
         List<ExerciseColumnResponse> columns,
+        /** Read-only sample row (columnId → value) shown above the sheet, or null. */
+        Map<String, Object> exampleRow,
+        /** False = no member-added rows; the sheet is fixed to its starter rows. */
+        boolean allowAddRows,
         List<ExerciseRowResponse> rows,
         List<ExerciseCommentResponse> comments
 ) {}

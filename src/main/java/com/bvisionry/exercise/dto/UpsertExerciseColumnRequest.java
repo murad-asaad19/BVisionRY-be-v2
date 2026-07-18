@@ -19,9 +19,13 @@ public record UpsertExerciseColumnRequest(
 
         Map<String, Object> configJson,
 
-        Boolean isRequired
+        Boolean isRequired,
+
+        /** Prefilled by the admin via starter rows — members can't edit it. */
+        Boolean isLocked
 ) {
     public UpsertExerciseColumnRequest {
         isRequired = isRequired != null && isRequired;
+        isLocked = isLocked != null && isLocked;
     }
 }

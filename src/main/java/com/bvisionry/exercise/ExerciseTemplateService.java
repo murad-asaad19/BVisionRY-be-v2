@@ -85,6 +85,9 @@ public class ExerciseTemplateService {
         requireNotArchived(template);
         template.setName(request.name());
         template.setDescription(request.description());
+        template.setExampleRow(request.exampleRow());
+        template.setStarterRows(request.starterRows());
+        template.setAllowAddRows(request.allowAddRows());
         return ExerciseTemplateDetailResponse.from(template, isStructureLocked(id));
     }
 
@@ -182,6 +185,7 @@ public class ExerciseTemplateService {
         column.setType(request.type());
         column.setConfigJson(request.configJson());
         column.setRequired(request.isRequired());
+        column.setLocked(request.isLocked());
     }
 
     /**

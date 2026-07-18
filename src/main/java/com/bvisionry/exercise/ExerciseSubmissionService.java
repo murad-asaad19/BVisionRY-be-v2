@@ -97,9 +97,14 @@ public class ExerciseSubmissionService {
                                                      SaveExerciseRowsRequest request) {
         ExerciseSubmission submission = requireOwned(submissionId, userId);
         Set<String> columnIds = new HashSet<>();
+        Set<String> lockedColumnIds = new HashSet<>();
         for (ExerciseColumn column : templateColumns(submission)) {
             columnIds.add(column.getId().toString());
+            if (column.isLocked()) {
+                lockedColumnIds.add(column.getId().toString());
+            }
         }
+        boolean allowAddRows = submission.getAssignment().getTemplate().isAllowAddRows();
 
         Map<UUID, ExerciseRow> existingById = new HashMap<>();
         List<ExerciseRow> existing = rowRepository.findBySubmissionId(submissionId);
@@ -118,10 +123,24 @@ public class ExerciseSubmissionService {
                 row.setDeletedAt(null);
                 kept.add(payload.id());
             } else {
+                if (!allowAddRows) {
+                    throw new BadRequestException("This exercise does not allow adding rows.");
+                }
                 row = new ExerciseRow();
                 row.setSubmission(submission);
             }
-            row.setCells(sanitizeCells(payload.cells(), columnIds));
+            Map<String, Object> cells = sanitizeCells(payload.cells(), columnIds);
+            // Locked columns are admin-prefilled: keep the stored value, drop
+            // whatever the client sent.
+            for (String lockedId : lockedColumnIds) {
+                Object stored = row.getCells() != null ? row.getCells().get(lockedId) : null;
+                if (stored != null) {
+                    cells.put(lockedId, stored);
+                } else {
+                    cells.remove(lockedId);
+                }
+            }
+            row.setCells(cells);
             row.setDisplayOrder(order++);
             rowRepository.save(row);
         }
@@ -129,6 +148,9 @@ public class ExerciseSubmissionService {
         for (ExerciseRow row : existing) {
             if (kept.contains(row.getId()) || row.isDeleted()) {
                 continue;
+            }
+            if (row.isStarter()) {
+                throw new BadRequestException("Prefilled rows cannot be removed.");
             }
             if (commentedRowIds.contains(row.getId())) {
                 row.setDeletedAt(Instant.now());
@@ -156,7 +178,9 @@ public class ExerciseSubmissionService {
             throw new BadRequestException("Add at least one row before submitting.");
         }
         for (ExerciseColumn column : templateColumns(submission)) {
-            if (!column.isRequired()) {
+            // Locked columns are admin-prefilled — members can't fix a blank
+            // one, so they are exempt from the required check.
+            if (!column.isRequired() || column.isLocked()) {
                 continue;
             }
             String key = column.getId().toString();
@@ -262,6 +286,8 @@ public class ExerciseSubmissionService {
                 forAdmin ? member.getName() : null,
                 forAdmin ? member.getEmail() : null,
                 columns,
+                template.getExampleRow(),
+                template.isAllowAddRows(),
                 rows,
                 comments);
     }
@@ -285,10 +311,10 @@ public class ExerciseSubmissionService {
 
     /** Values are kept as sent; keys that don't match a real column are dropped. */
     private Map<String, Object> sanitizeCells(Map<String, Object> cells, Set<String> columnIds) {
-        if (cells == null) {
-            return Map.of();
-        }
         Map<String, Object> clean = new LinkedHashMap<>();
+        if (cells == null) {
+            return clean;
+        }
         cells.forEach((key, value) -> {
             if (columnIds.contains(key) && value != null) {
                 clean.put(key, value);

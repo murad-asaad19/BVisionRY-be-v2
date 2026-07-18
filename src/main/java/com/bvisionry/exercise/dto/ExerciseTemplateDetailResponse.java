@@ -5,6 +5,7 @@ import com.bvisionry.exercise.entity.ExerciseTemplateStatus;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public record ExerciseTemplateDetailResponse(
@@ -13,6 +14,12 @@ public record ExerciseTemplateDetailResponse(
         String description,
         ExerciseTemplateStatus status,
         List<ExerciseColumnResponse> columns,
+        /** Read-only sample row (columnId → value) shown above the sheet, or null. */
+        Map<String, Object> exampleRow,
+        /** Rows seeded into every new member submission, or null. */
+        List<Map<String, Object>> starterRows,
+        /** False = the sheet is fixed to the starter rows. */
+        boolean allowAddRows,
         /** True once the template has any assignment — column add/delete is frozen. */
         boolean structureLocked,
         Instant createdAt,
@@ -25,6 +32,9 @@ public record ExerciseTemplateDetailResponse(
                 template.getDescription(),
                 template.getStatus(),
                 template.getColumns().stream().map(ExerciseColumnResponse::from).toList(),
+                template.getExampleRow(),
+                template.getStarterRows(),
+                template.isAllowAddRows(),
                 structureLocked,
                 template.getCreatedAt(),
                 template.getUpdatedAt());

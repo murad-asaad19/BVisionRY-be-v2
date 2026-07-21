@@ -447,6 +447,18 @@ public class SurveyResultsService {
     }
 
     /**
+     * Permanently remove a single response (and, via cascade, its answers).
+     * Scoped to the survey so a response id from another survey 404s instead
+     * of deleting across surveys.
+     */
+    @Transactional
+    public void deleteResponse(UUID surveyId, UUID responseId) {
+        SurveyResponse r = responseRepository.findByIdAndSurveyId(responseId, surveyId)
+                .orElseThrow(() -> new ResourceNotFoundException("SurveyResponse", responseId.toString()));
+        responseRepository.delete(r);
+    }
+
+    /**
      * Build the ordered list of answer detail rows for a single response,
      * sorted by pillar then question display order. Shared by the survey
      * response-detail view and the member-results view (which embeds the

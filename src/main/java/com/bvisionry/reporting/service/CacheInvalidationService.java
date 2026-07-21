@@ -1,10 +1,12 @@
 package com.bvisionry.reporting.service;
 
+import com.bvisionry.common.event.SurveyEvents;
 import com.bvisionry.config.CacheConfig;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Caching;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.util.UUID;
 
@@ -53,6 +55,20 @@ public class CacheInvalidationService {
      */
     @CacheEvict(value = CacheConfig.MEMBER_RESULTS, key = "#submissionId")
     public void invalidateMemberResultsForSubmission(UUID submissionId) {
+        // Annotation-driven -- no body needed
+    }
+
+    /**
+     * Evict the member-results entry embedding a post-assessment survey
+     * response that an admin just hard-deleted, so the cached view stops
+     * serving the deleted answers. After-commit so a concurrent reader can't
+     * re-populate the cache from the still-open transaction's pre-commit view;
+     * {@code fallbackExecution} keeps it working without a transaction (unit
+     * tests).
+     */
+    @TransactionalEventListener(fallbackExecution = true)
+    @CacheEvict(value = CacheConfig.MEMBER_RESULTS, key = "#event.submissionId()")
+    public void onPostAssessmentResponseDeleted(SurveyEvents.PostAssessmentResponseDeleted event) {
         // Annotation-driven -- no body needed
     }
 }

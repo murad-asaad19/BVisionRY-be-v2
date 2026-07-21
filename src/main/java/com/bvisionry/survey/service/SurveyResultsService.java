@@ -437,8 +437,7 @@ public class SurveyResultsService {
 
     @Transactional(readOnly = true)
     public SurveyResponseDetailDto getResponseDetail(UUID surveyId, UUID responseId) {
-        SurveyResponse r = responseRepository.findByIdAndSurveyId(responseId, surveyId)
-                .orElseThrow(() -> new ResourceNotFoundException("SurveyResponse", responseId.toString()));
+        SurveyResponse r = requireResponse(surveyId, responseId);
 
         return new SurveyResponseDetailDto(
                 r.getId(), r.getSubmittedAt(), r.getSource(),
@@ -453,9 +452,13 @@ public class SurveyResultsService {
      */
     @Transactional
     public void deleteResponse(UUID surveyId, UUID responseId) {
-        SurveyResponse r = responseRepository.findByIdAndSurveyId(responseId, surveyId)
+        responseRepository.delete(requireResponse(surveyId, responseId));
+    }
+
+    /** Fetch a response scoped to its survey, or 404. */
+    private SurveyResponse requireResponse(UUID surveyId, UUID responseId) {
+        return responseRepository.findByIdAndSurveyId(responseId, surveyId)
                 .orElseThrow(() -> new ResourceNotFoundException("SurveyResponse", responseId.toString()));
-        responseRepository.delete(r);
     }
 
     /**

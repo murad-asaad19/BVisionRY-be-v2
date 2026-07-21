@@ -1,5 +1,6 @@
 package com.bvisionry.survey.service;
 
+import com.bvisionry.common.event.SurveyEvents;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.survey.entity.SurveyResponse;
 import com.bvisionry.survey.repository.SurveyAnswerRepository;
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -26,6 +28,7 @@ class SurveyResultsServiceTest {
     @Mock SurveyResponseRepository responseRepository;
     @Mock SurveyAnswerRepository answerRepository;
     @Mock CountryCatalog countryCatalog;
+    @Mock ApplicationEventPublisher eventPublisher;
 
     @InjectMocks SurveyResultsService service;
 
@@ -39,7 +42,25 @@ class SurveyResultsServiceTest {
 
         service.deleteResponse(surveyId, responseId);
 
-        verify(responseRepository).delete(response);
+        verify(responseRepository).hardDeleteById(responseId);
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void deleteResponse_postAssessmentResponse_publishesCacheEvictionEvent() {
+        UUID surveyId = UUID.randomUUID();
+        UUID responseId = UUID.randomUUID();
+        UUID submissionId = UUID.randomUUID();
+        when(responseRepository.findByIdAndSurveyId(responseId, surveyId))
+                .thenReturn(Optional.of(new SurveyResponse()));
+        when(responseRepository.findSubmissionIdByResponseId(responseId))
+                .thenReturn(submissionId);
+
+        service.deleteResponse(surveyId, responseId);
+
+        verify(responseRepository).hardDeleteById(responseId);
+        verify(eventPublisher).publishEvent(
+                new SurveyEvents.PostAssessmentResponseDeleted(submissionId));
     }
 
     @Test
@@ -51,6 +72,6 @@ class SurveyResultsServiceTest {
 
         assertThatThrownBy(() -> service.deleteResponse(surveyId, responseId))
                 .isInstanceOf(ResourceNotFoundException.class);
-        verify(responseRepository, never()).delete(any(SurveyResponse.class));
+        verify(responseRepository, never()).hardDeleteById(any());
     }
 }

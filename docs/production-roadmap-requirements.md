@@ -58,6 +58,7 @@ Legend: ✅ built · 🟡 partial · ❌ missing · Effort: S (&lt;1 wk) / M (1�
 | 13 | Multi-language content | ❌ | Zero i18n on both ends; all copy hardcoded English | BE: locale on user/org, translation tables for course/lesson/pillar content. FE: next-intl (or similar), message extraction across ~560 files. Retrofit cost grows with every new page — decide early | L |
 | 14 | Org-level custom content (white-label) | 🟡 | Every course/cohort is `orgId`-scoped; `parentOrganization` sub-org hierarchy exists; org admins can author | Missing the *look*: per-tenant branding entity (logo, palette, email sender), FE runtime theming (tokens exist in `globals.css` but are single-brand), de-hardcode `hello@bvisionry.com` etc. | M–L |
 | 15 | Coaching calendar integration | ❌ | Nothing. "Coach" today = AI text assistant (SSE) | Decision needed: **integrate** (Cal.com/Calendly embed per coach — S–M) vs **build native** (availability, slots, booking, ics, reminders — L). Recommend integrate first, build later if needed | M or L |
+| 16 | Cohort communications *(not on roadmap — identified gap)* | ❌ | No human-to-human messaging anywhere. Closest touchpoints: exercise comment review loop, workshop help requests, course reviews, one-way notifications, AI coach chat | See §5a — announcements, contextual discussion threads, coach↔founder messaging | M–L |
 
 ---
 
@@ -150,6 +151,82 @@ Major changes are on the table; these are the ones actually worth making:
 
 ---
 
+## 5a. Cohort Communications (identified gap, not on the roadmap)
+
+### Current state
+
+There is **no human-to-human communication channel** in the product. What
+exists today only brushes against it:
+
+- **Exercise comment loop** (`ExerciseComment`) — reviewer feedback on
+  submissions, scoped to one exercise. Closest thing to threaded discussion.
+- **Workshop help requests** (`WorkshopTeam.helpRequestedAt`) — a raised hand,
+  not a conversation.
+- **Course reviews** — public ratings, not discussion.
+- **Notifications** (email + web push) — strictly one-way, system-generated.
+- **AI coach chat** (SSE streaming) — AI only, no humans involved.
+- The marketing site has a WhatsApp floating button — implying support
+  conversations currently happen *off-platform*.
+
+So a founder cannot ask their coach a question, a coach cannot address their
+cohort, founders cannot discuss a module with peers, and an org admin cannot
+broadcast to a cohort — all core expectations of a cohort-based program.
+
+### Options
+
+| Option | Pros | Cons |
+|---|---|---|
+| **A. External community** (Slack/Discord/WhatsApp groups, Circle) | Live in days; zero build | Fragments UX, no completion-context, breaks white-label, no data ownership, per-cohort setup toil |
+| **B. Native, lightweight (recommended)** | In-product, context-aware ("discuss this module"), white-label-safe, reuses existing notification + sanitizer + SSE infra | Real build effort; moderation responsibility |
+| **C. Full real-time chat platform** | Everything | Heavy (WebSocket infra, presence, moderation tooling); overkill for cohort learning |
+
+### Recommended scope (Option B, three increments)
+
+1. **Cohort announcements** (S–M): coach/org-admin → cohort broadcast.
+   `Announcement` entity (cohortId, authorId, body, pinned), fan-out through the
+   existing `UserNotification` + email/push preference system. One-way; cheapest
+   high-value win.
+2. **Contextual discussion threads** (M): threads attached to a context
+   (`contextType`: MODULE / TASK / LESSON / COHORT, contextId) rather than a
+   free-floating forum. Founders ask questions where the confusion happens;
+   coaches answer once for the whole cohort. Generalizes the proven
+   `ExerciseComment` pattern.
+3. **Coach ↔ founder direct messages** (M): `Conversation` + `Message`,
+   participants constrained by `CoachAssignment` (§3) — a founder can only DM
+   their assigned coach, keeping the surface safe and support load bounded.
+   Founder↔founder DMs deliberately excluded initially.
+
+Delivery: polling/refetch first (TanStack Query intervals), SSE for live
+updates later if needed — the AI coach already streams over SSE, so the
+pattern exists. Full WebSockets not required at this scale.
+
+### Data model sketch (new `communication` vertical slice)
+
+- `Announcement`: id, orgId, cohortId, authorUserId, title, body (sanitized),
+  pinned, createdAt.
+- `DiscussionThread`: id, orgId, cohortId, contextType, contextId,
+  authorUserId, title, resolved. `DiscussionPost`: threadId, authorUserId,
+  body, createdAt, editedAt.
+- `Conversation`: id, orgId, coachUserId, founderUserId (unique pair).
+  `Message`: conversationId, senderUserId, body, readAt.
+- Unread state: reuse `UserNotification`; digest email for inactive users via
+  the existing ShedLock job pattern.
+
+### Safety & governance requirements
+
+- Sanitize all bodies with the existing OWASP sanitizer; plain-text-plus-links
+  first, rich text later.
+- Org/cohort scoping enforced with a guard bean (same pattern as
+  `@orgAccess`/`@coachAccess`); RBAC: founders post in their own cohort only,
+  coaches moderate (delete/pin) in assigned cohorts, org admins moderate
+  org-wide.
+- Report/flag on every post + audit log (infra exists: `AuditLog`).
+- Retention policy for messages (align with the GDPR items in §6); export &
+  delete on account deletion.
+- Notification preferences must cover the new types (opt-out per type exists).
+
+---
+
 ## 6. Production-Grade Requirements (cross-cutting)
 
 ### Security
@@ -190,14 +267,16 @@ Major changes are on the table; these are the ones actually worth making:
 3. Coach role + `CoachAssignment` + coach console (L) — includes resolving `MANAGER`.
 4. Inactivity reminder rule (S–M).
 5. Cohort completion analytics endpoint + admin chart (M).
-6. CI hardening: blocking lint, e2e in CI (S–M).
+6. Cohort announcements (§5a increment 1) — cheap, high-value with the new coach console (S–M).
+7. CI hardening: blocking lint, e2e in CI (S–M).
 
 ### Phase 2 — Personalization (must land well before end of Q2 2027)
 1. `PillarCourseMapping` entity + admin UI (M).
 2. Auto-enrollment engine on evaluation-complete events, with idempotency, admin override, and notification (L).
 3. Self-paced "explore" labeling + recommendations on dashboard (S).
-4. Mobile/PWA polish: manifest, device QA (S).
-5. Start i18n for all *new* surfaces (S ongoing discipline).
+4. Contextual discussion threads + coach↔founder DMs (§5a increments 2–3) (M+M).
+5. Mobile/PWA polish: manifest, device QA (S).
+6. Start i18n for all *new* surfaces (S ongoing discipline).
 
 ### Phase 3 — Scale
 1. Multi-language retrofit: BE translation tables + FE next-intl extraction (L).
@@ -214,3 +293,4 @@ Major changes are on the table; these are the ones actually worth making:
 3. **Calendar** — integrate (fast, external dependency) vs build native (slow, owned)?
 4. **i18n scope** — UI chrome only, or translated *content* (courses/lessons/pillars) too? The latter drives the data-model work.
 5. **White-label depth** — colors/logo only, or custom domains + branded emails?
+6. **Communications** — native lightweight build (§5a recommendation) vs external community tool (Slack/WhatsApp/Circle) as a stopgap? And should founder↔founder DMs ever be allowed, or only cohort-visible threads + coach DMs?

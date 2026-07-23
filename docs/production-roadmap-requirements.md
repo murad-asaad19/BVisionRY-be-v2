@@ -227,6 +227,90 @@ pattern exists. Full WebSockets not required at this scale.
 
 ---
 
+## 5b. UI/UX & Navigation Requirements
+
+Goal: every step reachable in ≤2 obvious clicks from a stable anchor (sidebar,
+home, or breadcrumb), and the user is always told what to do next.
+
+### Current state (audit summary)
+
+**What already works well:** consistent page shell (`PageHero` used across 39
+pages + shared `APP_PAGE_BODY` width), clear active-state highlighting in the
+sidebar, collapsible icon rail, fully role-gated nav, correct deep-linking
+from the notification bell, a "continue where you left off" spotlight card,
+and the program task player's exemplary "Next: {task} →" guided flow.
+
+**Friction found:**
+
+| # | Issue | Where | Impact |
+|---|---|---|---|
+| 1 | No breadcrumbs anywhere in `/app`; deep org pages (6 levels: org → members → user → results → submission) offer only a single back-hop + tab bar | `Breadcrumb` primitive exists but is used on 2 marketing pages only | Users get lost in admin drill-ins; no shareable sense of place |
+| 2 | Course player has **no "Next lesson" button** — only "Mark as complete", then the learner must pick from the sidebar | `learn/_components/content-viewer.tsx` | Breaks flow in the core learning loop; program player already does this right |
+| 3 | `/app` home is a link grid, not a dashboard; the spotlight card is assessment-only; **admins get zero dynamic content** (bare welcome + links) | `(app)/app/page.tsx`, `workspace-spotlight.tsx` | No "needs attention" queue for admins; no next-action guidance |
+| 4 | SUPER_ADMIN sidebar = ~25 flat items (16 platform links, ungrouped); ORG_ADMIN sidebar = only 2 admin links with everything buried one drill-in deeper | `src/lib/app-nav.ts`, `app-sidebar.tsx` | Wall-of-links for one role, hidden features for the other |
+| 5 | No global search / command palette (no cmd+k) | — | With 25 nav items + deep trees, keyboard jump is the cheapest nav accelerator |
+| 6 | No onboarding/first-run experience; assessments empty state is a dead-end ("Check back soon") with no CTA | `assessments-list.tsx` | New users land with no guidance on first value |
+| 7 | Assessment results have no onward CTA to courses/program ("you scored low on X → here's the module") | `results/_components/results-body.tsx` | Misses the core product loop; ties into personalization (§2 #9–10) |
+| 8 | Notification inbox is dropdown-only, capped at 20, no "See all" page | `notification-bell.tsx` | Older notifications unreachable |
+| 9 | Post-login landing is `/app` for every role — admins aren't taken to their console | `(auth)/actions.ts` | Extra hop for admins on every session |
+| 10 | Duplicated parallel admin trees (`organizations/[orgId]/*` vs `sub-organizations/[subOrgId]/*`) — same member result has two URLs; nested tabs (in-page tabs inside route tabs) aren't URL-addressable | org console | Cognitive + maintenance load; unshareable state |
+| 11 | Orphan route: `(app)/app/admin/exercises/page.tsx` linked from no nav | — | Dead code / confusion |
+| 12 | Marketing header has no self-serve signup path ("Request a free trial" opens a lead modal; `/signup` only linked from secondary surfaces) | `site-header.tsx` | Fine if intentionally invite/demo-led; blocks self-serve growth otherwise |
+
+### Requirements (prioritized)
+
+**P0 — core loop & wayfinding**
+1. **"Next lesson" in the course player** — replicate the program player's
+   next-CTA pattern on lesson completion; auto-advance option. (S)
+2. **Breadcrumb trail on all `/app` pages ≥2 levels deep** — the primitive
+   exists; add a layout-level trail for the org/sub-org drill-ins and learner
+   deep pages. (S–M)
+3. **Role-aware home**: members get a real dashboard (spotlight extended to
+   courses + program next-task + recommendations); admins get KPI cards +
+   "needs attention" queue (idle founders, pending reviews, expiring trials).
+   Ties into roadmap #3 founder dashboard. (M)
+4. **Non-dead-end empty states everywhere** — standardize on the shared
+   `EmptyState` component; every empty state names the next action or who to
+   contact. (S)
+
+**P1 — findability & admin ergonomics**
+5. **Command palette (cmd+k)** — role-gated jump to any nav destination +
+   entity search (members, courses, cohorts) later. (M)
+6. **Group the platform sidebar** — collapsible sections (e.g. Tenants /
+   Authoring / Engagement / Config) instead of 16 flat links; promote key
+   org-admin destinations (Members, Reports) to the ORG_ADMIN sidebar instead
+   of drill-in-only. (S–M)
+7. **Role-based post-login redirect** (admins → console, members → home). (S)
+8. **Full `/app/notifications` page** + "See all" from the bell. (S)
+9. **Results → next-step CTA**: assessment results page links to recommended
+   or assigned modules (manual link first; auto once §2 #10 lands). (S)
+
+**P2 — structure & polish**
+10. **First-run onboarding checklist** for new members (take assessment →
+    view results → start first module) and coaches (review roster). (M)
+11. **Unify the parallel org/sub-org trees** into one surface keyed by org
+    type — one URL per resource, one tree to maintain. (L, do alongside the
+    coach-console work)
+12. **URL-addressable tabs** — lift in-page tab state (dashboard, builders)
+    into search params so views are shareable and back-button-safe. (S–M)
+13. Remove the orphan `admin/exercises` route; decide on the self-serve
+    signup question (§8). (S)
+14. Mobile: keep the Sheet drawer, consider a 4-item bottom tab bar for the
+    member surfaces (Home / Learning / Program / Profile); audit the 16-tab
+    horizontal scroll on the org console. (M)
+
+### Navigation principles (for all new surfaces, incl. coach console & comms)
+
+- Every page belongs to exactly one sidebar anchor and shows a breadcrumb
+  when deeper than its anchor.
+- Every completed action proposes the next one (finish lesson → next lesson;
+  finish assessment → recommended module; empty list → how to fill it).
+- Admin "needs attention" surfaces beat admin "browse everything" surfaces.
+- State a user can see should be linkable (URL-addressable tabs/filters).
+- One resource, one URL.
+
+---
+
 ## 6. Production-Grade Requirements (cross-cutting)
 
 ### Security
@@ -268,15 +352,17 @@ pattern exists. Full WebSockets not required at this scale.
 4. Inactivity reminder rule (S–M).
 5. Cohort completion analytics endpoint + admin chart (M).
 6. Cohort announcements (§5a increment 1) — cheap, high-value with the new coach console (S–M).
-7. CI hardening: blocking lint, e2e in CI (S–M).
+7. UX P0 items (§5b): next-lesson CTA, breadcrumbs, role-aware home, empty states (S–M each; the role-aware home *is* item 2 above).
+8. CI hardening: blocking lint, e2e in CI (S–M).
 
 ### Phase 2 — Personalization (must land well before end of Q2 2027)
 1. `PillarCourseMapping` entity + admin UI (M).
 2. Auto-enrollment engine on evaluation-complete events, with idempotency, admin override, and notification (L).
 3. Self-paced "explore" labeling + recommendations on dashboard (S).
 4. Contextual discussion threads + coach↔founder DMs (§5a increments 2–3) (M+M).
-5. Mobile/PWA polish: manifest, device QA (S).
-6. Start i18n for all *new* surfaces (S ongoing discipline).
+5. UX P1 items (§5b): command palette, grouped admin sidebar, role-based login redirect, notifications page, results→module CTA (S–M each).
+6. Mobile/PWA polish: manifest, device QA (S).
+7. Start i18n for all *new* surfaces (S ongoing discipline).
 
 ### Phase 3 — Scale
 1. Multi-language retrofit: BE translation tables + FE next-intl extraction (L).

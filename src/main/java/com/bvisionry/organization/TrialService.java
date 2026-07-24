@@ -43,6 +43,7 @@ public class TrialService {
 
     private final OrganizationRepository orgRepo;
     private final UserRepository userRepo;
+    private final OrganizationService organizationService;
     private final AuditService auditService;
     private final AuditRepository auditRepo;
     private final EmailService emailService;
@@ -290,9 +291,8 @@ public class TrialService {
     }
 
     OrganizationResponse toResponse(Organization org) {
-        long memberCount = userRepo.countByOrganizationId(org.getId());
-        Instant lastActive = userRepo.findMaxLastLoginByOrganizationId(org.getId());
-        int subOrgCount = (int) orgRepo.countByParentOrganizationId(org.getId());
-        return OrganizationResponse.from(org, memberCount, lastActive, subOrgCount);
+        // Delegates so memberCount keeps the same roll-up semantics as every
+        // other organization response.
+        return organizationService.responseWithStats(org);
     }
 }

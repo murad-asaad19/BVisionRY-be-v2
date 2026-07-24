@@ -11,9 +11,9 @@ import java.util.UUID;
 /**
  * API view of an organization.
  *
- * <p>{@code memberCount} counts DIRECT members only — a parent org's count
- * does not include members of its sub-organizations (each sub-org lists its
- * own). {@code subOrganizationCount} is always 0 for sub-orgs (the hierarchy
+ * <p>{@code memberCount} is the roll-up: a parent org's count includes the
+ * members of its sub-organizations (a sub-org, having no children, counts only
+ * its own). {@code subOrganizationCount} is always 0 for sub-orgs (the hierarchy
  * is one level deep). {@code effectiveSubscriptionTier} is the tier that
  * governs feature access: the parent's tier for sub-orgs, own tier otherwise.
  */

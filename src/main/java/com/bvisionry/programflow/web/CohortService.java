@@ -14,6 +14,7 @@ import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.programflow.domain.Cohort;
+import com.bvisionry.programflow.domain.ProgramSurface;
 import com.bvisionry.programflow.dto.CohortDto;
 import com.bvisionry.programflow.dto.CreateCohortRequest;
 import com.bvisionry.programflow.dto.ProgramOrgDto;
@@ -40,13 +41,28 @@ public class CohortService {
         return cohorts.findByOrgIdOrderByPositionAsc(orgId).stream().map(CohortDto::of).toList();
     }
 
-    /** Every org with learner + cohort counts (switcher shows cohorted orgs, picker the rest). */
+    /** Every sub-org with its console membership and learner / cohort / workshop counts. */
     @Transactional(readOnly = true)
     public List<ProgramOrgDto> listOrgs() {
         return cohorts.findOrgProgramRows().stream()
                 .map(r -> new ProgramOrgDto(r.getId(), r.getName(), r.getDescription(),
-                        (int) r.getMemberCount(), (int) r.getCohortCount()))
+                        r.getParentName(), (int) r.getMemberCount(), (int) r.getCohortCount(),
+                        (int) r.getWorkshopCount(), r.getInProgramFlow(), r.getInWorkshops()))
                 .toList();
+    }
+
+    /** Lists the org on a console (idempotent); its existing data is reused as-is. */
+    public void addToSurface(UUID orgId, ProgramSurface surface) {
+        cohorts.addToSurface(orgId, surface.name());
+    }
+
+    /**
+     * Takes the org off a console. Deliberately non-destructive: cohorts,
+     * workshops and every learner record survive, so re-adding the org restores
+     * it exactly. Deleting that data is a separate, explicit choice.
+     */
+    public void removeFromSurface(UUID orgId, ProgramSurface surface) {
+        cohorts.removeFromSurface(orgId, surface.name());
     }
 
     public CohortDto create(UUID orgId, CreateCohortRequest req) {

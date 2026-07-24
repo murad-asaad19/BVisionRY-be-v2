@@ -135,6 +135,31 @@ class SubOrganizationIntegrationTest extends AbstractPostgresIntegrationTest {
                 .andExpect(jsonPath("$[0].effectiveSubscriptionTier", is("PREMIUM")));
     }
 
+    /**
+     * A parent's memberCount rolls its sub-orgs' members up (people live in the
+     * default "General" child, so a direct-only count would read 0), without
+     * double-counting direct members across multiple children.
+     */
+    @Test
+    void parentMemberCount_rollsUpSubOrgMembers() throws Exception {
+        authenticateSuperAdmin();
+        saveUser(UserRole.ORG_ADMIN, parentOrg, "rollup-direct@t.invalid");
+        saveUser(UserRole.MEMBER, subOrg, "rollup-sub-a@t.invalid");
+        saveUser(UserRole.MEMBER, subOrg, "rollup-sub-b@t.invalid");
+        saveUser(UserRole.MEMBER, saveOrg("Second Sub", SubscriptionTier.FREE, parentOrg),
+                "rollup-sub-c@t.invalid");
+
+        mockMvc.perform(get("/api/organizations/{orgId}", parentOrg.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.memberCount", is(4)))
+                .andExpect(jsonPath("$.subOrganizationCount", is(2)));
+
+        // A sub-org has no children, so it still reports only its own members.
+        mockMvc.perform(get("/api/organizations/{orgId}", subOrg.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.memberCount", is(2)));
+    }
+
     /** The load-bearing rename path: the PARENT org's admin renames a child. */
     @Test
     void parentOrgAdmin_renamesSubOrg_200() throws Exception {

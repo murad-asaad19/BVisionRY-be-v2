@@ -90,7 +90,8 @@ public class ExerciseSubmissionService {
      * updated in place (keeping their comment anchors); omitted rows are
      * hard-deleted when uncommented and soft-deleted otherwise, so no thread
      * ever loses its target. Allowed in every status — members can edit at
-     * any time, including after review.
+     * any time; a change to a REVIEWED sheet moves it back to SUBMITTED so
+     * the admin re-reviews what actually shipped.
      */
     @Transactional
     public ExerciseSubmissionDetailResponse saveRows(UUID submissionId, UUID userId,
@@ -112,6 +113,7 @@ public class ExerciseSubmissionService {
         Set<UUID> commentedRowIds = new HashSet<>(commentRepository.findCommentedRowIds(submissionId));
 
         Set<UUID> kept = new HashSet<>();
+        boolean changed = false;
         int order = 0;
         for (ExerciseRowPayload payload : request.rows()) {
             ExerciseRow row;
@@ -120,6 +122,7 @@ public class ExerciseSubmissionService {
                 if (row == null) {
                     throw new BadRequestException("Unknown row: " + payload.id());
                 }
+                changed |= row.isDeleted() || row.getDisplayOrder() != order;
                 row.setDeletedAt(null);
                 kept.add(payload.id());
             } else {
@@ -128,6 +131,7 @@ public class ExerciseSubmissionService {
                 }
                 row = new ExerciseRow();
                 row.setSubmission(submission);
+                changed = true;
             }
             Map<String, Object> cells = sanitizeCells(payload.cells(), columnIds);
             // Locked columns are admin-prefilled: keep the stored value, drop
@@ -140,6 +144,7 @@ public class ExerciseSubmissionService {
                     cells.remove(lockedId);
                 }
             }
+            changed |= !cells.equals(row.getCells() != null ? row.getCells() : Map.of());
             row.setCells(cells);
             row.setDisplayOrder(order++);
             rowRepository.save(row);
@@ -152,11 +157,19 @@ public class ExerciseSubmissionService {
             if (row.isStarter()) {
                 throw new BadRequestException("Prefilled rows cannot be removed.");
             }
+            changed = true;
             if (commentedRowIds.contains(row.getId())) {
                 row.setDeletedAt(Instant.now());
             } else {
                 rowRepository.delete(row);
             }
+        }
+
+        // REVIEWED is only terminal until the member edits again — a real
+        // change puts the sheet back in the admin's queue for re-review.
+        if (changed && submission.getStatus() == ExerciseSubmissionStatus.REVIEWED) {
+            submission.setStatus(ExerciseSubmissionStatus.SUBMITTED);
+            submission.setReviewedAt(null);
         }
 
         submission.setLastSavedAt(Instant.now());

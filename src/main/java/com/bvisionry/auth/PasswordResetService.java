@@ -3,11 +3,13 @@ package com.bvisionry.auth;
 import com.bvisionry.auth.entity.PasswordResetToken;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.web.RequestContextUtils;
 import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.EmailService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,23 +42,30 @@ public class PasswordResetService {
      * unknown email — the endpoint always answers 204, so it cannot be used to
      * enumerate which addresses have accounts.
      *
+     * <p>The whole method runs on the {@code emailExecutor} pool: the request
+     * thread returns 204 before the user lookup even starts, so known and
+     * unknown emails are indistinguishable by response timing as well as by
+     * response body. Only the SHA-256 of the raw token is persisted; the raw
+     * value exists solely in the emailed link.
+     *
      * <p>SSO-only accounts (no password hash) are included on purpose: proving
      * email ownership through this flow is exactly the "account recovery" that
      * {@link AuthService#changePassword} points them to for setting an initial
      * password.
      */
+    @Async("emailExecutor")
     @Transactional
     public void requestReset(String email) {
         String normalized = email.toLowerCase().trim();
         userRepository.findByEmail(normalized).ifPresentOrElse(user -> {
+            UUID rawToken = UUID.randomUUID();
             PasswordResetToken token = new PasswordResetToken();
             token.setUser(user);
+            token.setToken(RequestContextUtils.sha256Hex(rawToken.toString()));
             token.setExpiresAt(Instant.now().plus(TOKEN_TTL));
             PasswordResetToken saved = tokenRepository.save(token);
 
-            String resetUrl = frontendUrls.path("/reset-password/" + saved.getToken());
-            // Fire-and-forget on the emailExecutor pool, matching the
-            // invitation flow: SMTP latency must not block the request.
+            String resetUrl = frontendUrls.path("/reset-password/" + rawToken);
             emailService.sendPasswordResetEmailAsync(normalized, resetUrl, saved.getExpiresAt());
         }, () -> log.info("Password reset requested for unknown email"));
     }
@@ -69,7 +78,8 @@ public class PasswordResetService {
      */
     @Transactional
     public void resetPassword(UUID token, String newPassword) {
-        PasswordResetToken reset = tokenRepository.findByToken(token)
+        PasswordResetToken reset = tokenRepository.findByToken(
+                        RequestContextUtils.sha256Hex(token.toString()))
                 .filter(PasswordResetToken::isUsable)
                 // One message for unknown/expired/spent — no oracle for which it was.
                 .orElseThrow(() -> new BadRequestException(

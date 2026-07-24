@@ -12,7 +12,8 @@ import java.util.UUID;
 
 public interface PasswordResetTokenRepository extends JpaRepository<PasswordResetToken, UUID> {
 
-    Optional<PasswordResetToken> findByToken(UUID token);
+    /** Lookup by the stored SHA-256 hex of the raw emailed token. */
+    Optional<PasswordResetToken> findByToken(String tokenHash);
 
     /**
      * Spends every still-usable token for {@code userId}. Called on successful

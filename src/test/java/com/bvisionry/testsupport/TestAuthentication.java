@@ -51,11 +51,16 @@ public final class TestAuthentication {
         return persistAndAuthenticate(userRepository, user);
     }
 
+    /** Installs an existing user as the authenticated principal — same shape the filter installs. */
+    public static void authenticate(User user) {
+        var authorities = List.of(new SimpleGrantedAuthority(user.getRole().name()));
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(user, null, authorities));
+    }
+
     private static User persistAndAuthenticate(UserRepository userRepository, User user) {
         User saved = userRepository.save(user);
-        var authorities = List.of(new SimpleGrantedAuthority(saved.getRole().name()));
-        SecurityContextHolder.getContext().setAuthentication(
-                new UsernamePasswordAuthenticationToken(saved, null, authorities));
+        authenticate(saved);
         return saved;
     }
 

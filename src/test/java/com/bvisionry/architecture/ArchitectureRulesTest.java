@@ -2,6 +2,9 @@ package com.bvisionry.architecture;
 
 import com.tngtech.archunit.core.domain.Dependency;
 import com.tngtech.archunit.core.domain.JavaClass;
+import com.tngtech.archunit.core.domain.JavaMethodCall;
+import com.tngtech.archunit.core.domain.JavaParameterizedType;
+import com.tngtech.archunit.core.domain.JavaType;
 import com.tngtech.archunit.core.importer.ImportOption.DoNotIncludeTests;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
@@ -11,6 +14,8 @@ import com.tngtech.archunit.lang.ConditionEvents;
 import com.tngtech.archunit.lang.SimpleConditionEvent;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.Set;
 
 import static com.tngtech.archunit.base.DescribedPredicate.not;
@@ -110,6 +115,37 @@ class ArchitectureRulesTest {
     @ArchTest
     static final ArchRule noFieldInjection = freeze(NO_CLASSES_SHOULD_USE_FIELD_INJECTION);
 
+    // ---------------------------------------------------------------------
+    // Rule 5 (FROZEN): fail-closed tenancy.
+    // Multi-tenant isolation in this codebase is per-query discipline: services
+    // load an aggregate by bare ID and then assert org ownership in a guard
+    // helper (requireWorkshop, requireAssignmentInOrg, ...). Nothing structural
+    // stops a NEW service method from calling repo.findById(id) and skipping
+    // the assert — that is a silent cross-org leak.
+    //
+    // This rule makes the discipline structural: bare-ID Spring Data lookups
+    // (findById / getById / getReferenceById / any findAll overload) on a
+    // repository whose entity carries an org column (a field named orgId,
+    // organizationId, or organization) may only be made from methods named
+    // require* (incl. lambdas inside them). Every existing non-conforming call
+    // site is pinned in the frozen store as a reviewed baseline; any NEW
+    // unguarded bare-ID load fails the build.
+    //
+    // Scope notes: static analysis cannot prove the org assert itself — the
+    // enforceable proxy is "route bare-ID loads through a require* guard"; the
+    // guard body remains a review concern. Child entities without their own org
+    // column (reached via already-guarded parents) and the Organization
+    // aggregate itself are out of scope. Entity resolution reads the repo's
+    // DIRECT parameterized interfaces (all repos here extend JpaRepository
+    // directly); a repo inheriting its generics through an intermediate
+    // interface would be missed — add handling if that pattern appears.
+    // ---------------------------------------------------------------------
+    @ArchTest
+    static final ArchRule bareIdLoadsOnOrgOwnedReposRequireGuard =
+            freeze(classes()
+                    .should(onlyLoadOrgOwnedAggregatesThroughGuards())
+                    .as("bare-ID repository loads on org-owned entities should only happen inside require* guard methods"));
+
     // =====================================================================
     // Helpers
     // =====================================================================
@@ -157,6 +193,74 @@ class ArchitectureRulesTest {
                 }
             }
         };
+    }
+
+    /** Field names that mark an entity as org-owned (all three shapes in use). */
+    private static final Set<String> ORG_FIELD_NAMES = Set.of("orgId", "organizationId", "organization");
+
+    /** Spring Data methods that load rows with no tenant predicate in the query. */
+    private static final Set<String> BARE_ID_METHODS = Set.of("findById", "getById", "getReferenceById", "findAll");
+
+    private static ArchCondition<JavaClass> onlyLoadOrgOwnedAggregatesThroughGuards() {
+        return new ArchCondition<>("only load org-owned aggregates through require* guard methods") {
+            private final Set<String> orgOwnedRepositories = new HashSet<>();
+
+            @Override
+            public void init(Collection<JavaClass> allClasses) {
+                orgOwnedRepositories.clear();
+                Set<String> orgOwnedEntities = new HashSet<>();
+                for (JavaClass clazz : allClasses) {
+                    if (clazz.isAnnotatedWith("jakarta.persistence.Entity")
+                            && clazz.getAllFields().stream().anyMatch(f -> ORG_FIELD_NAMES.contains(f.getName()))) {
+                        orgOwnedEntities.add(clazz.getName());
+                    }
+                }
+                for (JavaClass clazz : allClasses) {
+                    if (clazz.isInterface()
+                            && clazz.isAssignableTo("org.springframework.data.repository.Repository")
+                            && orgOwnedEntities.contains(repositoryEntityName(clazz))) {
+                        orgOwnedRepositories.add(clazz.getName());
+                    }
+                }
+            }
+
+            @Override
+            public void check(JavaClass origin, ConditionEvents events) {
+                for (JavaMethodCall call : origin.getMethodCallsFromSelf()) {
+                    if (!orgOwnedRepositories.contains(call.getTargetOwner().getName())
+                            || !BARE_ID_METHODS.contains(call.getTarget().getName())) {
+                        continue;
+                    }
+                    String caller = call.getOrigin().getName();
+                    if (caller.startsWith("require") || caller.startsWith("lambda$require")) {
+                        continue;
+                    }
+                    events.add(SimpleConditionEvent.violated(call, call.getDescription()));
+                }
+            }
+        };
+    }
+
+    /**
+     * Resolves the entity type a Spring Data repository manages by reading the
+     * first type argument of its direct parameterized {@code Repository}
+     * super-interface (e.g. {@code JpaRepository<Workshop, UUID>} → Workshop).
+     * Returns {@code null} when no such interface is present.
+     */
+    private static String repositoryEntityName(JavaClass repository) {
+        for (JavaType iface : repository.getInterfaces()) {
+            if (!(iface instanceof JavaParameterizedType parameterized)) {
+                continue;
+            }
+            if (!iface.toErasure().isAssignableTo("org.springframework.data.repository.Repository")) {
+                continue;
+            }
+            var typeArguments = parameterized.getActualTypeArguments();
+            if (!typeArguments.isEmpty()) {
+                return typeArguments.get(0).toErasure().getName();
+            }
+        }
+        return null;
     }
 
     private static ArchCondition<JavaClass> onlyBeDependedOnFromWithinTheirOwnPackage() {

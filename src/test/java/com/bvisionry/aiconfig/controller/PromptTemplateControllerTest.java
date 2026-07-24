@@ -8,6 +8,7 @@ import com.bvisionry.aiconfig.service.RateLimitService;
 import com.bvisionry.auth.CookieService;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.jwt.JwtProvider;
+import com.bvisionry.auth.jwt.UserPrincipalCache;
 import com.bvisionry.common.dto.PillarEvaluationResult;
 import com.bvisionry.common.web.ClientIpResolver;
 import com.bvisionry.common.enums.PillarType;
@@ -66,6 +67,11 @@ class PromptTemplateControllerTest {
 
     @MockitoBean
     private JwtProvider jwtProvider;
+
+    // Required by JwtAuthenticationFilter in the @WebMvcTest slice; never
+    // touched on these tests' no-token requests.
+    @MockitoBean
+    private UserPrincipalCache userPrincipalCache;
 
     @MockitoBean
     private CookieService cookieService;

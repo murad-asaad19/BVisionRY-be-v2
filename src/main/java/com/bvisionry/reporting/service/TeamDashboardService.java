@@ -6,8 +6,8 @@ import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.config.CacheConfig;
 import com.bvisionry.evaluation.OverallSummaryRepository;
 import com.bvisionry.evaluation.PillarEvaluationRepository;
+import com.bvisionry.evaluation.PillarScoreView;
 import com.bvisionry.evaluation.entity.OverallSummary;
-import com.bvisionry.evaluation.entity.PillarEvaluation;
 import com.bvisionry.reporting.dto.CompletionStatsResponse;
 import com.bvisionry.reporting.dto.DashboardOverviewResponse;
 import com.bvisionry.reporting.dto.HistogramBucket;
@@ -42,11 +42,12 @@ public class TeamDashboardService {
     @Cacheable(value = CacheConfig.DASHBOARD_OVERVIEW, key = "#orgId + '-' + #pipelineId")
     public DashboardOverviewResponse getOverview(UUID orgId, UUID pipelineId) {
         List<Submission> submissions = submissionRepository.findByOrgAndPipelineForDashboard(orgId, pipelineId);
-        List<PillarEvaluation> allEvaluations = pillarEvaluationRepository.findByOrgAndPipeline(orgId, pipelineId);
+        List<PillarScoreView> allEvaluations =
+                pillarEvaluationRepository.findScoreViewsByOrgAndPipeline(orgId, pipelineId);
 
         // Group evaluations by submission
-        Map<UUID, List<PillarEvaluation>> evalsBySubmission = allEvaluations.stream()
-                .collect(Collectors.groupingBy(e -> e.getSubmission().getId()));
+        Map<UUID, List<PillarScoreView>> evalsBySubmission = allEvaluations.stream()
+                .collect(Collectors.groupingBy(PillarScoreView::submissionId));
 
         String pipelineName = submissions.isEmpty() ? "" :
                 submissions.getFirst().getAssignment().getPipeline().getName();
@@ -58,16 +59,16 @@ public class TeamDashboardService {
 
         List<MemberScoreRow> memberRows = submissions.stream()
                 .map(submission -> {
-                    List<PillarEvaluation> submissionEvals =
+                    List<PillarScoreView> submissionEvals =
                             evalsBySubmission.getOrDefault(submission.getId(), List.of());
 
                     List<PillarScoreSummary> pillarScores = submissionEvals.stream()
                             .map(eval -> new PillarScoreSummary(
-                                    eval.getPillar().getId(),
-                                    eval.getPillar().getName(),
-                                    eval.getPillar().getIconKey(),
-                                    eval.getScorePercentage(),
-                                    eval.getMaturityLabel()
+                                    eval.pillarId(),
+                                    eval.pillarName(),
+                                    eval.pillarIconKey(),
+                                    eval.scorePercentage(),
+                                    eval.maturityLabel()
                             ))
                             .toList();
 
@@ -109,15 +110,16 @@ public class TeamDashboardService {
      */
     @Cacheable(value = CacheConfig.DASHBOARD_DISTRIBUTION, key = "#orgId + '-' + #pipelineId")
     public ScoreDistributionResponse getDistribution(UUID orgId, UUID pipelineId) {
-        List<PillarEvaluation> evaluations = pillarEvaluationRepository.findByOrgAndPipeline(orgId, pipelineId);
+        List<PillarScoreView> evaluations =
+                pillarEvaluationRepository.findScoreViewsByOrgAndPipeline(orgId, pipelineId);
 
-        Map<UUID, List<PillarEvaluation>> byPillar = evaluations.stream()
-                .collect(Collectors.groupingBy(e -> e.getPillar().getId()));
+        Map<UUID, List<PillarScoreView>> byPillar = evaluations.stream()
+                .collect(Collectors.groupingBy(PillarScoreView::pillarId));
 
         List<ScoreDistributionResponse.PillarDistribution> distributions = byPillar.entrySet().stream()
                 .map(entry -> {
-                    List<PillarEvaluation> pillarEvals = entry.getValue();
-                    String pillarName = pillarEvals.getFirst().getPillar().getName();
+                    List<PillarScoreView> pillarEvals = entry.getValue();
+                    String pillarName = pillarEvals.getFirst().pillarName();
 
                     List<HistogramBucket> buckets = buildHistogramBuckets(pillarEvals);
 
@@ -161,13 +163,13 @@ public class TeamDashboardService {
         return new CompletionStatsResponse(total, inProgress, submitted, evaluated, completionRate);
     }
 
-    private List<HistogramBucket> buildHistogramBuckets(List<PillarEvaluation> evaluations) {
+    private List<HistogramBucket> buildHistogramBuckets(List<PillarScoreView> evaluations) {
         int[] bucketCounts = new int[5]; // 0-20, 21-40, 41-60, 61-80, 81-100
         int[][] ranges = {{0, 20}, {21, 40}, {41, 60}, {61, 80}, {81, 100}};
         String[] labels = {"0-20", "21-40", "41-60", "61-80", "81-100"};
 
-        for (PillarEvaluation eval : evaluations) {
-            int score = eval.getScorePercentage().intValue();
+        for (PillarScoreView eval : evaluations) {
+            int score = eval.scorePercentage().intValue();
             if (score <= 20) bucketCounts[0]++;
             else if (score <= 40) bucketCounts[1]++;
             else if (score <= 60) bucketCounts[2]++;

@@ -125,7 +125,7 @@ public class MoveMemberService {
         // Both source and target dashboards/member-results/insights now have
         // changed inputs (gained or lost a member's submissions). Cache keys
         // aren't org-scoped so we evict broadly, same as on a new evaluation.
-        AfterCommit.run(cacheInvalidationService::invalidateOnNewEvaluation);
+        AfterCommit.run(cacheInvalidationService::invalidateOnMemberChange);
 
         return new MoveMemberResponse(memberId, source.getId(), target.getId(), movedAssignments);
     }

@@ -27,6 +27,18 @@ public class MediaProperties {
      * default region is {@code us-east-1}.
      */
     private String region           = "us-east-1";
+    /**
+     * Upper bound on a server-side external-asset fetch ({@code MediaService.fetchBytes} over
+     * http/https) so a misconfigured or hostile URL can't exhaust memory. The body is streamed
+     * and the fetch aborts as soon as the ceiling is crossed.
+     */
+    private long externalFetchMaxBytes = 25L * 1024 * 1024;
+    /**
+     * SSRF guard escape hatch: when {@code false} (default, all real profiles) external media
+     * fetches refuse hosts that resolve to loopback / private / link-local addresses. Tests set
+     * {@code true} to exercise the fetch path against a localhost fixture server.
+     */
+    private boolean externalFetchAllowPrivate = false;
 
     // ----- getters / setters -----
 
@@ -50,4 +62,10 @@ public class MediaProperties {
 
     public String getRegion() { return region; }
     public void setRegion(String region) { this.region = region; }
+
+    public long getExternalFetchMaxBytes() { return externalFetchMaxBytes; }
+    public void setExternalFetchMaxBytes(long externalFetchMaxBytes) { this.externalFetchMaxBytes = externalFetchMaxBytes; }
+
+    public boolean isExternalFetchAllowPrivate() { return externalFetchAllowPrivate; }
+    public void setExternalFetchAllowPrivate(boolean externalFetchAllowPrivate) { this.externalFetchAllowPrivate = externalFetchAllowPrivate; }
 }

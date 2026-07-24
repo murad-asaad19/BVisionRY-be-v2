@@ -7,12 +7,12 @@ import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.evaluation.OverallSummaryRepository;
 import com.bvisionry.evaluation.PillarEvaluationRepository;
+import com.bvisionry.evaluation.PillarScoreView;
 import com.bvisionry.evaluation.entity.OverallSummary;
-import com.bvisionry.evaluation.entity.PillarEvaluation;
-import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.Pipeline;
 import com.bvisionry.reporting.dto.CompletionStatsResponse;
 import com.bvisionry.reporting.dto.DashboardOverviewResponse;
+import com.bvisionry.reporting.dto.PillarScoreSummary;
 import com.bvisionry.reporting.dto.ScoreDistributionResponse;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -26,6 +26,9 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -47,6 +50,7 @@ class TeamDashboardServiceTest {
     void getOverview_returnsMemberScoresGrid() {
         UUID orgId = UUID.randomUUID();
         UUID pipelineId = UUID.randomUUID();
+        UUID pillarId = UUID.randomUUID();
 
         User user = new User();
         user.setId(UUID.randomUUID());
@@ -67,16 +71,9 @@ class TeamDashboardServiceTest {
         submission.setStatus(SubmissionStatus.EVALUATED);
         submission.setEvaluatedAt(Instant.now());
 
-        Pillar pillar = new Pillar();
-        pillar.setId(UUID.randomUUID());
-        pillar.setName("Communication");
-        pillar.setIconKey("chat");
-
-        PillarEvaluation eval = new PillarEvaluation();
-        eval.setSubmission(submission);
-        eval.setPillar(pillar);
-        eval.setScorePercentage(new BigDecimal("78.00"));
-        eval.setMaturityLabel("Strong");
+        PillarScoreView eval = new PillarScoreView(
+                submission.getId(), pillarId, "Communication", "chat",
+                new BigDecimal("78.00"), "Strong");
 
         OverallSummary summary = new OverallSummary();
         summary.setSubmission(submission);
@@ -84,7 +81,7 @@ class TeamDashboardServiceTest {
 
         when(submissionRepository.findByOrgAndPipelineForDashboard(orgId, pipelineId))
                 .thenReturn(List.of(submission));
-        when(pillarEvaluationRepository.findByOrgAndPipeline(orgId, pipelineId))
+        when(pillarEvaluationRepository.findScoreViewsByOrgAndPipeline(orgId, pipelineId))
                 .thenReturn(List.of(eval));
         when(overallSummaryRepository.findBySubmissionIdIn(List.of(submission.getId())))
                 .thenReturn(List.of(summary));
@@ -96,34 +93,32 @@ class TeamDashboardServiceTest {
         assertThat(response.members().getFirst().memberName()).isEqualTo("John Doe");
         assertThat(response.members().getFirst().overallScore())
                 .isEqualByComparingTo(new BigDecimal("78.00"));
+
+        PillarScoreSummary pillarScore = response.members().getFirst().pillarScores().getFirst();
+        assertThat(pillarScore.pillarId()).isEqualTo(pillarId);
+        assertThat(pillarScore.pillarName()).isEqualTo("Communication");
+        assertThat(pillarScore.iconKey()).isEqualTo("chat");
+        assertThat(pillarScore.scorePercentage()).isEqualByComparingTo(new BigDecimal("78.00"));
+        assertThat(pillarScore.maturityLabel()).isEqualTo("Strong");
+
+        // The aggregation must stay on the score projection — hydrating full
+        // PillarEvaluation entities drags the heavy AI payload columns along.
+        verify(pillarEvaluationRepository, never()).findByOrgAndPipeline(any(), any());
     }
 
     @Test
     void getDistribution_returnsHistogramBuckets() {
         UUID orgId = UUID.randomUUID();
         UUID pipelineId = UUID.randomUUID();
+        UUID pillarId = UUID.randomUUID();
 
-        Pillar pillar = new Pillar();
-        pillar.setId(UUID.randomUUID());
-        pillar.setName("Strategy");
+        List<PillarScoreView> evals = List.of(
+                scoreView(pillarId, "Strategy", "45.00", "Emerging"),
+                scoreView(pillarId, "Strategy", "72.00", "Strong"),
+                scoreView(pillarId, "Strategy", "88.00", "Elite"));
 
-        PillarEvaluation eval1 = new PillarEvaluation();
-        eval1.setPillar(pillar);
-        eval1.setScorePercentage(new BigDecimal("45.00"));
-        eval1.setMaturityLabel("Emerging");
-
-        PillarEvaluation eval2 = new PillarEvaluation();
-        eval2.setPillar(pillar);
-        eval2.setScorePercentage(new BigDecimal("72.00"));
-        eval2.setMaturityLabel("Strong");
-
-        PillarEvaluation eval3 = new PillarEvaluation();
-        eval3.setPillar(pillar);
-        eval3.setScorePercentage(new BigDecimal("88.00"));
-        eval3.setMaturityLabel("Elite");
-
-        when(pillarEvaluationRepository.findByOrgAndPipeline(orgId, pipelineId))
-                .thenReturn(List.of(eval1, eval2, eval3));
+        when(pillarEvaluationRepository.findScoreViewsByOrgAndPipeline(orgId, pipelineId))
+                .thenReturn(evals);
 
         ScoreDistributionResponse response = teamDashboardService.getDistribution(orgId, pipelineId);
 
@@ -131,6 +126,11 @@ class TeamDashboardServiceTest {
         assertThat(response.pillars().getFirst().pillarName()).isEqualTo("Strategy");
         // Should have 5 buckets: 0-20, 21-40, 41-60, 61-80, 81-100
         assertThat(response.pillars().getFirst().buckets()).hasSize(5);
+        assertThat(response.pillars().getFirst().buckets())
+                .extracting(b -> b.count())
+                .containsExactly(0, 0, 1, 1, 1);
+
+        verify(pillarEvaluationRepository, never()).findByOrgAndPipeline(any(), any());
     }
 
     @Test
@@ -154,5 +154,10 @@ class TeamDashboardServiceTest {
         assertThat(response.submitted()).isEqualTo(2);
         assertThat(response.evaluated()).isEqualTo(5);
         assertThat(response.completionRate()).isEqualByComparingTo(new BigDecimal("70.00"));
+    }
+
+    private static PillarScoreView scoreView(UUID pillarId, String name, String score, String label) {
+        return new PillarScoreView(UUID.randomUUID(), pillarId, name, name.toLowerCase(),
+                new BigDecimal(score), label);
     }
 }

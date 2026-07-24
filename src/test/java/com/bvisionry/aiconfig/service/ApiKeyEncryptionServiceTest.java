@@ -31,6 +31,15 @@ class ApiKeyEncryptionServiceTest {
     }
 
     @Test
+    void encrypt_thenDecrypt_roundTripsNonAsciiRegardlessOfPlatformCharset() {
+        // The service pins UTF-8 explicitly — a platform default other than
+        // UTF-8 must not corrupt non-ASCII key material.
+        String original = "sk-ключ-密钥-🔑";
+        assertThat(encryptionService.decrypt(encryptionService.encrypt(original)))
+                .isEqualTo(original);
+    }
+
+    @Test
     void encrypt_producesUniqueCiphertextEachTime() {
         String original = "sk-or-v1-abc123def456";
         String encrypted1 = encryptionService.encrypt(original);

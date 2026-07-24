@@ -50,6 +50,7 @@ class TrialServiceTest {
 
     @Mock OrganizationRepository orgRepo;
     @Mock UserRepository userRepo;
+    @Mock OrganizationService organizationService;
     @Mock AuditService auditService;
     @Mock AuditRepository auditRepo;
     @Mock EmailService emailService;
@@ -82,6 +83,10 @@ class TrialServiceTest {
         // tests need to exercise per-org expiry.
         lenient().when(transactionManager.getTransaction(any()))
                 .thenReturn(new SimpleTransactionStatus());
+        // toResponse() delegates the member/sub-org roll-up to OrganizationService;
+        // here it only has to echo the org back so tier/expiry assertions hold.
+        lenient().when(organizationService.responseWithStats(any(Organization.class)))
+                .thenAnswer(inv -> OrganizationResponse.from(inv.getArgument(0), 0, null, 0));
         ReflectionTestUtils.invokeMethod(trialService, "initTransactionTemplate");
     }
 
@@ -89,8 +94,6 @@ class TrialServiceTest {
     void startTrial_setsPremiumAndExpiry_logsAudit() {
         when(orgRepo.findById(orgId)).thenReturn(Optional.of(freeOrg));
         when(orgRepo.save(any(Organization.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(userRepo.countByOrganizationId(any())).thenReturn(0L);
-        when(userRepo.findMaxLastLoginByOrganizationId(any())).thenReturn(null);
 
         OrganizationResponse resp = trialService.startTrial(orgId, 7, actorId);
 
@@ -182,7 +185,6 @@ class TrialServiceTest {
         freeOrg.setTrialEndsAt(currentEnd);
         when(orgRepo.findById(orgId)).thenReturn(Optional.of(freeOrg));
         when(orgRepo.save(any(Organization.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(userRepo.countByOrganizationId(any())).thenReturn(0L);
 
         OrganizationResponse resp = trialService.extendTrial(orgId, 5, actorId);
 
@@ -211,7 +213,6 @@ class TrialServiceTest {
         freeOrg.setTrialEndsAt(futureEnd);
         when(orgRepo.findById(orgId)).thenReturn(Optional.of(freeOrg));
         when(orgRepo.save(any(Organization.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(userRepo.countByOrganizationId(any())).thenReturn(0L);
 
         OrganizationResponse resp = trialService.endTrialEarly(orgId, actorId);
 

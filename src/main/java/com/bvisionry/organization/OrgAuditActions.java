@@ -15,6 +15,12 @@ public final class OrgAuditActions {
     public static final String ORGANIZATION_DELETED     = "ORGANIZATION_DELETED";
     public static final String TIER_CHANGE              = "TIER_CHANGE";
 
+    // Sub-organization lifecycle — logged against the PARENT org id so the
+    // parent's activity feed shows its sub-orgs being managed.
+    public static final String SUB_ORG_CREATED          = "SUB_ORG_CREATED";
+    public static final String SUB_ORG_UPDATED          = "SUB_ORG_UPDATED";
+    public static final String SUB_ORG_DELETED          = "SUB_ORG_DELETED";
+
     public static final String TRIAL_STARTED               = "TRIAL_STARTED";
     public static final String TRIAL_EXTENDED              = "TRIAL_EXTENDED";
     public static final String TRIAL_ENDED_EARLY           = "TRIAL_ENDED_EARLY";
@@ -55,6 +61,14 @@ public final class OrgAuditActions {
     public static final String ASSESSMENT_CHECK_IN_STARTED = "ASSESSMENT_CHECK_IN_STARTED";
     public static final String SURVEY_RESPONSE_SUBMITTED = "SURVEY_RESPONSE_SUBMITTED";
 
+    // --- Exercise lifecycle (sheet-like exercises with admin review) --------
+    /** Super admin provisioned an exercise template to an org (no member yet). */
+    public static final String EXERCISE_PROVISIONED       = "EXERCISE_PROVISIONED";
+    public static final String EXERCISE_ASSIGNED          = "EXERCISE_ASSIGNED";
+    public static final String EXERCISE_SUBMITTED         = "EXERCISE_SUBMITTED";
+    public static final String EXERCISE_CHANGES_REQUESTED = "EXERCISE_CHANGES_REQUESTED";
+    public static final String EXERCISE_REVIEWED          = "EXERCISE_REVIEWED";
+
     /** Member on a Free-tier org clicked Request Upgrade. */
     public static final String UPGRADE_REQUESTED                 = "UPGRADE_REQUESTED";
     public static final String UPGRADE_PROMPT_UPDATED            = "UPGRADE_PROMPT_UPDATED";
@@ -74,5 +88,6 @@ public final class OrgAuditActions {
     public static final String ENTITY_PLATFORM     = "Platform";
     public static final String ENTITY_USER         = "User";
     public static final String ENTITY_SUBMISSION   = "Submission";
+    public static final String ENTITY_EXERCISE_SUBMISSION = "ExerciseSubmission";
     public static final String ENTITY_SURVEY       = "Survey";
 }

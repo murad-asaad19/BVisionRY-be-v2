@@ -47,8 +47,8 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
     }
 
     @Test
-    void createOrganization_returns201() throws Exception {
-        mockMvc.perform(post("/api/organizations")
+    void createOrganization_returns201_withDefaultGeneralSubOrg() throws Exception {
+        String body = mockMvc.perform(post("/api/organizations")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"name": "Acme Corp", "description": "Test org"}
@@ -57,7 +57,17 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
                 .andExpect(jsonPath("$.name", is("Acme Corp")))
                 .andExpect(jsonPath("$.subscriptionTier", is("FREE")))
                 .andExpect(jsonPath("$.active", is(true)))
-                .andExpect(jsonPath("$.memberCount", is(0)));
+                .andExpect(jsonPath("$.memberCount", is(0)))
+                // Members live in sub-orgs only — every root gets a "General" child.
+                .andExpect(jsonPath("$.subOrganizationCount", is(1)))
+                .andReturn().getResponse().getContentAsString();
+
+        java.util.UUID rootId = java.util.UUID.fromString(
+                com.jayway.jsonpath.JsonPath.read(body, "$.id"));
+        org.assertj.core.api.Assertions.assertThat(
+                        organizationRepository.findByParentOrganizationIdOrderByNameAsc(rootId))
+                .extracting(Organization::getName)
+                .containsExactly("General");
     }
 
     @Test

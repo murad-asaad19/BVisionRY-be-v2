@@ -47,6 +47,13 @@ public class JoinLinkService {
     public JoinLinkResponse generate(UUID orgId, int expiryDays, UUID workshopId, UUID createdBy) {
         Organization org = organizationService.findActiveOrThrow(orgId);
 
+        // Join links provision MEMBER accounts, and members live in sub-orgs
+        // only — a root org has no member population to join.
+        if (!org.isSubOrganization()) {
+            throw new BadRequestException(
+                    "Join links are generated for a sub-organization. Members join sub-organizations.");
+        }
+
         // A workshop link may only be bound to a workshop of this org — otherwise
         // an org admin could mint a link that enrols joiners into another org's
         // workshop team (the accept flow trusts the link's workshop_id).

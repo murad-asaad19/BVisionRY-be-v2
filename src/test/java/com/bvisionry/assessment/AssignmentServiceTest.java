@@ -94,6 +94,7 @@ class AssignmentServiceTest {
         member1.setName("Member One");
         member1.setRole(UserRole.MEMBER);
         member1.setStatus(UserStatus.ACTIVE);
+        member1.setOrganization(organization);
 
         member2 = new User();
         member2.setId(UUID.randomUUID());
@@ -101,6 +102,7 @@ class AssignmentServiceTest {
         member2.setName("Member Two");
         member2.setRole(UserRole.MEMBER);
         member2.setStatus(UserStatus.ACTIVE);
+        member2.setOrganization(organization);
 
         // Service derives the assigner from SecurityUtils now that the
         // assignedBy request field was dropped — seed the principal here.
@@ -154,6 +156,28 @@ class AssignmentServiceTest {
 
         verify(assignmentRepository, times(2)).save(any(Assignment.class));
         verify(submissionRepository, times(2)).save(any(Submission.class));
+    }
+
+    @Test
+    void createAssignment_memberIdFromAnotherOrg_isNotFoundAndSavesNothing() {
+        Organization otherOrg = new Organization();
+        otherOrg.setId(UUID.randomUUID());
+        User foreign = new User();
+        foreign.setId(UUID.randomUUID());
+        foreign.setName("Foreign Member");
+        foreign.setStatus(UserStatus.ACTIVE);
+        foreign.setOrganization(otherOrg);
+
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(organization));
+        when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
+        when(userRepository.findAllById(List.of(foreign.getId()))).thenReturn(List.of(foreign));
+
+        CreateAssignmentRequest request = new CreateAssignmentRequest(
+                pipelineId, List.of(foreign.getId()), null, null, false, false, null);
+
+        assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
+                .isInstanceOf(ResourceNotFoundException.class);
+        verify(assignmentRepository, never()).save(any(Assignment.class));
     }
 
     @Test

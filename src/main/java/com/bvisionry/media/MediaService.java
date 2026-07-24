@@ -2,7 +2,9 @@ package com.bvisionry.media;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetAddress;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -47,8 +49,13 @@ public class MediaService {
 
     private static final Logger log = LoggerFactory.getLogger(MediaService.class);
     private static final String MINIO_SCHEME = "minio://";
-    /** Upper bound on a server-side external-asset fetch so a misconfigured URL can't exhaust memory. */
-    private static final long MAX_EXTERNAL_BYTES = 25L * 1024 * 1024;
+    /** Redirect-hop ceiling for external fetches; each hop is re-validated against the SSRF guard. */
+    private static final int MAX_EXTERNAL_REDIRECTS = 5;
+    /** Shared, thread-safe client for {@link #fetchExternal(String)} — keeps connection reuse across fetches. */
+    private static final HttpClient EXTERNAL_HTTP_CLIENT = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .build();
 
     private final MinioClient internalClient;
     private final MinioClient publicClient;
@@ -90,6 +97,8 @@ public class MediaService {
      * @return the {@code minio://bucket/objectKey} marker to persist in the database
      */
     public String upload(MultipartFile file, String kind) {
+        String contentType = MediaUploadPolicy.validate(
+                kind, file.getContentType(), file.getOriginalFilename(), file.getSize());
         lazyEnsureBucket();
 
         String objectKey = buildObjectKey(kind, file.getOriginalFilename());
@@ -100,7 +109,7 @@ public class MediaService {
                             .bucket(props.getBucket())
                             .object(objectKey)
                             .stream(is, file.getSize(), -1)
-                            .contentType(file.getContentType())
+                            .contentType(contentType)
                             .build());
         } catch (Exception ex) {
             throw new MediaUploadException("Failed to upload file to MinIO: " + ex.getMessage(), ex);
@@ -139,9 +148,12 @@ public class MediaService {
      * @return the presigned PUT URL, the {@code minio://} marker to persist, and a presigned GET preview URL
      */
     public PresignedUpload presignUpload(String kind, String filename, String contentType) {
+        String resolvedKind = (kind == null || kind.isBlank()) ? "asset" : kind;
+        // ponytail: size is unenforceable here — a presigned PUT doesn't bind
+        // Content-Length, so only kind + content type are validated on this path.
+        MediaUploadPolicy.validate(resolvedKind, contentType, filename, -1);
         lazyEnsureBucket();
 
-        String resolvedKind = (kind == null || kind.isBlank()) ? "asset" : kind;
         String objectKey    = buildObjectKey(resolvedKind, filename);
         String marker       = MINIO_SCHEME + props.getBucket() + "/" + objectKey;
 
@@ -271,40 +283,132 @@ public class MediaService {
                 "Unsupported media marker (expected minio:// or http(s)://): " + marker);
     }
 
+    /**
+     * Fetches an admin-configured external asset with two hard safety bounds:
+     *
+     * <ul>
+     *   <li><strong>SSRF guard</strong> — redirects are followed manually
+     *       ({@code Redirect.NEVER}) so EVERY hop's host is validated against
+     *       {@link #requireExternallyRoutableHost(URI)}; an allowed first hop
+     *       can't bounce the fetch into a private network.</li>
+     *   <li><strong>Byte ceiling</strong> — the body is streamed and reading
+     *       stops one byte past {@code externalFetchMaxBytes}; an oversized or
+     *       endless response can never be buffered whole.</li>
+     * </ul>
+     */
     private byte[] fetchExternal(String url) {
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(10))
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .build();
-
-        final HttpRequest request;
+        URI target;
         try {
-            request = HttpRequest.newBuilder(URI.create(url))
-                    .timeout(Duration.ofSeconds(30))
-                    .GET()
-                    .build();
+            target = URI.create(url);
         } catch (IllegalArgumentException ex) {
             throw new MediaUploadException("Invalid external media URL: " + url, ex);
         }
 
-        try {
-            HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
-            if (response.statusCode() / 100 != 2) {
-                throw new MediaUploadException(
-                        "External media fetch returned HTTP " + response.statusCode() + " for " + url);
+        long maxBytes = props.getExternalFetchMaxBytes();
+        for (int hop = 0; hop <= MAX_EXTERNAL_REDIRECTS; hop++) {
+            requireExternallyRoutableHost(target);
+
+            final HttpRequest request;
+            try {
+                request = HttpRequest.newBuilder(target)
+                        .timeout(Duration.ofSeconds(30))
+                        .GET()
+                        .build();
+            } catch (IllegalArgumentException ex) {
+                throw new MediaUploadException("Invalid external media URL: " + target, ex);
             }
-            byte[] body = response.body();
-            if (body.length > MAX_EXTERNAL_BYTES) {
+
+            try {
+                HttpResponse<InputStream> response =
+                        EXTERNAL_HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofInputStream());
+                int status = response.statusCode();
+
+                if (status / 100 == 3) {
+                    String location = response.headers().firstValue("Location").orElse(null);
+                    try (InputStream ignored = response.body()) { /* drain/close redirect body */ }
+                    if (location == null) {
+                        throw new MediaUploadException(
+                                "External media fetch returned HTTP " + status + " without a Location for " + url);
+                    }
+                    target = target.resolve(location);
+                    continue;
+                }
+                if (status / 100 != 2) {
+                    try (InputStream ignored = response.body()) { /* drain/close error body */ }
+                    throw new MediaUploadException(
+                            "External media fetch returned HTTP " + status + " for " + url);
+                }
+
+                try (InputStream body = response.body()) {
+                    int readLimit = (int) Math.min(maxBytes + 1, Integer.MAX_VALUE);
+                    byte[] bytes = body.readNBytes(readLimit);
+                    if (bytes.length > maxBytes) {
+                        throw new MediaUploadException(
+                                "External media exceeds the " + (maxBytes / (1024 * 1024)) + "MB limit: " + url);
+                    }
+                    return bytes;
+                }
+            } catch (IOException ex) {
                 throw new MediaUploadException(
-                        "External media exceeds the " + (MAX_EXTERNAL_BYTES / (1024 * 1024)) + "MB limit: " + url);
+                        "Failed to fetch external media from " + url + ": " + ex.getMessage(), ex);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new MediaUploadException("Interrupted fetching external media from " + url, ex);
             }
-            return body;
-        } catch (IOException ex) {
-            throw new MediaUploadException("Failed to fetch external media from " + url + ": " + ex.getMessage(), ex);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            throw new MediaUploadException("Interrupted fetching external media from " + url, ex);
         }
+        throw new MediaUploadException(
+                "Too many redirects (max " + MAX_EXTERNAL_REDIRECTS + ") fetching external media from " + url);
+    }
+
+    /**
+     * SSRF guard for {@link #fetchExternal(String)}: only http(s) schemes, and —
+     * unless {@code externalFetchAllowPrivate} is set (tests only) — the host
+     * must not resolve to any loopback / private / link-local / CGNAT address.
+     *
+     * <p>ponytail: the address is validated at check time and the HTTP client
+     * re-resolves at connect time, so a hostile DNS record flipping between the
+     * two (DNS rebinding) is a known ceiling. The feature is SUPER_ADMIN-gated
+     * admin configuration; pin the resolved address into the connection if this
+     * ever opens to lower-trust input.</p>
+     */
+    private void requireExternallyRoutableHost(URI uri) {
+        String scheme = uri.getScheme();
+        if (scheme == null
+                || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+            throw new MediaUploadException("Unsupported external media scheme: " + uri);
+        }
+        if (props.isExternalFetchAllowPrivate()) {
+            return;
+        }
+        String host = uri.getHost();
+        if (host == null) {
+            throw new MediaUploadException("External media URL has no host: " + uri);
+        }
+        final InetAddress[] addresses;
+        try {
+            addresses = InetAddress.getAllByName(host);
+        } catch (UnknownHostException ex) {
+            throw new MediaUploadException("Cannot resolve external media host: " + host, ex);
+        }
+        for (InetAddress address : addresses) {
+            if (isPrivateAddress(address)) {
+                throw new MediaUploadException(
+                        "External media host '" + host + "' resolves to a private address and is not allowed");
+            }
+        }
+    }
+
+    private static boolean isPrivateAddress(InetAddress address) {
+        if (address.isLoopbackAddress() || address.isAnyLocalAddress()
+                || address.isLinkLocalAddress() || address.isSiteLocalAddress()
+                || address.isMulticastAddress()) {
+            return true;
+        }
+        byte[] raw = address.getAddress();
+        if (raw.length == 16 && (raw[0] & 0xFE) == 0xFC) {
+            return true; // IPv6 unique-local fc00::/7
+        }
+        return raw.length == 4 && (raw[0] & 0xFF) == 100 && (raw[1] & 0xC0) == 64; // CGNAT 100.64/10
     }
 
     // -------------------------------------------------------------------------

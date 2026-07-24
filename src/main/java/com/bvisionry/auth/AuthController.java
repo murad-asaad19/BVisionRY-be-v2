@@ -4,9 +4,11 @@ import com.bvisionry.aiconfig.service.RateLimitService;
 import com.bvisionry.auth.dto.AuthResponse;
 import com.bvisionry.auth.dto.ChangePasswordRequest;
 import com.bvisionry.auth.dto.DownloadTokenResponse;
+import com.bvisionry.auth.dto.ForgotPasswordRequest;
 import com.bvisionry.auth.dto.LoginRequest;
 import com.bvisionry.auth.dto.RefreshTokenRequest;
 import com.bvisionry.auth.dto.RegisterRequest;
+import com.bvisionry.auth.dto.ResetPasswordRequest;
 import com.bvisionry.auth.dto.UserResponse;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.auth.jwt.JwtProvider;
@@ -29,6 +31,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final PasswordResetService passwordResetService;
     private final RateLimitService rateLimitService;
     private final ClientIpResolver clientIpResolver;
     private final CookieService cookieService;
@@ -36,12 +39,14 @@ public class AuthController {
     private final String publicBaseUrl;
 
     public AuthController(AuthService authService,
+                          PasswordResetService passwordResetService,
                           RateLimitService rateLimitService,
                           ClientIpResolver clientIpResolver,
                           CookieService cookieService,
                           JwtProvider jwtProvider,
                           @Value("${bvisionry.public.base-url}") String publicBaseUrl) {
         this.authService = authService;
+        this.passwordResetService = passwordResetService;
         this.rateLimitService = rateLimitService;
         this.clientIpResolver = clientIpResolver;
         this.cookieService = cookieService;
@@ -123,6 +128,28 @@ public class AuthController {
     public ResponseEntity<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request, HttpServletRequest httpRequest) {
         rateLimitService.checkAuthLimit(clientIpResolver.resolve(httpRequest));
         authService.changePassword(SecurityUtils.getCurrentUserId(), request.currentPassword(), request.newPassword());
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Always 204 whether or not the email has an account — the response must
+     * not reveal which addresses exist. Limited per IP AND per target email so
+     * neither a scanning bot nor an inbox-bombing attack gets past the ceiling.
+     */
+    @PostMapping("/forgot-password")
+    public ResponseEntity<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request,
+                                               HttpServletRequest httpRequest) {
+        rateLimitService.checkPasswordResetLimit(clientIpResolver.resolve(httpRequest));
+        rateLimitService.checkPasswordResetLimit("email:" + request.email().toLowerCase().trim());
+        passwordResetService.requestReset(request.email());
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/reset-password")
+    public ResponseEntity<Void> resetPassword(@Valid @RequestBody ResetPasswordRequest request,
+                                              HttpServletRequest httpRequest) {
+        rateLimitService.checkAuthLimit(clientIpResolver.resolve(httpRequest));
+        passwordResetService.resetPassword(request.token(), request.newPassword());
         return ResponseEntity.noContent().build();
     }
 

@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -111,5 +112,68 @@ class OrganizationServiceTest {
                 orgId, new ChangeTierRequest(SubscriptionTier.PREMIUM), actorId))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("already on the PREMIUM tier");
+    }
+
+    // --- Sub-organizations --------------------------------------------------
+
+    private Organization newSubOrg(UUID id, Organization parent) {
+        Organization subOrg = new Organization();
+        subOrg.setId(id);
+        subOrg.setName("Sub Org");
+        subOrg.setActive(true);
+        subOrg.setParentOrganization(parent);
+        return subOrg;
+    }
+
+    /** Sub-orgs have no billing identity — tier is managed on the parent. */
+    @Test
+    void changeTier_onSubOrganization_throws() {
+        UUID subOrgId = UUID.randomUUID();
+        Organization subOrg = newSubOrg(subOrgId, org);
+        when(organizationRepository.findById(subOrgId)).thenReturn(Optional.of(subOrg));
+
+        assertThatThrownBy(() -> organizationService.changeTier(
+                subOrgId, new ChangeTierRequest(SubscriptionTier.PREMIUM), actorId))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("parent organization");
+    }
+
+    @Test
+    void toggleActive_onParent_cascadesToSubOrganizations() {
+        UUID subOrgId = UUID.randomUUID();
+        Organization subOrg = newSubOrg(subOrgId, org);
+        var childMember = new com.bvisionry.auth.entity.User();
+        childMember.setStatus(com.bvisionry.common.enums.UserStatus.ACTIVE);
+
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(org));
+        when(organizationRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+        when(organizationRepository.findByParentOrganizationId(orgId)).thenReturn(List.of(subOrg));
+        when(userRepository.findByOrganizationId(orgId)).thenReturn(List.of());
+        when(userRepository.findByOrganizationId(subOrgId)).thenReturn(List.of(childMember));
+        when(organizationRepository.countByParentOrganizationId(orgId)).thenReturn(1L);
+        when(organizationRepository.findOrgStatsByIds(anyList()))
+                .thenReturn(List.<Object[]>of(new Object[]{orgId, 0L, null}));
+
+        organizationService.toggleActive(orgId, false, actorId);
+
+        assertThat(org.isActive()).isFalse();
+        assertThat(subOrg.isActive()).isFalse();
+        assertThat(childMember.getStatus()).isEqualTo(com.bvisionry.common.enums.UserStatus.SUSPENDED);
+    }
+
+    @Test
+    void hardDelete_parent_deletesSubOrganizationsFirst() {
+        UUID subOrgId = UUID.randomUUID();
+        Organization subOrg = newSubOrg(subOrgId, org);
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(org));
+        when(organizationRepository.findById(subOrgId)).thenReturn(Optional.of(subOrg));
+        when(organizationRepository.findByParentOrganizationId(orgId)).thenReturn(List.of(subOrg));
+        when(organizationRepository.findByParentOrganizationId(subOrgId)).thenReturn(List.of());
+
+        organizationService.hardDelete(orgId);
+
+        var deletionOrder = inOrder(organizationRepository);
+        deletionOrder.verify(organizationRepository).delete(subOrg);
+        deletionOrder.verify(organizationRepository).delete(this.org);
     }
 }

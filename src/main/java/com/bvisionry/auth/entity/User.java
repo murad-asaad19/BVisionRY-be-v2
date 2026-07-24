@@ -1,11 +1,13 @@
 package com.bvisionry.auth.entity;
 
+import com.bvisionry.auth.jwt.UserPrincipalCacheEvictionListener;
 import com.bvisionry.common.entity.BaseEntity;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.organization.entity.Organization;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EntityListeners;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
@@ -21,6 +23,9 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "users")
+// Evicts the auth-filter principal cache on any update/removal of this row, so
+// role/status changes keep taking effect on the very next request.
+@EntityListeners(UserPrincipalCacheEvictionListener.class)
 @Getter
 @Setter
 @NoArgsConstructor

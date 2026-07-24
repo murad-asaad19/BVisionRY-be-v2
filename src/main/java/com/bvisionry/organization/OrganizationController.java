@@ -27,13 +27,17 @@ import java.util.UUID;
 public class OrganizationController {
 
     private final OrganizationService organizationService;
+    private final SubOrganizationService subOrganizationService;
     private final TrialService trialService;
     private final ActivityService activityService;
 
     @PostMapping
     public ResponseEntity<OrganizationResponse> create(@Valid @RequestBody CreateOrganizationRequest request) {
         UUID actorId = SecurityUtils.getCurrentUserId();
-        return ResponseEntity.status(HttpStatus.CREATED).body(organizationService.create(request, actorId));
+        // Root orgs are created together with their default "General" sub-org —
+        // members live in sub-orgs only.
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(subOrganizationService.createRootOrganization(request, actorId));
     }
 
     @GetMapping
@@ -42,7 +46,11 @@ public class OrganizationController {
         return ResponseEntity.ok(organizationService.listAll(pageable));
     }
 
+    // Same in-org override pattern as /{id}/activity below. @orgAccess.isInOrg
+    // also grants a parent org's ORG_ADMIN access to its sub-orgs, so this lets
+    // org admins load their own org profile AND any sub-org they govern.
     @GetMapping("/{id}")
+    @PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#id))")
     public ResponseEntity<OrganizationResponse> getById(@PathVariable UUID id) {
         return ResponseEntity.ok(organizationService.getById(id));
     }

@@ -48,6 +48,32 @@ public class EmailService {
     }
 
     /**
+     * Send the password-reset link. {@code resetUrl} embeds the single-use
+     * token; {@code expiresAt} tells the recipient how long the link is valid.
+     */
+    public void sendPasswordResetEmail(String toEmail, String resetUrl, Instant expiresAt) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("resetUrl", resetUrl);
+        vars.put("expiresAt", expiresAt.toString());
+
+        send(toEmail, EmailTemplateKey.PASSWORD_RESET, vars);
+    }
+
+    /**
+     * Fire-and-forget variant used by the forgot-password flow: the endpoint
+     * must answer in constant time whether or not the account exists, so SMTP
+     * latency (or failure) can never leak into the response.
+     */
+    @Async("emailExecutor")
+    public void sendPasswordResetEmailAsync(String toEmail, String resetUrl, Instant expiresAt) {
+        try {
+            sendPasswordResetEmail(toEmail, resetUrl, expiresAt);
+        } catch (Exception e) {
+            log.warn("Async password-reset email to {} failed: {}", toEmail, e.getMessage());
+        }
+    }
+
+    /**
      * Send notification when a new assessment is assigned.
      */
     public void sendAssessmentAssigned(String email, String memberName,

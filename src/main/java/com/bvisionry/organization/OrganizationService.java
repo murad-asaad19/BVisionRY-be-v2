@@ -52,23 +52,27 @@ public class OrganizationService {
         auditService.log(actorId, saved.getId(), OrgAuditActions.ORGANIZATION_CREATED,
                 OrgAuditActions.ENTITY_ORGANIZATION, saved.getId(),
                 Map.of("name", saved.getName()));
-        return OrganizationResponse.from(saved, 0, null);
+        return OrganizationResponse.from(saved, 0, null, 0);
     }
 
     @Transactional(readOnly = true)
     public Page<OrganizationResponse> listAll(Pageable pageable) {
         Page<Organization> page = organizationRepository.findAll(pageable);
         if (page.isEmpty()) {
-            return page.map(o -> OrganizationResponse.from(o, 0, null));
+            return page.map(o -> OrganizationResponse.from(o, 0, null, 0));
         }
         List<UUID> ids = page.getContent().stream().map(Organization::getId).toList();
         Map<UUID, OrgStats> statsById = organizationRepository.findOrgStatsByIds(ids).stream()
                 .collect(Collectors.toMap(
                         row -> (UUID) row[0],
                         row -> new OrgStats((Long) row[1], (Instant) row[2])));
+        // Batch sub-org counts for the page — one group-by query, no per-row lookups.
+        Map<UUID, Long> subOrgCounts = organizationRepository.countSubOrgsByParentIds(ids).stream()
+                .collect(Collectors.toMap(row -> (UUID) row[0], row -> (Long) row[1]));
         return page.map(org -> {
             OrgStats stats = statsById.getOrDefault(org.getId(), new OrgStats(0L, null));
-            return OrganizationResponse.from(org, stats.count(), stats.lastLogin());
+            return OrganizationResponse.from(org, stats.count(), stats.lastLogin(),
+                    subOrgCounts.getOrDefault(org.getId(), 0L).intValue());
         });
     }
 
@@ -100,6 +104,10 @@ public class OrganizationService {
     @Transactional
     public OrganizationResponse changeTier(UUID id, ChangeTierRequest request, UUID actorId) {
         Organization org = findOrThrow(id);
+        if (org.isSubOrganization()) {
+            throw new BadRequestException(
+                    "Subscription tier is managed by the parent organization");
+        }
         if (org.getSubscriptionTier() == request.tier()) {
             throw new BadRequestException("Organization is already on the " + request.tier() + " tier");
         }
@@ -123,34 +131,63 @@ public class OrganizationService {
         return responseWithStats(saved);
     }
 
+    /**
+     * Suspends/reactivates an organization and its members. Toggling a ROOT
+     * org cascades the same state to every sub-organization (and their
+     * members) in both directions — a suspended customer must not keep live
+     * sub-org access, and reactivating restores the whole tree. Toggling a
+     * sub-org directly affects only that sub-org.
+     *
+     * <p>Kept as one flat method (rather than a per-org helper) on purpose:
+     * the ArchUnit ratchet freezes cross-feature edges per ORIGIN METHOD, so
+     * the {@code UserRepository}/{@code User} calls must stay inside
+     * {@code toggleActive}, each with a single call site, to keep matching
+     * their frozen baseline entries.
+     */
     @Transactional
     public OrganizationResponse toggleActive(UUID id, boolean active, UUID actorId) {
         Organization org = findOrThrow(id);
         boolean wasActive = org.isActive();
-        org.setActive(active);
-        Organization saved = organizationRepository.save(org);
 
-        var members = userRepository.findByOrganizationId(id);
-        for (var member : members) {
-            member.setStatus(active ? UserStatus.ACTIVE : UserStatus.SUSPENDED);
+        List<Organization> children = organizationRepository.findByParentOrganizationId(id);
+        List<Organization> affectedOrgs = new java.util.ArrayList<>(children.size() + 1);
+        affectedOrgs.add(org);
+        affectedOrgs.addAll(children);
+
+        long directMemberCount = 0;
+        for (Organization affected : affectedOrgs) {
+            affected.setActive(active);
+            var members = userRepository.findByOrganizationId(affected.getId());
+            if (affected == org) {
+                directMemberCount = members.size();
+            }
+            for (var member : members) {
+                member.setStatus(active ? UserStatus.ACTIVE : UserStatus.SUSPENDED);
+            }
+            userRepository.saveAll(members);
         }
-        userRepository.saveAll(members);
+        Organization saved = organizationRepository.saveAll(affectedOrgs).get(0);
 
         if (wasActive != active) {
             String action = active ? OrgAuditActions.ORGANIZATION_REACTIVATED
                                    : OrgAuditActions.ORGANIZATION_SUSPENDED;
             auditService.log(actorId, saved.getId(), action, OrgAuditActions.ENTITY_ORGANIZATION, saved.getId(),
-                    Map.of("memberCount", String.valueOf(members.size())));
+                    Map.of("memberCount", String.valueOf(directMemberCount),
+                            "cascadedSubOrganizations", String.valueOf(children.size())));
         }
 
         return responseWithStats(saved);
     }
 
-    private OrganizationResponse responseWithStats(Organization org) {
+    // Package-private so SubOrganizationService reuses the same response shape.
+    OrganizationResponse responseWithStats(Organization org) {
+        // One level deep: for sub-orgs this count is 0 by invariant, so the
+        // extra query stays a single cheap index lookup either way.
+        int subOrgCount = (int) organizationRepository.countByParentOrganizationId(org.getId());
         return organizationRepository.findOrgStatsByIds(List.of(org.getId())).stream()
                 .findFirst()
-                .map(row -> OrganizationResponse.from(org, (Long) row[1], (Instant) row[2]))
-                .orElseGet(() -> OrganizationResponse.from(org, 0, null));
+                .map(row -> OrganizationResponse.from(org, (Long) row[1], (Instant) row[2], subOrgCount))
+                .orElseGet(() -> OrganizationResponse.from(org, 0, null, subOrgCount));
     }
 
     /**
@@ -159,6 +196,7 @@ public class OrganizationService {
      * confirmation before invoking this.
      *
      * Cascade order (all in one transaction so partial failure rolls back):
+     *   0. Sub-organizations (each gets the same full cascade; one level deep)
      *   1. Org-level insight reports
      *   2. Assignments (submissions + answers + pillar_evaluations +
      *      overall_summaries cascade from the assignment FKs)
@@ -172,6 +210,14 @@ public class OrganizationService {
         Organization org = findOrThrow(id);
         String orgName = org.getName();
         long memberCount = userRepository.countByOrganizationId(id);
+
+        // Sub-orgs first: their rows FK-reference the parent, and each child
+        // needs the same full cascade. One level deep, so this never recurses
+        // further. Self-invocation is fine — we're already inside the
+        // REQUIRED transaction, so all deletions commit or roll back together.
+        for (Organization child : organizationRepository.findByParentOrganizationId(id)) {
+            hardDelete(child.getId());
+        }
 
         insightReportRepository.deleteByOrganizationId(id);
         assignmentRepository.deleteByOrganizationId(id);

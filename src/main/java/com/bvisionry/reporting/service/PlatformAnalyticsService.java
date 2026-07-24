@@ -32,7 +32,10 @@ public class PlatformAnalyticsService {
      */
     @Cacheable(value = CacheConfig.PLATFORM_ANALYTICS)
     public PlatformAnalyticsResponse getAnalytics() {
-        long totalOrgs = organizationRepository.count();
+        // Root orgs only: sub-org rows are always FREE satellites of their
+        // parent and would inflate both the total and the tier mix (keeps this
+        // consistent with DashboardService).
+        long totalOrgs = organizationRepository.countByParentOrganizationIsNull();
         long totalUsers = userRepository.count();
         long totalSubmissions = submissionRepository.count();
         long evaluatedSubmissions = submissionRepository.countByStatus(SubmissionStatus.EVALUATED);
@@ -42,8 +45,10 @@ public class PlatformAnalyticsService {
                         .multiply(BigDecimal.valueOf(100))
                         .divide(BigDecimal.valueOf(totalSubmissions), 2, RoundingMode.HALF_UP);
 
-        long premiumOrgs = organizationRepository.countBySubscriptionTier(SubscriptionTier.PREMIUM);
-        long freeOrgs = organizationRepository.countBySubscriptionTier(SubscriptionTier.FREE);
+        long premiumOrgs = organizationRepository
+                .countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.PREMIUM);
+        long freeOrgs = organizationRepository
+                .countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.FREE);
 
         BigDecimal avgScore = overallSummaryRepository.findPlatformAverageScore();
         if (avgScore == null) avgScore = BigDecimal.ZERO;

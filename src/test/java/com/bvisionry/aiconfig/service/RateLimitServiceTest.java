@@ -14,9 +14,10 @@ class RateLimitServiceTest {
     @BeforeEach
     void setUp() {
         // Args: tryItOut, evaluation, auth, surveySubmit, publicAssessment,
-        // publicAssessmentSave, businessCard, refresh, accept, contact, leadMagnet.
+        // publicAssessmentSave, businessCard, refresh, accept, passwordReset,
+        // contact, leadMagnet.
         // No StringRedisTemplate is wired here, so all checks use the in-memory path.
-        rateLimitService = new RateLimitService(5, 10, 10, 10, 5, 50, 7, 30, 10, 3, 5);
+        rateLimitService = new RateLimitService(5, 10, 10, 10, 5, 50, 7, 30, 10, 5, 3, 5);
     }
 
     @Test

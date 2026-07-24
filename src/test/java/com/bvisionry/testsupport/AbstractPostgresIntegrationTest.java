@@ -40,5 +40,9 @@ public abstract class AbstractPostgresIntegrationTest {
         // Let Flyway own the schema; Hibernate should only validate.
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
         registry.add("spring.flyway.enabled", () -> "true");
+        // Principal cache off: integration tests mutate users/orgs (often via
+        // bulk updates that bypass the eviction listener) and assert immediate
+        // effect on the next request.
+        registry.add("bvisionry.auth.principal-cache-ttl-seconds", () -> "0");
     }
 }

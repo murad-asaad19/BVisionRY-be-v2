@@ -7,6 +7,8 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
+import java.util.List;
+import java.util.Set;
 
 /**
  * Fail-fast guard (B6): refuses to start the {@code prod} profile with the
@@ -45,23 +47,39 @@ public class StartupSafetyValidator implements InitializingBean {
     private static final String DEFAULT_PROXY_SHARED_SECRET =
             "default-bvisionry-proxy-secret-9f2c7a4e1d8b6053f4a9c2e7b1d6480a";
 
+    /**
+     * The committed dev-default web-push VAPID private key and MinIO secret from
+     * application.properties. Blocklisted so a PARTIAL prod env (env vars set for
+     * the big three but not these) can't silently run production push/storage on
+     * publicly-committed credentials. Blank is allowed — that's "feature not
+     * configured", which fails loudly in the feature itself, not here.
+     */
+    private static final String DEV_VAPID_PRIVATE_KEY = "RAv88777_39RhxvBROLQluAktjHlu59rfp0F5QdZBrg";
+    private static final String DEV_MINIO_SECRET_KEY = "minio123";
+
     private final Environment environment;
     private final boolean cookiesSecure;
     private final String jwtSecret;
     private final String encryptionKey;
     private final String proxySharedSecret;
+    private final String vapidPrivateKey;
+    private final String minioSecretKey;
 
     public StartupSafetyValidator(
             Environment environment,
             @Value("${bvisionry.security.cookies.secure:false}") boolean cookiesSecure,
             @Value("${bvisionry.jwt.secret:}") String jwtSecret,
             @Value("${bvisionry.encryption.secret-key:}") String encryptionKey,
-            @Value("${bvisionry.proxy.shared-secret:}") String proxySharedSecret) {
+            @Value("${bvisionry.proxy.shared-secret:}") String proxySharedSecret,
+            @Value("${bvisionry.push.vapid.private-key:}") String vapidPrivateKey,
+            @Value("${bvisionry.minio.secret-key:}") String minioSecretKey) {
         this.environment = environment;
         this.cookiesSecure = cookiesSecure;
         this.jwtSecret = jwtSecret;
         this.encryptionKey = encryptionKey;
         this.proxySharedSecret = proxySharedSecret;
+        this.vapidPrivateKey = vapidPrivateKey;
+        this.minioSecretKey = minioSecretKey;
     }
 
     @Override
@@ -77,28 +95,38 @@ public class StartupSafetyValidator implements InitializingBean {
                             + "Auth cookies would be sent without the Secure flag — this usually means prod is "
                             + "running with dev configuration.");
         }
-        if (jwtSecret == null || jwtSecret.isBlank()
-                || DEV_JWT_SECRET.equals(jwtSecret) || PROD_FALLBACK_JWT_SECRET.equals(jwtSecret)) {
-            throw new IllegalStateException(
-                    "Refusing to start: 'prod' profile is active but the JWT secret is empty, the built-in dev "
-                            + "default, or a committed prod fallback. Set JWT_SECRET to a strong, unique value "
-                            + "(>= 256 bits).");
-        }
-        if (encryptionKey == null || encryptionKey.isBlank()
-                || DEV_ENCRYPTION_KEY.equals(encryptionKey) || PROD_FALLBACK_ENCRYPTION_KEY.equals(encryptionKey)) {
-            throw new IllegalStateException(
-                    "Refusing to start: 'prod' profile is active but the encryption key is empty, the built-in "
-                            + "dev default, or a committed prod fallback. Set BVISIONRY_ENCRYPTION_KEY to a strong, "
-                            + "unique value.");
-        }
-        if (proxySharedSecret == null || proxySharedSecret.isBlank()
-                || DEFAULT_PROXY_SHARED_SECRET.equals(proxySharedSecret)) {
-            throw new IllegalStateException(
-                    "Refusing to start: 'prod' profile is active but the proxy shared secret is empty or the "
-                            + "committed default. Set BVISIONRY_PROXY_SHARED_SECRET to a strong, unique value "
-                            + "matching the BFF's BFF_PROXY_SHARED_SECRET.");
+        // One row per guarded secret: adding the next one is a single entry here.
+        // requiredInProd=false means blank is acceptable ("feature not configured").
+        List<SecretCheck> checks = List.of(
+                new SecretCheck(jwtSecret, true, Set.of(DEV_JWT_SECRET, PROD_FALLBACK_JWT_SECRET),
+                        "Refusing to start: 'prod' profile is active but the JWT secret is empty, the built-in dev "
+                                + "default, or a committed prod fallback. Set JWT_SECRET to a strong, unique value "
+                                + "(>= 256 bits)."),
+                new SecretCheck(encryptionKey, true, Set.of(DEV_ENCRYPTION_KEY, PROD_FALLBACK_ENCRYPTION_KEY),
+                        "Refusing to start: 'prod' profile is active but the encryption key is empty, the built-in "
+                                + "dev default, or a committed prod fallback. Set BVISIONRY_ENCRYPTION_KEY to a strong, "
+                                + "unique value."),
+                new SecretCheck(proxySharedSecret, true, Set.of(DEFAULT_PROXY_SHARED_SECRET),
+                        "Refusing to start: 'prod' profile is active but the proxy shared secret is empty or the "
+                                + "committed default. Set BVISIONRY_PROXY_SHARED_SECRET to a strong, unique value "
+                                + "matching the BFF's BFF_PROXY_SHARED_SECRET."),
+                new SecretCheck(vapidPrivateKey, false, Set.of(DEV_VAPID_PRIVATE_KEY),
+                        "Refusing to start: 'prod' profile is active but the web-push VAPID private key is the "
+                                + "committed dev default. Set VAPID_PRIVATE_KEY (and VAPID_PUBLIC_KEY) to a freshly "
+                                + "generated pair."),
+                new SecretCheck(minioSecretKey, false, Set.of(DEV_MINIO_SECRET_KEY),
+                        "Refusing to start: 'prod' profile is active but the MinIO secret key is the committed dev "
+                                + "default ('minio123'). Set MINIO_SECRET_KEY to the production object-store credential."));
+
+        for (SecretCheck check : checks) {
+            boolean blank = check.value() == null || check.value().isBlank();
+            if (blank ? check.requiredInProd() : check.blockedValues().contains(check.value())) {
+                throw new IllegalStateException(check.message());
+            }
         }
 
         log.info("StartupSafetyValidator: production safety checks passed (secure cookies + non-default secrets).");
     }
+
+    private record SecretCheck(String value, boolean requiredInProd, Set<String> blockedValues, String message) {}
 }

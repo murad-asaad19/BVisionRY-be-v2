@@ -56,6 +56,14 @@ public class InvitationService {
     @Transactional
     public List<InvitationResponse> inviteMembers(UUID orgId, InviteMembersRequest request) {
         Organization org = organizationService.findActiveOrThrow(orgId);
+        // Members live in sub-orgs only: a root org holds ORG_ADMINs and
+        // INSTRUCTORs, so MEMBER/MANAGER invites must target a sub-org.
+        if (!org.isSubOrganization()
+                && request.role() != UserRole.ORG_ADMIN && request.role() != UserRole.INSTRUCTOR) {
+            throw new BadRequestException(
+                    "Members are invited to a sub-organization. Only Org Admins and "
+                            + "Instructors can be invited to the organization itself.");
+        }
         List<InvitationResponse> responses = new ArrayList<>();
 
         // Hoist the inviter lookup out of the loop — same value for every recipient.

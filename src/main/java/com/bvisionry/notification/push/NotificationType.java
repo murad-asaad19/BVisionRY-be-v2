@@ -61,7 +61,19 @@ public enum NotificationType {
     WORKSHOP_RESULTS_SHARED(
             "Workshop results shared",
             "When your team lead shares their results and your workshop tasks unlock.",
-            false);
+            false),
+    EXERCISE_ASSIGNED(
+            "New exercise assigned",
+            "When an exercise is assigned to you.",
+            false),
+    EXERCISE_FEEDBACK(
+            "Exercise feedback",
+            "When an admin comments on your exercise or completes their review.",
+            false),
+    EXERCISE_ACTIVITY(
+            "Member exercise activity",
+            "When a member of your organization submits an exercise or replies to your feedback.",
+            true);
 
     private final String label;
     private final String description;

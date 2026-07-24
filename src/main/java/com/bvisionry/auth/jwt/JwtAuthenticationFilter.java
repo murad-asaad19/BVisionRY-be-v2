@@ -2,6 +2,7 @@ package com.bvisionry.auth.jwt;
 
 import com.bvisionry.auth.CookieService;
 import com.bvisionry.auth.UserRepository;
+import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserStatus;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -28,6 +29,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtProvider jwtProvider;
     private final UserRepository userRepository;
     private final CookieService cookieService;
+    private final UserPrincipalCache principalCache;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -38,20 +40,32 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (token != null) {
             jwtProvider.parseAndValidate(token, TokenType.ACCESS).ifPresent(claims -> {
                 UUID userId = UUID.fromString(claims.getSubject());
-                userRepository.findByIdWithOrganization(userId).ifPresent(user -> {
-                    if (user.getOrganization() != null && !user.getOrganization().isActive()) {
-                        return;
+                // Short-TTL cache in front of the per-request user+org load — the
+                // hottest query in the system. Entity updates evict via
+                // UserPrincipalCacheEvictionListener, so the ACTIVE/org checks
+                // below keep taking effect on the next request after a change.
+                User user = principalCache.get(userId).orElse(null);
+                if (user == null) {
+                    user = userRepository.findByIdWithOrganization(userId).orElse(null);
+                    if (user != null) {
+                        principalCache.put(userId, user);
                     }
-                    // Suspended/deactivated users must lose access immediately, not only after the
-                    // access-token TTL expires. Login/refresh already require ACTIVE; mirror that here
-                    // so a status change takes effect on the next request (treat as unauthenticated).
-                    if (user.getStatus() != UserStatus.ACTIVE) {
-                        return;
-                    }
-                    var authorities = List.of(new SimpleGrantedAuthority(user.getRole().name()));
-                    var authentication = new UsernamePasswordAuthenticationToken(user, null, authorities);
-                    SecurityContextHolder.getContext().setAuthentication(authentication);
-                });
+                }
+                if (user == null) {
+                    return;
+                }
+                if (user.getOrganization() != null && !user.getOrganization().isActive()) {
+                    return;
+                }
+                // Suspended/deactivated users must lose access immediately, not only after the
+                // access-token TTL expires. Login/refresh already require ACTIVE; mirror that here
+                // so a status change takes effect on the next request (treat as unauthenticated).
+                if (user.getStatus() != UserStatus.ACTIVE) {
+                    return;
+                }
+                var authorities = List.of(new SimpleGrantedAuthority(user.getRole().name()));
+                var authentication = new UsernamePasswordAuthenticationToken(user, null, authorities);
+                SecurityContextHolder.getContext().setAuthentication(authentication);
             });
         }
 

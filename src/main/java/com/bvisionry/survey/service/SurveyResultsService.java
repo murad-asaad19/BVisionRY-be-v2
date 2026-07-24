@@ -3,6 +3,7 @@ package com.bvisionry.survey.service;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.excel.ExcelWorkbookBuilder;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.event.SurveyEvents;
 import com.bvisionry.survey.dto.PillarSummaryDto;
 import com.bvisionry.survey.dto.QuestionSummaryDto;
 import com.bvisionry.survey.dto.QuestionSummaryDto.GeoPointDto;
@@ -22,6 +23,7 @@ import com.bvisionry.survey.entity.SurveyResponse;
 import com.bvisionry.survey.repository.SurveyAnswerRepository;
 import com.bvisionry.survey.repository.SurveyResponseRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -58,6 +60,7 @@ public class SurveyResultsService {
     private final SurveyResponseRepository responseRepository;
     private final SurveyAnswerRepository answerRepository;
     private final CountryCatalog countryCatalog;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(readOnly = true)
     public SurveyResultsSummaryDto getSummary(UUID surveyId) {
@@ -437,13 +440,38 @@ public class SurveyResultsService {
 
     @Transactional(readOnly = true)
     public SurveyResponseDetailDto getResponseDetail(UUID surveyId, UUID responseId) {
-        SurveyResponse r = responseRepository.findByIdAndSurveyId(responseId, surveyId)
-                .orElseThrow(() -> new ResourceNotFoundException("SurveyResponse", responseId.toString()));
+        SurveyResponse r = requireResponse(surveyId, responseId);
 
         return new SurveyResponseDetailDto(
                 r.getId(), r.getSubmittedAt(), r.getSource(),
                 r.getRespondentEmail(), r.getRespondentName(),
                 buildAnswerDetailsForResponse(responseId));
+    }
+
+    /**
+     * Permanently remove a single response (and, via DB cascade, its answers).
+     * Scoped to the survey so a response id from another survey 404s instead
+     * of deleting across surveys. A post-assessment response is embedded in
+     * the cached member-results view, so its cache entry is evicted once the
+     * delete commits.
+     */
+    @Transactional
+    public void deleteResponse(UUID surveyId, UUID responseId) {
+        requireResponse(surveyId, responseId);
+        // Captured before the row disappears; a scalar lookup keeps this slice
+        // off the assessment-slice Submission entity.
+        UUID submissionId = responseRepository.findSubmissionIdByResponseId(responseId);
+        responseRepository.hardDeleteById(responseId);
+        if (submissionId != null) {
+            eventPublisher.publishEvent(
+                    new SurveyEvents.PostAssessmentResponseDeleted(submissionId));
+        }
+    }
+
+    /** Fetch a response scoped to its survey, or 404. */
+    private SurveyResponse requireResponse(UUID surveyId, UUID responseId) {
+        return responseRepository.findByIdAndSurveyId(responseId, surveyId)
+                .orElseThrow(() -> new ResourceNotFoundException("SurveyResponse", responseId.toString()));
     }
 
     /**

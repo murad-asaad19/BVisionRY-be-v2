@@ -29,6 +29,7 @@ public class EmailTemplateSchemaRegistry {
             case RESULTS_READY                  -> resultsReady();
             case POST_ASSESSMENT_SURVEY_INVITE  -> postAssessmentSurveyInvite();
             case INVITATION                     -> invitation();
+            case PASSWORD_RESET                 -> passwordReset();
             case TRIAL_ENDING_SOON              -> trialEndingSoon();
             case TRIAL_EXPIRED                  -> trialExpired();
             case UPGRADE_REQUESTED              -> upgradeRequested();
@@ -452,6 +453,68 @@ public class EmailTemplateSchemaRegistry {
                         EmailTemplateField.Kind.PLAIN_TEXT, 240,
                         NO_VARS,
                         "If you did not expect this invitation, you can safely ignore this email.",
+                        5, "Closing", false, null)
+        );
+    }
+
+    private List<EmailTemplateField> passwordReset() {
+        List<String> expiryVars = List.of("expiresAt");
+        return List.of(
+                new EmailTemplateField(
+                        "subject", "Subject line",
+                        "The line recipients see in their inbox.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        NO_VARS,
+                        "Reset your BVisionRY password",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "heading", "Heading",
+                        "The large title at the top of the email body.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "Reset your password",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "introLine", "Intro line",
+                        "Explains why the recipient got this email.",
+                        EmailTemplateField.Kind.RICH_TEXT, 240,
+                        NO_VARS,
+                        "We received a request to reset the password for your BVisionRY account.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "cardHeading", "Card heading",
+                        "Headline shown inside the highlighted card.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "This link is single-use",
+                        3, "Expiry Card", false, null),
+                new EmailTemplateField(
+                        "expiryLine", "Expiration line",
+                        "Tells the recipient when the link expires. Use {{expiresAt}} to insert the date.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        expiryVars,
+                        "This reset link expires on {{expiresAt}}",
+                        3, "Expiry Card", false, null),
+                new EmailTemplateField(
+                        "ctaIntro", "Line before the button",
+                        "Invites the recipient to click the button.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 240,
+                        NO_VARS,
+                        "Click the button below to choose a new password:",
+                        4, "Call to Action", false, null),
+                new EmailTemplateField(
+                        "ctaLabel", "Button label",
+                        "Text on the main action button.",
+                        EmailTemplateField.Kind.CTA_LABEL, 40,
+                        NO_VARS,
+                        "Reset Password",
+                        4, "Call to Action", false, null),
+                new EmailTemplateField(
+                        "footerNote", "Safety note at the bottom",
+                        "Reassures users who didn't request a reset that they can ignore it.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 240,
+                        NO_VARS,
+                        "If you did not request a password reset, you can safely ignore this email — your password will not change.",
                         5, "Closing", false, null)
         );
     }

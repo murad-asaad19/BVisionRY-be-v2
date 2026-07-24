@@ -57,6 +57,7 @@ public class RateLimitService {
     private final int businessCardRequestsPerMinute;
     private final int refreshRequestsPerMinute;
     private final int acceptRequestsPerHour;
+    private final int passwordResetRequestsPerHour;
     private final int contactRequestsPerMinute;
     private final int leadMagnetRequestsPerMinute;
 
@@ -78,6 +79,8 @@ public class RateLimitService {
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> acceptWindows =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> passwordResetWindows =
+            new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> contactWindows =
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> leadMagnetWindows =
@@ -93,6 +96,7 @@ public class RateLimitService {
             @Value("${bvisionry.rate-limit.business-card.requests-per-minute:60}") int businessCardRequestsPerMinute,
             @Value("${bvisionry.rate-limit.refresh.requests-per-minute:30}") int refreshRequestsPerMinute,
             @Value("${bvisionry.rate-limit.accept.requests-per-hour:10}") int acceptRequestsPerHour,
+            @Value("${bvisionry.rate-limit.password-reset.requests-per-hour:5}") int passwordResetRequestsPerHour,
             @Value("${bvisionry.rate-limit.contact.requests-per-minute:100}") int contactRequestsPerMinute,
             @Value("${bvisionry.rate-limit.lead-magnet.requests-per-minute:20}") int leadMagnetRequestsPerMinute) {
         this.tryItOutRequestsPerMinute = tryItOutRequestsPerMinute;
@@ -104,6 +108,7 @@ public class RateLimitService {
         this.businessCardRequestsPerMinute = businessCardRequestsPerMinute;
         this.refreshRequestsPerMinute = refreshRequestsPerMinute;
         this.acceptRequestsPerHour = acceptRequestsPerHour;
+        this.passwordResetRequestsPerHour = passwordResetRequestsPerHour;
         this.contactRequestsPerMinute = contactRequestsPerMinute;
         this.leadMagnetRequestsPerMinute = leadMagnetRequestsPerMinute;
     }
@@ -183,6 +188,16 @@ public class RateLimitService {
      */
     public void checkAcceptLimit(String key) {
         checkLimit(acceptWindows, key, acceptRequestsPerHour, 3600, "accept");
+    }
+
+    /**
+     * Rate limit for "forgot password" email requests. Hourly window, checked
+     * per IP and per target email: the endpoint sends mail and must not reveal
+     * account existence, so both inbox-bombing a victim and scanning from one
+     * host need the same hard ceiling.
+     */
+    public void checkPasswordResetLimit(String key) {
+        checkLimit(passwordResetWindows, key, passwordResetRequestsPerHour, 3600, "password-reset");
     }
 
     /**
@@ -290,7 +305,7 @@ public class RateLimitService {
 
         // Per-hour windows: drop entries older than 3600s.
         Instant hourCutoff = Instant.now().minusSeconds(3600);
-        evictOlderThan(List.of(acceptWindows), hourCutoff);
+        evictOlderThan(List.of(acceptWindows, passwordResetWindows), hourCutoff);
     }
 
     private static void evictOlderThan(

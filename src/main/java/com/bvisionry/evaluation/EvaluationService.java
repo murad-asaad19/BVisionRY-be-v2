@@ -610,8 +610,17 @@ public class EvaluationService {
         // Evict only after the transaction commits — otherwise a concurrent
         // reader can re-populate the cache mid-transaction (reading the
         // pre-evaluation state) and we end up with a stale entry that sticks
-        // until the next write.
-        AfterCommit.run(cacheInvalidationService::invalidateOnNewEvaluation);
+        // until the next write. IDs are captured HERE, inside the session —
+        // the lambda runs post-commit where lazy access would throw. Anonymous
+        // public submissions have no assignment/user → null org/user, and the
+        // eviction skips the dashboard/history keys accordingly.
+        UUID evictOrgId = submission.getAssignment() != null
+                ? submission.getAssignment().getOrganization().getId() : null;
+        UUID evictUserId = submission.getUser() != null ? submission.getUser().getId() : null;
+        UUID evictSubmissionId = submission.getId();
+        UUID evictPipelineId = pipeline.getId();
+        AfterCommit.run(() -> cacheInvalidationService.invalidateOnNewEvaluation(
+                evictOrgId, evictPipelineId, evictUserId, evictSubmissionId));
         return degraded;
     }
 

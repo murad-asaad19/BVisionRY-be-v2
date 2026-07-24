@@ -119,8 +119,14 @@ public interface AssignmentRepository extends JpaRepository<Assignment, UUID> {
     @Query("SELECT DISTINCT a.pipeline.id, a.organization.id, a.organization.name FROM Assignment a WHERE a.pipeline.id IN :pipelineIds")
     List<Object[]> findDistinctOrgsByPipelineIds(@Param("pipelineIds") List<UUID> pipelineIds);
 
-    /** Distinct pipelines assigned (provisioned or per-member) to an org. */
-    @Query("SELECT DISTINCT a.pipeline.id FROM Assignment a WHERE a.organization.id = :orgId")
+    /**
+     * Distinct pipelines assigned (provisioned or per-member) to an org or any
+     * of its sub-orgs. The sub-org clause matters for ORG_ADMIN callers: admins
+     * live on the root org while every assignment lives in a sub-org (V136), so
+     * a root-only match would always be empty.
+     */
+    @Query("SELECT DISTINCT a.pipeline.id FROM Assignment a "
+            + "WHERE a.organization.id = :orgId OR a.organization.parentOrganization.id = :orgId")
     List<UUID> findDistinctPipelineIdsByOrganizationId(@Param("orgId") UUID orgId);
 
     @Modifying

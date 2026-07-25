@@ -401,7 +401,15 @@ gates:
   - id: 4_e2e
     run: "cd web && pnpm e2e"
     when: FRONTEND_CHANGED
-    note: "Needs the sandbox stack up. This is the frontend's primary evidence."
+    requires:
+      - "your lane is up (sandbox.sh up <n>) and its env is sourced"
+      - "the backend is running on the lane's SERVER_PORT"
+      - "`pnpm dev --port $PORT` is running — playwright.config has NO webServer by design"
+    note: >
+      The frontend's primary evidence at ~2% unit coverage. baseURL comes from
+      E2E_BASE_URL in the lane env. Never override it and never point e2e at a
+      server you did not start: aimed elsewhere it exercises another process and
+      still reports green, which is the exact failure this gate exists to catch.
   - id: 5_scope
     run: "diff must be a subset of the ticket's scope globs"
 

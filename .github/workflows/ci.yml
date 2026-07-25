@@ -55,3 +55,13 @@ jobs:
       # Docker is available on ubuntu-latest, so Testcontainers (postgres:16-alpine) runs here.
       - name: Build and verify
         run: ./mvnw -B verify
+
+      # Changed lines must be ~70% covered. This is separate from — and does not
+      # touch — the deliberately low global JaCoCo floor in pom.xml. Runs on pull
+      # requests only: without a base branch there is no "changed" to measure.
+      # Consumes the JaCoCo XML `verify` just produced; needs no extra toolchain.
+      - name: Changed-line coverage
+        if: github.base_ref != ''
+        run: |
+          git fetch --no-tags --quiet origin "${{ github.base_ref }}"
+          java tools/DiffCoverage.java --base "origin/${{ github.base_ref }}"

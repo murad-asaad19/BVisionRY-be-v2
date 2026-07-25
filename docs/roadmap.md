@@ -1,7 +1,6 @@
 # Bvisionry — Roadmap
 
-Single source of truth. Supersedes `production-roadmap-requirements.md` and
-`production-roadmap-board-review.md`.
+Single source of truth for what we build and why.
 
 Last revised: 2026-07-25 · Verified against `main`
 Scope: `backend` (Spring Boot 4 / Java 21) + `web` (Next.js 16 / React 19)

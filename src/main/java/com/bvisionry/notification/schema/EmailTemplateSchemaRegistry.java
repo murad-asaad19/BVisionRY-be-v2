@@ -417,7 +417,7 @@ public class EmailTemplateSchemaRegistry {
                         "Explains who invited the recipient. The inviter name becomes bold automatically.",
                         EmailTemplateField.Kind.RICH_TEXT, 240,
                         inviterVars,
-                        "{{inviterName}} has invited you to join their organization on BVisionRY:",
+                        "{{inviterName}} has invited you to join their organization on Bvisionry:",
                         2, "Main Content", false, null),
                 new EmailTemplateField(
                         "cardHeading", "Organization name shown in card",
@@ -465,7 +465,7 @@ public class EmailTemplateSchemaRegistry {
                         "The line recipients see in their inbox.",
                         EmailTemplateField.Kind.RICH_TEXT, 160,
                         NO_VARS,
-                        "Reset your BVisionRY password",
+                        "Reset your Bvisionry password",
                         1, "Basics", false, null),
                 new EmailTemplateField(
                         "heading", "Heading",
@@ -479,7 +479,7 @@ public class EmailTemplateSchemaRegistry {
                         "Explains why the recipient got this email.",
                         EmailTemplateField.Kind.RICH_TEXT, 240,
                         NO_VARS,
-                        "We received a request to reset the password for your BVisionRY account.",
+                        "We received a request to reset the password for your Bvisionry account.",
                         2, "Main Content", false, null),
                 new EmailTemplateField(
                         "cardHeading", "Card heading",
@@ -641,7 +641,7 @@ public class EmailTemplateSchemaRegistry {
                         "Closing note at the bottom of the email.",
                         EmailTemplateField.Kind.PLAIN_TEXT, 240,
                         NO_VARS,
-                        "Thanks for trying BVisionRY — reply to this email if you'd like a hand picking the right plan.",
+                        "Thanks for trying Bvisionry — reply to this email if you'd like a hand picking the right plan.",
                         5, "Closing", false, null)
         );
     }

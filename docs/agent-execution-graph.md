@@ -85,24 +85,50 @@ flowchart TB
 
 ### Node specifications
 
-| Node | Model | Context it receives | Authority | Stop condition |
+**Every node runs Opus 5.** Effort tier varies, model does not.
+
+| Node | Model · effort | Context it receives | Authority | Stop condition |
 |---|---|---|---|---|
-| **Orchestrator** | Opus 5 | Roadmap §7, ticket queue, zone status, WIP count | Routes, spawns, cancels | — |
-| **Spine writer** | Opus 5 | Full schema, migration history, role model | **Exclusive** write on migrations/enums | Human approval per migration |
-| **Zone worker** | Sonnet 5 | Ticket spec + its own slice + `CLAUDE.md` + spine output. **Not** other zones. | Implements within its slice | 3 gate failures → escalate |
-| **Mechanical worker** | Haiku 4.5 | One file + one rule | Breadth sweeps only (empty states, breadcrumbs, `error.tsx`) | 2 failures → escalate |
-| **Validator** | Opus 5 | **Diff + spec only** — never the implementer's reasoning | V1/V2 veto; others advise | One pass, no iteration |
+| **Orchestrator** | Opus 5 · high | Roadmap §7, ticket queue, zone status, WIP count | Routes, spawns, cancels | — |
+| **Spine writer** | Opus 5 · max | Full schema, migration history, role model | **Exclusive** write on migrations/enums | Human approval per migration |
+| **Zone worker** | Opus 5 · high | Ticket spec + its own slice + `CLAUDE.md` + spine output. **Not** other zones. | Implements within its slice | 3 gate failures → escalate |
+| **Mechanical worker** | Opus 5 · low | One file + one rule | Breadth sweeps only (empty states, breadcrumbs, `error.tsx`) | 2 failures → escalate |
+| **Validator** | Opus 5 · max | **Diff + spec only** — never the implementer's reasoning | V1/V2 veto; others advise | One pass, no iteration |
 | **Human** | — | Batched: one approval per feature | Final | — |
 
-Two things in that table are load-bearing.
+### Why single-model, and what it costs
 
-**Validators get the diff and the spec, never the implementer's chain of
-thought.** Handing a reviewer the author's reasoning is precisely how you get
-agreement instead of review. Fresh context is the anti-groupthink control.
+The advisor-orchestrator pattern (capable orchestrator, cheaper workers) reports
+roughly 92% of top-tier quality at ~63% of cost. We are declining that trade
+deliberately: this codebase's failure modes are tenant-scoping and RBAC
+correctness on a multi-tenant system handling founder assessment data, where a
+missed guard is a cross-org data leak rather than a bug. Consistent with
+`CLAUDE.md` — *implement as fast as possible without sacrificing quality, don't
+worry about token consumption* — capability is uniform and **cost is controlled
+by effort tier and by gate ordering, not by model downgrade.**
 
-**Worker model is Sonnet, orchestrator and validators are Opus.** The
-advisor-orchestrator pattern reports roughly 92% of top-tier quality at ~63% of
-cost. Spend capability on routing and judgement, not on typing.
+That choice has one consequence the graph must actively compensate for.
+
+**Homogeneity raises the groupthink risk, so the context controls have to carry
+it alone.** Mixed models gave a small amount of reviewer diversity for free —
+different training, different priors, different mistakes. An all-Opus graph
+gives that up, which makes the §0 failure mode *more* live, not less: agents on
+the same model reading the same context tend to agree with each other. The
+compensating controls are therefore mandatory rather than advisable:
+
+- **Validators receive the diff and the spec — never the implementer's chain of
+  thought.** Handing a reviewer the author's reasoning is precisely how you get
+  agreement instead of review.
+- **One lens per validator**, assigned explicitly. Five reviewers asked to
+  "review this" on the same model will return five versions of the same
+  opinion; five reviewers asked about tenant scoping, RBAC, contract, perf and
+  UX will not.
+- **Deterministic gates stay the primary evidence.** Uniformly strong reviewers
+  are still reviewers. ArchUnit does not have an opinion.
+
+**Effort tiers do the cost work.** `low` on mechanical per-file sweeps, `high`
+on implementation and routing, `max` on the spine and validators — the two
+places where being wrong is expensive and hard to reverse.
 
 ---
 

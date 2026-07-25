@@ -30,20 +30,19 @@ about rather than an engineer:
    roughly **17 months of work against an 11-month deadline** (§4). The plan
    does not fail on quality — it fails on arithmetic.
 
-There is also a **strategic framing issue** worth more than either. The document
-consistently describes Bvisionry as an LMS. Competing as an LMS means competing
-with Docebo, 360Learning, CYPHER and D2L on table stakes that are already
-commoditised. The genuinely defensible asset here is the **11-pillar Founder
-Readiness assessment engine with AI evaluation and longitudinal scoring** —
-that is a *measurement* product with learning attached, not a learning product
-with measurement attached. Industry research (§5) independently confirms this
-is the exact gap in the accelerator-software market. The roadmap should be
-re-weighted around it.
+There is also a **product/roadmap mismatch** worth more than either. The
+document plans an LMS. The pricing page sells the **Founder Readiness Index —
+an assessment instrument priced per cohort**, in which learning content appears
+only in the top tier. That is not a positioning debate to be had; the
+positioning is already chosen and it is the right one. The problem is that the
+engineering backlog and the price list describe different products, and
+**several features that are sold today do not exist** (§5.2). The roadmap
+should be ordered by which priced tier each item unblocks.
 
-**Headline recommendation:** cut Phase 1 by half, start compliance immediately
-in parallel (it costs calendar, not code), reposition around outcome
-measurement, and put the Q2 2027 personalization deadline on the critical path
-from today rather than after a six-month Phase 1.
+**Headline recommendation:** re-order the plan around the tier ladder, cut the
+first phase by half, start compliance immediately in parallel (it costs
+calendar, not code), and put the Q2 2027 personalization deadline on the
+critical path from today rather than after a six-month Phase 1.
 
 ---
 
@@ -211,31 +210,125 @@ ratchet would have consumed.
 
 ---
 
-## 5. Industry research — what the market requires and what it rewards
+## 5. What we sell — and what we owe
 
-### 5.1 The competitive frame is wrong in the source doc
+### 5.1 The product is the FRI, priced per cohort
 
-Bvisionry is positioned in the document as an LMS. In the market it actually
-sells into — accelerators, incubators, universities running venture programs —
-the competitors are **AcceleratorApp** (500+ programs, ~40% of major US
-accelerators), **F6S**, **Babele** (Google, UN, Bosch), **Catalyzer**, and
-**Sopact Sense**. These are program-operations platforms: applications, deal
-flow, mentor matching, demo days, portfolio tracking. Budget in this segment
-runs roughly **$200–800/month per program**.
+The pricing page settles what the engineering doc leaves ambiguous. Bvisionry
+does not sell an LMS or seats. It sells the **Founder Readiness Index**, priced
+by **cohort and founder capacity**:
 
-Critically, the identified structural weakness across that entire category is
-what Sopact calls the **"Cohort Cliff"** — the absence of a persistent founder
-identity connecting intake data to program activity to outcome data in one
-queryable record. It is described as an architectural gap that cannot be closed
-by adding a feature.
+| Tier | Monthly | Annual eff. | Capacity | Learning content? |
+|---|---|---|---|---|
+| **Starter** | $299 | $209 | 1 cohort/quarter · 20 founders | ❌ None |
+| **Growth** *("most clients start here")* | $599 | $419 | 1 cohort/month · 40 founders | ❌ None |
+| **Founder Success** | Contact Sales | — | Unlimited | ✅ Journeys + coaching |
 
-**Bvisionry already has that record.** Per-pillar scores, AI evaluation,
-maturity thresholds, repeatable assessment over time, all tied to a founder
-inside an org and cohort. The thing the category cannot retrofit is the thing
-that was built first here. That is the moat, and the roadmap currently treats
-it as a feature among many.
+Annual billing discounts ≈30%. The feature comparison ladder reads
+`Assessment & Screening → Development & Learning → Analytics & Reporting`, and
+the accelerator vertical page runs `Screen → Diagnose → Develop` against the
+stated pain: *"you invest heavily in founder development but lack data to prove
+transformation or justify program ROI to donors."* Four verticals are
+addressed — accelerators, universities, investors, corporate.
 
-### 5.2 Table stakes — required to be allowed to sell
+Two consequences the roadmap has not absorbed:
+
+**Learning is a top-tier add-on, not the product.** Two of the three tiers ship
+zero content. The LMS is delivery machinery for Founder Success contracts.
+
+**The unit of value is a measured cohort.** Every roadmap item should be scored
+by whether it lets us sell a cohort, upgrade a cohort, or renew a cohort.
+
+### 5.2 The delivery gap — sold today, not built today
+
+This is the finding that should reorder the plan. The following appear on the
+live pricing page as included features:
+
+| Sold in | Promised feature | Reality | Cost to close |
+|---|---|---|---|
+| **Growth $599** | "Mentor/Organization access portal" | ❌ **Does not exist.** This is the coach console. The **only** unbuilt feature in the self-serve ladder — it is what a Starter customer pays to upgrade for. | 8 EW |
+| **Growth $599** | "Cohort benchmarking" | 🟡 Partial — `TeamInsightResult.Benchmarking` produces an AI-narrated *team vs platform* section with outlier pillars in the org insight PDF/Excel. Demos well. Not a quantitative cross-cohort corpus. | 3 EW to make it statistical |
+| **Founder Success** | "ROI reporting & analytics" | ❌ Does not exist. The renewal driver for the highest-ACV tier. | 5 EW |
+| **Founder Success** | "Personalized learning journeys" | ❌ The Q2 2027 auto-enrolment item. | 10 EW |
+| **Founder Success** | "Group + 1:1 coaching sessions" | ❌ No booking or calendar model. | 3 EW (integrate) |
+| **Founder Success** | "White-label platform option" | 🟡 Data-scoping only; no branding, no theming, no sender identity. | 8 EW |
+| **Founder Success** | "Custom FRI analysis" | 🟡 Deliverable as a service today. | — |
+| — | Course library | ✅ Built, flag off. **Not sold in Starter or Growth**, so it blocks no self-serve revenue — only Founder Success delivery. | 2.5 EW QA |
+
+Read as a backlog this is unremarkable. Read as a **price list** it is urgent:
+Growth is the featured tier, and one of its two differentiating features does
+not exist while the other is thinner than the label implies.
+
+**What can be sold safely today**, until the phases in §7 land:
+
+- **Starter** — fully deliverable now.
+- **Growth** — deliverable *except* the mentor/organization portal. Until
+  Phase 1 ships, either scope it out of the contract or commit to a date.
+- **Founder Success** — Contact Sales, so delivery can be staged per contract.
+  Do not sign one that requires white-label or native booking before Q3 2027,
+  and do not commit personalized journeys earlier than Q2 2027.
+
+One housekeeping item: `fri-pricing-plans.tsx` documents an
+`fri-enterprise` tier living in an "Enterprise & Add-Ons" section. Neither the
+tier nor the section exists. Stale comment, but it implies a fourth tier
+somebody once intended to sell.
+
+### 5.3 Market validation of the model
+
+The pricing is well placed. Accelerator-management platforms sit at roughly
+**$200–800/month per program**, putting Growth at $599 squarely in band — and
+those competitors (**AcceleratorApp**, at 500+ programs and ~40% of major US
+accelerators; **F6S**; **Babele**, used by Google, the UN and Bosch;
+**Catalyzer**; **Sopact Sense**) sell *program operations*: applications, deal
+flow, mentor matching, demo days, portfolio tracking. Bvisionry sells the
+diagnostic instead. Same buyer, same budget line, different product — which is
+a better place to be than competing on ops feature count.
+
+The category's identified structural weakness is what Sopact calls the
+**"Cohort Cliff"**: no persistent founder identity connecting intake data to
+program activity to outcome data in one queryable record, described as an
+architectural gap that cannot be closed by adding a feature. Bvisionry has that
+record already — per-pillar scores, AI evaluation, maturity thresholds,
+repeatable over time, scoped to a founder inside an org and cohort. Benchmarking
+and ROI reporting (§5.2) are the two features that *expose* it. They are sold
+and unbuilt, and they are the moat.
+
+**Selling the instrument rather than the LMS also lowers the procurement bar.**
+LMS buyers gate on SCORM, xAPI and HRIS — a content-portability roadmap we do
+not want and, given the tier ladder, do not need. `SCORM`, `WEBPAGE` and
+`ARTICLE` exist in the `ContentType` enum with no runtime behind them; remove
+them from the authoring UI rather than implement them. Instrument buyers gate on
+something else entirely, and that bar has not been budgeted for:
+
+| Requirement | Status | Consequence of absence |
+|---|---|---|
+| **SOC 2 Type II** | ❌ Not started | The most common late-stage B2B deal blocker; minimum standard above ~100 employees, and explicitly required by university CIO/CISO vendor-risk programs. Needs a **3–12 month observation window** that cannot be compressed. |
+| **VPAT / ACR (WCAG 2.1 AA)** | ❌ Not started | Described as *virtually impossible to sell to multiple universities without one* in 2026. Requested at three separate procurement gates. **2–4 weeks to obtain.** |
+| **SAML 2.0 / OIDC SSO** | ❌ Google OAuth only | Near-universal enterprise and university requirement; confirmed with IT during procurement. |
+| **GDPR export & deletion** | ⚠️ **Claimed publicly, not built** | The pricing FAQ states assessment data is *"encrypted and GDPR-compliant."* Retention jobs exist; account export and deletion do not. A public compliance claim ahead of the control surfaces in exactly the review where it costs most. |
+| **Validity evidence for the FRI** | ❌ None | Assessment instruments are bought on validity — Gallup and Hogan sell decades of validation studies. Nothing currently captures whether a pillar score predicts funding, survival or revenue. |
+| ~~SCORM / xAPI / HRIS~~ | N/A | Drops out of scope under this positioning. Revisit only if corporate L&D becomes a primary vertical. |
+
+The last row is the one nobody has written down. It is a data-capture and
+research item, not an engineering one, and it is the difference between "our AI
+scores your pillars" and "founders below 40 on Pillar 6 fail to raise at 3× the
+rate." One is a feature; the other is a company.
+
+### 5.4 Where the market is going
+
+- **Adaptive personalization is now the defining capability** — real-time
+  adjustment of path and pacing from learner performance, with reported effects
+  of ~30% lower time-to-competency and 40–50% higher completion. The Q2 2027
+  auto-selection item is both a contractual obligation and the thing the
+  category is judged on.
+- **Skills taxonomy and competency mapping is the organising primitive**;
+  platforms map content to competencies and visualise mastery matrices. The 11
+  pillars *are* a competency framework that is not yet exposed as one.
+- **Proactive AI agents** that monitor progress and intervene are shipping in
+  CYPHER and Degreed. The AI coach here is reactive chat on infrastructure that
+  already supports more.
+- **Outcome and impact proof** is the accelerator-specific expression of the
+  same trend, is sold in Founder Success, and remains unclaimed ground.
 
 These are not differentiators. Their absence loses deals silently, usually
 late, after the effort of the sales cycle has been spent.
@@ -336,33 +429,45 @@ more than it consumes engineering weeks.
 
 ---
 
-## 7. Recommended roadmap
+## 7. Recommended roadmap — ordered by the tier it unblocks
 
-Two credible paths. The board's decision is which one to fund.
+Each phase is defined by the revenue it releases, not by its engineering theme.
+The ordering rule: **deliver what is already sold, cheapest tier first, before
+building anything that is not yet sold.**
+
+| Phase | Unblocks | Commercial effect |
+|---|---|---|
+| **0 · Commercial** | All tiers | Removes procurement blockers; closes a live GDPR claim |
+| **1 · Growth tier** | $599/mo self-serve | Makes the featured tier fully deliverable; enables Starter→Growth upgrade |
+| **2 · Founder Success** | Contact Sales ACV | ROI proof — the renewal driver — plus content delivery |
+| **3 · Personalization** | Founder Success | Contractual Q2 2027 obligation |
+| **4 · Expansion** | New segments | SSO, booking, white-label, i18n |
 
 ```mermaid
 gantt
-    title Bvisionry — Recommended Plan (solo capacity, deadline-first)
+    title Bvisionry — Roadmap by revenue tier unblocked (solo capacity)
     dateFormat YYYY-MM-DD
     axisFormat %b '%y
 
     section Phase 0 · Commercial (parallel, mostly non-eng)
-    SOC 2 Type II — start observation window now :crit, soc2, 2026-08-01, 300d
+    SOC 2 Type II — open observation window now  :crit, soc2, 2026-08-01, 300d
     VPAT / ACR accessibility audit               :crit, vpat, 2026-08-01, 45d
     Accessibility remediation                    :a11y, after vpat, 30d
+    GDPR export + delete (closes public claim)   :crit, gdpr, 2026-08-01, 14d
 
-    section Phase 1 · Unlock trapped value (Aug–Oct 26)
-    Courses QA + flip the flag                   :crit, p1a, 2026-08-01, 21d
-    Remove fake lesson types                     :p1b, 2026-08-01, 5d
-    Founder dashboard (role-aware home)          :p1c, after p1a, 21d
-    Next-lesson CTA + breadcrumbs + empty states :p1d, after p1a, 14d
-    Diff-coverage CI + blocking lint             :p1e, 2026-08-15, 10d
-    Inactivity nudge + proactive AI coach        :p1f, after p1c, 14d
+    section Phase 1 · Make GROWTH $599 deliverable (Aug–Dec 26)
+    Coach role + CoachAssignment + console       :crit, p1a, 2026-08-01, 56d
+    (= "Mentor/Organization access portal")      :milestone, m1, 2026-09-26, 0d
+    Quantitative cohort benchmarking             :crit, p1b, after p1a, 21d
+    Founder dashboard (role-aware home)          :p1c, 2026-10-01, 21d
+    Error tracking + diff coverage + lint gate   :p1d, 2026-08-15, 14d
 
-    section Phase 2 · Close the loop (Oct 26–Feb 27)
-    Coach role + CoachAssignment + console       :crit, p2a, 2026-10-15, 56d
-    Cohort announcements                         :p2b, after p2a, 14d
-    Impact reporting + competency matrix         :crit, p2c, 2026-12-15, 35d
+    section Phase 2 · Make FOUNDER SUCCESS deliverable (Dec 26–Feb 27)
+    ROI reporting + competency matrix            :crit, p2a, 2026-12-01, 35d
+    Courses QA + flip flag + drop fake types     :p2b, 2026-12-01, 18d
+    Cohort announcements                         :p2c, after p2a, 14d
+    Inactivity nudge + proactive AI coach        :p2d, after p2b, 14d
+    UX P0 — next-lesson CTA, breadcrumbs, empties:p2e, after p2b, 21d
 
     section Phase 3 · Personalization — HARD DEADLINE (Feb–Jun 27)
     PillarCourseMapping + admin UI               :crit, p3a, 2027-02-01, 21d
@@ -370,65 +475,103 @@ gantt
     Recommendations on dashboard                 :p3c, after p3b, 10d
     Deadline buffer                              :milestone, buf, 2027-05-15, 45d
 
-    section Phase 4 · Enterprise (post-deadline)
-    SAML / OIDC SSO                              :p4a, 2027-03-01, 21d
-    Calendar integration (Cal.com)               :p4b, 2027-06-01, 21d
-    White-label theming                          :p4c, 2027-07-01, 56d
-    i18n retrofit                                :p4d, 2027-09-01, 70d
+    section Phase 4 · Expansion (post-deadline)
+    SAML / OIDC SSO                              :p4a, 2027-06-01, 21d
+    Calendar integration → "1:1 coaching"        :p4b, 2027-07-01, 21d
+    White-label theming → FS promise             :p4c, 2027-08-01, 56d
+    i18n retrofit                                :p4d, 2027-10-01, 70d
 ```
 
-### Why this ordering
+### What changed from the source doc's ordering, and why
 
-- **Phase 0 starts today** because it is the only work where delay cannot be
-  recovered by effort later. It is largely budget and process, not engineering.
-- **Phase 1 is deliberately small** and front-loads the finished course library,
-  which is the fastest conversion of sunk cost into revenue available.
-- **Phase 2 builds the coach console**, which the source doc correctly
-  identifies as the unlock for the review queue, calendar and messaging — and
-  adds impact reporting, the differentiator.
-- **Phase 3 starts in February with a six-week buffer** before the Q2 2027
-  deadline. In the source doc's ordering it would start around Q1 2027 with no
-  buffer at all.
-- **Everything without a deadline or a deal attached moves to Phase 4.**
+**The coach console moves from Phase 1 item 3 to the very first thing built.**
+The source doc justifies it architecturally — it unlocks the review queue,
+messaging and calendar. The stronger reason is commercial: it is sold as the
+"Mentor/Organization access portal" in Growth, it is the only unbuilt feature in
+the self-serve ladder, and it is therefore the single feature standing between
+a $299 customer and a $599 one. Nothing else on the list has a clearer payback.
+
+**The courses flag drops from first to Phase 2.** I had it first in my previous
+draft, and the pricing page shows that was wrong — courses are not sold in
+Starter or Growth at all, so flipping the flag releases no self-serve revenue.
+It is a Founder Success delivery dependency, so it lands alongside the rest of
+that tier's work.
+
+**Benchmarking is promoted into Phase 1.** It is a paid Growth feature that
+currently ships as an AI-written narrative. Making it quantitative both honours
+the label and starts accumulating the cross-tenant corpus that compounds.
+
+**ROI reporting is promoted into Phase 2 and framed as the renewal driver.** The
+source doc has it as mid-priority "cohort completion analytics." It is sold, it
+is unbuilt, and it is what a program shows its funders to keep its budget.
+
+**GDPR export/delete moves into Phase 0.** Not because of the deadline, but
+because the pricing FAQ already claims compliance.
+
+**Phase 3 starts in February with roughly six weeks of buffer.** Under the
+source doc's ordering it would begin around Q1 2027 with none.
 
 ### Critical path
 
 ```mermaid
 flowchart LR
-    F["Flip courses flag<br/>2 EW"] --> D["Founder dashboard<br/>3 EW"]
-    D --> C["Coach console<br/>8 EW"]
-    C --> AN["Announcements<br/>3 EW"]
-    C --> IR["Impact reporting<br/>4 EW"]
-    D --> PM["PillarCourseMapping<br/>3 EW"]
-    PM --> AE["Auto-enrolment<br/>6 EW"]
-    AE --> DL(["Q2 2027<br/>DEADLINE"])
-    IR --> RN["Renewal / funder proof"]
+    subgraph P1["Phase 1 — unblocks GROWTH $599"]
+        C["Coach console<br/>8 EW<br/><i>sold as Mentor Portal</i>"]
+        B["Quantitative benchmarking<br/>3 EW<br/><i>sold in Growth</i>"]
+        D["Founder dashboard<br/>3 EW"]
+    end
+    subgraph P2["Phase 2 — unblocks FOUNDER SUCCESS"]
+        IR["ROI reporting +<br/>competency matrix<br/>5 EW<br/><i>sold in FS</i>"]
+        F["Courses QA + flag<br/>2.5 EW"]
+        AN["Announcements<br/>3 EW"]
+    end
+    subgraph P3["Phase 3 — CONTRACTUAL"]
+        PM["PillarCourseMapping<br/>3 EW"]
+        AE["Auto-enrolment<br/>6 EW<br/><i>sold as Learning Journeys</i>"]
+    end
 
-    SOC["SOC 2 · starts NOW<br/>calendar-bound"] --> ENT(["Enterprise deals"])
+    C --> B --> IR
+    C --> AN
+    D --> PM
+    F --> AE
+    PM --> AE
+    AE --> DL(["Q2 2027<br/>DEADLINE"])
+    C -.->|"upgrade path"| REV(["Starter → Growth<br/>revenue"])
+    IR -.->|"renewal proof"| RN(["FS renewals"])
+
+    SOC["SOC 2 · starts NOW<br/>calendar-bound, 3–12 mo"] --> ENT(["University &<br/>enterprise deals"])
     VP["VPAT / ACR<br/>2–4 weeks"] --> ENT
+    GD["GDPR export/delete<br/>2 EW · claim already live"] --> ENT
 
     style DL fill:#ff6b6b,color:#fff
     style SOC fill:#ffd93d
     style VP fill:#ffd93d
+    style GD fill:#ffd93d
     style C fill:#4dabf7,color:#fff
     style AE fill:#4dabf7,color:#fff
+    style IR fill:#4dabf7,color:#fff
 ```
 
-The coach console and the auto-enrolment engine are the two nodes that gate
-everything downstream. Any slip on either propagates directly to the deadline.
-Compliance runs on a wholly separate track and is unaffected by engineering
-progress — which is precisely why it can start immediately.
+Three nodes gate everything: the **coach console** (Growth revenue), **ROI
+reporting** (Founder Success renewals) and the **auto-enrolment engine** (the
+contractual deadline). Compliance runs on a wholly separate track, unaffected by
+engineering progress — which is exactly why it starts now.
 
 ### Scope fit
 
-| Path | Scope | Capacity needed | Q2 2027 deadline |
-|---|---|---|---|
-| **A — Solo (recommended baseline)** | Phases 0–3 above | ~42 EW vs ~45 available | ✅ Met, ~6 weeks buffer |
-| **B — Solo, original plan** | Source doc Phases 1–3 | ~75 EW vs ~45 available | ❌ Missed by ~6 months |
-| **C — +2 engineers from Q4 2026** | Phases 0–3 **plus** SSO, white-label, comms | ~70 EW across 3 people | ✅ Met, plus enterprise readiness a year earlier |
+| Path | Scope | Capacity | Q2 2027 | Sold-but-unbuilt remaining |
+|---|---|---|---|---|
+| **A — Solo (recommended baseline)** | Phases 0–3 | ~43.5 EW vs ~45 available | ✅ ~6 weeks buffer | White-label + native booking (both Founder Success, both stageable per contract) |
+| **B — Solo, source doc ordering** | Source Phases 1–3 | ~75 EW vs ~45 | ❌ Missed by ~6 months | Growth tier still undeliverable into 2027 |
+| **C — +2 engineers from Q4 2026** | Phases 0–3 **plus** SSO, white-label, comms | ~70 EW across 3 | ✅ Met | None — full price list deliverable |
 
-Path A is achievable as things stand. Path C is what turns a deadline-driven
-year into a market-position year, and it is the natural shape of a funding ask.
+Path A is achievable as things stand and makes every self-serve tier honest by
+the end of 2026. Path C additionally clears the Founder Success promises we
+cannot currently keep, and is the natural shape of a funding ask.
+
+**Board framing:** Path A is *"we stop selling things we cannot ship, in that
+order."* Path C is *"we can also sell the top tier without caveats a year
+earlier."*
 
 ---
 
@@ -462,7 +605,7 @@ can be closed rather than discussed.
 | 4 | i18n scope | **UI chrome only, and not before Q3 2027.** Translated *content* multiplies the authoring burden for every customer, not just the platform — that is a business model change, not a feature. |
 | 5 | White-label depth | **Logo and colours only.** Custom domains and branded email are a long tail of DNS, deliverability and support cost for marginal gain at this stage. |
 | 6 | Communications | **Announcements only** for now. Threads and DMs are deferrable; both carry permanent moderation cost. |
-| 7 | *(new)* Enterprise or accelerator-first? | **Accelerator-first.** It is where the product already fits and where the category has a structural gap. Enterprise implies SCORM, HRIS and SAML — a different roadmap that should not be entered accidentally. |
+| 7 | *(new)* Enterprise or accelerator-first? | **Already decided — accelerator-first**, confirmed by the tier ladder and the four vertical pages. Worth stating explicitly so it is not drifted away from: enterprise L&D would imply SCORM, xAPI and HRIS, a roadmap that should never be entered by accident. |
 | 8 | *(new)* Fund Path C? | **Yes if capital allows.** Two engineers from Q4 2026 converts a survival year into a market-position year. If not, Path A is genuinely achievable — but risk #1 remains unaddressed. |
 
 ---
@@ -474,11 +617,15 @@ Ordered. Items 1–3 are calendar-bound and should not wait on the others.
 1. Engage a SOC 2 auditor and open the observation window.
 2. Order the VPAT/ACR accessibility audit (2–4 weeks to report).
 3. Post the engineering hire (risk #1).
-4. Begin the courses QA pass; remove `WEBPAGE`/`ARTICLE`/`SCORM` from the
-   authoring UI.
-5. Wire error tracking on both ends — half a day, removes a blind spot.
-6. Switch CI to diff coverage; make lint blocking.
-7. Close the eight decisions in §9.
+4. **Start the coach console** — the Growth-tier "Mentor/Organization access
+   portal" we already charge $599/mo for. First code written.
+5. Ship GDPR export/delete; the pricing FAQ already claims it.
+6. Give sales the deliverable-today list (§5.2) so no further contract commits
+   white-label, native booking, or personalized journeys ahead of §7.
+7. Wire error tracking on both ends — half a day, removes a blind spot.
+8. Switch CI to diff coverage; make lint blocking. Remove `WEBPAGE`/`ARTICLE`/
+   `SCORM` from the authoring UI.
+9. Close the eight decisions in §9.
 
 ---
 

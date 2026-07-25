@@ -6,6 +6,10 @@ Companion to `docs/roadmap.md` (what to build, in what order) and
 This document: **how to execute it autonomously** — implementation, review, fix,
 landing — with no human in the loop.
 
+**Resuming a run?** Read `docs/agent-run-report.md` first — it carries live state
+(what landed, what is verified, what runs next) and a resume protocol that needs
+no conversation history. This document is design; that one is status.
+
 ---
 
 ## 0. The design principle
@@ -504,15 +508,3 @@ It pays on **wide, shallow, independently verifiable** work:
 
 Two-line summary: **fan out on the boring, keep one loop on the interesting, and
 — since no human says it works — make sure something that is not an agent does.**
-
----
-
-## Sources
-
-- [Louis Bouchard — Graph Engineering Explained: What Actually Changed](https://www.louisbouchard.ai/graph-engineering-explained/)
-- [explainX — Graph Engineering: Wire Multi-Agent Orgs After Loops (2026)](https://explainx.ai/blog/graph-engineering-ai-agents-multi-agent-organizations-2026)
-- [Eigent — Graph Engineering for AI Agents](https://www.eigent.ai/blog/graph-engineering-ai-agents)
-- [AI Builder Club — Graph Engineering Guide 2026](https://www.aibuilderclub.com/blog/graph-engineering-guide-2026)
-- [Strands Agents — Graph Multi-Agent Pattern](https://strandsagents.com/docs/user-guide/concepts/multi-agent/graph/)
-- [Augment Code — Multi-Agent Orchestration: A Practical Architecture](https://www.augmentcode.com/guides/multi-agent-orchestration-architecture-guide)
-- [Sourcegraph — Context Engineering: A Practical Guide for AI Agents](https://sourcegraph.com/blog/context-engineering)

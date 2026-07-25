@@ -15,9 +15,9 @@ class RateLimitServiceTest {
     void setUp() {
         // Args: tryItOut, evaluation, auth, surveySubmit, publicAssessment,
         // publicAssessmentSave, businessCard, refresh, accept, passwordReset,
-        // contact, leadMagnet.
+        // contact, leadMagnet, errorReport.
         // No StringRedisTemplate is wired here, so all checks use the in-memory path.
-        rateLimitService = new RateLimitService(5, 10, 10, 10, 5, 50, 7, 30, 10, 5, 3, 5);
+        rateLimitService = new RateLimitService(5, 10, 10, 10, 5, 50, 7, 30, 10, 5, 3, 5, 4);
     }
 
     @Test
@@ -128,5 +128,26 @@ class RateLimitServiceTest {
         }
 
         rateLimitService.checkPublicAssessmentSaveLimit("ip-1");
+    }
+
+    @Test
+    void checkErrorReportLimit_overLimit_throws() {
+        for (int i = 0; i < 4; i++) {
+            rateLimitService.checkErrorReportLimit("ip:1.2.3.4");
+        }
+
+        assertThatThrownBy(() -> rateLimitService.checkErrorReportLimit("ip:1.2.3.4"))
+                .isInstanceOf(RateLimitExceededException.class)
+                .hasMessageContaining("error-report");
+    }
+
+    /** Its own bucket: a flood of crash reports must not lock anyone out of contact. */
+    @Test
+    void checkErrorReportLimit_isolatedFromContactBucket() {
+        for (int i = 0; i < 4; i++) {
+            rateLimitService.checkErrorReportLimit("ip:1.2.3.4");
+        }
+
+        rateLimitService.checkContactLimit("ip:1.2.3.4");
     }
 }

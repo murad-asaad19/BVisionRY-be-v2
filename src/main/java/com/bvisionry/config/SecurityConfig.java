@@ -40,6 +40,7 @@ public class SecurityConfig {
     private final SurveySubmitRateLimitFilter surveySubmitRateLimitFilter;
     private final PublicAssessmentRateLimitFilter publicAssessmentRateLimitFilter;
     private final BusinessCardRateLimitFilter businessCardRateLimitFilter;
+    private final ErrorEventRateLimitFilter errorEventRateLimitFilter;
     private final DownloadTokenAuthenticationFilter downloadTokenAuthenticationFilter;
 
     @Value("${bvisionry.cors.allowed-origins:http://localhost:5173,http://localhost:4173,http://localhost:3000,http://localhost:5174}")
@@ -88,6 +89,9 @@ public class SecurityConfig {
                                 "/api/v1/contact",
                                 // Public marketing POST — lead-magnet (science PDF) modal
                                 "/api/v1/lead-magnet",
+                                // Web-tier error reports — server-side POST, no CSRF cookie in
+                                // flight; authenticated by the BFF proxy shared secret instead.
+                                "/api/v1/error-events",
                                 // Player POST endpoints called through BFF (server-side, no CSRF cookie)
                                 "/api/v1/courses/*/enroll",
                                 "/api/v1/enrollments/*/content/*/complete",
@@ -132,6 +136,13 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/contact").permitAll()
                         // Lead magnet — public POST from the "science behind the pillars" modal
                         .requestMatchers(HttpMethod.POST, "/api/v1/lead-magnet").permitAll()
+                        // Error ingest — anonymous by necessity (a crashing browser has no
+                        // session, and the server reports crashes too). Bounded exactly like
+                        // the other anonymous writes above: ErrorEventRateLimitFilter caps it
+                        // per real client IP and every DTO field is @Size-capped. The GET on
+                        // the same path stays SUPER_ADMIN-only via @PreAuthorize +
+                        // anyRequest().authenticated().
+                        .requestMatchers(HttpMethod.POST, "/api/v1/error-events").permitAll()
                         // LMS catalog + health: public, read-only.
                         .requestMatchers("/api/v1/health").permitAll()
                         // Public catalog — keep permitAll for list + detail.
@@ -165,7 +176,8 @@ public class SecurityConfig {
                 .addFilterAfter(jwtAuthenticationFilter, DownloadTokenAuthenticationFilter.class)
                 .addFilterBefore(surveySubmitRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(publicAssessmentRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterBefore(businessCardRateLimitFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(businessCardRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(errorEventRateLimitFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 

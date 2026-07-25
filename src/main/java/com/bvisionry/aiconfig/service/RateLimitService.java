@@ -60,6 +60,7 @@ public class RateLimitService {
     private final int passwordResetRequestsPerHour;
     private final int contactRequestsPerMinute;
     private final int leadMagnetRequestsPerMinute;
+    private final int errorReportRequestsPerMinute;
 
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> tryItOutWindows =
             new ConcurrentHashMap<>();
@@ -85,6 +86,8 @@ public class RateLimitService {
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> leadMagnetWindows =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> errorReportWindows =
+            new ConcurrentHashMap<>();
 
     public RateLimitService(
             @Value("${bvisionry.rate-limit.try-it-out.requests-per-minute:10}") int tryItOutRequestsPerMinute,
@@ -98,7 +101,8 @@ public class RateLimitService {
             @Value("${bvisionry.rate-limit.accept.requests-per-hour:10}") int acceptRequestsPerHour,
             @Value("${bvisionry.rate-limit.password-reset.requests-per-hour:5}") int passwordResetRequestsPerHour,
             @Value("${bvisionry.rate-limit.contact.requests-per-minute:100}") int contactRequestsPerMinute,
-            @Value("${bvisionry.rate-limit.lead-magnet.requests-per-minute:20}") int leadMagnetRequestsPerMinute) {
+            @Value("${bvisionry.rate-limit.lead-magnet.requests-per-minute:20}") int leadMagnetRequestsPerMinute,
+            @Value("${bvisionry.rate-limit.error-report.requests-per-minute:30}") int errorReportRequestsPerMinute) {
         this.tryItOutRequestsPerMinute = tryItOutRequestsPerMinute;
         this.evaluationRequestsPerMinute = evaluationRequestsPerMinute;
         this.authRequestsPerMinute = authRequestsPerMinute;
@@ -111,6 +115,7 @@ public class RateLimitService {
         this.passwordResetRequestsPerHour = passwordResetRequestsPerHour;
         this.contactRequestsPerMinute = contactRequestsPerMinute;
         this.leadMagnetRequestsPerMinute = leadMagnetRequestsPerMinute;
+        this.errorReportRequestsPerMinute = errorReportRequestsPerMinute;
     }
 
     /**
@@ -210,6 +215,18 @@ public class RateLimitService {
     }
 
     /**
+     * Rate limit for the public web-tier error-report ingest
+     * ({@code POST /api/v1/error-events}). Its own per-IP bucket so a browser stuck
+     * in a render-crash loop — or a bot pointed at the endpoint — cannot flood the
+     * error store and bury the real regression signal it exists to carry. The
+     * ceiling is deliberately higher than contact's: a genuinely broken page can
+     * legitimately report a handful of errors per navigation.
+     */
+    public void checkErrorReportLimit(String key) {
+        checkLimit(errorReportWindows, key, errorReportRequestsPerMinute, 60, "error-report");
+    }
+
+    /**
      * Rate limit for the public lead-magnet capture ("the science behind the 11
      * pillars"). Its own per-IP bucket and ceiling so it is isolated from the AI
      * "try it out" limiter and can be tuned independently against a bot flooding the
@@ -301,7 +318,8 @@ public class RateLimitService {
         Instant minuteCutoff = Instant.now().minusSeconds(60);
         evictOlderThan(List.of(tryItOutWindows, evaluationWindows, authWindows,
                 surveySubmitWindows, publicAssessmentWindows, publicAssessmentSaveWindows,
-                businessCardWindows, refreshWindows, contactWindows, leadMagnetWindows), minuteCutoff);
+                businessCardWindows, refreshWindows, contactWindows, leadMagnetWindows,
+                errorReportWindows), minuteCutoff);
 
         // Per-hour windows: drop entries older than 3600s.
         Instant hourCutoff = Instant.now().minusSeconds(3600);

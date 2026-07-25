@@ -1,6 +1,9 @@
 package com.bvisionry.common.exception;
 
+import com.bvisionry.common.errortracking.ErrorEventRecorder;
 import com.bvisionry.common.web.ProblemDetails;
+import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -12,8 +15,17 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 @RestControllerAdvice
+@RequiredArgsConstructor
 @Slf4j
 public class GlobalExceptionHandler {
+
+    /**
+     * Aggregates the 500 catch-all into the queryable in-box error store. Only
+     * {@link #handleGeneral} feeds it: every other handler here maps a KNOWN,
+     * expected condition (404, 403, validation, …) to a deliberate status, and
+     * recording those would bury real regressions in routine traffic.
+     */
+    private final ErrorEventRecorder errorEventRecorder;
 
     @ExceptionHandler(AuthenticationException.class)
     public ProblemDetail handleAuthentication(AuthenticationException ex) {
@@ -166,8 +178,11 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public ProblemDetail handleGeneral(Exception ex) {
+    public ProblemDetail handleGeneral(Exception ex, HttpServletRequest request) {
         log.error("Unhandled exception", ex);
+        // Best effort — the recorder swallows its own failures, so a store outage
+        // can never turn one 500 into two.
+        errorEventRecorder.recordBackendException(ex, request);
         return problem(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred. Please try again later.");
     }
 

@@ -39,6 +39,23 @@ run_mode:
 
   commit_granularity: PER_TICKET      # not per action
 
+  # Concurrency. Every parallel agent claims its own runtime lane before doing
+  # anything — sharing one produces Flyway divergence, cache bleed and port
+  # clashes, none of which attribute to a cause during an unattended run.
+  max_parallel_agents: 4
+  lane_claim: "bash docker/sandbox/sandbox.sh up <n>"        # n = 1..4, one per agent
+  lane_env:   "set -a; source docker/sandbox/agent-<n>.env; set +a"
+  lane_reset: "bash docker/sandbox/sandbox.sh reset <n>"     # this lane only
+  # Each lane is a SEPARATE compose project — its own Postgres, Redis, MinIO and
+  # Mailpit containers and volumes. Sharing a runtime would produce Flyway
+  # divergence, cache bleed and port clashes, none of which attribute to a cause
+  # during an unattended run. Separate containers also make a stray FLUSHALL or
+  # a dropped bucket impossible to inflict on another lane rather than merely
+  # discouraged.
+  lane_isolates: [postgres, redis, minio, mailpit, api_port, web_port]
+  lane_ports: "lane n → pg 5433+n · redis 6380+n · s3 9002+2n · mail 8026+n · api 8180+n · web 3010+n"
+  # Lane 0 is the manual/inspection lane. Agents take 1..4.
+
 # ---------------------------------------------------------------------------
 # Things that NEVER get auto-decided — these park regardless of on_ambiguity
 # ---------------------------------------------------------------------------
@@ -325,6 +342,9 @@ hard_constraints:
 
   # Agents work against the sandbox stack, never dev.
   - database: SANDBOX_ONLY                    # localhost:5433, see docker/sandbox/
+
+  # Concurrent agents MUST NOT share a runtime. Claim a lane first.
+  - runtime_isolation: ONE_LANE_PER_AGENT
 
 # ---------------------------------------------------------------------------
 # Gates — the evidence bar. All run locally; no remote CI under LOCAL_COMMITS_ONLY.

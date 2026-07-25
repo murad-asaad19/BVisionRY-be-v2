@@ -242,7 +242,7 @@ public class MemberService {
         // Both modes change inputs to org-scoped reports (member list lost a
         // row, possibly assessments too). Same conservative eviction pattern
         // used by clearResponses.
-        AfterCommit.run(cacheInvalidationService::invalidateOnNewEvaluation);
+        AfterCommit.run(cacheInvalidationService::invalidateOnMemberChange);
 
         return new RemoveMemberResponse(memberId, wipeAssessments, assignmentsDeleted);
     }
@@ -274,7 +274,7 @@ public class MemberService {
 
         // Same conservative eviction as removeMember: the org lost a member and
         // (via cascade) potentially assessments feeding org-scoped reports.
-        AfterCommit.run(cacheInvalidationService::invalidateOnNewEvaluation);
+        AfterCommit.run(cacheInvalidationService::invalidateOnMemberChange);
     }
 
     /**
@@ -377,7 +377,7 @@ public class MemberService {
         }
         int deleted = submissionRepository.deleteAllByIdIn(submissionIds);
         log.info("Cleared {} submissions for member {} in org {}", deleted, memberId, orgId);
-        AfterCommit.run(cacheInvalidationService::invalidateOnNewEvaluation);
+        AfterCommit.run(cacheInvalidationService::invalidateOnMemberChange);
         return deleted;
     }
 

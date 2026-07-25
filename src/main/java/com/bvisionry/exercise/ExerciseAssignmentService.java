@@ -32,6 +32,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -296,13 +297,37 @@ public class ExerciseAssignmentService {
             }
             return userRepository.findByOrganizationIdAndStatus(orgId, UserStatus.ACTIVE);
         }
-        List<User> byIds = userRepository.findAllById(request.memberIds());
+        List<User> byIds = requireActiveOrgMembers(orgId, request.memberIds());
         if (userType != null) {
             return byIds.stream()
                     .filter(m -> userType.equals(m.getUserType()))
                     .toList();
         }
         return byIds;
+    }
+
+    /**
+     * Explicit member ids must resolve to ACTIVE members of this org. Unknown
+     * and foreign-org ids are both "not found" so member ids can't be probed
+     * (or assigned to) across tenants.
+     */
+    private List<User> requireActiveOrgMembers(UUID orgId, List<UUID> memberIds) {
+        Map<UUID, User> byId = new HashMap<>();
+        userRepository.findAllById(memberIds).forEach(u -> byId.put(u.getId(), u));
+        List<User> members = new ArrayList<>();
+        for (UUID id : new LinkedHashSet<>(memberIds)) {
+            User user = byId.get(id);
+            if (user == null || user.getOrganization() == null
+                    || !orgId.equals(user.getOrganization().getId())) {
+                throw new ResourceNotFoundException("User", id.toString());
+            }
+            if (user.getStatus() != UserStatus.ACTIVE) {
+                throw new BadRequestException(
+                        "Member \"" + user.getName() + "\" is not active.");
+            }
+            members.add(user);
+        }
+        return members;
     }
 
     private ExerciseAssignmentResponse toResponse(ExerciseAssignment assignment,

@@ -39,9 +39,15 @@ public class PasswordResetToken {
     @Column(updatable = false, nullable = false)
     private UUID id;
 
-    /** The opaque value embedded in the emailed reset link — the lookup key. */
-    @Column(nullable = false, unique = true)
-    private UUID token = UUID.randomUUID();
+    /**
+     * SHA-256 hex of the raw UUID embedded in the emailed reset link — the
+     * lookup key. Only the hash is persisted, so a database read (backup leak,
+     * SQL injection) can't be turned into usable reset links. A fast hash is
+     * correct here: the raw token is a 122-bit random UUID, not a guessable
+     * password, so brute-forcing the hash is infeasible.
+     */
+    @Column(nullable = false, unique = true, length = 64)
+    private String token;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "user_id", nullable = false)

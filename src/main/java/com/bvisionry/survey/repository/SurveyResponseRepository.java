@@ -4,6 +4,7 @@ import com.bvisionry.survey.entity.SurveyResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -76,6 +77,27 @@ public interface SurveyResponseRepository extends JpaRepository<SurveyResponse, 
             """)
     List<Object[]> findGiftSubmissionRefs(@Param("responseIds") Collection<UUID> responseIds,
                                           @Param("giftLinkId") UUID giftLinkId);
+
+    /**
+     * The linked post-assessment submission id for a response, or null when the
+     * response has none (or the response does not exist). Scalar projection so
+     * callers in the survey slice don't have to touch the assessment-slice
+     * {@code Submission} entity (the architecture rules forbid new
+     * cross-feature dependencies).
+     */
+    @Query("SELECT r.submission.id FROM SurveyResponse r WHERE r.id = :id")
+    UUID findSubmissionIdByResponseId(@Param("id") UUID id);
+
+    /**
+     * Single-statement hard delete. A bulk JPQL delete (rather than
+     * {@code delete(entity)}) skips Hibernate's per-row cascade over the
+     * {@code answers} collection — the {@code survey_answers} FK is
+     * {@code ON DELETE CASCADE}, so the database removes the answer rows
+     * as part of this one statement.
+     */
+    @Modifying
+    @Query("DELETE FROM SurveyResponse r WHERE r.id = :id")
+    void hardDeleteById(@Param("id") UUID id);
 
     /**
      * Filtered + paginated lookup used by the admin "responses" table. Pushes the

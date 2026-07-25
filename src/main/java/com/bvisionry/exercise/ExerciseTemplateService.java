@@ -30,9 +30,10 @@ import java.util.UUID;
 
 /**
  * Super-admin authoring of exercise templates and their columns. Column
- * structure is frozen (no add/delete) once the template has assignments so
- * members' saved rows and comment anchors can't be invalidated; renames,
- * descriptions, config tweaks and reorders stay allowed.
+ * structure is frozen (no add/delete, no type or locked-state changes) once
+ * the template has assignments so members' saved rows and comment anchors
+ * can't be invalidated; renames, descriptions, config tweaks and reorders
+ * stay allowed.
  */
 @Service
 @RequiredArgsConstructor
@@ -141,6 +142,14 @@ public class ExerciseTemplateService {
                                                UpsertExerciseColumnRequest request) {
         ExerciseColumn column = requireColumnInTemplate(templateId, columnId);
         requireNotArchived(column.getTemplate());
+        // Type and locked-state changes would invalidate or freeze cell values
+        // members already hold — frozen alongside add/delete once assigned.
+        // Renames, descriptions, config tweaks and required stay allowed.
+        if (isStructureLocked(templateId)
+                && (column.getType() != request.type() || column.isLocked() != request.isLocked())) {
+            throw new BadRequestException(
+                    "This exercise has been assigned — a column's type and locked state can no longer change.");
+        }
         applyColumn(column, request);
         return ExerciseColumnResponse.from(column);
     }

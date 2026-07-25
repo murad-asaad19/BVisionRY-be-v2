@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import javax.crypto.Cipher;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Base64;
 
@@ -37,7 +38,7 @@ public class ApiKeyEncryptionService {
 
             Cipher cipher = Cipher.getInstance(ALGORITHM);
             cipher.init(Cipher.ENCRYPT_MODE, secretKey, new GCMParameterSpec(GCM_TAG_LENGTH, iv));
-            byte[] encrypted = cipher.doFinal(plaintext.getBytes());
+            byte[] encrypted = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
 
             // Prepend IV to ciphertext
             byte[] combined = new byte[IV_LENGTH + encrypted.length];
@@ -67,7 +68,7 @@ public class ApiKeyEncryptionService {
             cipher.init(Cipher.DECRYPT_MODE, secretKey, new GCMParameterSpec(GCM_TAG_LENGTH, iv));
             byte[] decrypted = cipher.doFinal(encrypted);
 
-            return new String(decrypted);
+            return new String(decrypted, StandardCharsets.UTF_8);
         } catch (Exception e) {
             throw new RuntimeException("Failed to decrypt API key", e);
         }

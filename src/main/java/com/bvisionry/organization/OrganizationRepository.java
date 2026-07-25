@@ -79,14 +79,20 @@ public interface OrganizationRepository extends JpaRepository<Organization, UUID
      * Aggregate per-org member-count + last-login in a single query.
      * Used by both the paginated platform listing (one fetch + one aggregate)
      * and the AttentionRuleService (one aggregate over every org instead of
-     * 2-4 lookups per org). The LEFT JOIN ensures orgs with zero members
+     * 2-4 lookups per org). The LEFT JOINs ensure orgs with zero members
      * still appear with count = 0 and lastLogin = null.
+     *
+     * Members of sub-orgs roll up into their parent's row: since every root org
+     * gets a default "General" sub-org that holds its people, a direct-only
+     * count would report 0 for practically every customer. DISTINCT is required
+     * because a root org's direct members repeat once per child row.
      *
      * Returns rows of [organizationId(UUID), memberCount(long), lastLogin(Instant)].
      */
     @Query("""
-            SELECT o.id, COUNT(u.id), MAX(u.lastLoginAt) FROM Organization o
-            LEFT JOIN User u ON u.organization.id = o.id
+            SELECT o.id, COUNT(DISTINCT u.id), MAX(u.lastLoginAt) FROM Organization o
+            LEFT JOIN Organization c ON c.parentOrganization.id = o.id
+            LEFT JOIN User u ON u.organization.id = o.id OR u.organization.id = c.id
             GROUP BY o.id
             """)
     List<Object[]> findOrgStatsAll();
@@ -97,8 +103,9 @@ public interface OrganizationRepository extends JpaRepository<Organization, UUID
      * the page's ids — independent of the platform-wide org count.
      */
     @Query("""
-            SELECT o.id, COUNT(u.id), MAX(u.lastLoginAt) FROM Organization o
-            LEFT JOIN User u ON u.organization.id = o.id
+            SELECT o.id, COUNT(DISTINCT u.id), MAX(u.lastLoginAt) FROM Organization o
+            LEFT JOIN Organization c ON c.parentOrganization.id = o.id
+            LEFT JOIN User u ON u.organization.id = o.id OR u.organization.id = c.id
             WHERE o.id IN :orgIds
             GROUP BY o.id
             """)

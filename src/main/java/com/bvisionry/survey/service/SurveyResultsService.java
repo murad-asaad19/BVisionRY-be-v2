@@ -3,6 +3,7 @@ package com.bvisionry.survey.service;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.excel.ExcelWorkbookBuilder;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.event.SurveyEvents;
 import com.bvisionry.survey.dto.PillarSummaryDto;
 import com.bvisionry.survey.dto.QuestionSummaryDto;
 import com.bvisionry.survey.dto.QuestionSummaryDto.GeoPointDto;
@@ -22,6 +23,7 @@ import com.bvisionry.survey.entity.SurveyResponse;
 import com.bvisionry.survey.repository.SurveyAnswerRepository;
 import com.bvisionry.survey.repository.SurveyResponseRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -58,6 +60,7 @@ public class SurveyResultsService {
     private final SurveyResponseRepository responseRepository;
     private final SurveyAnswerRepository answerRepository;
     private final CountryCatalog countryCatalog;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(readOnly = true)
     public SurveyResultsSummaryDto getSummary(UUID surveyId) {
@@ -446,13 +449,23 @@ public class SurveyResultsService {
     }
 
     /**
-     * Permanently remove a single response (and, via cascade, its answers).
+     * Permanently remove a single response (and, via DB cascade, its answers).
      * Scoped to the survey so a response id from another survey 404s instead
-     * of deleting across surveys.
+     * of deleting across surveys. A post-assessment response is embedded in
+     * the cached member-results view, so its cache entry is evicted once the
+     * delete commits.
      */
     @Transactional
     public void deleteResponse(UUID surveyId, UUID responseId) {
-        responseRepository.delete(requireResponse(surveyId, responseId));
+        requireResponse(surveyId, responseId);
+        // Captured before the row disappears; a scalar lookup keeps this slice
+        // off the assessment-slice Submission entity.
+        UUID submissionId = responseRepository.findSubmissionIdByResponseId(responseId);
+        responseRepository.hardDeleteById(responseId);
+        if (submissionId != null) {
+            eventPublisher.publishEvent(
+                    new SurveyEvents.PostAssessmentResponseDeleted(submissionId));
+        }
     }
 
     /** Fetch a response scoped to its survey, or 404. */

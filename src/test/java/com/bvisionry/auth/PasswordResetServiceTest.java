@@ -5,6 +5,7 @@ import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.web.RequestContextUtils;
 import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.EmailService;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +25,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -66,7 +66,7 @@ class PasswordResetServiceTest {
     // ---------- requestReset ----------
 
     @Test
-    void requestReset_knownEmail_savesTokenAndEmailsLink() {
+    void requestReset_knownEmail_savesHashedTokenAndEmailsRawLink() {
         when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
         when(tokenRepository.save(any(PasswordResetToken.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -78,14 +78,46 @@ class PasswordResetServiceTest {
         ArgumentCaptor<PasswordResetToken> saved = ArgumentCaptor.forClass(PasswordResetToken.class);
         verify(tokenRepository).save(saved.capture());
         assertThat(saved.getValue().getUser()).isSameAs(user);
-        assertThat(saved.getValue().getToken()).isNotNull();
         assertThat(saved.getValue().getExpiresAt())
                 .isCloseTo(Instant.now().plus(PasswordResetService.TOKEN_TTL), within(java.time.Duration.ofSeconds(5)));
 
+        ArgumentCaptor<String> resetUrl = ArgumentCaptor.forClass(String.class);
         verify(emailService).sendPasswordResetEmailAsync(
-                eq("ada@example.com"),
-                contains("/reset-password/" + saved.getValue().getToken()),
-                eq(saved.getValue().getExpiresAt()));
+                eq("ada@example.com"), resetUrl.capture(), eq(saved.getValue().getExpiresAt()));
+
+        // Emailed link carries the raw UUID; the row stores only its SHA-256.
+        String rawToken = resetUrl.getValue()
+                .substring(resetUrl.getValue().lastIndexOf('/') + 1);
+        assertThat(saved.getValue().getToken())
+                .isNotEqualTo(rawToken)
+                .isEqualTo(RequestContextUtils.sha256Hex(rawToken));
+    }
+
+    @Test
+    void requestThenReset_rawTokenRoundTripsThroughHashedLookup() {
+        when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+        when(tokenRepository.save(any(PasswordResetToken.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        when(frontendUrls.path(any(String.class)))
+                .thenAnswer(inv -> "http://localhost:3000" + inv.getArgument(0));
+
+        passwordResetService.requestReset("ada@example.com");
+
+        ArgumentCaptor<PasswordResetToken> saved = ArgumentCaptor.forClass(PasswordResetToken.class);
+        verify(tokenRepository).save(saved.capture());
+        ArgumentCaptor<String> resetUrl = ArgumentCaptor.forClass(String.class);
+        verify(emailService).sendPasswordResetEmailAsync(any(String.class), resetUrl.capture(), any(Instant.class));
+        UUID rawToken = UUID.fromString(
+                resetUrl.getValue().substring(resetUrl.getValue().lastIndexOf('/') + 1));
+
+        when(tokenRepository.findByToken(saved.getValue().getToken()))
+                .thenReturn(Optional.of(saved.getValue()));
+        when(passwordEncoder.encode("new-password-123")).thenReturn("new-hash");
+
+        passwordResetService.resetPassword(rawToken, "new-password-123");
+
+        assertThat(user.getPasswordHash()).isEqualTo("new-hash");
+        verify(refreshTokenRepository).revokeAllForUser(eq(userId), any(Instant.class));
     }
 
     @Test
@@ -105,7 +137,7 @@ class PasswordResetServiceTest {
         when(tokenRepository.findByToken(token.getToken())).thenReturn(Optional.of(token));
         when(passwordEncoder.encode("new-password-123")).thenReturn("new-hash");
 
-        passwordResetService.resetPassword(token.getToken(), "new-password-123");
+        passwordResetService.resetPassword(RAW_TOKEN, "new-password-123");
 
         assertThat(user.getPasswordHash()).isEqualTo("new-hash");
         verify(userRepository).save(user);
@@ -124,7 +156,7 @@ class PasswordResetServiceTest {
         when(tokenRepository.findByToken(token.getToken())).thenReturn(Optional.of(token));
         when(passwordEncoder.encode("new-password-123")).thenReturn("new-hash");
 
-        passwordResetService.resetPassword(token.getToken(), "new-password-123");
+        passwordResetService.resetPassword(RAW_TOKEN, "new-password-123");
 
         assertThat(user.getPasswordHash()).isEqualTo("new-hash");
     }
@@ -135,7 +167,7 @@ class PasswordResetServiceTest {
         token.setExpiresAt(Instant.now().minusSeconds(60));
         when(tokenRepository.findByToken(token.getToken())).thenReturn(Optional.of(token));
 
-        assertThatThrownBy(() -> passwordResetService.resetPassword(token.getToken(), "new-password-123"))
+        assertThatThrownBy(() -> passwordResetService.resetPassword(RAW_TOKEN, "new-password-123"))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("invalid or has expired");
 
@@ -149,7 +181,7 @@ class PasswordResetServiceTest {
         token.setUsedAt(Instant.now().minusSeconds(60));
         when(tokenRepository.findByToken(token.getToken())).thenReturn(Optional.of(token));
 
-        assertThatThrownBy(() -> passwordResetService.resetPassword(token.getToken(), "new-password-123"))
+        assertThatThrownBy(() -> passwordResetService.resetPassword(RAW_TOKEN, "new-password-123"))
                 .isInstanceOf(BadRequestException.class);
 
         assertThat(user.getPasswordHash()).isEqualTo("old-hash");
@@ -159,7 +191,8 @@ class PasswordResetServiceTest {
     @Test
     void resetPassword_unknownToken_rejected() {
         UUID bogus = UUID.randomUUID();
-        when(tokenRepository.findByToken(bogus)).thenReturn(Optional.empty());
+        when(tokenRepository.findByToken(RequestContextUtils.sha256Hex(bogus.toString())))
+                .thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> passwordResetService.resetPassword(bogus, "new-password-123"))
                 .isInstanceOf(BadRequestException.class);
@@ -167,9 +200,13 @@ class PasswordResetServiceTest {
         verifyNoInteractions(refreshTokenRepository, passwordEncoder);
     }
 
+    /** Raw token "from the email"; the entity below stores only its SHA-256. */
+    private static final UUID RAW_TOKEN = UUID.randomUUID();
+
     private PasswordResetToken usableToken() {
         PasswordResetToken token = new PasswordResetToken();
         token.setUser(user);
+        token.setToken(RequestContextUtils.sha256Hex(RAW_TOKEN.toString()));
         token.setExpiresAt(Instant.now().plusSeconds(3600));
         return token;
     }

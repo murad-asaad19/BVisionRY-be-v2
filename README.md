@@ -49,9 +49,10 @@ Two tiers of tests, both under `src/test/java`:
 Docker Desktop is running in this environment, so the integration tests execute; on a
 machine without Docker, `mvnw test` still passes (integration tests report as skipped).
 
-> **Coverage:** no JaCoCo plugin is wired into `pom.xml` today, so `mvnw test` produces
-> a Surefire report (`target/surefire-reports/`) but **no coverage report**. Add the
-> `jacoco-maven-plugin` if a coverage gate is needed.
+> **Coverage:** `jacoco-maven-plugin` is wired into `pom.xml` — `mvnw test` produces a
+> coverage report (`target/site/jacoco/`) alongside the Surefire report, and the `check`
+> goal enforces a **10% line-coverage ratchet** (raise the minimum as coverage grows;
+> never lower it).
 
 ## Profiles
 
@@ -96,6 +97,40 @@ applied migration** — its checksum is recorded in every database's
 **intentional gap at V84** (it jumps `V83__playback_reviews.sql` → `V85__catalog_certificate_schema_fixes.sql`):
 V84 was applied to environments and later removed, and that history is why the slot
 stays empty. Do not fill, reuse, or renumber V84 — always add the next unused number.
+
+## Package layout
+
+Three layouts coexist historically under `com.bvisionry.<feature>`:
+
+| Style | Shape | Features |
+| ----- | ----- | -------- |
+| **DDD-ish (canonical for new features)** | `domain/ · dto/ · repository/ · web/` (controllers + their services live in `web/`) | `workshops`, `catalog`, `quiz`, `enrollment`, `programflow`, `certificate` |
+| Layered | `controller/ · service/ · entity/ · repository/ · dto/` | `survey`, `pipeline`, `reporting`, `insights` |
+| Flat | everything at the package root (± `dto/`, `entity/`) | `assessment`, `auth`, `organization`, `evaluation`, `lead` |
+
+**Rule:** a brand-new feature uses the DDD-ish shape (copy `workshops/` as the
+reference). When extending an existing feature, match *its* layout — do not
+migrate a feature between styles as a side effect of another change.
+
+## Tenant scoping (multi-org isolation)
+
+Org isolation is enforced per-query; pick the guard that fits the endpoint:
+
+1. **Path-scoped** `/api/organizations/{orgId}/**` — `OrgAccessInterceptor`
+   gates automatically; nothing extra needed beyond using that path shape.
+2. **SpEL-checkable param** — `@PreAuthorize("hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId)")`.
+3. **Service-layer / non-path org access** — call
+   `SecurityUtils.requireOrgAccess(orgId)` before touching org-owned data
+   (the pattern used across catalog/quiz authoring).
+4. **Loading an aggregate by bare id** — do it inside a `require*(orgId, id)`
+   helper that asserts ownership (`requireWorkshop`, `requireAssignmentInOrg`, …).
+   This is machine-enforced: the ArchUnit rule
+   `bareIdLoadsOnOrgOwnedReposRequireGuard` fails the build on a bare-ID
+   `findById`/`findAll` against an org-owned repository outside a `require*`
+   method.
+
+All four routes end at the same predicate (`OrgAccessGuard.callerHasAccess`):
+SUPER_ADMIN, member of the org, or ORG_ADMIN of its parent org.
 
 ## API docs (Swagger)
 

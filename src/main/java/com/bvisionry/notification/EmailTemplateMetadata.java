@@ -42,7 +42,7 @@ public final class EmailTemplateMetadata {
             case ASSESSMENT_REMINDER            -> "Sent as a nudge when an assessment is still incomplete.";
             case RESULTS_READY                  -> "Sent once evaluation finishes and the member can view their results.";
             case POST_ASSESSMENT_SURVEY_INVITE  -> "Sent alongside the results email when the pipeline has a paired survey, inviting the member to share feedback.";
-            case INVITATION                     -> "Sent to someone invited to join an organization on BVisionRY.";
+            case INVITATION                     -> "Sent to someone invited to join an organization on Bvisionry.";
             case PASSWORD_RESET                 -> "Sent when a user requests a password reset from the \"Forgot your password?\" link, with a single-use link to choose a new password.";
             case TRIAL_ENDING_SOON              -> "Sent to org admins a few days before their Premium trial expires.";
             case TRIAL_EXPIRED                  -> "Sent to org admins once their Premium trial has ended.";

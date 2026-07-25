@@ -6,6 +6,7 @@ import com.bvisionry.assessment.dto.CreateAssignmentRequest;
 import com.bvisionry.auth.CookieService;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.jwt.JwtProvider;
+import com.bvisionry.auth.jwt.UserPrincipalCache;
 import com.bvisionry.common.enums.PipelineStatus;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.web.ClientIpResolver;
@@ -59,6 +60,11 @@ class AssignmentControllerTest {
 
     @MockitoBean
     private JwtProvider jwtProvider;
+
+    // Required by JwtAuthenticationFilter in the @WebMvcTest slice; never
+    // touched on these tests' no-token requests.
+    @MockitoBean
+    private UserPrincipalCache userPrincipalCache;
 
     @MockitoBean
     private CookieService cookieService;

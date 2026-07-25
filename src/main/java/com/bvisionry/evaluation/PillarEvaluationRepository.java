@@ -64,7 +64,10 @@ public interface PillarEvaluationRepository extends JpaRepository<PillarEvaluati
                                            @Param("pillarId") UUID pillarId);
 
     /**
-     * All evaluations for a given org + pipeline (for dashboard overview).
+     * All evaluations for a given org + pipeline, as full entities. Used by the
+     * PDF/Excel insight exports, which read the AI narrative columns. Dashboard
+     * aggregations must use {@link #findScoreViewsByOrgAndPipeline} instead —
+     * this query hydrates the heavy AI payload columns with every row.
      */
     @Query("""
             SELECT pe FROM PillarEvaluation pe
@@ -78,5 +81,24 @@ public interface PillarEvaluationRepository extends JpaRepository<PillarEvaluati
             """)
     List<PillarEvaluation> findByOrgAndPipeline(@Param("orgId") UUID orgId,
                                                  @Param("pipelineId") UUID pipelineId);
+
+    /**
+     * Score-only projection of {@link #findByOrgAndPipeline} for dashboard
+     * aggregations: identical scope (org + pipeline, EVALUATED only), but
+     * selects just the six aggregation columns instead of whole rows.
+     */
+    @Query("""
+            SELECT new com.bvisionry.evaluation.PillarScoreView(
+                s.id, p.id, p.name, p.iconKey, pe.scorePercentage, pe.maturityLabel)
+            FROM PillarEvaluation pe
+            JOIN pe.pillar p
+            JOIN pe.submission s
+            JOIN s.assignment a
+            WHERE a.organization.id = :orgId
+            AND a.pipeline.id = :pipelineId
+            AND s.status = 'EVALUATED'
+            """)
+    List<PillarScoreView> findScoreViewsByOrgAndPipeline(@Param("orgId") UUID orgId,
+                                                         @Param("pipelineId") UUID pipelineId);
 
 }

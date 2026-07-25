@@ -9,7 +9,7 @@
 #     blocked/ with the question stated, and the scheduler moves on.
 #   - Only a human amends this file.
 #
-# Rationale: docs/roadmap.md §15   Execution: docs/agent-execution-graph.md
+# Rationale: docs/roadmap.md §14   Execution: docs/agent-execution-graph.md
 
 version: 1
 revised: 2026-07-25
@@ -23,31 +23,31 @@ product:
   is_not: "a learning management system"
   # Learning content ships only in the top tier. Two of three tiers have none.
   unit_of_value: MEASURED_COHORT
-  vertical: ACCELERATOR_FIRST          # §15.7
+  vertical: ACCELERATOR_FIRST          # §14.7
   # Entering the enterprise-L&D roadmap by accident is the failure mode.
   never_add: [SCORM, xAPI, AICC, HRIS_INTEGRATION]
 
 # ---------------------------------------------------------------------------
-# Closed decisions — roadmap §15
+# Closed decisions — roadmap §14
 # ---------------------------------------------------------------------------
 decisions:
   roles:
-    coach_separate_from_instructor: true      # §15.1 — two roles, different data scopes
-    manager: DELETE                           # §15.2 — migrate holders to MEMBER
-  calendar: INTEGRATE_CAL_COM                 # §15.3 — never build native booking
+    coach_separate_from_instructor: true      # §14.1 — two roles, different data scopes
+    manager: DELETE                           # §14.2 — migrate holders to MEMBER
+  calendar: INTEGRATE_CAL_COM                 # §14.3 — never build native booking
   i18n:
-    scope: UI_CHROME_ONLY                     # §15.4 — never translate course content
+    scope: UI_CHROME_ONLY                     # §14.4 — never translate course content
     retrofit_before: 2027-Q3
     new_surfaces_use_next_intl: true          # stop the bill growing now
   white_label:
     logo: true
     colors: true
-    custom_domain: false                      # §15.5
+    custom_domain: false                      # §14.5
     branded_email_sender: false
-  communications: ANNOUNCEMENTS_ONLY          # §15.6 — no threads, no DMs
+  communications: ANNOUNCEMENTS_ONLY          # §14.6 — no threads, no DMs
 
 # ---------------------------------------------------------------------------
-# Delivery order — roadmap §13. The graph does not reorder the business case.
+# Delivery order — roadmap §12. The graph does not reorder the business case.
 # ---------------------------------------------------------------------------
 tier_order:
   - phase: 0

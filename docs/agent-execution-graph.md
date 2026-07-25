@@ -56,7 +56,7 @@ do**, because without them there is no signal that a bad change shipped.
 
 | Human function removed | Autonomous replacement | Status |
 |---|---|---|
-| Spine judgement (role model, schema shape) | **Policy record** — decisions pre-committed as an artifact the graph reads (§2) | ✅ Exists — roadmap §15 |
+| Spine judgement (role model, schema shape) | **Policy record** — decisions pre-committed as an artifact the graph reads (§2) | ✅ Exists — roadmap §14 |
 | Browser validation on FE tickets | **Playwright e2e in CI** against a compose stack | ❌ Specs exist, never run. **Blocker.** |
 | "Something looks wrong in production" | **Error tracking + alerting** as the rollback trigger | ❌ No exception aggregation on either end. **Blocker.** |
 | Judging whether a diff is in scope | **Scope manifest** — declared file globs per ticket, enforced at merge | ❌ New, ~2 days |
@@ -83,23 +83,23 @@ not deleted, it is relocated from runtime interrupt to declared artifact.**
 
 The policy record is a committed file the orchestrator and every worker read as
 authoritative. Its initial contents are the eight decisions already closed in
-roadmap §15:
+roadmap §14:
 
 ```yaml
 # docs/agent-policy.yml — excerpt (the real file is committed alongside this one)
 roles:
-  coach_separate_from_instructor: true      # §9.1
-  manager: DELETE                            # §9.2 — migrate holders to MEMBER
-calendar: INTEGRATE_CAL_COM                  # §9.3 — do not build native booking
-i18n: { scope: UI_CHROME_ONLY, before: 2027-Q3 }   # §9.4
-white_label: { logo: true, colors: true, custom_domain: false }  # §9.5
-communications: ANNOUNCEMENTS_ONLY           # §9.6
-vertical: ACCELERATOR_FIRST                  # §9.7 — never add SCORM/xAPI/HRIS
+  coach_separate_from_instructor: true      # §14.1
+  manager: DELETE                            # §14.2 — migrate holders to MEMBER
+calendar: INTEGRATE_CAL_COM                  # §14.3 — do not build native booking
+i18n: { scope: UI_CHROME_ONLY, before: 2027-Q3 }   # §14.4
+white_label: { logo: true, colors: true, custom_domain: false }  # §14.5
+communications: ANNOUNCEMENTS_ONLY           # §14.6
+vertical: ACCELERATOR_FIRST                  # §14.7 — never add SCORM/xAPI/HRIS
 tier_order: [GROWTH, FOUNDER_SUCCESS, PERSONALIZATION]  # §7
 
 hard_constraints:
   - never_write: "src/test/resources/architecture/frozen-violations/**"
-  - migrations: EXPAND_CONTRACT_ONLY         # §6 — additive, reversible by code revert
+  - migrations: EXPAND_CONTRACT_ONLY         # §11 — additive, reversible by code revert
   - never_touch: ["**/pricing/**", "**/founder-content.ts"]
   - one_feature_per_promotion: true
 ```
@@ -165,7 +165,7 @@ flowchart TB
 
 | Node | Model · effort  | Context it receives | Authority | Stop condition |
 |---|-----------------|---|---|---|
-| **Orchestrator** | Opus 5 · high   | Policy record, roadmap §13, ticket queue, zone status, WIP | Routes, spawns, cancels, parks | — |
+| **Orchestrator** | Opus 5 · high   | Policy record, roadmap §12, ticket queue, zone status, WIP | Routes, spawns, cancels, parks | — |
 | **Spine writer** | Opus 5 · max    | Full schema, migration history, policy record | **Exclusive** write on migrations/enums | Expand-contract check fails → park |
 | **Zone worker** | Opus 5 · high   | Ticket spec + scope manifest + its own slice + `CLAUDE.md` + spine output. **Not** other zones. | Implements within its declared scope | 3 gate failures → park |
 | **Mechanical worker** | Opus 5 · medium | One file + one rule | Breadth sweeps only | 2 failures → park |
@@ -356,7 +356,7 @@ design.
 
 ```mermaid
 flowchart LR
-    Q["📋 Backlog<br/>ordered by §13 tier"] --> SCHED{"scheduler"}
+    Q["📋 Backlog<br/>ordered by §12 tier"] --> SCHED{"scheduler"}
     SCHED -->|"WIP < 3"| PICK["pick next eligible<br/>policy covers it? spine deps met?<br/>zone free? promotion slot free?"]
     PICK --> WG["work graph (§4)"]
     WG -->|shipped| Q2["✔ done"]
@@ -452,9 +452,10 @@ deserve a probabilistic agent and which stay boring, deterministic code.
 
 ## 9. Where the payoff actually is
 
-Against roadmap §13's ~43.5 engineer-weeks of ~45 available, this graph exists to buy
-back weeks. It will not do that on deep design work — coach console
-architecture, auto-enrolment — where the bottleneck is judgement, not typing.
+This graph exists to raise throughput and confidence at once. It adds least on
+deep design work — coach console architecture, auto-enrolment — where the
+constraint is judgement and blast radius, not how much can be written in
+parallel. Fanning those out buys nothing and costs coherence.
 
 It pays on **wide, shallow, independently verifiable** work:
 

@@ -1,18 +1,21 @@
 # Bvisionry — Roadmap
 
-Single source of truth for what we build and why.
+What we build, for which tier, in what order, and why. **Not how, and not when.**
+Implementation is the delivering agent's call. Sequencing is by dependency and
+revenue tier, not by calendar — the only dates here are externally imposed and
+listed in §6.
 
 Last revised: 2026-07-25 · Verified against `main`
 Scope: `backend` (Spring Boot 4 / Java 21) + `web` (Next.js 16 / React 19)
 
-**Companions:** `agent-policy.yml` (machine-readable decisions — what agents
-load) · `agent-execution-graph.md` (how the work gets executed)
+**Companions:** `agent-policy.yml` (closed decisions + hard constraints — what
+agents load) · `agent-execution-graph.md` (how the work is executed)
 
 ---
 
-- [Part I — Strategy](#part-i--strategy) · what we sell, what's missing, what it costs
-- [Part II — Engineering specification](#part-ii--engineering-specification) · the actual work
-- [Part III — Delivery](#part-iii--delivery) · phases, risks, decisions
+- [Part I — Strategy](#part-i--strategy) · what we sell, what's missing
+- [Part II — The work](#part-ii--the-work) · outcomes and acceptance criteria
+- [Part III — Delivery](#part-iii--delivery) · order, risks, decisions
 
 ---
 
@@ -22,29 +25,29 @@ load) · `agent-execution-graph.md` (how the work gets executed)
 
 The platform is **much further along than a feature list implies**. The
 assessment engine, course catalog and player, certificates, cohorts, multi-tenant
-org hierarchy, workshops and notifications are all built and hardened. The
-expensive, slow, risky work is done.
+org hierarchy, workshops and notifications are built and hardened. The expensive,
+slow, risky work is done.
 
 Three findings define what to do next.
 
 **1 · We sell a measurement instrument, not an LMS.** The pricing page sells the
-**Founder Readiness Index**, priced per *cohort*, in which learning content
-appears only in the top tier. That positioning is correct and already chosen —
-but the engineering backlog was written as if we were building an LMS. The two
-describe different products.
+**Founder Readiness Index**, priced per *cohort*, with learning content only in
+the top tier. That positioning is correct and already chosen — but the
+engineering backlog had been written as if we were building an LMS. The two
+described different products.
 
 **2 · Six features are sold today and do not exist** (§3). Including the
-Growth-tier "Mentor/Organization access portal" — the only unbuilt feature in
-the self-serve ladder, and therefore the single thing standing between a $299
+Growth-tier "Mentor/Organization access portal" — the only unbuilt feature in the
+self-serve ladder, and therefore the single thing standing between a $299
 customer and a $599 one.
 
-**3 · The plan was oversubscribed 1.7×.** At the observed solo velocity the
-original three phases were ~75 engineer-weeks against ~45 available before the
-Q2 2027 deadline. Re-ordered around the tier ladder and cut per §12, it fits with
-~6 weeks of buffer.
+**3 · The original ordering built the wrong things first.** It front-loaded work
+that unblocks no revenue, left the contractual Q2 2027 obligation until last with
+no buffer, and never started the compliance track — the one kind of work no
+amount of execution speed can compress.
 
-Ordering rule for everything below: **deliver what is already sold, cheapest
-tier first, before building anything that is not yet sold.**
+Ordering rule for everything below: **deliver what is already sold, cheapest tier
+first, before building anything that is not yet sold.**
 
 ---
 
@@ -56,64 +59,59 @@ tier first, before building anything that is not yet sold.**
 | **Growth** *("most clients start here")* | $599 | $419 | 1 cohort/month · 40 founders | ❌ None |
 | **Founder Success** | Contact Sales | — | Unlimited | ✅ Journeys + coaching |
 
-Annual billing discounts ≈30%. Comparison ladder reads `Assessment & Screening →
-Development & Learning → Analytics & Reporting`. Four verticals: accelerators,
-universities, investors, corporate.
+Annual billing discounts ≈30%. The comparison ladder reads `Assessment &
+Screening → Development & Learning → Analytics & Reporting`. Four verticals:
+accelerators, universities, investors, corporate.
 
 Two consequences:
 
 **Learning is a top-tier add-on.** Two of three tiers ship zero content. The LMS
 is delivery machinery for Founder Success contracts.
 
-**The unit of value is a measured cohort.** Score every roadmap item by whether
-it lets us sell, upgrade, or renew a cohort.
+**The unit of value is a measured cohort.** Score every item by whether it lets us
+sell, upgrade, or renew a cohort.
 
 ---
 
 ## 3. The delivery gap — sold, not built
 
-| Sold in | Promised | Reality | Cost |
-|---|---|---|---|
-| **Growth $599** | "Mentor/Organization access portal" | ❌ The coach console. Only unbuilt feature in the self-serve ladder. | 8 EW |
-| **Growth $599** | "Cohort benchmarking" | 🟡 `TeamInsightResult.Benchmarking` — AI-narrated *team vs platform* + outlier pillars in the org insight PDF/Excel. Not a quantitative corpus. | 3 EW |
-| **Founder Success** | "ROI reporting & analytics" | ❌ The renewal driver for the highest-ACV tier. | 5 EW |
-| **Founder Success** | "Personalized learning journeys" | ❌ The Q2 2027 auto-enrolment item. | 10 EW |
-| **Founder Success** | "Group + 1:1 coaching sessions" | ❌ No booking model. | 3 EW (integrate) |
-| **Founder Success** | "White-label platform option" | 🟡 Data-scoping only; no branding. | 8 EW |
-| **Founder Success** | "Custom FRI analysis" | 🟡 Service-delivered today. | — |
-| — | Course library | ✅ Built, flag off. **Not sold in Starter or Growth** → blocks no self-serve revenue. | 2.5 EW QA |
+| Sold in | Promised | Reality |
+|---|---|---|
+| **Growth $599** | "Mentor/Organization access portal" | ❌ The coach console. Only unbuilt feature in the self-serve ladder. |
+| **Growth $599** | "Cohort benchmarking" | 🟡 Ships as an AI-written *team vs platform* narrative inside org insight reports. Not a quantitative corpus. |
+| **Founder Success** | "ROI reporting & analytics" | ❌ The renewal driver for the highest-ACV tier. |
+| **Founder Success** | "Personalized learning journeys" | ❌ The Q2 2027 auto-enrolment obligation. |
+| **Founder Success** | "Group + 1:1 coaching sessions" | ❌ No booking model. |
+| **Founder Success** | "White-label platform option" | 🟡 Data-scoping only; no branding. |
+| **Founder Success** | "Custom FRI analysis" | 🟡 Service-delivered today. |
+| — | Course library | ✅ Built, feature-flagged off. **Not sold in Starter or Growth** → releases no self-serve revenue. |
 
 ### What can be sold safely today
 
 - **Starter** — fully deliverable.
 - **Growth** — deliverable *except* the mentor/organization portal. Scope it out
-  or commit to a date until Phase 1 ships.
+  of contracts or commit to a date until Phase 1 ships.
 - **Founder Success** — Contact Sales, so stage delivery per contract. Do not
-  sign one requiring white-label or native booking before Q3 2027, or
-  personalized journeys before Q2 2027.
-
-> Housekeeping: `fri-pricing-plans.tsx` documents an `fri-enterprise` tier in an
-> "Enterprise & Add-Ons" section. Neither exists. Also live on the page: Growth
-> reads *"Up to 1 cohorts/month."*
+  sign one requiring white-label, booking, or personalized journeys before the
+  phase that delivers it (§12).
 
 ---
 
 ## 4. Verified current state
 
-Every load-bearing claim re-checked against `main`.
+Claims re-checked against `main` on 2026-07-25.
 
-| Claim | Finding | |
-|---|---|---|
-| `MANAGER` role is dead | 2 refs in 790 files — the enum declaration and one comment. Zero authorities. | ✅ |
-| `INSTRUCTOR` is authoring-only | 18 refs, all catalog/quiz authoring | ✅ |
-| Courses complete but flagged off | `src/lib/features.ts` — default off; admin authoring deliberately ungated | ✅ |
-| Zero i18n | No `next-intl`/`i18n`/`lingui`; no locale on user or org | ✅ |
-| Coverage thin | BE 100 test files / 790 source (JaCoCo floor 0.10). **FE 12 / 600 (2%)** | ✅ worse than stated |
-| No sitemap/robots/manifest | None; `sw.js` exists | ✅ |
-| `Breadcrumb` primitive unused | 4 files | ✅ |
-| Exotic lesson types don't render | `SCORM`, `WEBPAGE`, `ARTICLE` in the enum + API contract, **no runtime** | ✅ |
-| **Enterprise SSO** | ❌ Google OAuth2 + local credentials only. No SAML/OIDC. | new |
-| **Team capacity** | 105 BE + 84 FE commits in 6 months from **one contributor** | new |
+| Finding | |
+|---|---|
+| `MANAGER` role grants **no authorities** — assignable, declared, silently equivalent to member access | ✅ |
+| `INSTRUCTOR` is authoring-only. It is not a coach role, and no model links a coach to the founders they coach | ✅ |
+| Self-paced courses are **complete but feature-flagged off**; admin authoring is deliberately ungated | ✅ |
+| **Zero i18n** on either end — no locale on user or org, all copy hardcoded English | ✅ |
+| Test coverage is thin: backend ~13%, **frontend ~2%** | ✅ worse than previously stated |
+| No sitemap, robots or manifest; a service worker already exists | ✅ |
+| Breadcrumbs are effectively unused across the app | ✅ |
+| Three lesson types are offered in authoring with **no player runtime behind them** | ✅ |
+| **No enterprise SSO** — Google OAuth + local credentials only. No SAML/OIDC. | new |
 
 ```mermaid
 flowchart LR
@@ -140,9 +138,9 @@ into a defensible product.**
 
 Competitors are **program-operations** platforms — AcceleratorApp (500+ programs,
 ~40% of major US accelerators), F6S, Babele (Google, UN, Bosch), Catalyzer,
-Sopact Sense — selling applications, deal flow, mentor matching, demo days. Band
-is **$200–800/month per program**, putting Growth at $599 squarely in it. We sell
-the diagnostic instead: same buyer, same budget line, different product.
+Sopact Sense — selling applications, deal flow, mentor matching, demo days. The
+band is **$200–800/month per program**, putting Growth at $599 squarely in it. We
+sell the diagnostic instead: same buyer, same budget line, different product.
 
 The category's structural weakness is the **"Cohort Cliff"** — no persistent
 founder identity connecting intake → activity → outcome in one queryable record,
@@ -155,214 +153,169 @@ out of scope entirely. It substitutes a different bar, unbudgeted:
 
 | Requirement | Status | Consequence |
 |---|---|---|
-| **SOC 2 Type II** | ❌ | Most common late-stage B2B blocker; required by university CIO/CISO vendor-risk programs. **3–12 month observation window, uncompressible.** |
-| **VPAT / ACR (WCAG 2.1 AA)** | ❌ | *Virtually impossible to sell to multiple universities without one* in 2026. **2–4 weeks.** |
+| **SOC 2 Type II** | ❌ | Most common late-stage B2B blocker; required by university vendor-risk programs. |
+| **VPAT / ACR (WCAG 2.1 AA)** | ❌ | *Virtually impossible to sell to multiple universities without one* in 2026. |
 | **SAML 2.0 / OIDC SSO** | ❌ | Confirmed with IT during procurement. |
-| **GDPR export & deletion** | ⚠️ **Claimed publicly, not built** | Pricing FAQ states data is *"encrypted and GDPR-compliant."* Retention jobs exist; export/delete do not. |
+| **GDPR export & deletion** | ⚠️ **Claimed publicly, not built** | The pricing FAQ states data is *"encrypted and GDPR-compliant."* Retention exists; export/delete do not. |
 | **FRI validity evidence** | ❌ | Instruments are bought on validity. Nothing captures whether a pillar score predicts funding, survival or revenue. |
 | ~~SCORM / xAPI / HRIS~~ | N/A | Out of scope under this positioning. |
 
 Where the market is going: adaptive personalization is the defining capability
 (~30% lower time-to-competency, 40–50% higher completion); skills taxonomy and
-competency mapping is the organising primitive (the 11 pillars *are* a competency
-framework, not yet exposed as one); proactive AI agents that intervene are
-shipping in CYPHER and Degreed.
+competency mapping is the organising primitive — the 11 pillars *are* a
+competency framework, not yet exposed as one; proactive AI agents that intervene
+are shipping in CYPHER and Degreed.
 
 ---
 
-## 6. Capacity
+## 6. What is actually calendar-bound
 
-Engineer-weeks (EW) at observed solo velocity with AI assistance. ~45 productive
-EW available in the 11 months to the deadline.
+Execution speed is not the constraint on this roadmap. Three things are, and none
+of them move faster with more agents:
 
-| | Original plan | Re-ordered (§11) |
+| Constraint | Duration | Why it can't be compressed |
 |---|---|---|
-| Phase 1 | 26 EW | 18 EW |
-| Phase 2 | 24 EW | 15.5 EW |
-| Phase 3 | 25 EW | 10 EW |
-| **Total** | **~75 EW → 17 months** | **~43.5 EW → fits, ~6 wk buffer** |
+| **SOC 2 Type II observation window** | 3–12 months | An auditor observes controls operating over time. There is no version of this that finishes early. **Not started = enterprise pipeline blocked for its full length.** |
+| **VPAT / ACR** | 2–4 weeks | External audit engagement, then remediation. |
+| **Q2 2027 personalization obligation** | Fixed date | Contractual. |
+| Staging soak per promotion | Per `agent-execution-graph.md` | Error signal needs wall-clock time to appear. |
 
-### Estimate corrections
+Everything else is dependency-ordered, not time-ordered. **The compliance track
+starts immediately and runs in parallel with all engineering work** — it consumes
+budget and calendar, not delivery capacity.
 
-| Item | Original | Actual | Why |
+---
+
+# Part II — The work
+
+Each item states the outcome and how we know it's done. **How to build it is the
+delivering agent's decision** — investigate the code at execution time rather than
+trusting a plan written earlier.
+
+## 7. Backlog
+
+**Blast radius** routes the ticket — it says how much verification the work
+needs, not how long it takes:
+
+- **S** — one slice, no schema change, reversible by code revert alone
+- **M** — one slice plus schema, or reads across slices; needs the spine
+- **L** — new slice or role/enum change; full validator set, highest scrutiny
+
+| # | Item | | Outcome & acceptance criteria | Radius |
+|---|---|---|---|---|
+| 1 | Authoring honesty | ✅ | Every lesson type offered in authoring renders in the player. Types with no runtime are removed from the authoring UI. | S |
+| 2 | Mindset tracking | ✅ | A learner records a reflection against a completed lesson; an admin can see it. Reuse the existing assessment or quiz mechanism if it fits. | S |
+| 3 | Founder dashboard | 🟡 | A member's home shows assigned modules, completion %, the single next action, and a pillar snapshot — without navigating to separate hubs. All data already exists. | M |
+| 4 | **Coach console** *(sold as Mentor Portal)* | ❌ | A coach sees **only** founders on their assigned cohorts; sees completion per founder; can review and comment on submissions; **cannot reach any other cohort's data, enforced server-side**. An org admin can assign coaches to cohorts. Founder detail shows pillar scores + module progress. | L |
+| 5 | Reflection prompts | ✅ | Met by quizzes + embedded pillar assessments. Optional: a lighter free-text type where a quiz is too heavy. | S |
+| 6 | Certificates | ✅ | Met. | — |
+| 7 | Inactivity reminders | 🟡 | A founder with no progress on an assigned course for N days is nudged on their preferred channel. N configurable per org. Notification infrastructure exists; only the trigger is missing. | S |
+| 8 | Cohort completion analytics | 🟡 | Superseded by #16 — same data, materially more value. | — |
+| 9 | Pillar → module mapping | 🟡 | An admin declares which modules address which pillar at which score band. A founder viewing results sees recommended modules. | M |
+| 10 | **Automated course selection** ⏰ *contractual* | 🟡 | On evaluation completion a founder is automatically enrolled in modules matched to their weak pillars, told **why**, and an admin can override. **Re-running an evaluation must not duplicate enrolments.** | L |
+| 11 | Self-paced library | ✅ | Full QA across every lesson type on desktop and mobile, then the flag flips. Assigned vs self-selected content is visually distinguishable. | S |
+| 12 | Mobile / PWA | ✅ | Installable, and the player works on a phone. | S |
+| 13 | Multi-language | ❌ | **Deferred.** New surfaces adopt the i18n library now so the retrofit bill stops growing. | L |
+| 14 | White-label | 🟡 | An org admin sets a logo and palette; the app renders in their brand. **No custom domains, no branded email sender.** | L |
+| 15 | Coaching calendar | ❌ | A founder books a session with their assigned coach. **Integrate an existing provider — do not build booking.** | M |
+| 16 | **ROI / impact reporting** *(sold)* | ❌ | A program operator produces a report showing pillar movement per cohort over time and per-founder deltas, exportable and presentable to a funder. **This is the renewal driver.** | M |
+| 17 | **Competency matrix** *(new)* | ❌ | The 11 pillars render as a mastery matrix per founder and per cohort, with movement over time. Mostly presentation over existing data. | S |
+| 18 | **Proactive AI nudges** *(new)* | 🟡 | The AI coach initiates contact on detected inactivity or a score drop instead of waiting to be asked. Merges with #7. | S |
+| 19 | **Quantitative benchmarking** *(sold)* | 🟡 | A cohort's pillar scores are compared against a real cross-tenant distribution, not an AI-written narrative. Compounds with every customer added. | M |
+| 20 | Cohort announcements | ❌ | A coach or org admin broadcasts to a cohort; members receive it on their preferred channel with existing opt-out respected. **Announcements only — no threads, no DMs** (policy). | M |
+
+---
+
+## 8. Target role model
+
+Policy, not implementation. Machine-readable in `agent-policy.yml`.
+
+| Role | Persona | Scope | Can do |
 |---|---|---|---|
-| White-label | M–L | **L (8 EW)** | Runtime tenant theming across 600 FE files + branded sender + domain routing |
-| Auto-enrolment | L | **L (6 EW)** ✓ | Overrun risk is idempotency/override/audit, not the rules engine |
-| Coach console | L | **L (8 EW)** ✓ | Correctly sized; correctly identified as the unlock for three other items |
-| i18n retrofit | L | **L (10 EW)** ✓ | "Adopt next-intl for new surfaces now" is the correct cheap hedge |
-| Courses QA + flag | S | **2.5 EW** | 12 lesson types × desktop/mobile is not small |
+| `SUPER_ADMIN` | Platform team | Platform | Everything |
+| `ORG_ADMIN` | Program admin | Own org + sub-orgs | Members, cohorts, authoring, analytics, coach assignment, branding |
+| `COACH` **(new)** | Coach / facilitator | **Assigned cohorts/founders only** | Read roster, review submissions, comment, run workshops |
+| `INSTRUCTOR` | Content author | Own org | Authoring only — **kept separate from COACH** |
+| `MEMBER` | Founder | Self | Own assessments, courses, program, bookings |
+| ~~`MANAGER`~~ | — | — | **Delete**; existing holders become `MEMBER` |
 
-**Reject the JaCoCo 10%→40% ratchet.** Chasing a global percentage across 790
-files produces tests nobody asked for over code nobody is changing. **Require
-coverage on changed lines** (~70% diff coverage) — one CI config change. The
-frontend at 2% is the real risk and should get the attention the ratchet would
-have consumed.
+Persona and role stay separated — "Founder" is member *type*, not a role. Keep it
+that way.
 
----
-
-# Part II — Engineering specification
-
-## 7. Gap analysis — item by item
-
-Legend: ✅ built · 🟡 partial · ❌ missing · S (<1 wk) / M (1–3 wk) / L (>3 wk)
-
-| # | Item | | Current state | What's needed | Eff |
-|---|---|---|---|---|---|
-| 1 | Content upload (video/PDF/slides) | ✅ | MinIO presigned upload (512 MB multipart), dropzone, 12 lesson types | **Remove** `SCORM`/`WEBPAGE`/`ARTICLE` from authoring — enum-only, no runtime | S |
-| 2 | Course structure + mindset checkbox | ✅ | `Course → Section → Content`, sequencing, publish states, per-content completion | Boolean reflection flag per completion, or reuse embedded assessments | S |
-| 3 | Founder dashboard | 🟡 | Separate hubs behind an `/app` NavCard grid | Unified home: assigned modules, completion %, next-up, pillar snapshot. Data exists — composition page + one aggregate endpoint | M |
-| 4 | **Coach view** *(sold as Mentor Portal)* | ❌ | No coach surface. INSTRUCTOR = authoring; MANAGER = nothing | §8: `CoachAssignment`, roster, review queue, console | L |
-| 5 | Reflection prompts | ✅ | Quizzes + embedded pillar assessments (`Content.pipelineId`) | Optional lightweight free-text type | S |
-| 6 | Completion certificates | ✅ | Entity, PDF, public verification, FE page | None | — |
-| 7 | Reminders (untouched N days) | 🟡 | Email + Web Push, per-type prefs, ShedLock jobs | Inactivity rule: no `ContentProgress` on assigned course for N days → nudge | S–M |
-| 8 | Cohort completion analytics | 🟡 | Assessment-side only; cohorts + enrollments soft-FK'd | Join enrollment progress across cohort membership → **re-scope as ROI reporting (#16)** | M |
-| 9 | Pillar → module linking | 🟡 | Forward link only (lesson embeds assessment) | `PillarCourseMapping` (pillarId → courseIds, score band) + admin UI + "recommended for you" | M |
-| 10 | **Automated course selection** ⏰ Q2 2027 | 🟡 | `PipelineAutoAssignment` auto-assigns *assessments*; engine produces pillar scores + thresholds | On `EVALUATED`: read scores, match mappings, create enrollments, notify. Rules engine + idempotency + admin override | L |
-| 11 | Self-paced library | ✅ | Fully built — **flagged off** | QA, then flip. Add "optional/explore" labelling | S |
-| 12 | Mobile friendly | ✅ | Tailwind responsive, collapsing sidebar, sheet drawer | `manifest.json` (sw.js exists → near-free PWA), device QA on player | S |
-| 13 | Multi-language | ❌ | Zero i18n, all copy hardcoded | BE locale + translation tables; FE next-intl across ~600 files. **Defer past deadline; adopt for new surfaces now** | L |
-| 14 | Org custom content (white-label) | 🟡 | `orgId`-scoped everything, `parentOrganization` hierarchy, org-admin authoring | Missing the *look*: branding entity (logo, palette, sender), runtime theming, de-hardcode `hello@bvisionry.com` | L |
-| 15 | Coaching calendar | ❌ | Nothing. "Coach" today = AI text assistant (SSE) | **Integrate Cal.com** — do not build native | M |
-| 16 | **ROI / impact reporting** *(sold, not on original roadmap)* | ❌ | — | Cohort pillar movement over time, per-founder deltas, exportable + brandable for funders. Certificate PDF + export infra already exist | M |
-| 17 | **Competency matrix** *(new)* | ❌ | Pillar data exists | Expose 11 pillars as a formal framework: mastery matrix per founder/cohort, movement over time. Presentation layer over existing data | S |
-| 18 | **Proactive AI nudges** *(new)* | 🟡 | AI coach is reactive chat | Point existing AI infra at detected inactivity + score drops. Merges with #7 | S |
-| 19 | **Cross-tenant benchmarking** *(sold)* | 🟡 | AI-narrated team-vs-platform in insight reports | Quantitative corpus: "your cohort vs 400 pre-seed B2B SaaS founders." Compounds with every customer; uncopyable by a new entrant | M |
-| 20 | Cohort communications | ❌ | No human-to-human channel anywhere | §10 — announcements only | M |
+**Non-negotiable:** a coach must be unable to reach data outside their
+assignment, enforced server-side, not by hiding navigation.
 
 ---
 
-## 8. RBAC & role restructure
+## 9. Communications scope
 
-### Current
+No human-to-human channel exists today. The closest things are reviewer feedback
+on submissions, a workshop "raised hand" flag, and one-way notifications. Support
+conversations currently happen off-platform.
 
-- Enum: `SUPER_ADMIN, ORG_ADMIN, INSTRUCTOR, MANAGER, MEMBER` (mirrored in FE `src/lib/auth.ts`)
-- `@PreAuthorize` on 65 controllers + `@orgAccess.isInOrg(#orgId)`; FE 3-layer defense (edge cookie → server `requireRole()` returning **404 not 403** → backend)
-- **`MANAGER` is dead** — declared, assignable, grants nothing. A user given it silently has member access. Security smell.
-- **No relationship model linking a coach to founders/cohorts** — so even a wired role couldn't scope its data.
-- Persona vs role correctly separated: "Founder" lives in `MemberType`. Keep it that way.
+**Decision: announcements only.** Contextual threads, coach↔founder DMs and
+founder↔founder DMs are deferred — each carries permanent moderation cost for
+deferrable value.
 
-### Target
-
-| Role | Persona | Scope | Key permissions |
-|---|---|---|---|
-| `SUPER_ADMIN` | Platform team | Platform | Everything; orgs, AI config, platform analytics |
-| `ORG_ADMIN` | Program admin | Org + sub-orgs | Members, cohorts, authoring, analytics, reminders, branding |
-| `COACH` **(new)** | Coach / facilitator | **Assigned cohorts/founders only** | Read roster, review reflections/submissions, comment, run workshops, own availability |
-| `INSTRUCTOR` | Content author | Org | Catalog/quiz CRUD — **kept separate from COACH** (policy §9.1) |
-| `MEMBER` | Founder (`MemberType=FOUNDER`) | Self | Own assessments, assigned + self-paced courses, program, bookings |
-| ~~`MANAGER`~~ | — | — | **DELETE** — migrate holders → MEMBER (policy §9.2) |
-
-### Required work
-
-**Backend**
-1. Migration: introduce `COACH`, remap `MANAGER` → `MEMBER`. Audit `users.role` values first. **Expand-contract: add COACH and migrate holders in one release; remove MANAGER from the enum in a later one.**
-2. Entity `CoachAssignment` (coachUserId ↔ cohortId and/or founderUserId, orgId) — the scoping backbone for every coach endpoint.
-3. Guard bean `@coachAccess.canViewFounder(#userId)` / `canViewCohort(#cohortId)`, mirroring `OrgAccessGuard`.
-4. Coach API: roster (founders + completion %), reflection/submission review queue, per-founder detail (reuse `MemberResultsController` data, coach-scoped).
-5. `@PreAuthorize` audit — every `ORG_ADMIN` controller reviewed for whether `COACH` gets read access.
-
-**Frontend**
-1. `src/lib/app-nav.ts` coach section; `src/lib/roles.ts` labels.
-2. Route area `(app)/app/coach/*`: dashboard (roster + completion), founder detail, review queue.
-3. `requireRole()` guards; keep the 404-not-403 convention.
+Acceptance: broadcast reaches a cohort through existing notification preferences;
+bodies are sanitized; coaches moderate within assigned cohorts and org admins
+org-wide; every post is reportable and audited; the new type appears in
+notification preferences.
 
 ---
 
-## 9. Architecture changes worth making
-
-**Frontend**
-1. **Split `src/components/site/`** (43 files) — separate marketing chrome from app-shell; the one folder fighting the otherwise clean feature-folder layout.
-2. **Founder dashboard as `/app` home** — replace the NavCard grid for members; keep the grid for admins.
-3. **Coach console area** (§8).
-4. **Finish or remove `next-themes`** — dark tokens exist, no toggle. Half-wired deps rot. Keep it if white-label is coming and make theming runtime-injectable per tenant.
-5. **Route-level `error.tsx` / `loading.tsx`** across `/app` — today most errors fall to `global-error.tsx`.
-6. **i18n discipline now, execution later** — adopt next-intl for *new* surfaces (coach console, dashboard) immediately so the retrofit bill stops growing.
-
-**Backend**
-1. **Resolve `MANAGER`** (§8).
-2. **New `coaching` vertical slice** matching ArchUnit conventions: `CoachAssignment`, coach endpoints, later availability.
-3. **`personalization` concern** in the assessment module: `PillarCourseMapping` + auto-enrolment handler on evaluation-complete events (pattern exists in `AutoAssignmentEventHandler`).
-4. **Soft-FK integrity job** — catalog/programflow use UUID soft-FKs; scheduled orphan detection (enrollments→deleted courses, `Content.pipelineId`→deleted pipelines) so drift is visible.
-5. **Branding entity** (deferred): per-org logo, palette, sender/reply-to. No custom domains (policy §9.5).
-6. **i18n data model** (deferred): `locale` on user + org; translation side-tables rather than column explosion.
-
----
-
-## 10. Cohort communications
-
-No human-to-human channel exists. Closest touchpoints: `ExerciseComment`
-(reviewer feedback — the closest thing to threaded discussion),
-`WorkshopTeam.helpRequestedAt` (a raised hand), course reviews, one-way
-notifications, AI coach chat. The marketing site's WhatsApp button implies
-support happens **off-platform**.
-
-**Decision (policy §9.6): announcements only.** Threads and DMs are deferrable
-and both carry permanent moderation cost.
-
-- `Announcement`: id, orgId, cohortId, authorUserId, title, body (sanitized), pinned, createdAt
-- Fan-out through the existing `UserNotification` + email/push preference system
-- Sanitize with the existing OWASP sanitizer; plain-text-plus-links first
-- Scoping via a guard bean (same pattern as `@orgAccess`/`@coachAccess`); coaches moderate in assigned cohorts, org admins org-wide
-- Report/flag + `AuditLog`; notification preferences must cover the new type
-- Delivery: TanStack Query polling. SSE only if needed — the AI coach already streams, so the pattern exists. No WebSockets at this scale.
-
-Deferred: contextual discussion threads, coach↔founder DMs, founder↔founder DMs.
-
----
-
-## 11. UI/UX & navigation
+## 10. UI/UX
 
 Goal: every step reachable in ≤2 obvious clicks from a stable anchor, and the
 user is always told what to do next.
 
-**Works well today:** consistent `PageHero` across 39 pages + shared
-`APP_PAGE_BODY` width, clear sidebar active states, collapsible icon rail, fully
-role-gated nav, correct deep-linking from the notification bell, a "continue
-where you left off" card, and the program task player's exemplary "Next: {task} →"
-flow.
+**Already good:** consistent page shell and width across the app, clear sidebar
+active states, a collapsible icon rail, fully role-gated navigation, correct
+deep-linking from the notification bell, a "continue where you left off" card,
+and the program task player's exemplary next-step flow.
 
-### Friction found
+### Friction
 
-| # | Issue | Where | Impact |
-|---|---|---|---|
-| 1 | No breadcrumbs in `/app`; org pages run 6 levels deep with one back-hop | `Breadcrumb` used on 2 marketing pages only | Users lost in admin drill-ins |
-| 2 | **Course player has no "Next lesson"** — only "Mark as complete", then pick from the sidebar | `learn/_components/content-viewer.tsx` | Breaks the core learning loop; program player does this right |
-| 3 | `/app` home is a link grid; spotlight is assessment-only; **admins get zero dynamic content** | `(app)/app/page.tsx` | No "needs attention" queue |
-| 4 | SUPER_ADMIN sidebar ≈25 flat items; ORG_ADMIN gets 2 links with everything buried | `src/lib/app-nav.ts` | Wall-of-links for one role, hidden features for the other |
-| 5 | No command palette (cmd+k) | — | Cheapest nav accelerator given the tree depth |
-| 6 | No onboarding; assessments empty state dead-ends ("Check back soon") | `assessments-list.tsx` | New users land with no guidance |
-| 7 | Assessment results have no onward CTA to courses | `results/_components/results-body.tsx` | Misses the core product loop |
-| 8 | Notification inbox is dropdown-only, capped at 20, no "See all" | `notification-bell.tsx` | Older notifications unreachable |
-| 9 | Post-login lands on `/app` for every role | `(auth)/actions.ts` | Extra hop for admins every session |
-| 10 | Duplicated `organizations/[orgId]/*` vs `sub-organizations/[subOrgId]/*` trees; nested tabs not URL-addressable | org console | Two URLs per resource; unshareable state |
-| 11 | Orphan route `(app)/app/admin/exercises/page.tsx`, linked from no nav | — | Dead code |
-| 12 | Marketing header has no self-serve signup ("Request a free trial" → lead modal) | `site-header.tsx` | Fine if invite-led; blocks self-serve otherwise |
+| # | Issue | Impact |
+|---|---|---|
+| 1 | No breadcrumbs anywhere in the app; admin drill-ins run ~6 levels deep with a single back-hop | Users get lost; no shareable sense of place |
+| 2 | **The course player has no "next lesson"** — only "mark complete", then pick from the sidebar | Breaks the core learning loop. The program player already does this right — copy it. |
+| 3 | The app home is a link grid, not a dashboard; **admins get no dynamic content at all** | No "needs attention" queue, no next-action guidance |
+| 4 | Super-admin sidebar is ~25 flat ungrouped items; org-admin sidebar is 2 links with everything buried a drill-in deeper | Wall-of-links for one role, hidden features for the other |
+| 5 | No global search or command palette | Cheapest nav accelerator, given the tree depth |
+| 6 | No first-run onboarding; the assessments empty state dead-ends with no CTA | New users land with no path to first value |
+| 7 | Assessment results have no onward CTA to modules | Misses the core product loop |
+| 8 | Notification inbox is dropdown-only, capped, with no "see all" page | Older notifications unreachable |
+| 9 | Post-login lands everyone in the same place regardless of role | Extra hop for admins every session |
+| 10 | Parallel org and sub-org admin trees — the same resource has two URLs; nested tabs aren't URL-addressable | Cognitive + maintenance load, unshareable state |
+| 11 | An admin route exists that no navigation links to | Dead code |
+| 12 | Marketing header has no self-serve signup path | Fine if invite-led; blocks self-serve growth otherwise |
 
 ### Requirements
 
 **P0 — core loop & wayfinding**
-1. **"Next lesson" in the course player** — replicate the program player's next-CTA; auto-advance option. (S)
-2. **Breadcrumbs on all `/app` pages ≥2 levels deep** — primitive exists; layout-level trail. (S–M)
-3. **Role-aware home** — members get a real dashboard (spotlight extended to courses + program next-task + recommendations); admins get KPI cards + "needs attention" (idle founders, pending reviews). (M)
-4. **No dead-end empty states** — standardize on the shared `EmptyState`; every one names the next action. (S)
+1. Next-lesson CTA in the course player, with auto-advance option.
+2. Breadcrumb trail on every page more than two levels deep.
+3. Role-aware home — members get a real dashboard; admins get KPIs and a "needs attention" queue (idle founders, pending reviews).
+4. No dead-end empty states — every one names the next action or who to contact.
 
 **P1 — findability & admin ergonomics**
-5. Command palette (cmd+k), role-gated. (M)
-6. Group the platform sidebar into collapsible sections; promote Members/Reports to the ORG_ADMIN sidebar. (S–M)
-7. Role-based post-login redirect. (S)
-8. Full `/app/notifications` page + "See all". (S)
-9. Results → recommended module CTA (manual first, auto once #10 lands). (S)
+5. Command palette, role-gated.
+6. Group the platform sidebar; promote key org-admin destinations out of drill-in-only.
+7. Role-based post-login redirect.
+8. Full notifications page.
+9. Results → recommended module CTA (manual first, automatic once #10 lands).
 
 **P2 — structure & polish**
-10. First-run onboarding checklist (member: assess → results → first module; coach: review roster). (M)
-11. Unify the parallel org/sub-org trees — one URL per resource. (L, alongside coach console)
-12. URL-addressable tabs — lift in-page tab state into search params. (S–M)
-13. Remove orphan `admin/exercises`. (S)
-14. Mobile: keep the Sheet drawer; consider a 4-item bottom tab bar for member surfaces; audit the 16-tab horizontal scroll on the org console. (M)
+10. First-run onboarding checklist for members and coaches.
+11. Unify the parallel org/sub-org trees — one resource, one URL. Do it alongside the coach console.
+12. URL-addressable tabs and filters.
+13. Remove the orphan admin route.
+14. Mobile: consider a bottom tab bar for member surfaces; audit the horizontal tab scroll on the org console.
 
-### Navigation principles (all new surfaces)
+### Principles for all new surfaces
 
-- Every page belongs to exactly one sidebar anchor; breadcrumb when deeper.
+- Every page belongs to exactly one sidebar anchor, with a breadcrumb when deeper.
 - Every completed action proposes the next one.
 - Admin "needs attention" beats admin "browse everything".
 - State a user can see should be linkable.
@@ -370,98 +323,128 @@ flow.
 
 ---
 
-## 12. Cross-cutting production requirements
+## 11. Cross-cutting production requirements
 
 ### Security
-- [ ] Access-token TTL 24h → 15–30 min (refresh rotation works; access tokens are not revocable today)
-- [ ] Audit anonymous read endpoints — confirm `LessonContentController` and catalog detail never return non-preview bodies to anonymous users
-- [ ] Complete CSP: nonce pipeline for `script-src`/`style-src` (deferred in `next.config.ts`)
-- [ ] Keep the `StartupSafetyValidator` pattern; same fail-closed check for every new secret
-- [ ] Pen-test the public token flows (`/a/[token]`, surveys, business cards) before scale marketing
+- [ ] Shorten access-token TTL from 24h to 15–30 min — refresh rotation already works, and access tokens are not revocable today
+- [ ] Audit anonymous read endpoints — confirm no non-preview lesson body is ever returned to an anonymous caller
+- [ ] Complete the CSP nonce pipeline (deliberately deferred)
+- [ ] Every new secret gets the same fail-closed startup validation as existing ones
+- [ ] Pen-test the public token flows before scale marketing
 
 ### Quality & CI
-- [ ] Fix the 13 pre-existing lint errors; make lint **blocking** in FE CI
-- [ ] **Diff coverage ~70% on changed lines** (not the global ratchet — see §6)
-- [ ] FE component/integration tests for the big `/app` pages (8 unit tests today, all in `src/lib/`)
-- [ ] **Playwright e2e in CI** with a compose stack — specs exist, never run. *Prerequisite for autonomous delivery.*
-- [ ] Full QA across the 12 lesson types before flipping the courses flag; delete unimplemented ones
+- [ ] Fix the pre-existing lint errors and make lint **blocking** in frontend CI
+- [ ] **Diff coverage ~70% on changed lines.** Do *not* chase a global coverage percentage — it produces tests over code nobody is changing. The frontend at ~2% is the real risk.
+- [ ] Component/integration tests for the major app pages
+- [ ] **e2e in CI** against a compose stack — the specs exist and have never run. *Autonomy prerequisite.*
+- [ ] Full QA across every lesson type before the courses flag flips
 
 ### Observability & operations
-- [ ] **Error tracking (Sentry) on both ends** — Prometheus/Actuator exists, no exception aggregation. *Prerequisite for autonomous delivery: it is the rollback trigger.*
-- [ ] Alerting on ShedLock jobs — a silently dead `EvaluationReaper` or reminder job is invisible today
+- [ ] **Error tracking on both ends** — metrics exist, exception aggregation does not. *Autonomy prerequisite: it is the rollback trigger.*
+- [ ] Alerting on scheduled jobs — a silently dead reaper or reminder job is invisible today
 - [ ] Uptime + synthetic checks on the public token flows
-- [ ] Backup/restore drill for Postgres + MinIO; documented RPO/RTO
-- [ ] Load-test the anonymous public-assessment path (it is the marketing funnel)
+- [ ] Backup/restore drill for Postgres and object storage; documented RPO/RTO
+- [ ] Load-test the anonymous public-assessment path — it is the marketing funnel
 
 ### Compliance & data
 - [ ] **GDPR account export + deletion** — the pricing FAQ already claims compliance
 - [ ] Retention policy surfaced to users
-- [ ] Terms/privacy review for AI evaluation of user content (AI call logging exists — good)
+- [ ] Terms/privacy review for AI evaluation of user content
 - [ ] SOC 2 Type II observation window opened
 - [ ] VPAT / ACR ordered
 
 ### SEO / PWA
-- [ ] `sitemap.ts`, `robots.txt`, `manifest.json` (sw.js present)
+- [ ] Sitemap, robots, manifest
 
 ---
 
 # Part III — Delivery
 
-## 13. Phases, ordered by the tier they unblock
+## 12. Phase order
+
+Phases are gated by dependency and by the revenue tier they unblock. A phase
+starts when its predecessors' acceptance criteria are met — not on a date.
 
 | Phase | Unblocks | Effect |
 |---|---|---|
-| **0 · Commercial** | All tiers | Removes procurement blockers; closes a live GDPR claim |
-| **1 · Growth tier** | $599/mo self-serve | Makes the featured tier deliverable; enables Starter→Growth upgrade |
+| **0 · Commercial** | All tiers | Removes procurement blockers, closes a live GDPR claim, and enables autonomous delivery. **Runs in parallel with everything — it consumes calendar, not capacity.** |
+| **1 · Growth tier** | $599/mo self-serve | Makes the featured tier deliverable; enables the Starter→Growth upgrade |
 | **2 · Founder Success** | Contact Sales ACV | ROI proof — the renewal driver — plus content delivery |
-| **3 · Personalization** | Founder Success | Contractual Q2 2027 obligation |
+| **3 · Personalization** | Founder Success | The contractual obligation |
 | **4 · Expansion** | New segments | SSO, booking, white-label, i18n |
 
 ```mermaid
-gantt
-    title Roadmap by revenue tier unblocked (solo capacity)
-    dateFormat YYYY-MM-DD
-    axisFormat %b '%y
+flowchart TB
+    subgraph P0["PHASE 0 · Commercial — starts immediately, parallel to all"]
+        direction LR
+        S0a["SOC 2 window<br/><i>calendar-bound</i>"]
+        S0b["VPAT / ACR<br/><i>calendar-bound</i>"]
+        S0c["GDPR export + delete<br/><i>claim already live</i>"]
+        S0d["Error tracking"]
+        S0e["e2e in CI"]
+        S0f["Diff coverage<br/>+ blocking lint"]
+    end
 
-    section Phase 0 · Commercial (parallel, mostly non-eng)
-    SOC 2 Type II — open window now              :crit, soc2, 2026-08-01, 300d
-    VPAT / ACR audit                             :crit, vpat, 2026-08-01, 45d
-    Accessibility remediation                    :a11y, after vpat, 30d
-    GDPR export + delete                         :crit, gdpr, 2026-08-01, 14d
-    Sentry + Playwright in CI (autonomy gate)    :crit, obs, 2026-08-01, 21d
+    subgraph P1["PHASE 1 · unblocks GROWTH $599"]
+        direction LR
+        C["Coach console<br/><b>sold as Mentor Portal</b>"]
+        B["Quantitative benchmarking<br/><b>sold in Growth</b>"]
+        D["Founder dashboard<br/>role-aware home"]
+    end
 
-    section Phase 1 · Make GROWTH $599 deliverable
-    Coach role + CoachAssignment + console       :crit, p1a, 2026-08-01, 56d
-    Quantitative cohort benchmarking             :crit, p1b, after p1a, 21d
-    Founder dashboard (role-aware home)          :p1c, 2026-10-01, 21d
-    Diff coverage + blocking lint                :p1d, 2026-08-15, 14d
+    subgraph P2["PHASE 2 · unblocks FOUNDER SUCCESS"]
+        direction LR
+        IR["ROI reporting<br/>+ competency matrix<br/><b>sold in FS</b>"]
+        F["Courses QA + flag<br/>+ authoring honesty"]
+        AN["Announcements"]
+        NU["Inactivity + proactive nudges"]
+        UX["UX P0"]
+    end
 
-    section Phase 2 · Make FOUNDER SUCCESS deliverable
-    ROI reporting + competency matrix            :crit, p2a, 2026-12-01, 35d
-    Courses QA + flip flag + drop fake types     :p2b, 2026-12-01, 18d
-    Cohort announcements                         :p2c, after p2a, 14d
-    Inactivity nudge + proactive AI coach        :p2d, after p2b, 14d
-    UX P0 — next-lesson, breadcrumbs, empties    :p2e, after p2b, 21d
+    subgraph P3["PHASE 3 · CONTRACTUAL"]
+        direction LR
+        PM["Pillar → module mapping"]
+        AE["Auto-enrolment<br/><b>sold as Learning Journeys</b>"]
+    end
 
-    section Phase 3 · Personalization — HARD DEADLINE
-    PillarCourseMapping + admin UI               :crit, p3a, 2027-02-01, 21d
-    Auto-enrolment engine                        :crit, p3b, after p3a, 42d
-    Recommendations on dashboard                 :p3c, after p3b, 10d
-    Deadline buffer                              :milestone, buf, 2027-05-15, 45d
+    subgraph P4["PHASE 4 · Expansion"]
+        direction LR
+        SSO["SAML / OIDC"]
+        CAL["Calendar integration"]
+        WL["White-label theming"]
+        I18["i18n retrofit"]
+    end
 
-    section Phase 4 · Expansion (post-deadline)
-    SAML / OIDC SSO                              :p4a, 2027-06-01, 21d
-    Calendar integration → "1:1 coaching"        :p4b, 2027-07-01, 21d
-    White-label theming                          :p4c, 2027-08-01, 56d
-    i18n retrofit                                :p4d, 2027-10-01, 70d
+    S0d & S0e & S0f -->|"autonomy gates"| P1
+    C --> B
+    C --> AN
+    B --> IR
+    D --> PM
+    F --> AE
+    PM --> AE
+    P1 --> P2 --> P3 --> P4
+    AE --> DL(["Q2 2027 — hard deadline"])
+    C -.->|"upgrade path"| REV(["Starter → Growth revenue"])
+    IR -.->|"renewal proof"| RN(["FS renewals"])
+    S0a & S0b & S0c -.-> ENT(["University & enterprise deals"])
+
+    style DL fill:#ff6b6b,color:#fff
+    style C fill:#4dabf7,color:#fff
+    style AE fill:#4dabf7,color:#fff
+    style IR fill:#4dabf7,color:#fff
+    style P0 fill:#fff9db
 ```
 
-### Why this ordering
+### Why this order
 
-**Coach console is the first thing built.** Not for architectural reasons — it is
-sold as the Growth "Mentor/Organization access portal", it is the only unbuilt
-feature in the self-serve ladder, and it is therefore the single feature between
-a $299 customer and a $599 one.
+**Phase 0 starts immediately** because it is the only work where delay cannot be
+recovered by working faster, and because three of its items are the gates that
+let the delivery graph run unsupervised at all.
+
+**The coach console is the first feature built.** Not for architectural reasons —
+it is sold as the Growth "Mentor/Organization access portal", it is the only
+unbuilt feature in the self-serve ladder, and it is therefore the single feature
+between a $299 customer and a $599 one.
 
 **The courses flag drops to Phase 2.** Courses are not sold in Starter or Growth,
 so flipping the flag releases no self-serve revenue. It is a Founder Success
@@ -472,118 +455,79 @@ shipping as an AI-written narrative.
 
 **ROI reporting is the renewal driver**, not mid-priority analytics.
 
-**GDPR export/delete is Phase 0** because the pricing FAQ already claims it.
+**Phase 3 is reached well before its deadline** because Phases 1 and 2 were cut
+to what revenue requires.
 
-**Phase 3 starts February with ~6 weeks of buffer.**
+### Critical nodes
 
-### Critical path
+Three items gate everything downstream: **coach console** (Growth revenue), **ROI
+reporting** (Founder Success renewals), **auto-enrolment** (the deadline). A
+failure on any of the three propagates. Compliance runs on a separate track,
+unaffected by engineering progress.
 
-```mermaid
-flowchart LR
-    subgraph P1["Phase 1 — unblocks GROWTH $599"]
-        C["Coach console · 8 EW<br/><i>sold as Mentor Portal</i>"]
-        B["Benchmarking · 3 EW<br/><i>sold in Growth</i>"]
-        D["Founder dashboard · 3 EW"]
-    end
-    subgraph P2["Phase 2 — unblocks FOUNDER SUCCESS"]
-        IR["ROI reporting + matrix · 5 EW<br/><i>sold in FS</i>"]
-        F["Courses QA + flag · 2.5 EW"]
-        AN["Announcements · 3 EW"]
-    end
-    subgraph P3["Phase 3 — CONTRACTUAL"]
-        PM["PillarCourseMapping · 3 EW"]
-        AE["Auto-enrolment · 6 EW<br/><i>sold as Learning Journeys</i>"]
-    end
-    C --> B --> IR
-    C --> AN
-    D --> PM
-    F --> AE
-    PM --> AE --> DL(["Q2 2027 DEADLINE"])
-    C -.->|"upgrade path"| REV(["Starter → Growth revenue"])
-    IR -.->|"renewal proof"| RN(["FS renewals"])
-    SOC["SOC 2 · starts NOW"] --> ENT(["University & enterprise deals"])
-    VP["VPAT / ACR · 2–4 wk"] --> ENT
-    GD["GDPR export/delete · claim live"] --> ENT
-    style DL fill:#ff6b6b,color:#fff
-    style SOC fill:#ffd93d
-    style VP fill:#ffd93d
-    style GD fill:#ffd93d
-    style C fill:#4dabf7,color:#fff
-    style AE fill:#4dabf7,color:#fff
-    style IR fill:#4dabf7,color:#fff
-```
+### Cut from scope
 
-Three nodes gate everything: **coach console** (Growth revenue), **ROI reporting**
-(FS renewals), **auto-enrolment** (the deadline). Compliance runs on a separate
-track unaffected by engineering progress — which is why it starts now.
-
-### Cut list (how the 75 EW became 43.5)
-
-| Cut | Saves |
+| Cut | In favour of |
 |---|---|
-| Native booking → integrate Cal.com | 7 EW |
-| Discussion threads + DMs → announcements only | 5 EW |
-| i18n retrofit → deferred (adopt for new surfaces only) | 10 EW |
-| Command palette, org tree unification, bottom tab bar | 6 EW |
-| Global coverage ratchet → diff coverage | ~3 EW |
+| Native booking | Integrate an existing provider |
+| Discussion threads + coach/founder DMs | Announcements only |
+| i18n retrofit | Deferred; new surfaces adopt the library now |
+| Command palette, org-tree unification, bottom tab bar | Deferred to Phase 4 / P2 polish |
+| Global coverage ratchet | Diff coverage on changed lines |
 
-### Scope fit
-
-| Path | Scope | Capacity | Q2 2027 | Sold-but-unbuilt remaining |
-|---|---|---|---|---|
-| **A — Solo (baseline)** | Phases 0–3 | ~43.5 of ~45 EW | ✅ ~6 wk buffer | White-label + native booking (both FS, stageable per contract) |
-| **B — Original ordering** | Original 1–3 | ~75 of ~45 EW | ❌ ~6 months late | Growth still undeliverable into 2027 |
-| **C — +2 engineers from Q4 26** | 0–3 **plus** SSO, white-label, comms | ~70 EW / 3 people | ✅ | None |
-
-Board framing: Path A is *"we stop selling things we cannot ship, in that order."*
-Path C is *"we can also sell the top tier without caveats a year earlier."*
+These are scope decisions, not deferrals for lack of time. Re-opening one is a
+policy amendment, not an agent's call.
 
 ---
 
-## 14. Risks
+## 13. Risks
 
 | # | Risk | Sev | Mitigation |
 |---|---|---|---|
-| 1 | **Bus factor of one** — one person holds 1,390 source files at 2% FE coverage | 🔴 | Highest-priority hire. Interim: diff coverage, ADRs, runbooks. Not a feature. |
-| 2 | **Compliance not started** — SOC 2 is uncompressible | 🔴 | Engage an auditor this quarter; VPAT in parallel (2–4 wk) |
-| 3 | **Deadline was oversubscribed 1.7×** | 🔴 | Path A cut list, or fund Path C |
-| 4 | **Growth tier sold with an unbuilt feature** | 🟠 | Phase 1 item 1; scope out of contracts until it ships |
-| 5 | **FE coverage 2%**, no e2e in CI, non-blocking lint | 🟠 | Diff coverage; wire the existing Playwright specs |
+| 1 | **Compliance not started** — the SOC 2 window is the longest pole and cannot be shortened | 🔴 | Engage an auditor now; VPAT in parallel |
+| 2 | **Single point of human knowledge** — one person holds ~1,390 source files at ~2% frontend coverage. Agents multiply throughput; they do not create a second reviewer or a second person who understands the system. | 🔴 | Hire. Interim: diff coverage, decision records, runbooks. Not a feature. |
+| 3 | **Growth tier sold with an unbuilt feature** | 🟠 | Phase 1 item 1; scope out of contracts until it ships |
+| 4 | **Frontend ~2% covered**, no e2e in CI, non-blocking lint — and under autonomous delivery this is the only evidence for most changes | 🟠 | Phase 0 gate. Wire the existing e2e specs. |
+| 5 | **No error aggregation** — production failures are invisible, and it is the autonomous rollback trigger | 🟠 | Phase 0 gate |
 | 6 | **Dead `MANAGER` role** grants nothing while appearing assignable | 🟠 | Remove in the coach-role migration |
-| 7 | **No error aggregation** — production failures invisible | 🟠 | Half a day. Also the autonomy rollback trigger. |
-| 8 | Category competition well funded (AcceleratorApp ~40% of major US accelerators) | 🟡 | Compete on measurement, not program ops |
-| 9 | 24h non-revocable access tokens | 🟡 | Shorten to 15–30 min |
-| 10 | i18n debt compounds per page | 🟡 | next-intl for new surfaces now |
+| 7 | Category competition well funded | 🟡 | Compete on measurement, not program ops |
+| 8 | 24h non-revocable access tokens | 🟡 | Shorten to 15–30 min |
+| 9 | i18n debt compounds per page | 🟡 | Adopt the library for new surfaces now |
 
 ---
 
-## 15. Decisions — closed
+## 14. Decisions — closed
 
-Machine-readable in `agent-policy.yml`. Agents must not re-litigate these.
+Machine-readable in `agent-policy.yml`. **Agents must not re-litigate these.**
 
 | # | Question | Decision |
 |---|---|---|
 | 1 | `INSTRUCTOR` vs `COACH` | **Two roles.** Authoring and coaching are different jobs with different data scopes. |
-| 2 | `MANAGER` | **Delete.** Migrate holders → `MEMBER`. A role granting nothing while looking meaningful is a security defect. |
-| 3 | Calendar | **Integrate Cal.com.** Saves 7 EW. Revisit only if a customer pays for native. |
-| 4 | i18n scope | **UI chrome only, not before Q3 2027.** Translated *content* multiplies authoring burden for every customer — a business-model change. |
+| 2 | `MANAGER` | **Delete.** Migrate holders to `MEMBER`. A role granting nothing while looking meaningful is a security defect. |
+| 3 | Calendar | **Integrate, don't build.** Revisit only if a customer pays for native. |
+| 4 | i18n scope | **UI chrome only, deferred.** Translated *content* multiplies authoring burden for every customer — a business-model change, not a feature. |
 | 5 | White-label depth | **Logo + colours only.** Custom domains and branded email are a long tail of DNS, deliverability and support cost. |
-| 6 | Communications | **Announcements only.** Threads/DMs deferrable; both carry permanent moderation cost. |
-| 7 | Vertical | **Accelerator-first** — confirmed by the tier ladder and four vertical pages. Enterprise L&D would imply SCORM/xAPI/HRIS; never enter that roadmap by accident. |
-| 8 | Fund Path C? | **Yes if capital allows.** Converts a survival year into a market-position year. Path A is achievable regardless, but risk #1 stays unaddressed. |
+| 6 | Communications | **Announcements only.** |
+| 7 | Vertical | **Accelerator-first** — confirmed by the tier ladder and the four vertical pages. Enterprise L&D would imply SCORM/xAPI/HRIS; never enter that roadmap by accident. |
+| 8 | Engineering hire | **Yes.** Agent execution removes the throughput ceiling, not the single-reviewer risk. |
 
 ---
 
-## 16. Next 30 days
+## 15. Start here
+
+Ordered by what unblocks the most. Items 1–3 are external engagements — start
+them before any code, because they are the only things that cannot be caught up.
 
 1. Engage a SOC 2 auditor; open the observation window.
-2. Order the VPAT/ACR audit (2–4 weeks to report).
-3. Post the engineering hire (risk #1).
-4. **Start the coach console** — the Growth-tier portal we already charge $599/mo for.
-5. Ship GDPR export/delete; the pricing FAQ already claims it.
-6. Wire Sentry on both ends and Playwright into CI — half a day and a few days respectively, and both are autonomy prerequisites.
-7. Give sales the §3 deliverable-today list so no further contract commits white-label, native booking, or personalized journeys ahead of §13.
-8. Switch CI to diff coverage; make lint blocking. Remove `WEBPAGE`/`ARTICLE`/`SCORM` from the authoring UI.
+2. Order the VPAT/ACR audit.
+3. Give sales the §3 deliverable-today list so no further contract commits
+   white-label, booking, or personalized journeys ahead of §12.
+4. **Phase 0 engineering:** error tracking on both ends, e2e in CI, diff coverage
+   + blocking lint. These are the autonomy gates — the delivery graph stays in
+   propose-only mode until they are green.
+5. Ship GDPR export and deletion; the pricing FAQ already claims it.
+6. **Then Phase 1: the coach console** — the Growth-tier portal we already charge
+   $599/mo for.
 
 ---
 

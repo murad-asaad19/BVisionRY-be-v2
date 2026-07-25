@@ -340,11 +340,13 @@ hard_constraints:
   # After any DTO change: OpenApiExportTest -> pnpm gen:api -> typecheck.
   - contract_pipeline: MANDATORY_ON_DTO_CHANGE
 
-  # Agents work against the sandbox stack, never dev.
-  - database: SANDBOX_ONLY                    # localhost:5433, see docker/sandbox/
-
-  # Concurrent agents MUST NOT share a runtime. Claim a lane first.
-  - runtime_isolation: ONE_LANE_PER_AGENT
+  # Agents work in their OWN lane. Never :5432 (dev) and never lane 0 (the
+  # operator's manual/inspection lane) — take a lane in 1..max_parallel_agents.
+  # The connection details come from the generated lane env file; no port is
+  # ever hardcoded in a ticket.
+  - database: SANDBOX_LANE_ONLY
+  - runtime_isolation: ONE_LANE_PER_AGENT     # worktree pair AND lane, claimed together
+  - never_connect: [":5432 — dev", "lane 0 — operator's lane"]
 
 # ---------------------------------------------------------------------------
 # Gates — the evidence bar. All run locally; no remote CI under LOCAL_COMMITS_ONLY.

@@ -311,8 +311,16 @@ stack.
 
 ### Per-ticket
 
-1. Worker holds a **worktree pair** — `backend/` and `web/` on matching branch
-   names. Two repos; an agent holding one is broken in a way it cannot detect.
+1. Worker claims a **worktree pair *and* a lane**, together, as one unit.
+   - *Worktree pair* — `backend/` and `web/` on matching branch names. Two
+     repos; an agent holding one is broken in a way it cannot detect.
+   - *Lane* — `sandbox.sh up <n>`, then source `agent-<n>.env`. A lane is its
+     own Postgres, Redis, MinIO and Mailpit. **A worktree without a lane is
+     precisely the collision:** two agents on isolated branches still sharing
+     one database, where agent A's migration makes agent B's Flyway validation
+     fail on a migration B never wrote — and the failure attributes to B.
+   - Lanes 1..N are for agents. **Lane 0 belongs to the operator**; never take
+     it. Never `:5432` — that is dev.
 2. All five gates green locally (`agent-policy.yml → gates`). **This is the
    evidence** — the same commands CI would run, minus the push latency.
 3. **One commit per ticket**, message carrying the ticket id, in both repos.
@@ -326,12 +334,15 @@ The full design promotes through a staging soak on error-rate and job-liveness.
 That needs a deployed environment and a push, so under local-only it does not
 apply. The substitutes:
 
-- **The sandbox is the blast-radius container.** Every migration and every write
-  lands in a disposable clone (`docker/sandbox/`), and `sandbox.sh reset`
-  restores it wholesale. Dev data is never reachable.
-- **e2e against the sandbox is the behavioural evidence**, standing in for
-  post-deploy error signal. At ~2% frontend coverage it is the only meaningful
-  check on most UI work — which is why `e2e_local_green` is a Phase 0 gate.
+- **The lane is the blast-radius container.** Every migration and every write
+  lands in that agent's disposable stack, and `sandbox.sh reset <n>` restores it
+  without touching any neighbour. Dev is not reachable — it is not even running.
+- **e2e against the agent's own lane is the behavioural evidence**, standing in
+  for post-deploy error signal. At ~2% frontend coverage it is the only
+  meaningful check on most UI work — which is why `e2e_local_green` is a Phase 0
+  gate. It must target `E2E_BASE_URL` from the lane env: pointed anywhere else
+  it tests some other process and reports green, which is §0's failure mode
+  arriving through the one gate meant to prevent it.
 - **The operator is the promotion gate**, asynchronously, reviewing the commit
   stack on return rather than approving each ticket in-flight.
 
@@ -365,7 +376,7 @@ design.
 ```mermaid
 flowchart LR
     Q["📋 Backlog<br/>ordered by §12 tier"] --> SCHED{"scheduler"}
-    SCHED -->|"WIP < 3"| PICK["pick next eligible<br/>policy covers it? spine deps met?<br/>zone free? promotion slot free?"]
+    SCHED -->|"lane free"| PICK["pick next eligible<br/>policy covers it? spine deps met?<br/>zone free? promotion slot free?"]
     PICK --> WG["work graph (§4)"]
     WG -->|shipped| Q2["✔ done"]
     WG -->|parked| BL[("🅿️ blocked/")]
@@ -380,9 +391,12 @@ flowchart LR
 
 1. **Tier order wins.** Phase 1 (Growth-tier revenue) before Phase 2, per §7.
    The graph does not reorder the business case.
-2. **WIP cap of 3.** Structural, not a throughput preference: migrations
-   serialize through the spine and promotions serialize one-at-a-time, so higher
-   WIP queues at both ends without finishing anything sooner.
+2. **WIP cap = `agent-policy.yml → max_parallel_agents`** (authoritative; the
+   script's `LANE_MAX` is a capacity ceiling, not policy). The binding
+   constraint is **lane count** — one isolated stack per concurrent agent, and
+   an agent without a free lane has nowhere safe to run. Under
+   `LOCAL_COMMITS_ONLY` there are no promotions to serialize, so that is no
+   longer the reason.
 3. **One active ticket per zone.** Two agents in `coaching/` conflict; agents in
    `coaching/` and `insights/` provably cannot.
 4. **Spine tickets never run concurrently.** Ever — see §7.

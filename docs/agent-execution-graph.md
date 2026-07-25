@@ -1,7 +1,8 @@
 # Agent Execution Graph — autonomous roadmap delivery
 
 Design date: 2026-07-25
-Companion to `docs/production-roadmap-board-review.md` (what to build, in what order)
+Companion to `docs/roadmap.md` (what to build, in what order) and
+`docs/agent-policy.yml` (the machine-readable decisions agents load)
 This document: **how to execute it autonomously** — implementation, review, fix,
 merge, promotion, with no human in the loop.
 
@@ -55,7 +56,7 @@ do**, because without them there is no signal that a bad change shipped.
 
 | Human function removed | Autonomous replacement | Status |
 |---|---|---|
-| Spine judgement (role model, schema shape) | **Policy record** — decisions pre-committed as an artifact the graph reads (§2) | ✅ Exists — board review §9 |
+| Spine judgement (role model, schema shape) | **Policy record** — decisions pre-committed as an artifact the graph reads (§2) | ✅ Exists — roadmap §15 |
 | Browser validation on FE tickets | **Playwright e2e in CI** against a compose stack | ❌ Specs exist, never run. **Blocker.** |
 | "Something looks wrong in production" | **Error tracking + alerting** as the rollback trigger | ❌ No exception aggregation on either end. **Blocker.** |
 | Judging whether a diff is in scope | **Scope manifest** — declared file globs per ticket, enforced at merge | ❌ New, ~2 days |
@@ -82,10 +83,10 @@ not deleted, it is relocated from runtime interrupt to declared artifact.**
 
 The policy record is a committed file the orchestrator and every worker read as
 authoritative. Its initial contents are the eight decisions already closed in
-board review §9:
+roadmap §15:
 
 ```yaml
-# docs/agent-policy.yml  (sketch)
+# docs/agent-policy.yml — excerpt (the real file is committed alongside this one)
 roles:
   coach_separate_from_instructor: true      # §9.1
   manager: DELETE                            # §9.2 — migrate holders to MEMBER
@@ -162,13 +163,13 @@ flowchart TB
 
 **Every node runs Opus 5.** Effort tier varies, model does not.
 
-| Node | Model · effort | Context it receives | Authority | Stop condition |
-|---|---|---|---|---|
-| **Orchestrator** | Opus 5 · high | Policy record, roadmap §7, ticket queue, zone status, WIP | Routes, spawns, cancels, parks | — |
-| **Spine writer** | Opus 5 · max | Full schema, migration history, policy record | **Exclusive** write on migrations/enums | Expand-contract check fails → park |
-| **Zone worker** | Opus 5 · high | Ticket spec + scope manifest + its own slice + `CLAUDE.md` + spine output. **Not** other zones. | Implements within its declared scope | 3 gate failures → park |
-| **Mechanical worker** | Opus 5 · low | One file + one rule | Breadth sweeps only | 2 failures → park |
-| **Validator** | Opus 5 · max | **Diff + spec + policy only** — never the implementer's reasoning | V1–V3 **absolute veto, no override**; rest advise | One pass, no iteration |
+| Node | Model · effort  | Context it receives | Authority | Stop condition |
+|---|-----------------|---|---|---|
+| **Orchestrator** | Opus 5 · high   | Policy record, roadmap §13, ticket queue, zone status, WIP | Routes, spawns, cancels, parks | — |
+| **Spine writer** | Opus 5 · max    | Full schema, migration history, policy record | **Exclusive** write on migrations/enums | Expand-contract check fails → park |
+| **Zone worker** | Opus 5 · high   | Ticket spec + scope manifest + its own slice + `CLAUDE.md` + spine output. **Not** other zones. | Implements within its declared scope | 3 gate failures → park |
+| **Mechanical worker** | Opus 5 · medium | One file + one rule | Breadth sweeps only | 2 failures → park |
+| **Validator** | Opus 5 · max    | **Diff + spec + policy only** — never the implementer's reasoning | V1–V3 **absolute veto, no override**; rest advise | One pass, no iteration |
 
 ### Why single-model, and what it costs
 
@@ -355,7 +356,7 @@ design.
 
 ```mermaid
 flowchart LR
-    Q["📋 Backlog<br/>ordered by §7 tier"] --> SCHED{"scheduler"}
+    Q["📋 Backlog<br/>ordered by §13 tier"] --> SCHED{"scheduler"}
     SCHED -->|"WIP < 3"| PICK["pick next eligible<br/>policy covers it? spine deps met?<br/>zone free? promotion slot free?"]
     PICK --> WG["work graph (§4)"]
     WG -->|shipped| Q2["✔ done"]
@@ -451,7 +452,7 @@ deserve a probabilistic agent and which stay boring, deterministic code.
 
 ## 9. Where the payoff actually is
 
-Against §7's ~43.5 engineer-weeks of ~45 available, this graph exists to buy
+Against roadmap §13's ~43.5 engineer-weeks of ~45 available, this graph exists to buy
 back weeks. It will not do that on deep design work — coach console
 architecture, auto-enrolment — where the bottleneck is judgement, not typing.
 

@@ -1,0 +1,137 @@
+# Bvisionry — agent policy record
+#
+# The graph's constitution. Every agent reads THIS, not the roadmap narrative.
+# Judgement lives here so it never has to happen mid-run.
+#
+# Rules:
+#   - Decisions below are CLOSED. Do not re-litigate, re-argue, or "improve" them.
+#   - A ticket needing a decision not covered here does NOT guess. It parks in
+#     blocked/ with the question stated, and the scheduler moves on.
+#   - Only a human amends this file.
+#
+# Rationale: docs/roadmap.md §15   Execution: docs/agent-execution-graph.md
+
+version: 1
+revised: 2026-07-25
+
+# ---------------------------------------------------------------------------
+# Product identity — the most common source of drift
+# ---------------------------------------------------------------------------
+product:
+  # We sell a MEASUREMENT INSTRUMENT priced per cohort, not an LMS priced per seat.
+  is: "Founder Readiness Index — cohort-priced assessment instrument"
+  is_not: "a learning management system"
+  # Learning content ships only in the top tier. Two of three tiers have none.
+  unit_of_value: MEASURED_COHORT
+  vertical: ACCELERATOR_FIRST          # §15.7
+  # Entering the enterprise-L&D roadmap by accident is the failure mode.
+  never_add: [SCORM, xAPI, AICC, HRIS_INTEGRATION]
+
+# ---------------------------------------------------------------------------
+# Closed decisions — roadmap §15
+# ---------------------------------------------------------------------------
+decisions:
+  roles:
+    coach_separate_from_instructor: true      # §15.1 — two roles, different data scopes
+    manager: DELETE                           # §15.2 — migrate holders to MEMBER
+  calendar: INTEGRATE_CAL_COM                 # §15.3 — never build native booking
+  i18n:
+    scope: UI_CHROME_ONLY                     # §15.4 — never translate course content
+    retrofit_before: 2027-Q3
+    new_surfaces_use_next_intl: true          # stop the bill growing now
+  white_label:
+    logo: true
+    colors: true
+    custom_domain: false                      # §15.5
+    branded_email_sender: false
+  communications: ANNOUNCEMENTS_ONLY          # §15.6 — no threads, no DMs
+
+# ---------------------------------------------------------------------------
+# Delivery order — roadmap §13. The graph does not reorder the business case.
+# ---------------------------------------------------------------------------
+tier_order:
+  - phase: 0
+    unblocks: ALL_TIERS
+    items: [soc2_window, vpat_acr, gdpr_export_delete, sentry, playwright_ci]
+  - phase: 1
+    unblocks: GROWTH_599
+    items: [coach_console, quantitative_benchmarking, founder_dashboard, diff_coverage_ci]
+  - phase: 2
+    unblocks: FOUNDER_SUCCESS
+    items: [roi_reporting, competency_matrix, courses_flag, announcements, proactive_nudges, ux_p0]
+  - phase: 3
+    unblocks: FOUNDER_SUCCESS
+    deadline: 2027-06-30                      # HARD — contractual
+    items: [pillar_course_mapping, auto_enrolment, dashboard_recommendations]
+  - phase: 4
+    unblocks: EXPANSION
+    items: [saml_oidc_sso, cal_com, white_label_theming, i18n_retrofit]
+
+# ---------------------------------------------------------------------------
+# Hard constraints — violating any of these parks the ticket
+# ---------------------------------------------------------------------------
+hard_constraints:
+
+  # An ArchUnit failure means REDESIGN THE DEPENDENCY or park. Adding a violation
+  # here turns a design error into permanent, silent debt and greens the build.
+  - never_write: "backend/src/test/resources/architecture/frozen-violations/**"
+
+  # Money path and public pricing claims.
+  - never_touch:
+      - "web/src/app/(marketing)/pricing/**"
+      - "web/src/lib/founder-content.ts"
+
+  # Flyway is append-only and immutable; code reverts, applied schema does not.
+  # Migrations may ADD columns/tables/nullable fields. They may NEVER drop,
+  # rename, or narrow a type in the same release as the code depending on it.
+  # Contraction ships separately, after the expanded form has soaked.
+  - migrations: EXPAND_CONTRACT_ONLY
+  - migrations_single_writer: true            # numbering is a mutex — never parallel
+  - never_edit_committed_migration: true
+
+  # Tenant scoping is mandatory. Bare findById on org-owned repos only inside
+  # require* guard methods.
+  - tenant_scoping: MANDATORY_ON_NEW_ENDPOINTS
+
+  # After any DTO change: OpenApiExportTest -> pnpm gen:api -> typecheck.
+  - contract_pipeline: MANDATORY_ON_DTO_CHANGE
+
+  # Rollback attribution dies if features promote in batches.
+  - one_feature_per_promotion: true
+
+  # Agents work against the sandbox stack, never dev.
+  - database: SANDBOX_ONLY                    # localhost:5433, see docker/sandbox/
+
+# ---------------------------------------------------------------------------
+# Autonomy gates — the loop does not run unsupervised until these are true
+# ---------------------------------------------------------------------------
+autonomy_prerequisites:
+  playwright_in_ci: false        # FE is 2% covered; e2e is its only real evidence
+  error_tracking: false          # the rollback trigger
+  scope_manifest_gate: false     # diff must stay inside declared globs
+  # While any are false: propose-only mode. Implement and gate, stop before merge.
+  mode_until_ready: PROPOSE_ONLY
+
+# ---------------------------------------------------------------------------
+# Review authority
+# ---------------------------------------------------------------------------
+validators:
+  veto:                          # absolute — no override mechanism exists
+    - tenant_scoping
+    - rbac_and_three_layer_defense
+    - policy_compliance
+  advisory:
+    - contract_and_migration
+    - performance_n_plus_one
+    - ux_conventions
+  # Validators receive diff + spec + this file. Never the implementer's reasoning.
+  context: [diff, ticket_spec, agent_policy]
+
+# ---------------------------------------------------------------------------
+# Known-stale facts worth fixing when touched (not tickets in themselves)
+# ---------------------------------------------------------------------------
+known_issues:
+  - "web/src/app/(marketing)/pricing/_components/fri-pricing-plans.tsx references a non-existent fri-enterprise tier and 'Enterprise & Add-Ons' section"
+  - "Growth tier feature list reads 'Up to 1 cohorts/month' (live on the pricing page)"
+  - "ContentType enum has SCORM, WEBPAGE, ARTICLE with no player runtime — remove from authoring UI"
+  - "MANAGER role: 2 references in 790 files, zero authorities"

@@ -58,7 +58,7 @@ public class Lc4jChatModelProvider {
     @Value("${bvisionry.ai.openrouter.referer:}")
     private String openRouterReferer;
 
-    @Value("${bvisionry.ai.openrouter.app-title:BVisionRY}")
+    @Value("${bvisionry.ai.openrouter.app-title:Bvisionry}")
     private String openRouterAppTitle;
 
     /**

@@ -32,7 +32,7 @@ class Lc4jChatModelProviderKeyRoutingTest {
         // underlying client builder gets a valid (non-zero) duration.
         ReflectionTestUtils.setField(provider, "requestTimeoutSeconds", 300L);
         ReflectionTestUtils.setField(provider, "maxRetries", 2);
-        ReflectionTestUtils.setField(provider, "openRouterAppTitle", "BVisionRY");
+        ReflectionTestUtils.setField(provider, "openRouterAppTitle", "Bvisionry");
 
         // Building the LangChain4j model does no network I/O, so a non-blank key is enough.
         assertThat(provider.modelFor("anthropic/claude-sonnet-4", 0.3, 1024)).isNotNull();

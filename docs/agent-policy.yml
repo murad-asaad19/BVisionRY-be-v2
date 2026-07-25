@@ -53,6 +53,19 @@ run_mode:
   # a dropped bucket impossible to inflict on another lane rather than merely
   # discouraged.
   lane_isolates: [postgres, redis, minio, mailpit, api_port, web_port]
+
+  # A lane isolates the RUNTIME. It does not isolate FILES — two agents in two
+  # worktrees can still edit the same pom.xml or package.json, and under
+  # LOCAL_COMMITS_ONLY that conflict never surfaces during the run. It lands on
+  # the operator as a conflicted stack. So:
+  scheduler_rules:
+    - "one active ticket per `zone` — never two at once, regardless of free lanes"
+    - "a ticket is eligible only when every id in depends_on is done"
+    - "no phase > 0 ticket starts until all autonomy_prerequisites are true"
+    - "zone `readonly` is exempt from exclusivity — it writes nothing"
+  # Consequence, and it is expected: Phase 0 is mostly SERIAL (four of its five
+  # tickets are zone `platform` and share build files). Real parallelism starts
+  # at Phase 2. Idle lanes early are correct, not a bug to schedule around.
   lane_ports: "lane n → pg 5433+n · redis 6380+n · s3 9002+2n · mail 8026+n · api 8180+n · web 3010+n"
   # Lane 0 is the manual/inspection lane. Agents take 1..4.
 
@@ -149,6 +162,7 @@ backlog:
 
   # -- Phase 0 · autonomy gates + live compliance claim -----------------------
   - id: error_tracking
+    zone: platform
     phase: 0
     radius: S
     outcome: "Unhandled exceptions from backend and web are aggregated and queryable. A deliberately thrown test error is visible from both."
@@ -156,6 +170,7 @@ backlog:
     depends_on: []
 
   - id: e2e_local_green
+    zone: platform
     phase: 0
     radius: M
     outcome: "The existing Playwright specs run and pass locally against the sandbox stack. This is the frontend's only real evidence at ~2% coverage."
@@ -164,6 +179,7 @@ backlog:
     depends_on: []
 
   - id: diff_coverage_and_lint_gate
+    zone: platform
     phase: 0
     radius: S
     outcome: "Coverage is enforced on changed lines (~70%), and lint is blocking for web. Pre-existing lint errors fixed."
@@ -172,12 +188,14 @@ backlog:
     depends_on: []
 
   - id: scope_manifest_gate
+    zone: platform
     phase: 0
     radius: S
     outcome: "A check fails when a ticket's diff touches files outside its declared scope globs."
     depends_on: []
 
   - id: gdpr_export_delete
+    zone: auth
     phase: 0
     radius: M
     outcome: "A user can export their data and delete their account. The pricing FAQ already claims compliance."
@@ -185,6 +203,7 @@ backlog:
 
   # -- Phase 1 · unblocks GROWTH $599 -----------------------------------------
   - id: coach_console
+    zone: coaching
     phase: 1
     radius: L
     outcome: "roadmap §7 item 4 — sold as the Growth 'Mentor/Organization access portal'."
@@ -192,12 +211,14 @@ backlog:
     depends_on: [error_tracking, e2e_local_green, diff_coverage_and_lint_gate]
 
   - id: quantitative_benchmarking
+    zone: insights
     phase: 1
     radius: M
     outcome: "roadmap §7 item 19 — real cross-tenant distribution, not an AI narrative."
     depends_on: [coach_console]
 
   - id: founder_dashboard
+    zone: webapp
     phase: 1
     radius: M
     outcome: "roadmap §7 item 3 — role-aware home."
@@ -205,42 +226,49 @@ backlog:
 
   # -- Phase 2 · unblocks FOUNDER SUCCESS -------------------------------------
   - id: authoring_honesty
+    zone: catalog
     phase: 2
     radius: S
     outcome: "roadmap §7 item 1 — remove lesson types with no player runtime."
-    depends_on: []
+    depends_on: [diff_coverage_and_lint_gate]
 
   - id: roi_reporting
+    zone: insights
     phase: 2
     radius: M
     outcome: "roadmap §7 item 16 — the renewal driver. See defaults.roi_report_*."
     depends_on: [quantitative_benchmarking]
 
   - id: competency_matrix
+    zone: webapp
     phase: 2
     radius: S
     outcome: "roadmap §7 item 17 — 11 pillars as a mastery matrix."
     depends_on: [founder_dashboard]
 
   - id: courses_qa_and_flag
+    zone: catalog
     phase: 2
     radius: S
     outcome: "roadmap §7 item 11 — full QA across every lesson type, then flip the flag."
     depends_on: [authoring_honesty, e2e_local_green]
 
   - id: announcements
+    zone: communication
     phase: 2
     radius: M
     outcome: "roadmap §7 item 20 — cohort broadcast. Announcements only."
     depends_on: [coach_console]
 
   - id: inactivity_and_proactive_nudges
+    zone: notification
     phase: 2
     radius: S
     outcome: "roadmap §7 items 7 + 18 — inactivity trigger and a proactive AI coach."
     depends_on: [courses_qa_and_flag]
 
   - id: ux_p0
+    zone: webapp
     phase: 2
     radius: S
     outcome: "roadmap §10 P0 1–4 — next-lesson CTA, breadcrumbs, role-aware home, no dead-end empty states."
@@ -249,12 +277,14 @@ backlog:
 
   # -- Phase 3 · contractual ---------------------------------------------------
   - id: pillar_course_mapping
+    zone: assessment
     phase: 3
     radius: M
     outcome: "roadmap §7 item 9 — admin declares pillar → module at score band."
     depends_on: [competency_matrix]
 
   - id: auto_enrolment
+    zone: assessment
     phase: 3
     radius: L
     deadline: 2027-06-30
@@ -263,6 +293,7 @@ backlog:
     depends_on: [pillar_course_mapping, courses_qa_and_flag]
 
   - id: dashboard_recommendations
+    zone: webapp
     phase: 3
     radius: S
     outcome: "Results and dashboard surface recommended/assigned modules with the reason."
@@ -270,34 +301,40 @@ backlog:
 
   # -- Sweeps · wide, shallow, gate-verified. Fan out freely. ------------------
   - id: sweep_preauthorize_audit
+    zone: readonly
     phase: 2
     radius: S
     outcome: "Every controller's authorization reviewed; findings reported. Read-only fan-out."
     depends_on: [coach_console]
 
   - id: sweep_fe_test_backfill
+    zone: webtests
     phase: 2
     radius: S
     outcome: "Frontend coverage raised from ~2%, verified by the diff-coverage gate."
     depends_on: [diff_coverage_and_lint_gate]
 
   - id: sweep_route_boundaries
+    zone: webroutes
     phase: 2
     radius: S
     outcome: "error.tsx / loading.tsx across the app route tree."
-    depends_on: []
+    depends_on: [diff_coverage_and_lint_gate, e2e_local_green]
 
   # -- Phase 4 · expansion. Attempt only if everything above is done. ----------
   - id: saml_oidc_sso
+    zone: auth
     phase: 4
     radius: L
     depends_on: [coach_console]
   - id: calendar_integration
+    zone: coaching
     phase: 4
     radius: M
     outcome: "Integrate a provider. Never build booking."
     depends_on: [coach_console]
   - id: white_label_theming
+    zone: webapp
     phase: 4
     radius: L
     outcome: "Logo + palette only. No custom domain, no branded sender."

@@ -397,13 +397,26 @@ flowchart LR
    an agent without a free lane has nowhere safe to run. Under
    `LOCAL_COMMITS_ONLY` there are no promotions to serialize, so that is no
    longer the reason.
-3. **One active ticket per zone.** Two agents in `coaching/` conflict; agents in
-   `coaching/` and `insights/` provably cannot.
+3. **One active ticket per zone** — declared as `zone:` on every backlog entry,
+   and enforced regardless of how many lanes are free. Two agents in `coaching/`
+   conflict; agents in `coaching/` and `insights/` provably cannot.
+
+   A lane isolates the **runtime**. It does not isolate **files**: two agents in
+   two worktrees can still both edit `pom.xml` or `package.json`, and under
+   `LOCAL_COMMITS_ONLY` there is no merge step to expose it — the conflict lands
+   on the operator, not the run. Zone exclusivity is what prevents that, so it
+   binds even when lanes are idle.
 4. **Spine tickets never run concurrently.** Ever — see §7.
 5. **One promotion in flight.** A ticket soaking blocks the next promotion, not
    the next implementation.
 6. **Parked tickets release their zone immediately.** The blocked queue is read
    asynchronously; it never stalls the loop.
+
+**Expect idle lanes early.** Four of Phase 0's five tickets are zone `platform`
+and share build files, so Phase 0 runs roughly two-wide (`platform` chain plus
+`auth`). Phase 1 is two-wide (`coaching` spine plus `webapp`). Real fan-out
+begins at Phase 2, once independent slices exist and the sweeps unlock. That
+profile is the design working, not a scheduling failure to optimise away.
 
 ---
 

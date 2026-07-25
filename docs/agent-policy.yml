@@ -5,14 +5,51 @@
 #
 # Rules:
 #   - Decisions below are CLOSED. Do not re-litigate, re-argue, or "improve" them.
-#   - A ticket needing a decision not covered here does NOT guess. It parks in
-#     blocked/ with the question stated, and the scheduler moves on.
+#   - Ambiguity outside them: see `on_ambiguity` — decide, log, keep going.
+#     EXCEPT for `never_auto_decide`, which always parks.
 #   - Only a human amends this file.
 #
 # Rationale: docs/roadmap.md §14   Execution: docs/agent-execution-graph.md
+# Decisions made during a run are appended to docs/agent-decisions.md
 
-version: 1
+version: 2
 revised: 2026-07-25
+
+# ---------------------------------------------------------------------------
+# Run mode — unattended
+# ---------------------------------------------------------------------------
+run_mode:
+  unattended: true                    # operator is AFK; never wait for input
+
+  git: LOCAL_COMMITS_ONLY
+  # Commit freely on the working branch. NEVER push, never open a PR, never
+  # merge to staging or main, never touch a remote. The operator reviews the
+  # local commit stack on return.
+  push: false
+  merge_to_staging: false
+
+  on_ambiguity: DECIDE_AND_LOG
+  # Pick the most defensible option, append an entry to docs/agent-decisions.md
+  # (what was ambiguous, options considered, choice, why, how to reverse), and
+  # continue. Do not stall. Do not ask.
+
+  # Bounded effort per ticket, then park and move on.
+  max_gate_failures_per_ticket: 3
+  max_consecutive_parks: 5            # more than this = something systemic; stop
+
+  commit_granularity: PER_TICKET      # not per action
+
+# ---------------------------------------------------------------------------
+# Things that NEVER get auto-decided — these park regardless of on_ambiguity
+# ---------------------------------------------------------------------------
+never_auto_decide:
+  - "anything under `never_touch` below"
+  - "contraction migrations — any DROP, RENAME, or type narrowing (irreversible)"
+  - "deleting or anonymising user data beyond a specified GDPR delete flow"
+  - "changing any decision in `decisions` below"
+  - "auth model changes beyond what a ticket specifies: token semantics, session handling, the RBAC model itself"
+  - "adding a third-party dependency that transmits user data off-box"
+  - "anything that changes what a customer is charged or promised"
 
 # ---------------------------------------------------------------------------
 # Product identity — the most common source of drift
@@ -37,7 +74,6 @@ decisions:
   calendar: INTEGRATE_CAL_COM                 # §14.3 — never build native booking
   i18n:
     scope: UI_CHROME_ONLY                     # §14.4 — never translate course content
-    retrofit_before: 2027-Q3
     new_surfaces_use_next_intl: true          # stop the bill growing now
   white_label:
     logo: true
@@ -47,25 +83,217 @@ decisions:
   communications: ANNOUNCEMENTS_ONLY          # §14.6 — no threads, no DMs
 
 # ---------------------------------------------------------------------------
-# Delivery order — roadmap §12. The graph does not reorder the business case.
+# Pre-answered design questions — so tickets don't have to park or guess.
+# These are defaults, not constraints: a ticket with a better-informed reason
+# may deviate, log it, and proceed.
 # ---------------------------------------------------------------------------
-tier_order:
-  - phase: 0
-    unblocks: ALL_TIERS
-    items: [soc2_window, vpat_acr, gdpr_export_delete, sentry, playwright_ci]
-  - phase: 1
-    unblocks: GROWTH_599
-    items: [coach_console, quantitative_benchmarking, founder_dashboard, diff_coverage_ci]
-  - phase: 2
-    unblocks: FOUNDER_SUCCESS
-    items: [roi_reporting, competency_matrix, courses_flag, announcements, proactive_nudges, ux_p0]
-  - phase: 3
-    unblocks: FOUNDER_SUCCESS
-    deadline: 2027-06-30                      # HARD — contractual
-    items: [pillar_course_mapping, auto_enrolment, dashboard_recommendations]
-  - phase: 4
-    unblocks: EXPANSION
-    items: [saml_oidc_sso, cal_com, white_label_theming, i18n_retrofit]
+defaults:
+  coach_assignment_grain: COHORT_AND_DIRECT
+  # A coach may be assigned to a whole cohort AND to individual founders.
+  # Union of both defines visibility.
+
+  coach_sees: [pillar_scores, module_progress, submissions, reflections, completion_pct]
+  coach_never_sees: [other_cohorts, billing, org_settings, platform_analytics]
+
+  roi_report_contains:
+    - cohort pillar averages at intake vs latest
+    - per-pillar delta with direction
+    - per-founder delta table
+    - completion rate across assigned modules
+    - cohort size, date range, program name
+  roi_report_formats: [PDF, XLSX]     # both already exist as infrastructure
+  roi_report_audience: FUNDER          # presentable outside the org, brandable
+
+  benchmark_segment_by: [cohort, org, platform_wide]
+  benchmark_min_sample: 30            # below this, show "insufficient data", never a number
+  benchmark_anonymity: AGGREGATE_ONLY # never expose another org's founders or org identity
+
+  competency_matrix_axes: [pillar, maturity_band]
+  competency_movement_window: ALL_ASSESSMENTS   # show full history, not just latest two
+
+  inactivity_threshold_days: 14       # org-configurable, this is the default
+  nudge_channels: RESPECT_EXISTING_PREFERENCES
+
+  announcement_targets: [cohort]      # not org-wide, not individual
+  announcement_body: PLAIN_TEXT_PLUS_LINKS   # rich text later, sanitizer applies now
+
+  auto_enrolment_idempotency_key: [founder_id, course_id, source_evaluation_id]
+  auto_enrolment_on_reassessment: NEW_ENROLMENTS_ONLY  # never duplicate, never unenrol
+  auto_enrolment_explains_why: true   # founder always sees the triggering pillar
+
+  empty_state_rule: EVERY_EMPTY_STATE_NAMES_A_NEXT_ACTION
+  new_ui_copy: ENGLISH_VIA_NEXT_INTL  # wrap new strings even though retrofit is deferred
+
+# ---------------------------------------------------------------------------
+# Delivery order — roadmap §12. The graph does not reorder the business case.
+# A ticket is eligible when every id in depends_on is done.
+# ---------------------------------------------------------------------------
+backlog:
+
+  # -- Phase 0 · autonomy gates + live compliance claim -----------------------
+  - id: error_tracking
+    phase: 0
+    radius: S
+    outcome: "Unhandled exceptions from backend and web are aggregated and queryable. A deliberately thrown test error is visible from both."
+    scope: ["backend/src/main/**", "backend/pom.xml", "web/src/**", "web/package.json", "web/next.config.ts"]
+    depends_on: []
+
+  - id: e2e_local_green
+    phase: 0
+    radius: M
+    outcome: "The existing Playwright specs run and pass locally against the sandbox stack. This is the frontend's only real evidence at ~2% coverage."
+    note: "Get it green LOCALLY first — that is the evidence. CI wiring may be committed but cannot be verified under LOCAL_COMMITS_ONLY."
+    scope: ["web/e2e/**", "web/playwright.config.*", "web/package.json", ".github/workflows/**"]
+    depends_on: []
+
+  - id: diff_coverage_and_lint_gate
+    phase: 0
+    radius: S
+    outcome: "Coverage is enforced on changed lines (~70%), and lint is blocking for web. Pre-existing lint errors fixed."
+    note: "Do NOT raise the global JaCoCo floor — roadmap §11."
+    scope: ["backend/pom.xml", "web/package.json", "web/eslint.config.*", ".github/workflows/**", "web/src/**"]
+    depends_on: []
+
+  - id: scope_manifest_gate
+    phase: 0
+    radius: S
+    outcome: "A check fails when a ticket's diff touches files outside its declared scope globs."
+    depends_on: []
+
+  - id: gdpr_export_delete
+    phase: 0
+    radius: M
+    outcome: "A user can export their data and delete their account. The pricing FAQ already claims compliance."
+    depends_on: []
+
+  # -- Phase 1 · unblocks GROWTH $599 -----------------------------------------
+  - id: coach_console
+    phase: 1
+    radius: L
+    outcome: "roadmap §7 item 4 — sold as the Growth 'Mentor/Organization access portal'."
+    note: "Spine ticket: introduces COACH, removes MANAGER. Single writer, expand-contract. Highest scrutiny."
+    depends_on: [error_tracking, e2e_local_green, diff_coverage_and_lint_gate]
+
+  - id: quantitative_benchmarking
+    phase: 1
+    radius: M
+    outcome: "roadmap §7 item 19 — real cross-tenant distribution, not an AI narrative."
+    depends_on: [coach_console]
+
+  - id: founder_dashboard
+    phase: 1
+    radius: M
+    outcome: "roadmap §7 item 3 — role-aware home."
+    depends_on: [error_tracking, diff_coverage_and_lint_gate]
+
+  # -- Phase 2 · unblocks FOUNDER SUCCESS -------------------------------------
+  - id: authoring_honesty
+    phase: 2
+    radius: S
+    outcome: "roadmap §7 item 1 — remove lesson types with no player runtime."
+    depends_on: []
+
+  - id: roi_reporting
+    phase: 2
+    radius: M
+    outcome: "roadmap §7 item 16 — the renewal driver. See defaults.roi_report_*."
+    depends_on: [quantitative_benchmarking]
+
+  - id: competency_matrix
+    phase: 2
+    radius: S
+    outcome: "roadmap §7 item 17 — 11 pillars as a mastery matrix."
+    depends_on: [founder_dashboard]
+
+  - id: courses_qa_and_flag
+    phase: 2
+    radius: S
+    outcome: "roadmap §7 item 11 — full QA across every lesson type, then flip the flag."
+    depends_on: [authoring_honesty, e2e_local_green]
+
+  - id: announcements
+    phase: 2
+    radius: M
+    outcome: "roadmap §7 item 20 — cohort broadcast. Announcements only."
+    depends_on: [coach_console]
+
+  - id: inactivity_and_proactive_nudges
+    phase: 2
+    radius: S
+    outcome: "roadmap §7 items 7 + 18 — inactivity trigger and a proactive AI coach."
+    depends_on: [courses_qa_and_flag]
+
+  - id: ux_p0
+    phase: 2
+    radius: S
+    outcome: "roadmap §10 P0 1–4 — next-lesson CTA, breadcrumbs, role-aware home, no dead-end empty states."
+    note: "Sweep-shaped. Fan out per page; one rule per agent."
+    depends_on: [founder_dashboard, courses_qa_and_flag]
+
+  # -- Phase 3 · contractual ---------------------------------------------------
+  - id: pillar_course_mapping
+    phase: 3
+    radius: M
+    outcome: "roadmap §7 item 9 — admin declares pillar → module at score band."
+    depends_on: [competency_matrix]
+
+  - id: auto_enrolment
+    phase: 3
+    radius: L
+    deadline: 2027-06-30
+    outcome: "roadmap §7 item 10 — sold as 'Personalized learning journeys'. See defaults.auto_enrolment_*."
+    note: "Single agent, sequential. Do NOT fan out — high blast radius, writes enrolments for real users."
+    depends_on: [pillar_course_mapping, courses_qa_and_flag]
+
+  - id: dashboard_recommendations
+    phase: 3
+    radius: S
+    outcome: "Results and dashboard surface recommended/assigned modules with the reason."
+    depends_on: [auto_enrolment]
+
+  # -- Sweeps · wide, shallow, gate-verified. Fan out freely. ------------------
+  - id: sweep_preauthorize_audit
+    phase: 2
+    radius: S
+    outcome: "Every controller's authorization reviewed; findings reported. Read-only fan-out."
+    depends_on: [coach_console]
+
+  - id: sweep_fe_test_backfill
+    phase: 2
+    radius: S
+    outcome: "Frontend coverage raised from ~2%, verified by the diff-coverage gate."
+    depends_on: [diff_coverage_and_lint_gate]
+
+  - id: sweep_route_boundaries
+    phase: 2
+    radius: S
+    outcome: "error.tsx / loading.tsx across the app route tree."
+    depends_on: []
+
+  # -- Phase 4 · expansion. Attempt only if everything above is done. ----------
+  - id: saml_oidc_sso
+    phase: 4
+    radius: L
+    depends_on: [coach_console]
+  - id: calendar_integration
+    phase: 4
+    radius: M
+    outcome: "Integrate a provider. Never build booking."
+    depends_on: [coach_console]
+  - id: white_label_theming
+    phase: 4
+    radius: L
+    outcome: "Logo + palette only. No custom domain, no branded sender."
+    depends_on: [founder_dashboard]
+
+# ---------------------------------------------------------------------------
+# NOT agent work — park immediately with a note, never attempt
+# ---------------------------------------------------------------------------
+human_only:
+  - "Engage a SOC 2 auditor / open the observation window"
+  - "Order the VPAT / ACR accessibility audit"
+  - "Brief sales on the deliverable-today list (roadmap §3)"
+  - "Engineering hire"
 
 # ---------------------------------------------------------------------------
 # Hard constraints — violating any of these parks the ticket
@@ -84,7 +312,6 @@ hard_constraints:
   # Flyway is append-only and immutable; code reverts, applied schema does not.
   # Migrations may ADD columns/tables/nullable fields. They may NEVER drop,
   # rename, or narrow a type in the same release as the code depending on it.
-  # Contraction ships separately, after the expanded form has soaked.
   - migrations: EXPAND_CONTRACT_ONLY
   - migrations_single_writer: true            # numbering is a mutex — never parallel
   - never_edit_committed_migration: true
@@ -96,21 +323,28 @@ hard_constraints:
   # After any DTO change: OpenApiExportTest -> pnpm gen:api -> typecheck.
   - contract_pipeline: MANDATORY_ON_DTO_CHANGE
 
-  # Rollback attribution dies if features promote in batches.
-  - one_feature_per_promotion: true
-
   # Agents work against the sandbox stack, never dev.
   - database: SANDBOX_ONLY                    # localhost:5433, see docker/sandbox/
 
 # ---------------------------------------------------------------------------
-# Autonomy gates — the loop does not run unsupervised until these are true
+# Gates — the evidence bar. All run locally; no remote CI under LOCAL_COMMITS_ONLY.
+# A ticket is done only when every applicable gate is green.
 # ---------------------------------------------------------------------------
-autonomy_prerequisites:
-  playwright_in_ci: false        # FE is 2% covered; e2e is its only real evidence
-  error_tracking: false          # the rollback trigger
-  scope_manifest_gate: false     # diff must stay inside declared globs
-  # While any are false: propose-only mode. Implement and gate, stop before merge.
-  mode_until_ready: PROPOSE_ONLY
+gates:
+  - id: 1_backend
+    run: "cd backend && ./mvnw test"
+    covers: [compile, ArchUnit, tenant-scoping rule, unit + integration tests]
+  - id: 2_contract
+    run: "backend OpenApiExportTest, then `pnpm gen:api` in web, then `pnpm typecheck`"
+    when: DTO_CHANGED
+  - id: 3_web
+    run: "cd web && pnpm lint && pnpm typecheck && pnpm test"
+  - id: 4_e2e
+    run: "cd web && pnpm e2e"
+    when: FRONTEND_CHANGED
+    note: "Needs the sandbox stack up. This is the frontend's primary evidence."
+  - id: 5_scope
+    run: "diff must be a subset of the ticket's scope globs"
 
 # ---------------------------------------------------------------------------
 # Review authority
@@ -131,7 +365,7 @@ validators:
 # Known-stale facts worth fixing when touched (not tickets in themselves)
 # ---------------------------------------------------------------------------
 known_issues:
-  - "web/src/app/(marketing)/pricing/_components/fri-pricing-plans.tsx references a non-existent fri-enterprise tier and 'Enterprise & Add-Ons' section"
-  - "Growth tier feature list reads 'Up to 1 cohorts/month' (live on the pricing page)"
-  - "ContentType enum has SCORM, WEBPAGE, ARTICLE with no player runtime — remove from authoring UI"
-  - "MANAGER role: 2 references in 790 files, zero authorities"
+  - "web pricing components reference a non-existent fri-enterprise tier and 'Enterprise & Add-Ons' section"
+  - "Growth tier feature list reads 'Up to 1 cohorts/month' — but pricing files are never_touch; report, don't edit"
+  - "ContentType enum has SCORM, WEBPAGE, ARTICLE with no player runtime"
+  - "MANAGER role is declared and assignable but grants no authorities"

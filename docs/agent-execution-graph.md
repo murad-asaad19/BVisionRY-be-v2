@@ -4,7 +4,7 @@ Design date: 2026-07-25
 Companion to `docs/roadmap.md` (what to build, in what order) and
 `docs/agent-policy.yml` (the machine-readable decisions agents load)
 This document: **how to execute it autonomously** — implementation, review, fix,
-merge, promotion, with no human in the loop.
+landing — with no human in the loop.
 
 ---
 
@@ -57,19 +57,21 @@ do**, because without them there is no signal that a bad change shipped.
 | Human function removed | Autonomous replacement | Status |
 |---|---|---|
 | Spine judgement (role model, schema shape) | **Policy record** — decisions pre-committed as an artifact the graph reads (§2) | ✅ Exists — roadmap §14 |
-| Browser validation on FE tickets | **Playwright e2e in CI** against a compose stack | ❌ Specs exist, never run. **Blocker.** |
-| "Something looks wrong in production" | **Error tracking + alerting** as the rollback trigger | ❌ No exception aggregation on either end. **Blocker.** |
-| Judging whether a diff is in scope | **Scope manifest** — declared file globs per ticket, enforced at merge | ❌ New, ~2 days |
+| Browser validation on FE tickets | **e2e green locally** against the sandbox stack | ❌ Specs exist, never run. Ticket `e2e_local_green`. |
+| "Something looks wrong in production" | **Error tracking** as the regression signal | ❌ No exception aggregation on either end. Ticket `error_tracking`. |
+| Judging whether a diff is in scope | **Scope manifest** — declared file globs per ticket | ❌ Ticket `scope_manifest_gate`. |
 | Deciding merge readiness | **Evidence bar** — all gates green, zero vetoes, scope clean | ✅ Composable from the above |
 
-Two of these are already on the roadmap as Phase 1 items. **Under autonomy they
-are promoted to Phase 0 gates**: error tracking becomes the rollback trigger,
-and Playwright-in-CI becomes the frontend's only evidence — the frontend has 12
-test files against 600 source files, so without e2e a green build says almost
+**These are the run's own first tickets, not a separate human phase.** The
+autonomous run builds its own evidence layer before it builds features — every
+Phase 1 ticket declares `depends_on` them, so the scheduler enforces it without
+supervision. Error tracking becomes the regression signal; local e2e becomes the
+frontend's only real evidence, since at ~2% coverage a green build says almost
 nothing about the surface most tickets touch.
 
-> **Do not start the autonomous loop before these three land.** Run the graph in
-> propose-only mode (everything up to merge, stopping at a PR) until then.
+> Under `run_mode.git: LOCAL_COMMITS_ONLY` nothing leaves the machine anyway, so
+> the blast radius while these are being built is the sandbox plus a local
+> commit stack — both fully revertable.
 
 ---
 
@@ -104,11 +106,20 @@ hard_constraints:
   - one_feature_per_promotion: true
 ```
 
-**A ticket whose implementation requires a decision not covered by the policy
-record does not get to guess.** It parks in `blocked/` with the question stated,
-and the scheduler moves to the next ticket. You answer by amending the policy
-file, and the ticket re-enters. That is the whole human interface: an
-append-only decision log, read asynchronously, never blocking a run.
+**A ticket hitting a question the policy does not answer decides, logs, and
+continues** (`on_ambiguity: DECIDE_AND_LOG`). The entry lands in
+`agent-decisions.md` — ambiguity, options, choice, reasoning, and honestly how
+expensive it is to reverse — so the operator reviews what they were not asked
+about.
+
+**Except for `never_auto_decide`**, which always parks: irreversible schema
+contraction, user-data deletion, auth-model changes, anything under
+`never_touch`, and any attempt to revisit a closed decision. Those are the
+choices where being wrong is not cheaply undoable, so they wait rather than
+guess.
+
+The `defaults` block exists to make both paths rare — it pre-answers the design
+questions the backlog is known to raise.
 
 ---
 
@@ -225,13 +236,9 @@ flowchart TB
     VETO{"veto?"}
     FIX["🔧 FIX — findings only"]
 
-    MQ["🚦 MERGE QUEUE — serialized<br/>rebase onto staging"]
-    REGATE["♻️ RE-GATE ON MERGED RESULT<br/>full suite against the combination"]
-    STG["🟢 → staging · deploy"]
-    SOAK["⏱️ SOAK 24h<br/>error rate · job liveness · e2e"]
-    PROMO["🚀 → main · tag both repos"]
-    RB["⏪ AUTO-ROLLBACK<br/>revert commit · redeploy"]
-    DONE(["✔ SHIPPED"])
+    MQ["🚦 COMMIT — one per ticket<br/>both repos, ticket id in message"]
+    REGATE["♻️ RE-GATE ON RESULT<br/>full suite after rebase on the stack"]
+    DONE(["✔ LANDED — local stack<br/>awaiting operator review"])
     PARK[("🅿️ blocked/<br/>+ stated question")]
 
     IN --> POLCHK
@@ -253,17 +260,13 @@ flowchart TB
     VETO -->|clean| MQ
     MQ --> REGATE
     REGATE -->|fail| FIX
-    REGATE -->|pass| STG --> SOAK
-    SOAK -->|"error spike"| RB --> PARK
-    SOAK -->|clean| PROMO --> DONE
+    REGATE -->|pass| DONE
 
-    BUG["🐞 POST-MERGE BUG<br/>from error tracking"] -.->|"auto-ticket, fast path"| IMPL
+    BUG["🐞 REGRESSION<br/>caught by a later ticket's gates"] -.->|"auto-ticket, fast path"| IMPL
 
     style SP fill:#ff6b6b,color:#fff
     style PARK fill:#ffa94d
-    style RB fill:#ff8787,color:#fff
     style DONE fill:#51cf66,color:#fff
-    style SOAK fill:#ffd93d
 ```
 
 ### Why the edges run this way
@@ -286,50 +289,55 @@ passed.
 independently can break together — this is the one place a barrier is genuinely
 required, and skipping it is how autonomous merge queues ship broken staging.
 
-**One feature per promotion.** Slower than batching, and deliberately so: if
-five features promote together and the error rate moves, nothing can attribute
-it. **Attribution is what replaces the human's judgement**, so it is protected
-at the cost of throughput.
+**One commit per ticket.** Deliberately not batched: the operator reviews a
+stack on return, and a stack where each commit is one ticket with green gates is
+reviewable. A stack of mixed commits is not, and nothing can attribute a
+regression to a cause.
 
-**The soak window is the human's replacement, expressed as time plus signal.**
-24 hours on staging with error-rate, ShedLock job liveness and e2e monitoring.
-Clean → promote. Spike → auto-revert and park. This is the only node in the
-graph that decides using evidence generated by the running system rather than by
-the build.
+**Landing is local.** Under `LOCAL_COMMITS_ONLY` there is no push, no staging
+merge and no soak — §5 covers what substitutes.
 
-**Post-merge bugs auto-ticket from error tracking** and take the fast path
-straight to implement — the spec already exists.
+**Regressions surface through later tickets' gates**, not through production
+error signal, and auto-ticket onto the fast path.
 
 ---
 
-## 5. Merge and promotion — mechanics
+## 5. Landing work — mechanics
 
 Not using the interactive `/integrate` and `/release` skills; both assume an
-operator. This is the autonomous equivalent.
+operator. Under `run_mode.git: LOCAL_COMMITS_ONLY` the run also does not push,
+open PRs, or merge to staging. Work accumulates as a reviewable local commit
+stack.
 
-### Per-feature merge
+### Per-ticket
 
 1. Worker holds a **worktree pair** — `backend/` and `web/` on matching branch
    names. Two repos; an agent holding one is broken in a way it cannot detect.
-2. Merge queue is **serialized** — one ticket rebases onto `staging` at a time.
-3. Rebase, then **re-run the full gate stack on the merged result** in both
-   repos.
-4. Green → fast-forward `staging` in both repos, same commit message pair, same
-   ticket ID. Red → route to Fix, release the queue slot.
+2. All five gates green locally (`agent-policy.yml → gates`). **This is the
+   evidence** — the same commands CI would run, minus the push latency.
+3. **One commit per ticket**, message carrying the ticket id, in both repos.
+   Never commit per action.
+4. Red after 3 attempts → park with the failing gate output attached, release
+   the zone, move to the next eligible ticket.
 
-### Staging → main promotion
+### What replaces the staging soak
 
-5. Deploy `staging`. Start the **24h soak**.
-6. Promotion criteria, all required:
-   - Zero new error classes in error tracking
-   - Error rate within baseline
-   - Every ShedLock job has run in its expected window (a silently dead
-     `EvaluationReaper` is invisible otherwise)
-   - Full e2e green at the end of the window
-7. Pass → merge `staging` → `main` in both repos, tag both with the same
-   version, generate release notes from ticket IDs.
-8. Fail → `git revert` the feature's merge commit in both repos, redeploy, park
-   the ticket with the captured error signature attached.
+The full design promotes through a staging soak on error-rate and job-liveness.
+That needs a deployed environment and a push, so under local-only it does not
+apply. The substitutes:
+
+- **The sandbox is the blast-radius container.** Every migration and every write
+  lands in a disposable clone (`docker/sandbox/`), and `sandbox.sh reset`
+  restores it wholesale. Dev data is never reachable.
+- **e2e against the sandbox is the behavioural evidence**, standing in for
+  post-deploy error signal. At ~2% frontend coverage it is the only meaningful
+  check on most UI work — which is why `e2e_local_green` is a Phase 0 gate.
+- **The operator is the promotion gate**, asynchronously, reviewing the commit
+  stack on return rather than approving each ticket in-flight.
+
+When the run is later allowed to push, restore the soak: it is the only node
+that decides on evidence from a *running system* rather than from the build, and
+nothing local reproduces that.
 
 ### Why rollback is asymmetric here — and the rule that fixes it
 
@@ -423,10 +431,10 @@ any ticket touching a DTO.
 Backend: 100 test files, ArchUnit, contract pins. Strong.
 Frontend: 12 test files against 600 source files. A green build says little.
 
-With a human, browser validation covered the gap. Without one, **Playwright in
-CI is the frontend's only evidence** — which is why it is a §1 prerequisite and
-not a Phase 1 nice-to-have. Until it runs, FE-heavy tickets should stay in
-propose-only mode.
+With a human, browser validation covered the gap. Without one, **e2e against the
+sandbox stack is the frontend's only evidence** — which is why `e2e_local_green`
+is a §1 prerequisite rather than a nice-to-have. Any FE-heavy ticket attempted
+before it is green is running unverified, so the scheduler gates them on it.
 
 ---
 

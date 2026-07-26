@@ -181,6 +181,30 @@ public class SecurityConfig {
                         // may call; the service refuses posts they never received.
                         .requestMatchers(HttpMethod.POST, "/api/v1/announcements/*/report")
                                 .authenticated()
+                        // Pillar + question AUTHORING — the route floor under
+                        // /api/pipelines, which otherwise falls to
+                        // anyRequest().authenticated() and leaves @PreAuthorize as
+                        // the ONLY role gate on the instrument's own definition.
+                        //
+                        // Audited before adding: every handler this pattern reaches
+                        // is already SUPER_ADMIN-only, so it closes a gap without
+                        // 403ing a legitimate surface —
+                        //   PillarController   /api/pipelines/{id}/pillars/**
+                        //                      class @PreAuthorize SUPER_ADMIN,
+                        //                      restated on both /course-mappings methods
+                        //   QuestionController /api/pipelines/{id}/pillars/{pid}/questions/**
+                        //                      class @PreAuthorize SUPER_ADMIN
+                        // Nothing else maps under it: the member-readable pipeline
+                        // routes are siblings, NOT descendants — /published,
+                        // /{id}/bands and /{id}/simulate contain no `/pillars`
+                        // segment and are untouched by this matcher. Adding it here,
+                        // above them, keeps that visible in one screen.
+                        //
+                        // The `/**` tail is load-bearing exactly as on the
+                        // announcement rules above: it also matches the bare
+                        // collection path, and PillarRouteSecurityIntegrationTest
+                        // pins that rather than trusting it.
+                        .requestMatchers("/api/pipelines/*/pillars/**").hasAuthority("SUPER_ADMIN")
                         .requestMatchers("/api/pipelines/published").authenticated()
                         .requestMatchers("/api/pipelines/*/simulate").authenticated()
                         .anyRequest().authenticated()

@@ -32,6 +32,7 @@ import com.bvisionry.catalog.repository.ContentRepository;
 import com.bvisionry.catalog.repository.CourseRepository;
 import com.bvisionry.catalog.repository.SectionRepository;
 import com.bvisionry.catalog.repository.TagRepository;
+import com.bvisionry.common.exception.BadRequestException;
 
 /**
  * Write-side service for course authoring (SUPER_ADMIN / INSTRUCTOR only).
@@ -172,9 +173,34 @@ public class AuthoringService {
     // Helpers
     // -------------------------------------------------------------------------
 
+    /**
+     * Resolves the requested lesson type, rejecting both unknown names and types
+     * the player has no runtime for (see {@link ContentType} "Retired types").
+     * Retired values stay READABLE — legacy rows, including the seeded SCORM
+     * lessons, still hydrate — but they can never be written again.
+     *
+     * <p>Note this also turns a garbage type name from a 500 into a 400:
+     * {@code valueOf}'s {@code IllegalArgumentException} has no handler in
+     * {@code GlobalExceptionHandler} and fell through to the catch-all.
+     */
+    private static ContentType requireAuthorableType(String raw) {
+        ContentType type;
+        try {
+            type = ContentType.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new BadRequestException("Unknown lesson type: " + raw);
+        }
+        if (!type.isAuthorable()) {
+            throw new BadRequestException("Lesson type " + type
+                    + " is retired and can no longer be authored — the player cannot play it. Use one of: "
+                    + ContentType.authorable());
+        }
+        return type;
+    }
+
     private void applyContentRequest(Content c, UpsertContentRequest req) {
         c.setTitle(req.title());
-        c.setContentType(ContentType.valueOf(req.contentType().toUpperCase()));
+        c.setContentType(requireAuthorableType(req.contentType()));
         c.setSequence(req.sequence());
         c.setDurationMin(req.durationMin());
         c.setAllowPreview(req.allowPreview());

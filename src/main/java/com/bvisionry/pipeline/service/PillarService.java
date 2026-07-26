@@ -1,8 +1,13 @@
 package com.bvisionry.pipeline.service;
 
 import com.bvisionry.common.enums.PillarType;
+import com.bvisionry.common.enums.PipelineStatus;
+import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.security.CurrentUser;
+import com.bvisionry.common.security.CurrentUserAccessor;
+import com.bvisionry.pipeline.dto.PillarBandsResponse;
 import com.bvisionry.pipeline.dto.PillarCreateRequest;
 import com.bvisionry.pipeline.dto.PillarResponse;
 import com.bvisionry.pipeline.dto.PillarUpdateRequest;
@@ -37,6 +42,7 @@ public class PillarService {
     private final PipelineService pipelineService;
     private final IconKeyValidator iconKeyValidator;
     private final MaturityThresholdValidator maturityThresholdValidator;
+    private final CurrentUserAccessor currentUser;
 
     @Transactional
     public PillarResponse create(UUID pipelineId, PillarCreateRequest request) {
@@ -45,9 +51,16 @@ public class PillarService {
 
         boolean isPersonal = "PERSONAL".equals(request.type());
 
+        // Bands are per-pillar configurable data; a request that omits them gets
+        // the platform default rather than a rejection. The backend is the only
+        // place that default lives — clients send nothing and inherit it.
+        Map<String, List<Integer>> maturityThresholds = request.maturityThresholds() != null
+                ? request.maturityThresholds()
+                : MaturityThresholdValidator.PLATFORM_DEFAULT;
+
         iconKeyValidator.validate(request.iconKey());
         if (!isPersonal) {
-            maturityThresholdValidator.validate(request.maturityThresholds());
+            maturityThresholdValidator.validate(maturityThresholds);
         }
 
         int nextOrder = pillarRepository.findMaxDisplayOrderByPipelineId(pipelineId) + 1;
@@ -79,7 +92,7 @@ public class PillarService {
         } else {
             pillar.setWeight(request.weight() != null ? request.weight() : BigDecimal.ONE);
             pillar.setAiRubricInstructions(request.aiRubricInstructions());
-            pillar.setMaturityThresholds(request.maturityThresholds());
+            pillar.setMaturityThresholds(maturityThresholds);
         }
 
         Pillar saved = pillarRepository.save(pillar);
@@ -91,6 +104,47 @@ public class PillarService {
         pipelineService.findPipelineOrThrow(pipelineId);
         return pillarRepository.findByPipelineIdOrderByDisplayOrder(pipelineId)
                 .stream().map(this::toResponse).toList();
+    }
+
+    /**
+     * The maturity bands every scored pillar of a pipeline is measured against.
+     * Read-only and tenant-scoped: the party being measured may read the
+     * yardstick. Authoring the bands stays SUPER_ADMIN on
+     * {@code PillarController} — this returns no authoring fields.
+     */
+    @Transactional(readOnly = true)
+    public List<PillarBandsResponse> listBands(UUID pipelineId) {
+        requireBandsReadable(pipelineId);
+        return pillarRepository.findByPipelineIdOrderByDisplayOrder(pipelineId).stream()
+                .filter(pillar -> pillar.getType() != PillarType.PERSONAL)
+                .map(pillar -> new PillarBandsResponse(
+                        pillar.getId(), pillar.getName(), pillar.getMaturityThresholds()))
+                .toList();
+    }
+
+    /**
+     * Data layer of the band read's three-layer defense (HTTP: SecurityConfig's
+     * {@code anyRequest().authenticated()}; method: {@code @PreAuthorize("isAuthenticated()")}
+     * on the route). A SUPER_ADMIN reads any pipeline; everyone else reads only a
+     * PUBLISHED pipeline their own org — or one of its sub-orgs — was actually
+     * assigned.
+     *
+     * <p>A pipeline the caller may not see answers 404, not 403: the same answer
+     * {@code MyWorkshopService#load} gives a member for a workshop outside their
+     * org or still in draft, so this endpoint cannot be used to confirm that a
+     * pipeline id exists.
+     */
+    private void requireBandsReadable(UUID pipelineId) {
+        Pipeline pipeline = pipelineService.findPipelineOrThrow(pipelineId);
+        CurrentUser caller = currentUser.require();
+        if (UserRole.SUPER_ADMIN.name().equals(caller.role())) {
+            return;
+        }
+        if (pipeline.getStatus() != PipelineStatus.PUBLISHED
+                || caller.orgId() == null
+                || !pipelineService.isAssignedToOrg(pipelineId, caller.orgId())) {
+            throw new ResourceNotFoundException("Pipeline", pipelineId.toString());
+        }
     }
 
     @Transactional(readOnly = true)

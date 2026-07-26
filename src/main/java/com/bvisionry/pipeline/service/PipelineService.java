@@ -467,6 +467,16 @@ public class PipelineService {
         return toFullResponse(saved);
     }
 
+    /**
+     * Whether this pipeline is assigned to {@code orgId} (or one of its
+     * sub-orgs) — the tenancy predicate behind both the published catalog and
+     * the band read. Kept next to {@link #getPublishedCatalog()} so the two
+     * cannot answer "is this pipeline yours?" differently.
+     */
+    boolean isAssignedToOrg(UUID pipelineId, UUID orgId) {
+        return pipelineRepository.countAssignmentsToOrg(pipelineId, orgId) > 0;
+    }
+
     void requireDraft(Pipeline pipeline) {
         if (pipeline.getStatus() != PipelineStatus.DRAFT) {
             throw new IllegalOperationException(

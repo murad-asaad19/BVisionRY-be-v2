@@ -53,16 +53,12 @@ public class PdfReportService {
                 .map(this::stripQids)
                 .toList();
 
-        // Derive overall category from score
-        String overallCategory = deriveCategory(results.overallScore().intValue());
-
         // Build Thymeleaf context
         Context ctx = new Context();
         ctx.setVariable("participantName", participantName);
         ctx.setVariable("assessmentTitle", results.pipelineName());
         ctx.setVariable("reportDate", LocalDate.now().format(DateTimeFormatter.ofPattern("MMMM yyyy")));
         ctx.setVariable("overallScore", results.overallScore().intValue());
-        ctx.setVariable("overallCategory", overallCategory);
         ctx.setVariable("summaryNarrative", stripQids(results.summaryNarrative()));
         ctx.setVariable("pillarScores", results.pillarScores());
         ctx.setVariable("pillarDetails", pillarDetails);
@@ -81,14 +77,6 @@ public class PdfReportService {
         byte[] pdf = pdfRenderer.renderTemplate("pdf-report", ctx);
         log.info("Generated PDF report for submission {} ({} bytes)", submissionId, pdf.length);
         return pdf;
-    }
-
-    private String deriveCategory(int score) {
-        if (score >= 81) return "Elite Mindset";
-        if (score >= 61) return "Strong Mindset";
-        if (score >= 41) return "Emerging Mindset";
-        if (score >= 21) return "Developing Mindset";
-        return "Foundational Mindset";
     }
 
     private String stripQids(String text) {

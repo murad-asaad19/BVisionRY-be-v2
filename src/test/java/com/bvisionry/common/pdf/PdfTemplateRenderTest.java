@@ -116,7 +116,6 @@ class PdfTemplateRenderTest {
         ctx.setVariable("assessmentTitle", "Founder Mindset Assessment");
         ctx.setVariable("reportDate", "June 2026");
         ctx.setVariable("overallScore", 63);
-        ctx.setVariable("overallCategory", "Strong Mindset");
         ctx.setVariable("summaryNarrative",
                 "You bring a strong, evidence-led mindset to building. Your clearest advantage is "
                         + "turning ambiguity into a concrete next step.");

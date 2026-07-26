@@ -98,12 +98,23 @@ public class BenchmarkReadRepository {
      * as the coach console's pillar read. {@code %s} takes the segment's extra
      * tenant predicate ({@code ""} for platform-wide); the org column feeds the
      * platform query's complement floor.
+     *
+     * <p>{@code status = 'EVALUATED'} is the population, not merely the
+     * presence of {@code pillar_evaluations} rows: a run that fails its repair
+     * retries persists {@code ai_failed} pillars scored {@code 0.00} under
+     * {@code NEEDS_REVIEW} ("fail loud, not quiet",
+     * {@link com.bvisionry.common.enums.SubmissionStatus}). Those zeros are
+     * quarantined failures, and letting them into a distribution would drag
+     * every mean and percentile — including the cross-tenant platform
+     * aggregate — toward zero. It also excludes {@code PENDING_REEDIT}, whose
+     * scores are mid-rewrite.
      */
     private static final String LATEST_EVALUATED = """
             SELECT DISTINCT ON (s.user_id) s.id, a.organization_id
             FROM submissions s
             JOIN assignments a ON a.id = s.assignment_id
             WHERE a.pipeline_id = :pipelineId
+              AND s.status = 'EVALUATED'
               AND EXISTS (SELECT 1 FROM pillar_evaluations pe WHERE pe.submission_id = s.id)
               %s
             ORDER BY s.user_id, s.submitted_at DESC NULLS LAST, s.created_at DESC
@@ -173,11 +184,18 @@ public class BenchmarkReadRepository {
                 (rs, i) -> 1).isEmpty();
     }
 
-    /** The pipeline's pillars in display order — the response axis. */
+    /**
+     * The pipeline's STANDARD pillars in display order — the response axis. The
+     * auto-created PERSONAL pillar ("General Information", V30) is excluded:
+     * {@code EvaluationEngine} strips it before scoring, so it can never hold a
+     * pillar evaluation and would otherwise render as a permanent
+     * "insufficient data" first row on the benchmark panel.
+     */
     public List<PillarRef> pillars(UUID pipelineId) {
         return jdbc.query("""
                 SELECT id, name FROM pillars
                 WHERE pipeline_id = :pipelineId
+                  AND type <> 'PERSONAL'
                 ORDER BY display_order, name
                 """,
                 new MapSqlParameterSource("pipelineId", pipelineId),

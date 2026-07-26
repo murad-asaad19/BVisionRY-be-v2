@@ -297,6 +297,25 @@ class BenchmarkIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void personalPillarIsNotAnAxisRow() throws Exception {
+        // V30 auto-creates a PERSONAL "General Information" pillar on every
+        // pipeline and EvaluationEngine strips it before scoring, so it can
+        // never carry a pillar evaluation — as an axis row it would render a
+        // permanent, meaningless "insufficient data" line on the panel.
+        jdbc.update("""
+                INSERT INTO pillars (pipeline_id, name, display_order, type)
+                VALUES (?, 'General Information', 0, 'PERSONAL')
+                """, pipelineId);
+
+        TestAuthentication.authenticate(orgAdminA);
+        mockMvc.perform(benchmarks(orgA, ""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.pillars", hasSize(2)))
+                .andExpect(jsonPath("$.pillars[0].pillarName", is("Vision")))
+                .andExpect(jsonPath("$.pillars[1].pillarName", is("Market")));
+    }
+
+    @Test
     void pillarsAreIndependentlySuppressed() throws Exception {
         List<UUID> submissions = seedFounders(orgA.getId(), 30, 40.0, null);
         // Only five founders were also evaluated on Market.

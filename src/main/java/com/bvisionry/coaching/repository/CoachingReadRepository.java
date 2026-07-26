@@ -15,6 +15,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import com.bvisionry.common.coachaccess.CoachAccess;
+import com.bvisionry.common.programaccess.ProgramAudience;
 
 /**
  * Cross-feature reads for the coach console, expressed as raw SQL through
@@ -62,18 +63,11 @@ public class CoachingReadRepository {
                           AND cg.cohort_id = c.id))""";
 
     /**
-     * Module {@code m}'s audience includes user {@code %1$s}. Semantic twin of
-     * {@code programflow.web.ProgramRules#includes} — keep them in step.
+     * Module {@code m}'s audience includes user {@code %1$s} — the shared
+     * fragment, so this console and the ROI report can never quote different
+     * completion numbers for the same founder.
      */
-    private static final String AUDIENCE = """
-            (m.assign_mode = 'ALL'
-             OR (m.assign_mode = 'TEAMS' AND EXISTS (
-                   SELECT 1 FROM program_module_teams pmt
-                   JOIN team_members tm ON tm.team_id = pmt.team_id
-                   WHERE pmt.module_id = m.id AND tm.user_id = %1$s))
-             OR (m.assign_mode = 'MEMBERS' AND EXISTS (
-                   SELECT 1 FROM program_module_members pmm
-                   WHERE pmm.module_id = m.id AND pmm.user_id = %1$s)))""";
+    private static final String AUDIENCE = ProgramAudience.INCLUDES_USER;
 
     /**
      * The roster row shape: grant-scoped cohort names plus grant-scoped

@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<!--
+  Program Outcomes (ROI) report — roadmap §7 item 16. Written to be handed to a
+  FUNDER: plain English, named founders, no ids, no internal vocabulary
+  ("assessment" not pipeline, "program" not cohort, "founder" not member).
+
+  Layout and palette come from fragments/pdf-base, exactly as the org- and
+  team-insights exports do; only the table styles below are new.
+-->
+<head>
+    <meta charset="UTF-8"/>
+    <th:block th:replace="~{fragments/pdf-base :: pdfStyles}"></th:block>
+    <style>
+        /* ===== ROI-report specific ===== */
+        /* -fs-table-paginate repeats the table head on every page a table spills
+           onto; without it a founder table longer than one page loses its
+           headers. NOTE: no angle brackets in this block — Flying Saucer parses
+           the rendered document as XML and a literal tag name inside a style
+           element aborts the whole render. */
+        .data-table {
+            width: 100%; border-collapse: collapse; margin-top: 10px;
+            -fs-table-paginate: paginate;
+        }
+        .data-table th {
+            font-size: 8.5pt; font-weight: 700; color: #051647; text-align: left;
+            letter-spacing: 0.05em; text-transform: uppercase;
+            padding: 7px 8px; border-bottom: 2px solid #d9ad62;
+        }
+        .data-table td {
+            font-size: 9.5pt; padding: 6px 8px; border-bottom: 1px solid #dce3ee;
+            vertical-align: top;
+        }
+        .data-table tr { page-break-inside: avoid; }
+        .num { text-align: right; }
+        .up { color: #2c7a52; font-weight: 700; }
+        .down { color: #b07d18; font-weight: 700; }
+        .flat { color: #55647d; font-weight: 700; }
+        .none { color: #55647d; }
+        .stat-grid { display: table; width: 100%; margin-top: 12px; }
+        .stat-cell { display: table-cell; width: 33%; padding-right: 12px; }
+        .stat-value { font-size: 22pt; font-weight: 700; color: #051647; line-height: 1.1; }
+        .stat-caption { font-size: 9pt; color: #55647d; margin-top: 3px; }
+    </style>
+</head>
+<body>
+
+<!-- ============ PAGE 1: Cover ============ -->
+<div class="page cover">
+    <div class="watermark" style="top: 70px; right: -120px;">
+        <img th:src="${brandWatermark}" style="width: 360px;" alt=""/>
+    </div>
+
+    <div style="position: relative; z-index: 1;">
+        <p class="cover-eyebrow">Program Outcomes Report</p>
+        <h1 class="cover-title" th:text="${report.organizationName()}">Organization</h1>
+        <span class="accent-rule" style="width: 78px; margin-top: 20px;"></span>
+
+        <p class="cover-subtitle" th:text="${report.programName()}">Program</p>
+        <p class="cover-date" th:text="${report.assessmentName()}">Assessment</p>
+        <p class="cover-date" th:text="${period}">Period</p>
+        <p class="cover-confidential">Confidential</p>
+    </div>
+
+    <div class="cover-foot">
+        <div style="display: table; width: 100%;">
+            <div class="cover-foot-cell">
+                <img class="cover-logo" th:src="${brandLogo}" alt="Bvisionry"/>
+            </div>
+            <div class="cover-foot-cell cover-url">www.bvisionry.com</div>
+        </div>
+    </div>
+</div>
+
+<!-- ============ PAGE 2: Summary + pillar movement ============ -->
+<div class="page">
+    <p class="page-heading">Where the cohort moved</p>
+    <span class="accent-rule"></span>
+
+    <div class="stat-grid">
+        <div class="stat-cell">
+            <p class="stat-value" th:text="${report.cohortSize()}">0</p>
+            <p class="stat-caption">founders in the program</p>
+        </div>
+        <div class="stat-cell">
+            <p class="stat-value" th:text="${report.foundersMeasured()}">0</p>
+            <p class="stat-caption">assessed at least once</p>
+        </div>
+        <div class="stat-cell">
+            <p class="stat-value" th:text="${report.foundersRemeasured()}">0</p>
+            <p class="stat-caption">assessed twice or more</p>
+        </div>
+    </div>
+
+    <table class="info-table mt-6">
+        <tr>
+            <td class="info-label">Program</td>
+            <td class="info-value" th:text="${report.programName()}">Program</td>
+        </tr>
+        <tr>
+            <td class="info-label">Assessment</td>
+            <td class="info-value" th:text="${report.assessmentName()}">Assessment</td>
+        </tr>
+        <tr>
+            <td class="info-label">Measurement period</td>
+            <td class="info-value" th:text="${period}">Period</td>
+        </tr>
+        <tr>
+            <td class="info-label">Module completion</td>
+            <td class="info-value" th:if="${report.completionRate() != null}"
+                th:text="|${#numbers.formatDecimal(report.completionRate(), 1, 1)}% — ${report.tasksCompleted()} of ${report.tasksAssigned()} program steps submitted|">
+                0%
+            </td>
+            <td class="info-value none" th:if="${report.completionRate() == null}">
+                No module steps have been assigned to this program yet.
+            </td>
+        </tr>
+    </table>
+
+    <div class="section">
+        <h3>Readiness by pillar, intake vs latest</h3>
+        <p class="muted" style="font-size: 9pt;">
+            Each pillar compares the same founders at their first and their most
+            recent assessment, scored 0&ndash;100. Founders assessed only once are
+            not counted in a movement &mdash; there is nothing to compare them to.
+        </p>
+
+        <table class="data-table" th:if="${report.foundersRemeasured() > 0}">
+            <thead>
+            <tr>
+                <th>Pillar</th>
+                <th class="num">Founders</th>
+                <th class="num">Intake</th>
+                <th class="num">Latest</th>
+                <th class="num">Change</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="p : ${report.pillars()}">
+                <td th:text="${p.pillarName()}">Pillar</td>
+                <td class="num" th:text="${p.foundersPaired()}">0</td>
+                <td class="num" th:text="${p.intakeAverage() != null} ? ${#numbers.formatDecimal(p.intakeAverage(), 1, 1)} : '—'">—</td>
+                <td class="num" th:text="${p.latestAverage() != null} ? ${#numbers.formatDecimal(p.latestAverage(), 1, 1)} : '—'">—</td>
+                <td class="num none" th:if="${p.delta() == null}">not yet measured twice</td>
+                <td class="num" th:unless="${p.delta() == null}"
+                    th:classappend="${p.direction().name() == 'UP'} ? 'up' : (${p.direction().name() == 'DOWN'} ? 'down' : 'flat')"
+                    th:text="|${p.delta().signum() > 0 ? '+' : ''}${#numbers.formatDecimal(p.delta(), 1, 1)}|">+0.0</td>
+            </tr>
+            </tbody>
+        </table>
+
+        <!-- Two honest empty states, not one: "assess them again" is the wrong
+             instruction for a program where nobody has been assessed at all.
+             Mirrors measurementNote() on the panel. -->
+        <div class="card-cream mt-4"
+             th:if="${report.foundersRemeasured() == 0 and report.foundersMeasured() > 0}">
+            <p style="font-size: 10pt;">
+                No founder in this program has been assessed twice yet, so there is
+                no movement to report. Run the assessment a second time to produce
+                an intake-to-latest comparison.
+            </p>
+        </div>
+        <div class="card-cream mt-4" th:if="${report.foundersMeasured() == 0}">
+            <p style="font-size: 10pt;">
+                No founder in this program has been assessed yet. Assign the
+                assessment to the cohort to start measuring readiness.
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- ============ PAGE 3+: Per-founder deltas ============ -->
+<div class="page">
+    <p class="page-heading">Founder by founder</p>
+    <span class="accent-rule"></span>
+
+    <table class="data-table" th:if="${report.cohortSize() > 0}">
+        <thead>
+        <tr>
+            <th>Founder</th>
+            <th>Intake</th>
+            <th class="num">Score</th>
+            <th>Latest</th>
+            <th class="num">Score</th>
+            <th class="num">Change</th>
+            <th class="num">Modules</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="f : ${report.founders()}">
+            <td th:text="${f.founderName()}">Founder</td>
+            <td th:text="${f.intakeOn() != null} ? ${#temporals.format(f.intakeOn(), 'd MMM yyyy')} : '—'">—</td>
+            <td class="num" th:text="${f.intakeScore() != null} ? ${#numbers.formatDecimal(f.intakeScore(), 1, 1)} : '—'">—</td>
+            <td th:text="${f.latestOn() != null} ? ${#temporals.format(f.latestOn(), 'd MMM yyyy')} : '—'">—</td>
+            <td class="num" th:text="${f.latestScore() != null} ? ${#numbers.formatDecimal(f.latestScore(), 1, 1)} : '—'">—</td>
+            <td class="num none" th:if="${f.delta() == null}">—</td>
+            <td class="num" th:unless="${f.delta() == null}"
+                th:classappend="${f.direction().name() == 'UP'} ? 'up' : (${f.direction().name() == 'DOWN'} ? 'down' : 'flat')"
+                th:text="|${f.delta().signum() > 0 ? '+' : ''}${#numbers.formatDecimal(f.delta(), 1, 1)}|">+0.0</td>
+            <td class="num" th:text="${f.completionRate() != null} ? |${#numbers.formatDecimal(f.completionRate(), 1, 1)}%| : '—'">—</td>
+        </tr>
+        </tbody>
+    </table>
+
+    <div class="card-cream mt-6" th:if="${report.cohortSize() == 0}">
+        <p style="font-size: 10pt;">
+            No founders are enrolled in this program yet. Enrol founders into the
+            cohort to produce an outcomes report.
+        </p>
+    </div>
+
+    <p class="muted mt-4" style="font-size: 9pt;">
+        A founder&rsquo;s score is the overall readiness score of that assessment
+        &mdash; the same number they see on their own results. The pillar table
+        is the paired, per-pillar view of those same assessments, so a
+        founder&rsquo;s change and a pillar&rsquo;s change need not match.
+        A dash means the measurement does not exist: a founder assessed once has
+        an intake score and no change, and a founder never assessed has neither.
+        Nothing on this page is estimated.
+    </p>
+</div>
+
+<!-- ============ Closing Page ============ -->
+<div class="page">
+    <div class="watermark" style="top: 520px; right: -110px;">
+        <img th:src="${brandWatermark}" style="width: 320px;" alt=""/>
+    </div>
+    <div style="position: relative; z-index: 1; padding-top: 40px;">
+        <p class="page-heading">How to read this report</p>
+        <span class="accent-rule"></span>
+        <div class="card mt-6">
+            <p style="font-size: 10pt;">
+                Every score is a founder&rsquo;s evaluated assessment on a
+                0&ndash;100 scale. <strong>Intake</strong> is a founder&rsquo;s
+                first evaluated assessment in this program;
+                <strong>latest</strong> is their most recent. Pillar averages
+                compare the same founders at both points, so a change reflects
+                the founders themselves &mdash; not a change in who was measured.
+            </p>
+            <p class="mt-3" style="font-size: 10pt;">
+                Module completion counts every program step assigned to each
+                founder against the ones they submitted, including steps whose
+                module has not been released to them yet.
+            </p>
+        </div>
+        <div class="card-cream mt-4 closing-block">
+            <p style="font-size: 10.5pt; color: #18233f;">
+                Prepared with Bvisionry &mdash; the Founder Readiness Index.
+            </p>
+            <p class="mt-4" style="font-size: 11pt; font-weight: 600;">
+                <a href="https://www.bvisionry.com" style="color: #051647; text-decoration: none;">www.bvisionry.com</a>
+            </p>
+            <img class="closing-brand mt-4" th:src="${brandLogo}" alt="Bvisionry"/>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>

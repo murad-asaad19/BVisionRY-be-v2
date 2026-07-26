@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.insights.BenchmarkReadRepository;
@@ -28,6 +29,13 @@ public class BenchmarkService {
 
     private final BenchmarkReadRepository repository;
 
+    /**
+     * One read transaction across the segment queries — under autocommit the
+     * cohort, org and platform distributions are independent snapshots, so a
+     * submission landing mid-request can put a founder in one segment and not
+     * another and move a sample count across the suppression floor.
+     */
+    @Transactional(readOnly = true)
     public BenchmarkResponse benchmarks(UUID orgId, UUID pipelineId, UUID cohortId) {
         // A DRAFT/ARCHIVED or absent pipeline reads as absent — the axis query
         // must not become an existence oracle for unpublished pillar names.

@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
@@ -61,12 +62,14 @@ public class ExcelWorkbookBuilder implements AutoCloseable {
     private final CellStyle headerStyle;
     private final CellStyle wrappedStyle;
     private final CellStyle labelStyle;
+    private final CellStyle dateStyle;
 
     public ExcelWorkbookBuilder() {
         this.workbook = new XSSFWorkbook();
         this.headerStyle = buildHeaderStyle(workbook);
         this.wrappedStyle = buildWrappedStyle(workbook);
         this.labelStyle = buildLabelStyle(workbook);
+        this.dateStyle = buildDateStyle(workbook);
     }
 
     public SheetBuilder newSheet(String desiredName) {
@@ -156,6 +159,10 @@ public class ExcelWorkbookBuilder implements AutoCloseable {
             }
             switch (value) {
                 case String s -> cell.setCellValue(s);
+                // A real date cell, so a reader can sort and filter it as a date
+                // instead of as the text "2026-05-17". Returns early: the date
+                // format IS this cell's style.
+                case LocalDate d -> { cell.setCellValue(d); cell.setCellStyle(dateStyle); return; }
                 case Boolean b -> cell.setCellValue(b ? "Yes" : "No");
                 case BigDecimal b -> cell.setCellValue(b.doubleValue());
                 case Number n -> cell.setCellValue(n.doubleValue());
@@ -184,6 +191,13 @@ public class ExcelWorkbookBuilder implements AutoCloseable {
     private static CellStyle buildWrappedStyle(Workbook wb) {
         CellStyle style = wb.createCellStyle();
         style.setWrapText(true);
+        style.setVerticalAlignment(VerticalAlignment.TOP);
+        return style;
+    }
+
+    private static CellStyle buildDateStyle(Workbook wb) {
+        CellStyle style = wb.createCellStyle();
+        style.setDataFormat(wb.createDataFormat().getFormat("yyyy-mm-dd"));
         style.setVerticalAlignment(VerticalAlignment.TOP);
         return style;
     }

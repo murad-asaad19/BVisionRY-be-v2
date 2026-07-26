@@ -5,6 +5,7 @@ import com.bvisionry.pipeline.dto.PillarCreateRequest;
 import com.bvisionry.pipeline.dto.PillarResponse;
 import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.Pipeline;
+import com.bvisionry.pipeline.repository.PillarCourseMappingRepository;
 import com.bvisionry.pipeline.repository.PillarRepository;
 import com.bvisionry.pipeline.validation.IconKeyValidator;
 import com.bvisionry.pipeline.validation.MaturityThresholdValidator;
@@ -35,6 +36,7 @@ import static org.mockito.Mockito.when;
 class PillarServiceTest {
 
     @Mock private PillarRepository pillarRepository;
+    @Mock private PillarCourseMappingRepository courseMappingRepository;
     @Mock private PipelineService pipelineService;
     @Mock private CurrentUserAccessor currentUser;
 
@@ -44,8 +46,8 @@ class PillarServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new PillarService(pillarRepository, pipelineService, new IconKeyValidator(),
-                new MaturityThresholdValidator(), currentUser);
+        service = new PillarService(pillarRepository, courseMappingRepository, pipelineService,
+                new IconKeyValidator(), new MaturityThresholdValidator(), currentUser);
 
         Pipeline pipeline = new Pipeline();
         pipeline.setId(pipelineId);

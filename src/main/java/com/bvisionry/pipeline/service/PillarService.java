@@ -16,6 +16,7 @@ import com.bvisionry.pipeline.dto.ReorderRequest;
 import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.Pipeline;
 import com.bvisionry.pipeline.entity.Question;
+import com.bvisionry.pipeline.repository.PillarCourseMappingRepository;
 import com.bvisionry.pipeline.repository.PillarRepository;
 import com.bvisionry.pipeline.validation.IconKeyValidator;
 import com.bvisionry.pipeline.validation.MaturityThresholdValidator;
@@ -39,6 +40,7 @@ import java.util.stream.Collectors;
 public class PillarService {
 
     private final PillarRepository pillarRepository;
+    private final PillarCourseMappingRepository courseMappingRepository;
     private final PipelineService pipelineService;
     private final IconKeyValidator iconKeyValidator;
     private final MaturityThresholdValidator maturityThresholdValidator;
@@ -271,6 +273,9 @@ public class PillarService {
         cloned.setQuestions(clonedQuestions);
 
         Pillar saved = pillarRepository.save(cloned);
+        // A copy that keeps the thresholds but drops the rules hanging off them
+        // is a half copy. Runs after the save because the clone needs its id.
+        courseMappingRepository.copyTo(pillarId, saved);
         return toResponse(saved);
     }
 

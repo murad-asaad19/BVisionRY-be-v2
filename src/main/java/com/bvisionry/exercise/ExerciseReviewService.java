@@ -33,11 +33,15 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Admin review loop over a member's exercise submission: read the sheet, leave
+ * Review loop over a member's exercise submission: read the sheet, leave
  * comments anchored to a cell / column / row / the whole submission, resolve
  * addressed threads, and drive the status handshake (request changes / mark
- * reviewed). Commenting is allowed in every submission status — the admin can
- * react to saved-but-not-submitted work too.
+ * reviewed). Commenting is allowed in every submission status — the reviewer
+ * can react to saved-but-not-submitted work too.
+ *
+ * <p>Reviewers are org admins and, since the coach console, COACHes — a coach
+ * only reaches submissions of founders inside their assignment union
+ * ({@link CoachAccess}); anything else is a 404 at the data layer.
  */
 @Service
 @RequiredArgsConstructor
@@ -53,6 +57,20 @@ public class ExerciseReviewService {
     private final UserRepository userRepository;
     private final AuditService auditService;
     private final PushNotificationService pushNotificationService;
+
+    /**
+     * Setter-injected on purpose: this class's constructor signature is pinned
+     * verbatim in the frozen ArchUnit store (its cross-feature parameters are
+     * recorded violations, and the store is append-never), so it cannot grow a
+     * constructor parameter without minting "new" violations. The gate is a
+     * same-feature bean, so the edge itself is legal.
+     */
+    private ExerciseCoachGate coachGate;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setCoachGate(ExerciseCoachGate coachGate) {
+        this.coachGate = coachGate;
+    }
 
     @Transactional(readOnly = true)
     public ExerciseSubmissionDetailResponse getSubmission(UUID orgId, UUID assignmentId) {
@@ -127,7 +145,7 @@ public class ExerciseReviewService {
         pushNotificationService.notifyUser(submission.getUser().getId(),
                 NotificationType.EXERCISE_FEEDBACK,
                 "New feedback on your exercise",
-                "An admin commented on \"" + assignment.getTemplate().getName() + "\".",
+                "Your reviewer commented on \"" + assignment.getTemplate().getName() + "\".",
                 "/app/exercises/" + submission.getId());
 
         return ExerciseCommentResponse.from(saved, true);
@@ -165,7 +183,7 @@ public class ExerciseReviewService {
 
         notifyStatus(submission, OrgAuditActions.EXERCISE_CHANGES_REQUESTED,
                 "Changes requested",
-                "An admin requested changes on \"" + templateName(submission) + "\".");
+                "Your reviewer requested changes on \"" + templateName(submission) + "\".");
         return submissionService.buildDetail(submission, true);
     }
 
@@ -208,6 +226,10 @@ public class ExerciseReviewService {
         if (assignment.getUser() == null) {
             throw new BadRequestException("This provision has not been assigned to a member yet.");
         }
+        // Data layer of the coach's three-layer defense: a COACH caller only
+        // reaches submissions of founders inside their assignment union — a
+        // uniform 404 outside it, so foreign work is absent, not forbidden.
+        coachGate.requireCoachMaySeeSubmission(orgId, assignmentId);
         return submissionRepository.findByAssignmentId(assignmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Submission", assignmentId.toString()));
     }

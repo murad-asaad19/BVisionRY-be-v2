@@ -41,7 +41,12 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
      */
     private static final Set<String> KNOWN_USER_REFERENCES = Set.of(
             "ai_configurations.updated_by", "assignments.assigned_by", "assignments.user_id",
-            "audit_logs.actor_id", "certificate.user_id", "cohort_members.user_id",
+            "audit_logs.actor_id", "certificate.user_id",
+            // coach_assignments (V147): coach_id / member_id CASCADE with the
+            // user row and are exported for both sides; assigned_by SET NULL —
+            // an admin attribution on the org's record, like assignments.assigned_by.
+            "coach_assignments.assigned_by", "coach_assignments.coach_id",
+            "coach_assignments.member_id", "cohort_members.user_id",
             "course.instructor_id", "email_templates.updated_by", "enrollment.user_id",
             "exercise_assignments.user_id", "exercise_comments.author_id",
             "exercise_submissions.user_id", "insight_report_member_ids.member_id",

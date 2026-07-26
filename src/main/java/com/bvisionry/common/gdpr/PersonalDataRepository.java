@@ -237,6 +237,13 @@ public class PersonalDataRepository {
         EXPORT_SECTIONS.put("team_memberships", "SELECT * FROM team_members WHERE user_id = :userId");
         EXPORT_SECTIONS.put("cohort_memberships", "SELECT * FROM cohort_members WHERE user_id = :userId");
 
+        // Coach grants ABOUT the subject: as the coach (their caseload) or as
+        // the founder (who may see them). Erasure needs no statement here — the
+        // subject's own rows CASCADE with the user row, and assigned_by is
+        // SET NULL like every other admin attribution.
+        EXPORT_SECTIONS.put("coach_assignments",
+                "SELECT * FROM coach_assignments WHERE coach_id = :userId OR member_id = :userId");
+
         EXPORT_SECTIONS.put("notifications", "SELECT * FROM notifications WHERE user_id = :userId");
         EXPORT_SECTIONS.put("notification_optouts", "SELECT * FROM notification_optouts WHERE user_id = :userId");
         EXPORT_SECTIONS.put("upgrade_requests", "SELECT * FROM upgrade_requests WHERE requested_by = :userId");

@@ -57,7 +57,8 @@ public class InvitationService {
     public List<InvitationResponse> inviteMembers(UUID orgId, InviteMembersRequest request) {
         Organization org = organizationService.findActiveOrThrow(orgId);
         // Members live in sub-orgs only: a root org holds ORG_ADMINs and
-        // INSTRUCTORs, so MEMBER/MANAGER invites must target a sub-org.
+        // INSTRUCTORs, so MEMBER/COACH invites must target a sub-org (a coach
+        // works the cohorts of a sub-org, which is where cohorts live).
         if (!org.isSubOrganization()
                 && request.role() != UserRole.ORG_ADMIN && request.role() != UserRole.INSTRUCTOR) {
             throw new BadRequestException(

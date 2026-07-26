@@ -1,0 +1,542 @@
+package com.bvisionry.coaching;
+
+import com.bvisionry.auth.UserRepository;
+import com.bvisionry.auth.entity.User;
+import com.bvisionry.common.enums.UserRole;
+import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.organization.OrganizationRepository;
+import com.bvisionry.organization.entity.Organization;
+import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
+import com.bvisionry.testsupport.EnabledIfDockerAvailable;
+import com.bvisionry.testsupport.TestAuthentication;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.UUID;
+
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.nullValue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * The coach console's tenancy story, end to end against the real schema:
+ *
+ * <ul>
+ *   <li>visibility is the UNION of cohort grants and direct grants;</li>
+ *   <li>a founder outside the union — same org or another tenant — is a 404
+ *       at the data layer, not a hidden nav entry;</li>
+ *   <li>MEMBER / INSTRUCTOR / ORG_ADMIN / foreign callers never clear the
+ *       console's gates;</li>
+ *   <li>org-admin grant management resolves every referenced row with the org
+ *       predicate;</li>
+ *   <li>the exercise review loop admits a coach only inside their union.</li>
+ * </ul>
+ */
+@SpringBootTest
+@AutoConfigureMockMvc(addFilters = false)
+@ActiveProfiles("test")
+@Transactional
+@EnabledIfDockerAvailable
+class CoachConsoleIntegrationTest extends AbstractPostgresIntegrationTest {
+
+    @Autowired private MockMvc mockMvc;
+    @Autowired private UserRepository userRepository;
+    @Autowired private OrganizationRepository organizationRepository;
+    @Autowired private JdbcTemplate jdbc;
+
+    private Organization orgA;
+    private Organization orgB;
+    private User coach;       // COACH in org A: cohort1 + direct(founderDirect)
+    private User coachB;      // COACH in org B
+    private User founderInCohort;   // org A, member of cohort1 AND cohort2 -> visible via the cohort1 grant
+    private User founderOtherCohort; // org A, member of cohort2 only -> NOT visible
+    private User founderDirect;      // org A, no cohort          -> visible (direct grant)
+    private User founderUnassigned;  // org A, no cohort, no grant -> NOT visible
+    private User founderB;           // org B, member of cohortB   -> visible to coachB only
+    private UUID cohort1;
+    private UUID cohort2;
+    private UUID cohortB;
+    private UUID exerciseAssignmentVisible;
+    private UUID exerciseAssignmentHidden;
+
+    @BeforeEach
+    void seed() {
+        orgA = saveOrg("Coach Org A");
+        orgB = saveOrg("Coach Org B");
+
+        coach = saveUser("coach.a@test.invalid", UserRole.COACH, orgA);
+        coachB = saveUser("coach.b@test.invalid", UserRole.COACH, orgB);
+        founderInCohort = saveUser("founder.cohort@test.invalid", UserRole.MEMBER, orgA);
+        founderOtherCohort = saveUser("founder.other@test.invalid", UserRole.MEMBER, orgA);
+        founderDirect = saveUser("founder.direct@test.invalid", UserRole.MEMBER, orgA);
+        founderUnassigned = saveUser("founder.unassigned@test.invalid", UserRole.MEMBER, orgA);
+        founderB = saveUser("founder.b@test.invalid", UserRole.MEMBER, orgB);
+
+        cohort1 = insertCohort(orgA.getId(), "Cohort One", founderInCohort.getId());
+        cohort2 = insertCohort(orgA.getId(), "Cohort Two", founderOtherCohort.getId());
+        cohortB = insertCohort(orgB.getId(), "Cohort B", founderB.getId());
+        // The grain seam: the visible founder ALSO belongs to the UNGRANTED
+        // cohort2 — its name, modules and progress must never leak through a
+        // cohort1-grain grant.
+        jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
+                cohort2, founderInCohort.getId());
+
+        insertGrant(orgA.getId(), coach.getId(), cohort1, null);
+        insertGrant(orgA.getId(), coach.getId(), null, founderDirect.getId());
+        insertGrant(orgB.getId(), coachB.getId(), cohortB, null);
+
+        seedProgram();
+        seedPillarScores();
+        seedExercises();
+    }
+
+    @AfterEach
+    void clearAuth() {
+        TestAuthentication.clear();
+    }
+
+    /* ------------------------------------------------------------- console */
+
+    @Nested
+    class Roster {
+
+        @Test
+        void unionOfCohortAndDirectGrants_nothingElse() throws Exception {
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(get("/api/v1/coach/roster"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.founders", hasSize(2)))
+                    .andExpect(jsonPath("$.founders[0].name", is("founder.cohort")))
+                    // No email anywhere — coach_sees does not include contact data.
+                    .andExpect(jsonPath("$.founders[0].email").doesNotExist())
+                    // GRAIN: the founder is also in the ungranted Cohort Two —
+                    // its name and its task must not leak through a cohort1 grant.
+                    .andExpect(jsonPath("$.founders[0].cohortNames", is("Cohort One")))
+                    .andExpect(jsonPath("$.founders[0].totalTasks", is(2)))
+                    .andExpect(jsonPath("$.founders[0].submittedTasks", is(1)))
+                    .andExpect(jsonPath("$.founders[0].completionPct", is(50)))
+                    .andExpect(jsonPath("$.founders[1].name", is("founder.direct")))
+                    .andExpect(jsonPath("$.founders[1].totalTasks", is(0)))
+                    .andExpect(jsonPath("$.founders[1].completionPct", nullValue()));
+        }
+
+        @Test
+        void foreignCoachSeesOnlyTheirOwnOrg() throws Exception {
+            TestAuthentication.authenticate(coachB);
+            mockMvc.perform(get("/api/v1/coach/roster"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.founders", hasSize(1)))
+                    .andExpect(jsonPath("$.founders[0].name", is("founder.b")));
+        }
+
+        @Test
+        void suspendedFounderDropsOutOfRosterAndReview() throws Exception {
+            jdbc.update("UPDATE users SET status = 'SUSPENDED' WHERE id = ?",
+                    founderInCohort.getId());
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(get("/api/v1/coach/roster"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.founders", hasSize(1)))
+                    .andExpect(jsonPath("$.founders[0].name", is("founder.direct")));
+            mockMvc.perform(get("/api/v1/coach/founders/" + founderInCohort.getId()))
+                    .andExpect(status().isNotFound());
+            // The review loop uses the SAME shared predicate — no divergence.
+            mockMvc.perform(get(review(orgA, exerciseAssignmentVisible)))
+                    .andExpect(status().isNotFound());
+        }
+
+        @Test
+        void nonCoachRolesAreRejectedAtTheGate() throws Exception {
+            TestAuthentication.authenticate(founderInCohort);
+            mockMvc.perform(get("/api/v1/coach/roster")).andExpect(status().isForbidden());
+
+            TestAuthentication.authenticate(saveUser("instructor@test.invalid",
+                    UserRole.INSTRUCTOR, orgA));
+            mockMvc.perform(get("/api/v1/coach/roster")).andExpect(status().isForbidden());
+
+            TestAuthentication.authenticate(saveUser("orgadmin.a@test.invalid",
+                    UserRole.ORG_ADMIN, orgA));
+            mockMvc.perform(get("/api/v1/coach/roster")).andExpect(status().isForbidden());
+        }
+    }
+
+    @Nested
+    class FounderDetail {
+
+        @Test
+        void visibleFounderCarriesScoresProgressAndSubmissions() throws Exception {
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(get("/api/v1/coach/founders/" + founderInCohort.getId()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.founder.name", is("founder.cohort")))
+                    .andExpect(jsonPath("$.founder.email").doesNotExist())
+                    // GRAIN: a cohort1 grant scopes everything journey-shaped
+                    // to cohort1 — the ungranted Cohort Two contributes no
+                    // name, no module row, no task counts.
+                    .andExpect(jsonPath("$.founder.cohortNames", is("Cohort One")))
+                    .andExpect(jsonPath("$.founder.totalTasks", is(2)))
+                    .andExpect(jsonPath("$.founder.submittedTasks", is(1)))
+                    .andExpect(jsonPath("$.pillarScores", hasSize(1)))
+                    .andExpect(jsonPath("$.pillarScores[0].pillarName", is("Vision")))
+                    .andExpect(jsonPath("$.pillarScores[0].scorePercentage", is(72.5)))
+                    .andExpect(jsonPath("$.pillarScores[0].maturityLabel", is("Strong")))
+                    .andExpect(jsonPath("$.modules", hasSize(1)))
+                    .andExpect(jsonPath("$.modules[0].moduleName", is("Module One")))
+                    .andExpect(jsonPath("$.modules[0].cohortName", is("Cohort One")))
+                    .andExpect(jsonPath("$.modules[0].totalTasks", is(2)))
+                    .andExpect(jsonPath("$.modules[0].submittedTasks", is(1)))
+                    .andExpect(jsonPath("$.exercises", hasSize(1)))
+                    .andExpect(jsonPath("$.exercises[0].exerciseName", is("Coach Test Exercise")))
+                    .andExpect(jsonPath("$.exercises[0].status", is("SUBMITTED")));
+        }
+
+        @Test
+        void directGrantExposesTheFullJourney() throws Exception {
+            // The admin authorized the PERSON: a direct grant reaches the
+            // founder's whole journey — both cohorts, all three live tasks.
+            User coachDirect = saveUser("coach.direct@test.invalid", UserRole.COACH, orgA);
+            insertGrant(orgA.getId(), coachDirect.getId(), null, founderInCohort.getId());
+            TestAuthentication.authenticate(coachDirect);
+            mockMvc.perform(get("/api/v1/coach/founders/" + founderInCohort.getId()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.founder.cohortNames", is("Cohort One, Cohort Two")))
+                    .andExpect(jsonPath("$.founder.totalTasks", is(3)))
+                    .andExpect(jsonPath("$.founder.submittedTasks", is(2)))
+                    .andExpect(jsonPath("$.founder.completionPct", is(67)))
+                    .andExpect(jsonPath("$.modules", hasSize(2)))
+                    .andExpect(jsonPath("$.modules[0].moduleName", is("Module One")))
+                    .andExpect(jsonPath("$.modules[1].moduleName", is("Module Two")));
+        }
+
+        @Test
+        void holdingBothGrainsIsTheFullUnion() throws Exception {
+            insertGrant(orgA.getId(), coach.getId(), null, founderInCohort.getId());
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(get("/api/v1/coach/founders/" + founderInCohort.getId()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.founder.cohortNames", is("Cohort One, Cohort Two")))
+                    .andExpect(jsonPath("$.founder.totalTasks", is(3)))
+                    .andExpect(jsonPath("$.founder.submittedTasks", is(2)))
+                    .andExpect(jsonPath("$.modules", hasSize(2)));
+        }
+
+        @Test
+        void founderOutsideTheUnionIs404_evenInTheCoachsOwnOrg() throws Exception {
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(get("/api/v1/coach/founders/" + founderOtherCohort.getId()))
+                    .andExpect(status().isNotFound());
+            mockMvc.perform(get("/api/v1/coach/founders/" + founderUnassigned.getId()))
+                    .andExpect(status().isNotFound());
+        }
+
+        @Test
+        void anotherTenantsFounderIs404() throws Exception {
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(get("/api/v1/coach/founders/" + founderB.getId()))
+                    .andExpect(status().isNotFound());
+        }
+    }
+
+    /* ---------------------------------------------------- grant management */
+
+    @Nested
+    class GrantManagement {
+
+        @Test
+        void orgAdminCreatesListsAndDeletesGrants() throws Exception {
+            User newCoach = saveUser("coach.new@test.invalid", UserRole.COACH, orgA);
+            TestAuthentication.authenticate(saveUser("orgadmin.crud@test.invalid",
+                    UserRole.ORG_ADMIN, orgA));
+
+            mockMvc.perform(post(grants(orgA))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"coachId\":\"%s\",\"cohortId\":\"%s\"}"
+                                    .formatted(newCoach.getId(), cohort2)))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.coachEmail", is("coach.new@test.invalid")))
+                    .andExpect(jsonPath("$.cohortName", is("Cohort Two")));
+
+            mockMvc.perform(post(grants(orgA))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"coachId\":\"%s\",\"memberId\":\"%s\"}"
+                                    .formatted(newCoach.getId(), founderUnassigned.getId())))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.memberEmail", is("founder.unassigned@test.invalid")));
+
+            // The 2 seeded org-A grants + the 2 just created (org B's stay invisible).
+            mockMvc.perform(get(grants(orgA)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(4)));
+
+            UUID grantId = jdbc.queryForObject(
+                    "SELECT id FROM coach_assignments WHERE cohort_id = ?", UUID.class, cohort2);
+            mockMvc.perform(delete(grants(orgA) + "/" + grantId))
+                    .andExpect(status().isNoContent());
+        }
+
+        @Test
+        void invalidGrainAndTargetsAreRejected() throws Exception {
+            TestAuthentication.authenticate(saveUser("orgadmin.val@test.invalid",
+                    UserRole.ORG_ADMIN, orgA));
+
+            // both / neither grain
+            mockMvc.perform(post(grants(orgA)).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"coachId\":\"%s\",\"cohortId\":\"%s\",\"memberId\":\"%s\"}"
+                                    .formatted(coach.getId(), cohort2, founderUnassigned.getId())))
+                    .andExpect(status().isBadRequest());
+            mockMvc.perform(post(grants(orgA)).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"coachId\":\"%s\"}".formatted(coach.getId())))
+                    .andExpect(status().isBadRequest());
+
+            // a MEMBER is not a coach
+            mockMvc.perform(post(grants(orgA)).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"coachId\":\"%s\",\"cohortId\":\"%s\"}"
+                                    .formatted(founderInCohort.getId(), cohort2)))
+                    .andExpect(status().isBadRequest());
+
+            // duplicates
+            mockMvc.perform(post(grants(orgA)).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"coachId\":\"%s\",\"cohortId\":\"%s\"}"
+                                    .formatted(coach.getId(), cohort1)))
+                    .andExpect(status().isBadRequest());
+
+            // foreign rows read as absent: org B's cohort, member and coach
+            mockMvc.perform(post(grants(orgA)).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"coachId\":\"%s\",\"cohortId\":\"%s\"}"
+                                    .formatted(coach.getId(), cohortB)))
+                    .andExpect(status().isNotFound());
+            mockMvc.perform(post(grants(orgA)).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"coachId\":\"%s\",\"memberId\":\"%s\"}"
+                                    .formatted(coach.getId(), founderB.getId())))
+                    .andExpect(status().isNotFound());
+            mockMvc.perform(post(grants(orgA)).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"coachId\":\"%s\",\"cohortId\":\"%s\"}"
+                                    .formatted(coachB.getId(), cohort2)))
+                    .andExpect(status().isNotFound());
+        }
+
+        @Test
+        void foreignAdminAndNonAdminsAreRejected() throws Exception {
+            // An org-B admin cannot touch org A's grants (403 at @orgAccess)…
+            TestAuthentication.authenticate(saveUser("orgadmin.b@test.invalid",
+                    UserRole.ORG_ADMIN, orgB));
+            mockMvc.perform(get(grants(orgA))).andExpect(status().isForbidden());
+            // …and cannot delete them through their own org's path (404 at data layer).
+            UUID orgAGrant = jdbc.queryForObject(
+                    "SELECT id FROM coach_assignments WHERE org_id = ? LIMIT 1",
+                    UUID.class, orgA.getId());
+            mockMvc.perform(delete(grants(orgB) + "/" + orgAGrant))
+                    .andExpect(status().isNotFound());
+
+            // A coach cannot manage grants at all.
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(get(grants(orgA))).andExpect(status().isForbidden());
+
+            // Nor can a member.
+            TestAuthentication.authenticate(founderInCohort);
+            mockMvc.perform(get(grants(orgA))).andExpect(status().isForbidden());
+        }
+    }
+
+    /* ----------------------------------------------------- exercise review */
+
+    @Nested
+    class ExerciseReview {
+
+        @Test
+        void coachReviewsAVisibleFoundersSubmission() throws Exception {
+            // An org admin's review payload carries the member's email…
+            TestAuthentication.authenticate(saveUser("orgadmin.review@test.invalid",
+                    UserRole.ORG_ADMIN, orgA));
+            mockMvc.perform(get(review(orgA, exerciseAssignmentVisible)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.memberEmail", is("founder.cohort@test.invalid")));
+
+            // …a coach's does not (coach_sees excludes contact data), name only.
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(get(review(orgA, exerciseAssignmentVisible)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.memberName", is("founder.cohort")))
+                    .andExpect(jsonPath("$.memberEmail", nullValue()));
+            mockMvc.perform(post("/api/organizations/" + orgA.getId()
+                            + "/exercise-assignments/" + exerciseAssignmentVisible + "/comments")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"body\":\"Sharpen the pricing assumptions in row two.\"}"))
+                    .andExpect(status().isCreated());
+            mockMvc.perform(post("/api/organizations/" + orgA.getId()
+                            + "/exercise-assignments/" + exerciseAssignmentVisible + "/mark-reviewed"))
+                    .andExpect(status().isOk());
+        }
+
+        @Test
+        void unassignedFoundersSubmissionIs404ForTheCoach() throws Exception {
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(get(review(orgA, exerciseAssignmentHidden)))
+                    .andExpect(status().isNotFound());
+        }
+
+        @Test
+        void foreignCoachAndMemberAreRejectedAtTheGate() throws Exception {
+            TestAuthentication.authenticate(coachB);
+            mockMvc.perform(get(review(orgA, exerciseAssignmentVisible)))
+                    .andExpect(status().isForbidden());
+
+            TestAuthentication.authenticate(founderInCohort);
+            mockMvc.perform(get(review(orgA, exerciseAssignmentVisible)))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        void coachCannotDistributeExercises() throws Exception {
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(get("/api/organizations/" + orgA.getId() + "/exercise-assignments"))
+                    .andExpect(status().isForbidden());
+        }
+    }
+
+    /* ------------------------------------------------------------ seeding */
+
+    private Organization saveOrg(String name) {
+        Organization org = new Organization();
+        org.setName(name);
+        org.setActive(true);
+        // Flush so the row is visible to the JdbcTemplate seeding below.
+        return organizationRepository.saveAndFlush(org);
+    }
+
+    private User saveUser(String email, UserRole role, Organization org) {
+        User user = new User();
+        user.setEmail(email);
+        user.setName(email.substring(0, email.indexOf('@')));
+        user.setRole(role);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setOrganization(org);
+        return userRepository.saveAndFlush(user);
+    }
+
+    private UUID insertCohort(UUID orgId, String name, UUID memberId) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("INSERT INTO cohorts (id, org_id, name) VALUES (?, ?, ?)", id, orgId, name);
+        jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)", id, memberId);
+        return id;
+    }
+
+    private void insertGrant(UUID orgId, UUID coachId, UUID cohortId, UUID memberId) {
+        jdbc.update("""
+                INSERT INTO coach_assignments (org_id, coach_id, cohort_id, member_id)
+                VALUES (?, ?, ?, ?)
+                """, orgId, coachId, cohortId, memberId);
+    }
+
+    /**
+     * Module One in cohort1: two LIVE tasks (one submitted by founderInCohort)
+     * + one DRAFT. Module Two in the UNGRANTED cohort2: one LIVE task, also
+     * submitted by founderInCohort — countable only through a direct grant.
+     */
+    private void seedProgram() {
+        UUID moduleId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO program_modules (id, org_id, cohort_id, name, assign_mode, lock_mode)
+                VALUES (?, ?, ?, 'Module One', 'ALL', 'UNLOCKED')
+                """, moduleId, orgA.getId(), cohort1);
+        UUID task1 = UUID.randomUUID();
+        UUID task2 = UUID.randomUUID();
+        jdbc.update("INSERT INTO program_tasks (id, module_id, name, status) VALUES (?, ?, 'Task One', 'LIVE')", task1, moduleId);
+        jdbc.update("INSERT INTO program_tasks (id, module_id, name, status) VALUES (?, ?, 'Task Two', 'LIVE')", task2, moduleId);
+        jdbc.update("INSERT INTO program_tasks (module_id, name, status) VALUES (?, 'Draft Task', 'DRAFT')", moduleId);
+        jdbc.update("""
+                INSERT INTO program_submissions (task_id, user_id, status, submitted_at)
+                VALUES (?, ?, 'SUBMITTED', now())
+                """, task1, founderInCohort.getId());
+        jdbc.update("""
+                INSERT INTO program_submissions (task_id, user_id, status)
+                VALUES (?, ?, 'DRAFT')
+                """, task2, founderInCohort.getId());
+
+        UUID module2Id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO program_modules (id, org_id, cohort_id, name, assign_mode, lock_mode)
+                VALUES (?, ?, ?, 'Module Two', 'ALL', 'UNLOCKED')
+                """, module2Id, orgA.getId(), cohort2);
+        UUID task3 = UUID.randomUUID();
+        jdbc.update("INSERT INTO program_tasks (id, module_id, name, status) VALUES (?, ?, 'Task Three', 'LIVE')", task3, module2Id);
+        jdbc.update("""
+                INSERT INTO program_submissions (task_id, user_id, status, submitted_at)
+                VALUES (?, ?, 'SUBMITTED', now())
+                """, task3, founderInCohort.getId());
+    }
+
+    /** One evaluated assessment for founderInCohort: pillar "Vision" at 72.50 / Strong. */
+    private void seedPillarScores() {
+        UUID pipelineId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO pipelines (id, name, status, created_by)
+                VALUES (?, 'Coach Test Pipeline', 'PUBLISHED', ?)
+                """, pipelineId, coach.getId());
+        UUID pillarId = UUID.randomUUID();
+        jdbc.update("INSERT INTO pillars (id, pipeline_id, name) VALUES (?, ?, 'Vision')",
+                pillarId, pipelineId);
+        UUID assignmentId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO assignments (id, pipeline_id, organization_id, user_id, assigned_by)
+                VALUES (?, ?, ?, ?, ?)
+                """, assignmentId, pipelineId, orgA.getId(), founderInCohort.getId(), coach.getId());
+        UUID submissionId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO submissions (id, assignment_id, user_id, status, submitted_at)
+                VALUES (?, ?, ?, 'EVALUATED', now())
+                """, submissionId, assignmentId, founderInCohort.getId());
+        jdbc.update("""
+                INSERT INTO pillar_evaluations (submission_id, pillar_id, score_percentage, maturity_label)
+                VALUES (?, ?, 72.50, 'Strong')
+                """, submissionId, pillarId);
+    }
+
+    /** One exercise each for the visible and the unassigned founder, both SUBMITTED. */
+    private void seedExercises() {
+        UUID templateId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO exercise_templates (id, name, status, created_by)
+                VALUES (?, 'Coach Test Exercise', 'PUBLISHED', ?)
+                """, templateId, coach.getId());
+        exerciseAssignmentVisible = insertExercise(templateId, founderInCohort.getId());
+        exerciseAssignmentHidden = insertExercise(templateId, founderUnassigned.getId());
+    }
+
+    private UUID insertExercise(UUID templateId, UUID userId) {
+        UUID assignmentId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO exercise_assignments (id, template_id, organization_id, user_id, assigned_by)
+                VALUES (?, ?, ?, ?, ?)
+                """, assignmentId, templateId, orgA.getId(), userId, coach.getId());
+        jdbc.update("""
+                INSERT INTO exercise_submissions (assignment_id, user_id, status, submitted_at)
+                VALUES (?, ?, 'SUBMITTED', now())
+                """, assignmentId, userId);
+        return assignmentId;
+    }
+
+    private String grants(Organization org) {
+        return "/api/organizations/" + org.getId() + "/coach-assignments";
+    }
+
+    private String review(Organization org, UUID assignmentId) {
+        return "/api/organizations/" + org.getId() + "/exercise-assignments/" + assignmentId
+                + "/submission";
+    }
+}

@@ -27,12 +27,22 @@ import java.util.UUID;
  * Org console for exercises: distribute templates to members and run the
  * review loop (read the member's sheet, comment, resolve, request changes,
  * mark reviewed).
+ *
+ * <p>Distribution stays admin-only (the class annotation). The five review
+ * endpoints additionally admit a COACH of the same org — see
+ * {@link #REVIEW_ACCESS} — whose reach is then narrowed to their assigned
+ * founders at the data layer ({@code ExerciseReviewService} checks the
+ * assignment union via {@code CoachAccess} and 404s outside it).
  */
 @RestController
 @RequestMapping("/api/organizations/{orgId}/exercise-assignments")
 @RequiredArgsConstructor
 @PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId))")
 public class ExerciseAssignmentController {
+
+    /** Review-loop access: admins of the org, or a coach inside it. */
+    private static final String REVIEW_ACCESS = "hasAuthority('SUPER_ADMIN') "
+            + "or ((hasAuthority('ORG_ADMIN') or hasAuthority('COACH')) and @orgAccess.isInOrg(#orgId))";
 
     private final ExerciseAssignmentService assignmentService;
     private final ExerciseReviewService reviewService;
@@ -62,6 +72,7 @@ public class ExerciseAssignmentController {
 
     /** The member's full sheet + comment threads for the review screen. */
     @GetMapping("/{id}/submission")
+    @PreAuthorize(REVIEW_ACCESS)
     public ResponseEntity<ExerciseSubmissionDetailResponse> getSubmission(
             @PathVariable UUID orgId,
             @PathVariable UUID id) {
@@ -69,6 +80,7 @@ public class ExerciseAssignmentController {
     }
 
     @PostMapping("/{id}/comments")
+    @PreAuthorize(REVIEW_ACCESS)
     public ResponseEntity<ExerciseCommentResponse> addComment(
             @PathVariable UUID orgId,
             @PathVariable UUID id,
@@ -78,6 +90,7 @@ public class ExerciseAssignmentController {
     }
 
     @PatchMapping("/{id}/comments/{commentId}/resolve")
+    @PreAuthorize(REVIEW_ACCESS)
     public ResponseEntity<ExerciseCommentResponse> resolveComment(
             @PathVariable UUID orgId,
             @PathVariable UUID id,
@@ -86,6 +99,7 @@ public class ExerciseAssignmentController {
     }
 
     @PostMapping("/{id}/request-changes")
+    @PreAuthorize(REVIEW_ACCESS)
     public ResponseEntity<ExerciseSubmissionDetailResponse> requestChanges(
             @PathVariable UUID orgId,
             @PathVariable UUID id) {
@@ -93,6 +107,7 @@ public class ExerciseAssignmentController {
     }
 
     @PostMapping("/{id}/mark-reviewed")
+    @PreAuthorize(REVIEW_ACCESS)
     public ResponseEntity<ExerciseSubmissionDetailResponse> markReviewed(
             @PathVariable UUID orgId,
             @PathVariable UUID id) {

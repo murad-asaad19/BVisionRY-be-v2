@@ -3,6 +3,7 @@ package com.bvisionry.exercise;
 import com.bvisionry.audit.AuditService;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.exercise.dto.ExerciseColumnResponse;
@@ -262,7 +263,9 @@ public class ExerciseSubmissionService {
 
     /**
      * Everything one screen needs in one payload. {@code forAdmin} additionally
-     * exposes the member's name/email (the member already knows their own).
+     * exposes the member's name/email (the member already knows their own) —
+     * except the email for a COACH caller: {@code coach_sees} excludes contact
+     * data, so a coach reviewing a submission gets the name only.
      */
     @Transactional(readOnly = true)
     public ExerciseSubmissionDetailResponse buildDetail(ExerciseSubmission submission, boolean forAdmin) {
@@ -297,7 +300,7 @@ public class ExerciseSubmissionService {
                 submission.getSubmittedAt(),
                 submission.getReviewedAt(),
                 forAdmin ? member.getName() : null,
-                forAdmin ? member.getEmail() : null,
+                forAdmin && !isCoachCaller() ? member.getEmail() : null,
                 columns,
                 template.getExampleRow(),
                 template.isAllowAddRows(),
@@ -336,8 +339,44 @@ public class ExerciseSubmissionService {
         return clean;
     }
 
+    /**
+     * Setter-injected on purpose: this class's constructor signature carries
+     * cross-feature parameters pinned verbatim in the frozen ArchUnit store
+     * (append-never), so it cannot grow a constructor parameter. The accessor
+     * is a shared-kernel type, so the edge itself is legal.
+     */
+    private CurrentUserAccessor currentUserAccessor;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setCurrentUserAccessor(CurrentUserAccessor currentUserAccessor) {
+        this.currentUserAccessor = currentUserAccessor;
+    }
+
+    /**
+     * Is the authenticated caller a COACH? Null accessor = plain unit tests
+     * without a Spring context; treat as non-coach (the admin paths those
+     * tests drive). Only consulted behind {@code forAdmin}, so member-facing
+     * builds never touch the security context.
+     */
+    private boolean isCoachCaller() {
+        return currentUserAccessor != null
+                && UserRole.COACH.name().equals(currentUserAccessor.require().role());
+    }
+
+    /**
+     * "Reviewer side of the loop" — drives the DTO's {@code byAdmin} flag (the
+     * web renders it as a "Reviewer" badge). Coaches review too, so a coach's
+     * comment must keep the badge when the thread is re-hydrated.
+     *
+     * <p>Exactly two {@code getRole()} call sites on purpose: this method's
+     * exercise→auth call occurrences are pinned by count in the frozen ArchUnit
+     * store (append-never), so one call would prune a stored violation and
+     * three would mint a new one.
+     */
     private static boolean isAdmin(User user) {
-        return user.getRole() == UserRole.ORG_ADMIN || user.getRole() == UserRole.SUPER_ADMIN;
+        UserRole role = user.getRole();
+        return role == UserRole.ORG_ADMIN || role == UserRole.SUPER_ADMIN
+                || user.getRole() == UserRole.COACH;
     }
 
     /**

@@ -87,7 +87,7 @@ class OrgAccessGuardTest {
 
     @Test
     void memberOfParent_subOrg_denied() {
-        // Traversal is an ORG_ADMIN privilege — a plain MEMBER (or MANAGER /
+        // Traversal is an ORG_ADMIN privilege — a plain MEMBER (or COACH /
         // INSTRUCTOR) of the parent gets no implicit sub-org access.
         authenticate(UserRole.MEMBER, parentOrgId);
         assertThat(OrgAccessGuard.callerHasAccess(childOrgId)).isFalse();

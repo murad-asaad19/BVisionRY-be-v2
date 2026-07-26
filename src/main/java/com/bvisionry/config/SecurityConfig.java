@@ -157,6 +157,14 @@ public class SecurityConfig {
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
                         .requestMatchers("/actuator/**").hasAuthority("SUPER_ADMIN")
+                        // Coach console — HTTP layer of the three-layer defense.
+                        // The controller re-asserts COACH via @PreAuthorize and
+                        // every query carries the assignment-union predicate.
+                        .requestMatchers("/api/v1/coach/**").hasAuthority("COACH")
+                        // Coach-grant management is an admin surface; @orgAccess
+                        // pins the caller to the path org at the method layer.
+                        .requestMatchers("/api/organizations/*/coach-assignments/**")
+                                .hasAnyAuthority("SUPER_ADMIN", "ORG_ADMIN")
                         .requestMatchers("/api/pipelines/published").authenticated()
                         .requestMatchers("/api/pipelines/*/simulate").authenticated()
                         .anyRequest().authenticated()

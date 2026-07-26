@@ -3,6 +3,7 @@ package com.bvisionry.insights;
 import com.bvisionry.auth.OrgAccessGuard;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
+import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.security.OrgHierarchyPort;
@@ -51,7 +52,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *   <li>org A's org segment excludes org B's data (two-tenant fixture);</li>
  *   <li>one founder is one sample — a re-assessment counts once, latest only;</li>
  *   <li>COACH / INSTRUCTOR / MEMBER and foreign org admins never clear the
- *       gate; a foreign cohort id reads as absent (404).</li>
+ *       gate; a foreign cohort id reads as absent (404);</li>
+ *   <li>ENTITLEMENT (RULING 3): a FREE org's own admin is 403 premium_required,
+ *       SUPER_ADMIN bypasses, and a PREMIUM org below the sample floor still
+ *       reads "insufficient" — the gate is about WHO, the floor about WHAT.</li>
  * </ul>
  */
 @SpringBootTest
@@ -436,6 +440,45 @@ class BenchmarkIntegrationTest extends AbstractPostgresIntegrationTest {
         mockMvc.perform(benchmarks(orgA, "")).andExpect(status().isOk());
     }
 
+    /* --------------------------------------------------------- entitlement */
+
+    @Test
+    void freeOrgAdminIsGatedEvenOnTheirOwnOrg_andSuperAdminBypasses() throws Exception {
+        // RULING 3: benchmarking is a sold line item, so the gate is about WHO
+        // is paying — orthogonal to the role check above (this admin owns the
+        // org and still cannot read it) and to the min-sample floor below.
+        Organization freeOrg = saveFreeOrg("Benchmark Free Org");
+        User freeAdmin = saveUser("bm.admin.free@test.invalid", UserRole.ORG_ADMIN, freeOrg);
+        seedFounders(freeOrg.getId(), 30, 40.0, null);
+
+        TestAuthentication.authenticate(freeAdmin);
+        mockMvc.perform(benchmarks(freeOrg, ""))
+                .andExpect(status().isForbidden())
+                // The web lock state keys off this body, not the bare status.
+                .andExpect(jsonPath("$.error", is("premium_required")))
+                .andExpect(jsonPath("$.feature", is("benchmarks")));
+
+        // Super admin bypasses the guard entirely — demo and sales flows are
+        // unaffected by the gate.
+        TestAuthentication.authenticate(saveUser("bm.super.free@test.invalid", UserRole.SUPER_ADMIN, null));
+        mockMvc.perform(benchmarks(freeOrg, "")).andExpect(status().isOk());
+    }
+
+    @Test
+    void premiumOrgBelowTheSampleFloorStillRenders_theGateIsAboutWhoNotWhat() throws Exception {
+        // The gate (WHO pays) and the min-sample rule (WHAT is statistically
+        // publishable) are independent: clearing the paywall must NOT be read
+        // as a promise of numbers. A PREMIUM org at n=5 gets 200 + "insufficient".
+        seedFounders(orgA.getId(), 5, 40.0, null);
+
+        TestAuthentication.authenticate(orgAdminA);
+        mockMvc.perform(benchmarks(orgA, ""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.pillars[0].org.sufficient", is(false)))
+                .andExpect(jsonPath("$.pillars[0].org.sampleSize", is(5)))
+                .andExpect(jsonPath("$.pillars[0].org.mean", nullValue()));
+    }
+
     /* ------------------------------------------------------------ seeding */
 
     private org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder benchmarks(
@@ -444,7 +487,20 @@ class BenchmarkIntegrationTest extends AbstractPostgresIntegrationTest {
                 + extraQuery);
     }
 
+    /**
+     * Benchmarking is entitlement-gated (RULING 3), so every fixture org that is
+     * expected to READ the surface is PREMIUM. The FREE case is its own test.
+     */
     private Organization saveOrg(String name) {
+        Organization org = new Organization();
+        org.setName(name);
+        org.setActive(true);
+        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        return organizationRepository.saveAndFlush(org);
+    }
+
+    /** A root org on the FREE tier — the entitlement gate's subject. */
+    private Organization saveFreeOrg(String name) {
         Organization org = new Organization();
         org.setName(name);
         org.setActive(true);
@@ -455,6 +511,8 @@ class BenchmarkIntegrationTest extends AbstractPostgresIntegrationTest {
         Organization org = new Organization();
         org.setName(name);
         org.setActive(true);
+        // Left FREE on purpose: sub-orgs inherit the parent's plan through
+        // effectiveTierOf, so this also pins that inheritance.
         org.setParentOrganization(parent);
         return organizationRepository.saveAndFlush(org);
     }

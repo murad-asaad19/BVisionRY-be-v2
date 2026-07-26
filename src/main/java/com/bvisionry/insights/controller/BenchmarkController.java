@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.bvisionry.insights.dto.BenchmarkResponse;
 import com.bvisionry.insights.service.BenchmarkService;
+import com.bvisionry.common.security.PremiumFeatureGuard;
 
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +29,12 @@ import lombok.RequiredArgsConstructor;
  * {@link com.bvisionry.insights.BenchmarkReadRepository} carries the tenant
  * predicate in the SQL itself. COACH is deliberately outside the gate —
  * {@code coach_never_sees: platform_analytics}.
+ *
+ * <p>A fourth, orthogonal layer sits on top: ENTITLEMENT. The three layers above
+ * answer "may this caller read THIS org's data"; {@link PremiumFeatureGuard}
+ * answers "is this org paying for this feature at all", and 403s a FREE org's own
+ * admin. Benchmarking is a sold line item, so the check is the handler's first
+ * statement — before any query runs.
  */
 @RestController
 @RequestMapping("/api/organizations/{orgId}/benchmarks")
@@ -37,6 +44,7 @@ import lombok.RequiredArgsConstructor;
 public class BenchmarkController {
 
     private final BenchmarkService benchmarkService;
+    private final PremiumFeatureGuard premiumFeatureGuard;
 
     /**
      * Per-pillar comparison for a pipeline; {@code cohortId} (optional) adds
@@ -46,6 +54,9 @@ public class BenchmarkController {
     public BenchmarkResponse get(@PathVariable UUID orgId,
                                  @RequestParam UUID pipelineId,
                                  @RequestParam(required = false) UUID cohortId) {
+        // ponytail: binary PREMIUM gate — sold from Growth up; split per-tier when
+        // the Starter/Growth/FS ladder exists as data.
+        premiumFeatureGuard.checkPremium(orgId, "benchmarks");
         return benchmarkService.benchmarks(orgId, pipelineId, cohortId);
     }
 }

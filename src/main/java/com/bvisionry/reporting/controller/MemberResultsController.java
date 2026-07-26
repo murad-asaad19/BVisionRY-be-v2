@@ -13,7 +13,7 @@ import com.bvisionry.reporting.service.MemberDisplayNameResolver;
 import com.bvisionry.reporting.service.MemberResultsExcelService;
 import com.bvisionry.reporting.service.MemberResultsService;
 import com.bvisionry.reporting.service.PdfReportService;
-import com.bvisionry.reporting.service.PremiumFeatureGuard;
+import com.bvisionry.common.security.PremiumFeatureGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;

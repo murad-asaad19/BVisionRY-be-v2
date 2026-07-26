@@ -8,6 +8,8 @@ package com.bvisionry.upgrade.entity;
 public enum UpgradeFeatureContext {
     INSIGHTS("Insights"),
     ORG_INSIGHTS("Org Insights"),
+    BENCHMARKS("Benchmarks"),
+    ROI_REPORT("ROI Reporting"),
     OTHER("General");
 
     private final String label;

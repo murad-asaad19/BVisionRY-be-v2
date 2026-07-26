@@ -3,6 +3,7 @@ package com.bvisionry.reporting.service;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.assessment.entity.Submission;
 import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.PremiumFeatureGuard;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.config.CacheConfig;

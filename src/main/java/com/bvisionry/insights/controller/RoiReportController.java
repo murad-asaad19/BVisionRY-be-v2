@@ -17,6 +17,7 @@ import com.bvisionry.insights.dto.RoiReportResponse;
 import com.bvisionry.insights.service.RoiReportExcelService;
 import com.bvisionry.insights.service.RoiReportPdfService;
 import com.bvisionry.insights.service.RoiReportService;
+import com.bvisionry.common.security.PremiumFeatureGuard;
 
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +39,13 @@ import lombok.RequiredArgsConstructor;
  * <p>The three routes share one guard and one assembly: the JSON is exactly what
  * the exports render, so a funder can never receive a document the operator did
  * not see on screen.
+ *
+ * <p>A fourth, orthogonal layer sits on top: ENTITLEMENT. The three layers above
+ * answer "may this caller read THIS org's data"; {@link PremiumFeatureGuard}
+ * answers "is this org paying for this feature at all", and 403s a FREE org's own
+ * admin. All THREE routes carry it identically — an export is not a lesser copy
+ * of the on-screen report, it is the same product in a file, so gating only the
+ * downloads would monetize nothing (print-to-PDF defeats it).
  */
 @RestController
 @RequestMapping("/api/organizations/{orgId}")
@@ -50,6 +58,7 @@ public class RoiReportController {
     private final RoiReportService roiReportService;
     private final RoiReportPdfService pdfService;
     private final RoiReportExcelService excelService;
+    private final PremiumFeatureGuard premiumFeatureGuard;
 
     /**
      * The report model. A cohort that is not this org's, or a pipeline that is
@@ -59,6 +68,8 @@ public class RoiReportController {
     public RoiReportResponse get(@PathVariable UUID orgId,
                                  @RequestParam UUID cohortId,
                                  @RequestParam UUID pipelineId) {
+        // ponytail: binary PREMIUM gate — sold as Founder Success; split per-tier when the Starter/Growth/FS ladder exists as data.
+        premiumFeatureGuard.checkPremium(orgId, "roi_report");
         return roiReportService.report(orgId, cohortId, pipelineId);
     }
 
@@ -67,6 +78,7 @@ public class RoiReportController {
                                       @RequestParam UUID cohortId,
                                       @RequestParam UUID pipelineId,
                                       @RequestParam(defaultValue = "download") String mode) {
+        premiumFeatureGuard.checkPremium(orgId, "roi_report");
         RoiReportResponse report = roiReportService.report(orgId, cohortId, pipelineId);
         byte[] body = pdfService.render(report);
         String disposition = "preview".equalsIgnoreCase(mode) ? "inline" : "attachment";
@@ -83,6 +95,7 @@ public class RoiReportController {
                                        @RequestParam UUID cohortId,
                                        @RequestParam UUID pipelineId,
                                        @RequestParam(defaultValue = "download") String mode) {
+        premiumFeatureGuard.checkPremium(orgId, "roi_report");
         RoiReportResponse report = roiReportService.report(orgId, cohortId, pipelineId);
         return XlsxResponse.build(excelService.render(report), filename(report) + ".xlsx", mode);
     }

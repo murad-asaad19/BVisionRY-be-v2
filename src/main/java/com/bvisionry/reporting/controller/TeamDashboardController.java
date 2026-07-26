@@ -13,7 +13,7 @@ import com.bvisionry.reporting.service.MemberDisplayNameResolver;
 import com.bvisionry.reporting.service.MemberResultsExcelService;
 import com.bvisionry.reporting.service.MemberResultsService;
 import com.bvisionry.reporting.service.PdfReportService;
-import com.bvisionry.reporting.service.PremiumFeatureGuard;
+import com.bvisionry.common.security.PremiumFeatureGuard;
 import com.bvisionry.reporting.service.TeamDashboardService;
 import com.bvisionry.reporting.service.TeamInsightsExcelService;
 import com.bvisionry.reporting.service.TeamInsightsPdfService;

@@ -2,6 +2,7 @@ package com.bvisionry.insights;
 
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
+import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.organization.OrganizationRepository;
@@ -58,7 +59,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *   <li>the PDF and XLSX routes return real, openable documents with the right
  *       content types;</li>
  *   <li>COACH / INSTRUCTOR / MEMBER and foreign org admins never clear the gate;
- *       a foreign cohort or an unpublished pipeline reads as absent (404).</li>
+ *       a foreign cohort or an unpublished pipeline reads as absent (404);</li>
+ *   <li>ENTITLEMENT (RULING 3): a FREE org's own admin is 403 premium_required
+ *       on ALL THREE routes — JSON, PDF and XLSX, no split — and SUPER_ADMIN
+ *       bypasses.</li>
  * </ul>
  */
 @SpringBootTest
@@ -494,6 +498,44 @@ class RoiReportIntegrationTest extends AbstractPostgresIntegrationTest {
         mockMvc.perform(export(orgA, cohortA, "xlsx")).andExpect(status().isOk());
     }
 
+    /* --------------------------------------------------------- entitlement */
+
+    @Test
+    void freeOrgAdminIsGatedOnAllThreeRoutes_andSuperAdminBypasses() throws Exception {
+        // RULING 3: exports and the on-screen report get IDENTICAL treatment —
+        // no split. Gating only the downloads would monetize nothing, since a
+        // free on-screen report is one browser print-to-PDF from a funder doc.
+        Organization freeOrg = saveFreeOrg("ROI Free Org");
+        User freeAdmin = saveUser("roi.admin.free@test.invalid", UserRole.ORG_ADMIN, freeOrg);
+        UUID freeCohort = insertCohort(freeOrg.getId(), "Free Cohort");
+        UUID founder = enrol(freeOrg.getId(), freeCohort, "Grace Hopper");
+        UUID assignment = insertAssignment(freeOrg.getId(), founder);
+        insertSubmission(assignment, founder, 30.0, 90);
+        insertSubmission(assignment, founder, 50.0, 0);
+
+        TestAuthentication.authenticate(freeAdmin);
+        // The JSON…
+        mockMvc.perform(report(freeOrg, freeCohort))
+                .andExpect(status().isForbidden())
+                // The web lock state keys off this body, not the bare status.
+                .andExpect(jsonPath("$.error", is("premium_required")))
+                .andExpect(jsonPath("$.feature", is("roi_report")));
+        // …and BOTH exports, identically.
+        for (String ext : List.of("pdf", "xlsx")) {
+            mockMvc.perform(export(freeOrg, freeCohort, ext))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.error", is("premium_required")))
+                    .andExpect(jsonPath("$.feature", is("roi_report")));
+        }
+
+        // Super admin bypasses the guard on all three — demo and sales flows
+        // are unaffected by the gate.
+        TestAuthentication.authenticate(saveUser("roi.super.free@test.invalid", UserRole.SUPER_ADMIN, null));
+        mockMvc.perform(report(freeOrg, freeCohort)).andExpect(status().isOk());
+        mockMvc.perform(export(freeOrg, freeCohort, "pdf")).andExpect(status().isOk());
+        mockMvc.perform(export(freeOrg, freeCohort, "xlsx")).andExpect(status().isOk());
+    }
+
     /* --------------------------------------------------------------- exports */
 
     @Test
@@ -582,7 +624,20 @@ class RoiReportIntegrationTest extends AbstractPostgresIntegrationTest {
         return out;
     }
 
+    /**
+     * ROI reporting is entitlement-gated (RULING 3), so every fixture org that
+     * is expected to READ the surface is PREMIUM. The FREE case is its own test.
+     */
     private Organization saveOrg(String name) {
+        Organization org = new Organization();
+        org.setName(name);
+        org.setActive(true);
+        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        return organizationRepository.saveAndFlush(org);
+    }
+
+    /** A root org on the FREE tier — the entitlement gate's subject. */
+    private Organization saveFreeOrg(String name) {
         Organization org = new Organization();
         org.setName(name);
         org.setActive(true);

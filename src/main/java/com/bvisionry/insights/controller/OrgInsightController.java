@@ -7,7 +7,7 @@ import com.bvisionry.insights.dto.InsightReportResponse;
 import com.bvisionry.insights.service.InsightService;
 import com.bvisionry.insights.service.OrgInsightExcelService;
 import com.bvisionry.insights.service.OrgInsightPdfService;
-import com.bvisionry.reporting.service.PremiumFeatureGuard;
+import com.bvisionry.common.security.PremiumFeatureGuard;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;

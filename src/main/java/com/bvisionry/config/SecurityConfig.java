@@ -165,6 +165,22 @@ public class SecurityConfig {
                         // pins the caller to the path org at the method layer.
                         .requestMatchers("/api/organizations/*/coach-assignments/**")
                                 .hasAnyAuthority("SUPER_ADMIN", "ORG_ADMIN")
+                        // Announcements (roadmap §7 item 20). Authoring is closed to
+                        // the three broadcast roles at the HTTP layer; @orgAccess pins
+                        // the org and the service re-checks the coach's cohort grant.
+                        // The `/**` tails are load-bearing, not future-proofing: without
+                        // them a subpath added later (say .../announcements/{id}) falls
+                        // through to anyRequest().authenticated() and is open to every
+                        // signed-in member. `/**` matches the bare collection path too —
+                        // AnnouncementRouteSecurityIntegrationTest posts to it and would
+                        // fail here first if that ever stopped being true.
+                        .requestMatchers("/api/organizations/*/announcement-cohorts/**",
+                                "/api/organizations/*/cohorts/*/announcements/**")
+                                .hasAnyAuthority("SUPER_ADMIN", "ORG_ADMIN", "COACH")
+                        // Flagging a post is the one announcement route a recipient
+                        // may call; the service refuses posts they never received.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/announcements/*/report")
+                                .authenticated()
                         .requestMatchers("/api/pipelines/published").authenticated()
                         .requestMatchers("/api/pipelines/*/simulate").authenticated()
                         .anyRequest().authenticated()

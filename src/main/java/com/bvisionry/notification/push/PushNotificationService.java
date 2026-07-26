@@ -51,6 +51,23 @@ public class PushNotificationService {
     }
 
     /**
+     * Notify a whole audience the caller has already resolved (a cohort, a
+     * team) in ONE pass: one opt-out query, one history batch, one task.
+     * Looping {@link #notifyUser} over the same list costs three statements
+     * and a task per recipient, which saturates the push executor's queue and
+     * pushes it onto its caller-runs policy at cohort scale.
+     */
+    @Async("pushExecutor")
+    public void notifyUsers(List<UUID> userIds, NotificationType type, String title,
+                            String body, String url) {
+        try {
+            dispatch(userIds, type, title, body, url);
+        } catch (RuntimeException e) {
+            log.warn("Push dispatch {} to {} users failed: {}", type, userIds.size(), e.getMessage());
+        }
+    }
+
+    /**
      * Notify the org's active ORG_ADMINs plus all active SUPER_ADMINs about an
      * event in {@code orgId}. The two roles land on different routes for the
      * same thing (org admins use the flat {@code /app/admin/*} console, super

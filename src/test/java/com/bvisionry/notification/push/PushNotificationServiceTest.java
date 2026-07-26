@@ -98,6 +98,45 @@ class PushNotificationServiceTest {
     }
 
     @Test
+    void notifyUsersMutesOptedOutRecipientsInsideOneBatch() {
+        // A cohort broadcast reaches its whole audience through THIS call, so
+        // "existing opt-out respected" is this assertion and nothing extra: the
+        // muted member gets neither a push nor a history row, while the member
+        // next to them in the cohort still does — and it costs one opt-out
+        // query and one history batch for the cohort, not one per recipient.
+        UUID mutedId = UUID.randomUUID();
+        NotificationOptOut optOut = new NotificationOptOut();
+        optOut.setUserId(mutedId);
+        optOut.setType(NotificationType.ANNOUNCEMENT);
+        when(optOutRepository.findByTypeAndUserIdIn(eq(NotificationType.ANNOUNCEMENT), anyCollection()))
+                .thenReturn(List.of(optOut));
+
+        service.notifyUsers(List.of(mutedId, userId), NotificationType.ANNOUNCEMENT,
+                "Announcement · Spring", "Demo day is Friday.", "/app/program?announcement=1");
+
+        verify(optOutRepository).findByTypeAndUserIdIn(eq(NotificationType.ANNOUNCEMENT), anyCollection());
+        ArgumentCaptor<List<UserNotification>> rows = ArgumentCaptor.forClass(List.class);
+        verify(notificationRepository).saveAll(rows.capture());
+        assertThat(rows.getValue()).singleElement()
+                .satisfies(row -> assertThat(row.getUserId()).isEqualTo(userId));
+    }
+
+    @Test
+    void notifyUsersWithAnEntirelyMutedAudienceTouchesNothing() {
+        NotificationOptOut optOut = new NotificationOptOut();
+        optOut.setUserId(userId);
+        optOut.setType(NotificationType.ANNOUNCEMENT);
+        when(optOutRepository.findByTypeAndUserIdIn(eq(NotificationType.ANNOUNCEMENT), anyCollection()))
+                .thenReturn(List.of(optOut));
+
+        service.notifyUsers(List.of(userId), NotificationType.ANNOUNCEMENT, "T", "B", "/app/program");
+
+        verify(notificationRepository, never()).saveAll(any());
+        verify(sender, never()).send(any(), any());
+        verify(subscriptionRepository, never()).findByUserIdIn(anyCollection());
+    }
+
+    @Test
     void notifyUserWritesHistoryRow() {
         service.notifyUser(userId, NotificationType.ASSESSMENT_ASSIGNED, "Title", "Body", "/my/x");
 
@@ -166,7 +205,8 @@ class PushNotificationServiceTest {
                         NotificationType.PROGRAM_TASK_DUE,
                         NotificationType.WORKSHOP_RESULTS_SHARED,
                         NotificationType.EXERCISE_ASSIGNED,
-                        NotificationType.EXERCISE_FEEDBACK)
+                        NotificationType.EXERCISE_FEEDBACK,
+                        NotificationType.ANNOUNCEMENT)
                 .noneMatch(NotificationType::isAdminOnly);
         assertThat(NotificationType.visibleTo(UserRole.ORG_ADMIN))
                 .containsExactlyInAnyOrder(NotificationType.values());

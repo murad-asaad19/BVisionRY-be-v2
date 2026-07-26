@@ -73,7 +73,11 @@ public enum NotificationType {
     EXERCISE_ACTIVITY(
             "Member exercise activity",
             "When a member of your organization submits an exercise or replies to your feedback.",
-            true);
+            true),
+    ANNOUNCEMENT(
+            "Cohort announcements",
+            "When your coach or an admin broadcasts an announcement to your cohort.",
+            false);
 
     private final String label;
     private final String description;

@@ -40,6 +40,11 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
      * SET NULL / explicit-statement breakdown.
      */
     private static final Set<String> KNOWN_USER_REFERENCES = Set.of(
+            // announcements (V148): author_id / flagged_by SET NULL — a cohort
+            // broadcast is the ORGANIZATION's record of what was said to a
+            // cohort, so it outlives the author's erasure with the attribution
+            // dropped, like assignments.assigned_by and join_links.created_by.
+            "announcements.author_id", "announcements.flagged_by",
             "ai_configurations.updated_by", "assignments.assigned_by", "assignments.user_id",
             "audit_logs.actor_id", "certificate.user_id",
             // coach_assignments (V147): coach_id / member_id CASCADE with the

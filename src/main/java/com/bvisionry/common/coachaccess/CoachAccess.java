@@ -52,6 +52,32 @@ public class CoachAccess {
                                     AND cm.user_id = mu.id))
             )""";
 
+    /**
+     * The COHORT-grain grant predicate: the coach holds a whole-cohort grant on
+     * cohort {@code %1$s}, and that cohort really belongs to the granting org.
+     * Binds {@code :orgId} and {@code :coachId}.
+     *
+     * <p>Distinct question from {@link #VISIBLE_MEMBER_PREDICATE}: "may this
+     * coach act on this COHORT?", not "may this coach see this MEMBER?". A
+     * direct founder grant deliberately does NOT qualify — it grants sight of
+     * one founder, never the right to address a cohort they happen to be in.
+     *
+     * <p>Aliases are prefixed {@code g*} on purpose: a composing query that
+     * selects {@code FROM cohorts c} would otherwise have its own alias shadowed
+     * by this fragment's, and the predicate would silently degrade to "the coach
+     * holds ANY cohort grant".
+     */
+    public static final String GRANTED_COHORT_PREDICATE = """
+            EXISTS (
+                SELECT 1
+                FROM coach_assignments gca
+                JOIN cohorts gcc ON gcc.id = gca.cohort_id
+                                AND gcc.org_id = gca.org_id
+                WHERE gca.org_id = :orgId
+                  AND gca.coach_id = :coachId
+                  AND gca.cohort_id = %1$s
+            )""";
+
     private final NamedParameterJdbcTemplate jdbc;
 
     public CoachAccess(NamedParameterJdbcTemplate jdbc) {
@@ -73,5 +99,23 @@ public class CoachAccess {
                         .addValue("memberId", memberId),
                 Boolean.class);
         return Boolean.TRUE.equals(visible);
+    }
+
+    /**
+     * True when {@code coachId} holds a whole-cohort grant on {@code cohortId}
+     * within {@code orgId} — the authorization for acting ON a cohort (today:
+     * broadcasting an announcement to it). False on any null.
+     */
+    public boolean coachHoldsCohort(UUID orgId, UUID coachId, UUID cohortId) {
+        if (orgId == null || coachId == null || cohortId == null) {
+            return false;
+        }
+        Boolean granted = jdbc.queryForObject(
+                "SELECT " + GRANTED_COHORT_PREDICATE.formatted(":cohortId"),
+                new MapSqlParameterSource("orgId", orgId)
+                        .addValue("coachId", coachId)
+                        .addValue("cohortId", cohortId),
+                Boolean.class);
+        return Boolean.TRUE.equals(granted);
     }
 }

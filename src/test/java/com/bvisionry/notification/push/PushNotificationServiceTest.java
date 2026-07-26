@@ -206,7 +206,12 @@ class PushNotificationServiceTest {
                         NotificationType.WORKSHOP_RESULTS_SHARED,
                         NotificationType.EXERCISE_ASSIGNED,
                         NotificationType.EXERCISE_FEEDBACK,
-                        NotificationType.ANNOUNCEMENT)
+                        NotificationType.ANNOUNCEMENT,
+                        // The inactivity nudge is ABOUT the member, so it is
+                        // theirs to switch off — policy nudge_channels:
+                        // RESPECT_EXISTING_PREFERENCES means the founder's
+                        // existing opt-out is the only mute that exists.
+                        NotificationType.INACTIVITY_NUDGE)
                 .noneMatch(NotificationType::isAdminOnly);
         assertThat(NotificationType.visibleTo(UserRole.ORG_ADMIN))
                 .containsExactlyInAnyOrder(NotificationType.values());

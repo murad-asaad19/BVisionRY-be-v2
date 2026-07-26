@@ -39,6 +39,18 @@ public class Organization extends BaseEntity {
     private Instant trialEndsAt;
 
     /**
+     * Days without progress on an active course enrolment before a founder is
+     * nudged (roadmap §7 items 7 + 18). {@code 0} disables nudging for the org;
+     * the DB default is 14 (policy {@code defaults.inactivity_threshold_days})
+     * and V149 bounds it to 0..90 — see that migration for why 90 is the cap.
+     *
+     * <p>Read by {@code InactivityNudgeJob}'s org-scoped query, not by Java:
+     * the job never imports this entity (feature boundary), it reads the column.
+     */
+    @Column(name = "inactivity_nudge_days", nullable = false)
+    private int inactivityNudgeDays = 14;
+
+    /**
      * Parent organization when this org is a sub-organization; null for root
      * orgs. The hierarchy is ONE level deep — the service layer rejects
      * creating a sub-org under another sub-org.

@@ -77,6 +77,10 @@ public enum NotificationType {
     ANNOUNCEMENT(
             "Cohort announcements",
             "When your coach or an admin broadcasts an announcement to your cohort.",
+            false),
+    INACTIVITY_NUDGE(
+            "Stalled course nudges",
+            "When a course you are enrolled on has seen no progress for a while.",
             false);
 
     private final String label;

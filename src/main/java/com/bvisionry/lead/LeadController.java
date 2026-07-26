@@ -1,6 +1,7 @@
 package com.bvisionry.lead;
 
 import com.bvisionry.aiconfig.service.RateLimitService;
+import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import com.bvisionry.common.web.ClientIpResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -37,6 +38,7 @@ public class LeadController {
      * users of the shared anonymous limiter. Exceeding the limit raises
      * {@code RateLimitExceededException}, which the global handler maps to 429.
      */
+    @AuthorizedInSecurityConfig("permitAll: public Book-a-Demo lead capture, posted server-side by the BFF")
     @PostMapping
     public ResponseEntity<Map<String, UUID>> create(
             @Valid @RequestBody CreateLeadRequest request,

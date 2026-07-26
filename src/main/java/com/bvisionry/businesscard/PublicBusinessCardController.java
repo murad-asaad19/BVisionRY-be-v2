@@ -1,6 +1,7 @@
 package com.bvisionry.businesscard;
 
 import com.bvisionry.businesscard.dto.PublicBusinessCardResponse;
+import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -20,6 +21,7 @@ public class PublicBusinessCardController {
 
     private final BusinessCardService businessCardService;
 
+    @AuthorizedInSecurityConfig("permitAll: public read of a published card - the /card/{slug} page has no session")
     @GetMapping("/by-slug/{slug}")
     public ResponseEntity<PublicBusinessCardResponse> getBySlug(@PathVariable String slug) {
         return ResponseEntity.ok(businessCardService.getPublishedBySlug(slug));

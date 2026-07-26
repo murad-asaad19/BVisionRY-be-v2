@@ -1,6 +1,7 @@
 package com.bvisionry.common.errortracking;
 
 import com.bvisionry.common.exception.AuthenticationException;
+import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import io.swagger.v3.oas.annotations.Parameter;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
@@ -76,6 +77,7 @@ public class ErrorEventController {
     // Method names are the springdoc operationIds and therefore part of the generated
     // web contract — kept unique so adding this endpoint doesn't renumber the existing
     // `list_N` / `report_N` operations across the whole schema.
+    @AuthorizedInSecurityConfig("permitAll: a crashing browser has no session; bounded by the shared-secret header and ErrorEventRateLimitFilter")
     @PostMapping
     @ResponseStatus(HttpStatus.ACCEPTED)
     public void reportErrorEvent(

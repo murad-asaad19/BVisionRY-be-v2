@@ -1,5 +1,6 @@
 package com.bvisionry.catalog.web;
 
+import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import java.math.BigDecimal;
 
 import org.springframework.http.MediaType;
@@ -44,6 +45,7 @@ public class CatalogController {
         this.catalog = catalog;
     }
 
+    @AuthorizedInSecurityConfig("permitAll: public course catalogue - the marketing site lists courses anonymously")
     @GetMapping
     @Operation(summary = "List catalog courses",
             description = "Returns all published courses matching the optional filters. "
@@ -70,6 +72,7 @@ public class CatalogController {
         return catalog.list(q, category, level, mode, maxPrice);
     }
 
+    @AuthorizedInSecurityConfig("permitAll: public course detail - the marketing site renders it anonymously")
     @GetMapping("/{slug}")
     @Operation(summary = "Get a course by slug",
             description = "Returns the full course detail for a published course. "

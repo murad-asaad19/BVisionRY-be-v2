@@ -1,10 +1,13 @@
 package com.bvisionry.architecture;
 
+import com.tngtech.archunit.base.DescribedPredicate;
 import com.tngtech.archunit.core.domain.Dependency;
 import com.tngtech.archunit.core.domain.JavaClass;
+import com.tngtech.archunit.core.domain.JavaMethod;
 import com.tngtech.archunit.core.domain.JavaMethodCall;
 import com.tngtech.archunit.core.domain.JavaParameterizedType;
 import com.tngtech.archunit.core.domain.JavaType;
+import com.tngtech.archunit.core.domain.properties.CanBeAnnotated;
 import com.tngtech.archunit.core.importer.ImportOption.DoNotIncludeTests;
 import com.tngtech.archunit.junit.AnalyzeClasses;
 import com.tngtech.archunit.junit.ArchTest;
@@ -21,6 +24,7 @@ import java.util.Set;
 import static com.tngtech.archunit.base.DescribedPredicate.not;
 import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAPackage;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 import static com.tngtech.archunit.library.GeneralCodingRules.NO_CLASSES_SHOULD_USE_FIELD_INJECTION;
 import static com.tngtech.archunit.library.freeze.FreezingArchRule.freeze;
@@ -47,6 +51,12 @@ import static com.tngtech.archunit.library.freeze.FreezingArchRule.freeze;
  * intentional exceptions in production code (lazy self-injection for
  * {@code @Async}/{@code @Cacheable} proxies and an optional Redis template), so
  * it is frozen to pin exactly those and forbid any new field injection.
+ *
+ * <p>Rule 6 (handler authorization) is likewise <em>not</em> frozen: its
+ * intentional exceptions carry an {@code @AuthorizedInSecurityConfig} marker with
+ * a written reason at the call site, which beats a baseline file for something a
+ * reviewer needs to audit. See {@code RequestHandlerAuthorizationRuleTest} for
+ * the falsification — a rule that has never been shown to fail is not evidence.
  */
 @AnalyzeClasses(packages = "com.bvisionry", importOptions = DoNotIncludeTests.class)
 class ArchitectureRulesTest {
@@ -145,6 +155,53 @@ class ArchitectureRulesTest {
             freeze(classes()
                     .should(onlyLoadOrgOwnedAggregatesThroughGuards())
                     .as("bare-ID repository loads on org-owned entities should only happen inside require* guard methods"));
+
+    // ---------------------------------------------------------------------
+    // Rule 6 (NOT FROZEN — must pass outright): authorization is opt-out, not
+    // opt-in.
+    //
+    // Authorization here is method security: 102 @PreAuthorize annotations
+    // across 75 controllers, backed by anyRequest().authenticated() in
+    // SecurityConfig. Nothing structural required a handler to carry one — a new
+    // @GetMapping with no annotation compiled, passed the suite, and silently
+    // degraded to "any signed-in user", which is how LessonContentController
+    // ended up as the single-layer outlier among its siblings.
+    //
+    // This rule makes the decision mandatory rather than the default: every
+    // @*Mapping method on a @Controller/@RestController must resolve to
+    // @PreAuthorize (on the method or on its declaring class, exactly as Spring
+    // resolves it) or be explicitly marked
+    // @AuthorizedInSecurityConfig("which route rule, and why that is deliberate").
+    //
+    // Deliberately NOT frozen. A frozen baseline would record "this handler was
+    // bare on the day the rule landed" in a file nobody reads next to the code;
+    // the marker records WHY at the call site, where a reviewer will see it. Note
+    // the marker is NOT the whole anonymous surface — @PreAuthorize("permitAll()")
+    // is the other legal spelling; see the annotation's javadoc for the two-grep
+    // audit that actually enumerates it.
+    //
+    // Scope notes: like Rule 5, this is a structural proxy. It cannot judge
+    // whether the expression is the RIGHT one — only that a decision was made.
+    // @PreAuthorize("permitAll()") satisfies it, correctly: that IS an explicit
+    // decision, just a different spelling of one.
+    //
+    // Known ceiling, verified unreachable rather than engineered around: the
+    // rule evaluates a method on its DECLARING class, so a handler declared on
+    // an abstract base class or an interface default method that is not itself
+    // annotated @Controller would be invisible here, while Spring still honours
+    // the inherited mapping on the concrete controller. Zero of the 75
+    // controllers use extends or implements today, so the gap has no instances;
+    // if that pattern ever appears, walk getAllRawSuperclasses/getAllRawInterfaces
+    // in areRequestHandlers. (The meta-annotation handling above already closes
+    // the composed-annotation half of the same class of evasion.)
+    // ---------------------------------------------------------------------
+    @ArchTest
+    static final ArchRule requestHandlersMustResolveToAnAuthorizationAnnotation =
+            methods()
+                    .that(areRequestHandlers())
+                    .should(resolveToAnAuthorizationAnnotation())
+                    .as("every request handler should resolve to @PreAuthorize (on the method or its "
+                            + "controller) or be explicitly marked @AuthorizedInSecurityConfig");
 
     // =====================================================================
     // Helpers
@@ -261,6 +318,73 @@ class ArchitectureRulesTest {
             }
         }
         return null;
+    }
+
+    /** Spring's request-mapping annotations — the full set that creates a handler. */
+    private static final Set<String> MAPPING_ANNOTATIONS = Set.of(
+            "org.springframework.web.bind.annotation.RequestMapping",
+            "org.springframework.web.bind.annotation.GetMapping",
+            "org.springframework.web.bind.annotation.PostMapping",
+            "org.springframework.web.bind.annotation.PutMapping",
+            "org.springframework.web.bind.annotation.PatchMapping",
+            "org.springframework.web.bind.annotation.DeleteMapping");
+
+    private static final String PRE_AUTHORIZE = "org.springframework.security.access.prepost.PreAuthorize";
+    private static final String ROUTE_LAYER_MARKER = "com.bvisionry.common.security.AuthorizedInSecurityConfig";
+    private static final String CONTROLLER = "org.springframework.stereotype.Controller";
+
+    /** True when {@code element} carries {@code annotation} directly or via a composed annotation. */
+    private static boolean carries(CanBeAnnotated element, String annotation) {
+        return element.isAnnotatedWith(annotation) || element.isMetaAnnotatedWith(annotation);
+    }
+
+    /**
+     * A method Spring will dispatch a request to: a {@code @*Mapping} method on
+     * a class annotated with {@code @Controller} or with anything meta-annotated
+     * by it (which is how {@code @RestController} is defined).
+     *
+     * <p>Both halves are meta-aware. Spring resolves composed annotations on
+     * either side, so a custom {@code @AdminGetMapping} meta-annotated with
+     * {@code @GetMapping} still creates a route — and a direct-only check here
+     * would let it slip past the rule entirely.
+     */
+    private static DescribedPredicate<JavaMethod> areRequestHandlers() {
+        return DescribedPredicate.describe("are Spring request handlers", method ->
+                carries(method.getOwner(), CONTROLLER)
+                        && MAPPING_ANNOTATIONS.stream().anyMatch(a -> carries(method, a)));
+    }
+
+    /**
+     * The two branches are deliberately asymmetric. {@code @PreAuthorize} counts
+     * on the method OR on the controller, because that is exactly how Spring
+     * resolves it. The route-layer marker counts on the METHOD ONLY: blessing a
+     * whole controller in one line — so that every handler added to it later is
+     * silently pre-approved — is the precise failure this rule exists to kill.
+     * {@code @AuthorizedInSecurityConfig} is {@code @Target(METHOD)} today, so
+     * this branch is currently unreachable; it is written this way so widening
+     * that target can never quietly re-open the hole.
+     */
+    private static ArchCondition<JavaMethod> resolveToAnAuthorizationAnnotation() {
+        return new ArchCondition<>("resolve to an authorization annotation") {
+            @Override
+            public void check(JavaMethod handler, ConditionEvents events) {
+                if (carries(handler, PRE_AUTHORIZE)
+                        || carries(handler, ROUTE_LAYER_MARKER)
+                        || carries(handler.getOwner(), PRE_AUTHORIZE)) {
+                    return;
+                }
+                events.add(SimpleConditionEvent.violated(handler, String.format(
+                        "handler %s has no @PreAuthorize on the method or on %s and is not marked "
+                                + "@AuthorizedInSecurityConfig: it would silently inherit whichever "
+                                + "SecurityConfig route rule happens to match (the fallback is merely "
+                                + "authenticated()). Add the @PreAuthorize it needs, or "
+                                + "@AuthorizedInSecurityConfig(\"which route rule, and why that is "
+                                + "deliberate\") if the route layer really is the whole story, in %s",
+                        handler.getFullName(),
+                        handler.getOwner().getSimpleName(),
+                        handler.getSourceCodeLocation())));
+            }
+        };
     }
 
     private static ArchCondition<JavaClass> onlyBeDependedOnFromWithinTheirOwnPackage() {

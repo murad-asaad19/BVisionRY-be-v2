@@ -12,6 +12,7 @@ import com.bvisionry.auth.dto.ResetPasswordRequest;
 import com.bvisionry.auth.dto.UserResponse;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.auth.jwt.JwtProvider;
+import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import com.bvisionry.common.web.ClientIpResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -54,6 +55,13 @@ public class AuthController {
         this.publicBaseUrl = publicBaseUrl;
     }
 
+    // Reason states only what is true. Signup must be anonymous-reachable; it is
+    // NOT true that no account exists yet - a duplicate email returns 409 naming
+    // the address, which is an enumeration oracle at 10/min/IP and undoes the
+    // always-204 defence forgot-password below was built to provide. Tracked as
+    // its own backlog ticket: the fix changes signup UX and is a product call,
+    // not something to slip into an ArchUnit ticket.
+    @AuthorizedInSecurityConfig("permitAll: pre-auth entry point - signup is by definition reachable without a session; rate-limited per IP")
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest request,
                                                   HttpServletRequest httpRequest,
@@ -64,6 +72,7 @@ public class AuthController {
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
+    @AuthorizedInSecurityConfig("permitAll: pre-auth entry point - the credentials in the body are the authentication")
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request,
                                                HttpServletRequest httpRequest,
@@ -74,6 +83,7 @@ public class AuthController {
         return ResponseEntity.ok(response);
     }
 
+    @AuthorizedInSecurityConfig("permitAll: pre-auth entry point - the refresh token is the authentication")
     @PostMapping("/refresh")
     public ResponseEntity<AuthResponse> refresh(@RequestBody(required = false) RefreshTokenRequest request,
                                                  HttpServletRequest httpRequest,
@@ -88,6 +98,7 @@ public class AuthController {
         return ResponseEntity.ok(response);
     }
 
+    @AuthorizedInSecurityConfig("permitAll: pre-auth entry point - must still clear cookies once the access token has expired")
     @PostMapping("/logout")
     public ResponseEntity<Void> logout(@RequestBody(required = false) RefreshTokenRequest request,
                                         HttpServletRequest httpRequest,
@@ -100,6 +111,7 @@ public class AuthController {
         return ResponseEntity.noContent().build();
     }
 
+    @AuthorizedInSecurityConfig("authenticated(): any signed-in user, and only ever their own principal")
     @GetMapping("/me")
     public ResponseEntity<UserResponse> me(@AuthenticationPrincipal User user) {
         if (user == null) {
@@ -114,6 +126,8 @@ public class AuthController {
      * binary fetches. Returned alongside this backend's public origin so the FE
      * doesn't hardcode hostnames.
      */
+    @AuthorizedInSecurityConfig("authenticated(): any signed-in user, minting a 60s token for themselves - "
+            + "note the token is a FULL-AUTHORITY, path-unscoped URL credential (audit finding H3, tracked separately)")
     @GetMapping("/download-token")
     public ResponseEntity<DownloadTokenResponse> downloadToken(@AuthenticationPrincipal User user) {
         if (user == null) {
@@ -124,6 +138,7 @@ public class AuthController {
         return ResponseEntity.ok(new DownloadTokenResponse(token, publicBaseUrl, expiresInSeconds));
     }
 
+    @AuthorizedInSecurityConfig("authenticated(): self-service only, and the current password is re-verified")
     @PostMapping("/change-password")
     public ResponseEntity<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request, HttpServletRequest httpRequest) {
         rateLimitService.checkAuthLimit(clientIpResolver.resolve(httpRequest));
@@ -136,6 +151,7 @@ public class AuthController {
      * not reveal which addresses exist. Limited per IP AND per target email so
      * neither a scanning bot nor an inbox-bombing attack gets past the ceiling.
      */
+    @AuthorizedInSecurityConfig("permitAll: pre-auth entry point - the caller has lost their credentials")
     @PostMapping("/forgot-password")
     public ResponseEntity<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request,
                                                HttpServletRequest httpRequest) {
@@ -145,6 +161,7 @@ public class AuthController {
         return ResponseEntity.noContent().build();
     }
 
+    @AuthorizedInSecurityConfig("permitAll: pre-auth entry point - the emailed single-use token is the authentication")
     @PostMapping("/reset-password")
     public ResponseEntity<Void> resetPassword(@Valid @RequestBody ResetPasswordRequest request,
                                               HttpServletRequest httpRequest) {

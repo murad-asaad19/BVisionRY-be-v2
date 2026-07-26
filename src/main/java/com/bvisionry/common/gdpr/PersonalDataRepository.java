@@ -204,6 +204,11 @@ public class PersonalDataRepository {
                 "SELECT * FROM survey_answers WHERE response_id IN " + MY_SURVEY_RESPONSES);
 
         EXPORT_SECTIONS.put("course_enrollments", "SELECT * FROM enrollment WHERE user_id = :userId");
+        // Automated decisions ABOUT the subject (Art. 15(1)(h)): which course they were
+        // put on, which pillar band triggered it, and — when they were not enrolled —
+        // why not. The enrolment rows above do not say any of that.
+        EXPORT_SECTIONS.put("course_recommendations",
+                "SELECT * FROM auto_enrolments WHERE user_id = :userId");
         EXPORT_SECTIONS.put("course_progress",
                 "SELECT * FROM content_progress WHERE enrollment_id IN "
                         + "(SELECT id FROM enrollment WHERE user_id = :userId)");

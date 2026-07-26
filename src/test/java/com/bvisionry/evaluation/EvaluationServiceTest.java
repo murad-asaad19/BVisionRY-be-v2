@@ -15,6 +15,8 @@ import com.bvisionry.common.enums.PillarType;
 import com.bvisionry.common.enums.PromptType;
 import com.bvisionry.common.enums.QuestionType;
 import com.bvisionry.common.enums.SubmissionStatus;
+import com.bvisionry.common.event.EvaluationEvents;
+import com.bvisionry.organization.OrgAuditActions;
 import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.config.FrontendProperties;
 import com.bvisionry.config.FrontendUrls;
@@ -71,6 +73,7 @@ class EvaluationServiceTest {
     @Mock private com.bvisionry.audit.AuditService auditService;
     @Mock private PillarReeditService pillarReeditService;
     @Mock private RateLimitService rateLimitService;
+    @Mock private org.springframework.context.ApplicationEventPublisher events;
 
     @InjectMocks
     private EvaluationService evaluationService;
@@ -93,6 +96,10 @@ class EvaluationServiceTest {
         // applies on the async worker thread; point it back at this same instance so
         // the unit test exercises the real persist method.
         ReflectionTestUtils.setField(evaluationService, "self", evaluationService);
+        // The event publisher arrives via ApplicationEventPublisherAware, not the
+        // constructor (see the field's javadoc), and @InjectMocks stops at constructor
+        // injection — so set it the same way the two fields above are set.
+        ReflectionTestUtils.setField(evaluationService, "events", events);
         submissionId = UUID.randomUUID();
 
         pipeline = new Pipeline();
@@ -362,6 +369,14 @@ class EvaluationServiceTest {
         when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
         when(overallSummaryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(submissionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        // Stubbed with a REAL founder id on purpose, and lenient because the degraded
+        // gate short-circuits BEFORE this read — which is the whole point. Without the
+        // stub the publisher exits on "no owner" first, and the assertion below passes
+        // whether or not the gate exists: deleting `if (degraded) return;` left this
+        // test green. With it, the gate is the only thing standing between a degraded
+        // run and an enrolment, and deleting the gate turns this red.
+        lenient().when(pillarEvaluationRepository.findMaturityLabels(submissionId))
+                .thenReturn(List.of(maturityView(pillar.getId(), "Unknown", submission.getUser().getId())));
 
         evaluationService.evaluateSubmission(submissionId);
 
@@ -373,6 +388,94 @@ class EvaluationServiceTest {
         assertThat(subCaptor.getValue().getStatus()).isEqualTo(SubmissionStatus.NEEDS_REVIEW);
         assertThat(subCaptor.getValue().getFailureReason()).contains("could not be evaluated");
         verify(emailService, never()).sendResultsReady(any(), any(), any(), any(), any(), any());
+        // ...and nothing is auto-enrolled off a run whose failed pillars are labelled
+        // "Unknown". The retry that succeeds publishes it instead.
+        verify(events, never()).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void evaluateSubmission_publishesTheStoredMaturityLabelsForTheAutoEnrolmentEngine() {
+        when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
+        when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId)).thenReturn(List.of(likertAnswer));
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), any(), anyBoolean()))
+                .thenReturn(buildMockResult());
+        when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
+        when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(overallSummaryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(submissionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        // The labels are read back from STORAGE after the commit, never taken from the
+        // in-memory result: a partial re-eval only holds the pillars it re-ran.
+        when(pillarEvaluationRepository.findMaturityLabels(submissionId))
+                .thenReturn(List.of(maturityView(pillar.getId(), "Strong", submission.getUser().getId())));
+
+        evaluationService.evaluateSubmission(submissionId);
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        verify(events).publishEvent(captor.capture());
+        assertThat(captor.getValue()).isInstanceOf(EvaluationEvents.SubmissionEvaluated.class);
+        EvaluationEvents.SubmissionEvaluated published =
+                (EvaluationEvents.SubmissionEvaluated) captor.getValue();
+        assertThat(published.submissionId()).isEqualTo(submissionId);
+        assertThat(published.founderId()).isEqualTo(submission.getUser().getId());
+        assertThat(published.maturityLabelByPillar()).containsEntry(pillar.getId(), "Strong");
+    }
+
+    @Test
+    void evaluateSubmission_autoEnrolmentDispatchFailing_stillNotifiesTheMember() {
+        when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
+        when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId)).thenReturn(List.of(likertAnswer));
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), any(), anyBoolean()))
+                .thenReturn(buildMockResult());
+        when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
+        when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(overallSummaryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(submissionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(pillarEvaluationRepository.findMaturityLabels(submissionId))
+                .thenReturn(List.of(maturityView(pillar.getId(), "Strong", submission.getUser().getId())));
+        // A pool timeout inside publishEvent, or a second listener added later, throws
+        // past the auto-enrolment listener's own catch.
+        doThrow(new IllegalStateException("connection pool timeout"))
+                .when(events).publishEvent(any(Object.class));
+
+        evaluationService.evaluateSubmission(submissionId);
+
+        // The inverse of the listener's guard, and the reason the publish has its own:
+        // enrolment is the FIRST side effect, so without it a failed dispatch would
+        // silently starve the audit row and the results the member is waiting for —
+        // neither of which anything before this feature could break.
+        verify(emailService).sendResultsReady(
+                eq("user@test.com"), eq("Test User"), eq("Test Pipeline"), any(), any(), any());
+        verify(auditService).log(any(), any(), eq(OrgAuditActions.ASSESSMENT_EVALUATED),
+                any(), any(), any());
+    }
+
+    @Test
+    void evaluateSubmission_aSubmissionWithNoAccountEnrolsNobody() {
+        submission.setUser(null);
+        when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
+        when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId)).thenReturn(List.of(likertAnswer));
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), any(), anyBoolean()))
+                .thenReturn(buildMockResult());
+        when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
+        when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(overallSummaryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(submissionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        // A QR-link respondent has no account, so the projection's owner column is null.
+        when(pillarEvaluationRepository.findMaturityLabels(submissionId))
+                .thenReturn(List.of(maturityView(pillar.getId(), "Strong", null)));
+
+        evaluationService.evaluateSubmission(submissionId);
+
+        verify(events, never()).publishEvent(any(Object.class));
+    }
+
+    private static PillarEvaluationRepository.PillarMaturityView maturityView(
+            UUID pillarId, String label, UUID founderId) {
+        return new PillarEvaluationRepository.PillarMaturityView() {
+            @Override public UUID getPillarId() { return pillarId; }
+            @Override public String getMaturityLabel() { return label; }
+            @Override public UUID getFounderId() { return founderId; }
+        };
     }
 
     private EvaluationEngine.PipelineEvaluationResult buildDegradedResult() {

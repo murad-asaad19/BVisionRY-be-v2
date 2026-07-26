@@ -14,6 +14,7 @@ import com.bvisionry.common.enums.PromptType;
 import com.bvisionry.common.enums.SubmissionFailureKind;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.enums.SubscriptionTier;
+import com.bvisionry.common.event.EvaluationEvents;
 import com.bvisionry.common.exception.RateLimitExceededException;
 import com.bvisionry.common.tx.AfterCommit;
 import com.bvisionry.common.web.RequestCorrelationFilter;
@@ -40,6 +41,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.ApplicationEventPublisherAware;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -50,6 +53,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -61,7 +65,25 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-public class EvaluationService {
+public class EvaluationService implements ApplicationEventPublisherAware {
+
+    /**
+     * Set by Spring rather than constructor-injected, and that is deliberate: this
+     * class's {@code @RequiredArgsConstructor} signature is embedded verbatim in
+     * ELEVEN frozen {@code noCrossFeatureDependencies} violation descriptions, so
+     * adding a seventeenth parameter rewrites all eleven and the ratchet reports
+     * them as NEW violations — a red build that can only be cleared by writing
+     * {@code frozen-violations/**}, which is {@code never_write}. (Same wall
+     * {@code PillarCourseMappingRepository#copyTo} documents for
+     * {@code PipelineService}.) {@link ApplicationEventPublisherAware} is Spring's
+     * own answer for exactly this and leaves the constructor untouched.
+     */
+    private ApplicationEventPublisher events;
+
+    @Override
+    public void setApplicationEventPublisher(ApplicationEventPublisher events) {
+        this.events = events;
+    }
 
     /**
      * A claim that hasn't been refreshed within this window is treated as abandoned
@@ -464,15 +486,28 @@ public class EvaluationService {
 
     /**
      * Best-effort post-completion bookkeeping run AFTER the evaluation outcome has
-     * been committed: the org Activity-feed audit entry and the member notification
-     * emails. Kept separate from {@link #evaluateSubmission} and invoked under a
-     * guard so a failure here can never flip an already-persisted
-     * EVALUATED/NEEDS_REVIEW submission to FAILED.
+     * been committed: the auto-enrolment event, the org Activity-feed audit entry
+     * and the member notification emails. Kept separate from
+     * {@link #evaluateSubmission} and invoked under a guard so a failure here can
+     * never flip an already-persisted EVALUATED/NEEDS_REVIEW submission to FAILED.
      */
     private void recordEvaluationSideEffects(Submission submission, Assignment assignment,
                                              Pipeline pipeline, List<Answer> answers,
                                              UUID submissionId, EvaluationRunKind kind,
                                              boolean degraded) {
+        // Own guard, not the caller's. The caller's catch wraps this whole method, so
+        // a throwing publish would skip everything below it — the ASSESSMENT_EVALUATED
+        // audit row, the results-ready email and the push — none of which could be
+        // broken by anything before this line existed. The listener has its own catch,
+        // but a connection-pool timeout inside publishEvent, or a second listener added
+        // later, throws past it. The two side effects fail independently or not at all.
+        try {
+            publishSubmissionEvaluated(submissionId, degraded);
+        } catch (RuntimeException e) {
+            log.warn("Auto-enrolment dispatch failed for submission {} (results already saved, "
+                    + "notifications unaffected): {}", submissionId, e.getMessage(), e);
+        }
+
         // Attribute the evaluation to the submitting member so the entry shows
         // up in the org Activity feed (which scopes by actorId IN org members).
         // Only a PARTIAL_REEDIT audits as a re-evaluation so the activity feed can
@@ -516,6 +551,61 @@ public class EvaluationService {
                     "Your \"" + pipeline.getName() + "\" results are available.",
                     "/my/assessments/" + submissionId + "/results");
         }
+    }
+
+    /**
+     * Announce a CLEAN completion so the auto-enrolment engine can build the
+     * founder's learning journey (roadmap §7 item 10). Fired FIRST among the side
+     * effects on purpose: enrolment has no retry of its own, whereas a missed email
+     * is visible to the member and re-sendable, so it must not be starved by a
+     * notification failing ahead of it.
+     *
+     * <p>Three gates, each of which would otherwise enrol someone off a score that
+     * does not exist:
+     * <ul>
+     *   <li><b>committed</b> — the caller runs this only after
+     *       {@link #persistEvaluationOutcome} returns, so the labels read below are
+     *       the ones the founder will see on their results page;</li>
+     *   <li><b>not degraded</b> — a NEEDS_REVIEW run's failed pillars carry the
+     *       label {@code "Unknown"}. Its retry publishes this instead;</li>
+     *   <li><b>has an account</b> — anonymous public (QR-link) submissions have no
+     *       user to enrol.</li>
+     * </ul>
+     * Every run KIND publishes, including a PARTIAL_REEDIT: a re-edit can move a
+     * pillar into a band with rules the founder has not been given yet, and
+     * NEW_ENROLMENTS_ONLY means adding those is safe while the idempotency key
+     * stops the unchanged pillars from being re-decided.
+     *
+     * <p>Takes ids only, and reads the owner out of the same projection as the
+     * labels rather than off the {@code Submission} the caller is holding: a new
+     * method here calling {@code Submission#getUser} is a new
+     * {@code evaluation -> assessment} edge, which the ArchUnit ratchet fails on
+     * (the frozen baseline pins the existing call sites, and it is never written).
+     */
+    private void publishSubmissionEvaluated(UUID submissionId, boolean degraded) {
+        if (degraded) {
+            return;
+        }
+        List<PillarEvaluationRepository.PillarMaturityView> pillars =
+                pillarEvaluationRepository.findMaturityLabels(submissionId);
+        UUID founderId = pillars.stream()
+                .map(PillarEvaluationRepository.PillarMaturityView::getFounderId)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+        if (founderId == null) {
+            // Anonymous public (QR-link) submission, or a run that produced no pillar
+            // rows at all. Nobody to enrol either way.
+            return;
+        }
+        events.publishEvent(new EvaluationEvents.SubmissionEvaluated(submissionId, founderId,
+                pillars.stream().collect(Collectors.toMap(
+                        PillarEvaluationRepository.PillarMaturityView::getPillarId,
+                        PillarEvaluationRepository.PillarMaturityView::getMaturityLabel,
+                        // Latest wins — the query is ordered newest-first. Unreachable
+                        // while uq_pillar_evaluations_submission_pillar (V102) holds;
+                        // it exists so the merge is a decision rather than a default.
+                        (newest, older) -> newest))));
     }
 
     /**

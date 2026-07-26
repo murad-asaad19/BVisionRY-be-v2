@@ -18,6 +18,15 @@ public interface PillarCourseMappingRepository extends JpaRepository<PillarCours
 
     List<PillarCourseMapping> findByPillarIdOrderByBandPositionAsc(UUID pillarId);
 
+    /**
+     * The read the enrolment engine makes: "band k of pillar p -> which courses",
+     * served by {@code idx_pillar_course_mappings_pillar_band} (V150). Ordered by
+     * course id purely so a rule set that maps two courses to one band is processed
+     * in the same order every run — the engine's tie-breaks have to be repeatable
+     * to be explainable.
+     */
+    List<PillarCourseMapping> findByPillarIdAndBandPositionOrderByCourseIdAsc(UUID pillarId, int bandPosition);
+
     void deleteByPillarId(UUID pillarId);
 
     /**

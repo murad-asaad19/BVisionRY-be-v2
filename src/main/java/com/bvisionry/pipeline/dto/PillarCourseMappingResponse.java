@@ -22,15 +22,17 @@ import java.util.UUID;
  * course is shown rather than hidden: an admin is entitled to know why a rule
  * they wrote will not reach anyone.
  *
- * <p><strong>TODO(auto_enrolment) — {@code courseState} is a REFUSAL INPUT, not
- * decoration.</strong> This surface deliberately declines to filter: an admin
- * may point a rule at a course they are about to publish, and hiding it would
- * make the rule look lost. That means the consumer owns the refusal —
- * {@code auto_enrolment} MUST skip any rule whose course is not
- * {@code PUBLISHED}, or it will enrol founders into drafts and archived
- * material. Pinned by
+ * <p><strong>{@code courseState} is a REFUSAL INPUT, not decoration.</strong> This
+ * surface deliberately declines to filter: an admin may point a rule at a course
+ * they are about to publish, and hiding it would make the rule look lost. That
+ * means the consumer owns the refusal, and it does —
+ * {@code AutoEnrolmentService} skips any rule whose course is not
+ * {@code PUBLISHED} and records the skip as
+ * {@code AutoEnrolmentOutcome.COURSE_NOT_PUBLISHED}; the predicate itself lives in
+ * {@code CourseCatalogReadRepository#findPublishedIds} rather than in a caller's
+ * {@code if}. Pinned by
  * {@code PillarCourseMappingServiceTest#everyRowCarriesCourseState...} so the
- * field cannot quietly disappear before that consumer exists.
+ * field cannot quietly disappear from under that consumer.
  */
 public record PillarCourseMappingResponse(
         UUID id,

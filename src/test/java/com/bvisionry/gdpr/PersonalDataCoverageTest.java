@@ -46,7 +46,13 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // dropped, like assignments.assigned_by and join_links.created_by.
             "announcements.author_id", "announcements.flagged_by",
             "ai_configurations.updated_by", "assignments.assigned_by", "assignments.user_id",
-            "audit_logs.actor_id", "certificate.user_id",
+            "audit_logs.actor_id",
+            // auto_enrolments (V151): user_id CASCADEs with the user row — the record of
+            // why a founder was put on a course is about that founder and nobody else, so
+            // it dies with them. Exported as course_recommendations: it is an automated
+            // decision about them (Art. 15(1)(h)) and the enrolment row alone does not
+            // say which pillar band caused it.
+            "auto_enrolments.user_id", "certificate.user_id",
             // coach_assignments (V147): coach_id / member_id CASCADE with the
             // user row and are exported for both sides; assigned_by SET NULL —
             // an admin attribution on the org's record, like assignments.assigned_by.

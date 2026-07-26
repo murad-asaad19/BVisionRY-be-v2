@@ -26,7 +26,7 @@ import java.util.stream.Collectors;
  * "Which courses address this pillar at which score band" (roadmap §7 item 9).
  *
  * <p>CONFIG ONLY. Nothing here enrols anyone or reads a founder's score; the
- * engine that consumes these rules is the next ticket ({@code auto_enrolment}).
+ * engine that consumes these rules is {@link AutoEnrolmentService}.
  *
  * <p><strong>Band identity is ordinal position</strong> (agent-decisions
  * RULING 4). Bands are per-pillar configurable data with bespoke per-customer
@@ -76,9 +76,6 @@ public class PillarCourseMappingService {
     private final PillarService pillarService;
     private final CourseCatalogReadRepository courseCatalog;
 
-    /** One band of a pillar, resolved from its thresholds at its ordinal position. */
-    private record Band(String label, int min, int max) {}
-
     @Transactional(readOnly = true)
     public List<PillarCourseMappingResponse> list(UUID pipelineId, UUID pillarId) {
         Pillar pillar = pillarService.findPillarOrThrow(pipelineId, pillarId);
@@ -101,7 +98,7 @@ public class PillarCourseMappingService {
                     "The General Information pillar is not scored, so it has no bands to map courses to.");
         }
 
-        List<Band> bands = bandsOf(pillar);
+        List<PillarBands.Band> bands = PillarBands.ordered(pillar);
         if (bands.isEmpty()) {
             throw new BadRequestException(
                     "This pillar has no maturity bands configured. Set its thresholds first.");
@@ -154,42 +151,17 @@ public class PillarCourseMappingService {
     }
 
     /** The bands as the admin sees them numbered on screen: 1-based, named. */
-    private static String bandList(List<Band> bands) {
+    private static String bandList(List<PillarBands.Band> bands) {
         return java.util.stream.IntStream.range(0, bands.size())
                 .mapToObj(i -> "%d %s (%d-%d%%)".formatted(
                         i + 1, bands.get(i).label(), bands.get(i).min(), bands.get(i).max()))
                 .collect(Collectors.joining(", "));
     }
 
-    /**
-     * The pillar's bands in ordinal order — sorted by minimum score, which is
-     * the only ordering {@code MaturityThresholdValidator} guarantees is total
-     * (it enforces a contiguous 1..N partition of 0-100) and the same order the
-     * threshold editor renders. {@code jsonb} does not preserve key order, so
-     * map iteration order is never trusted.
-     *
-     * <p>The filter checks the ELEMENTS, not just the size: the column predates
-     * the validator, so legacy jsonb can hold {@code [null, 59]}, which the
-     * comparator would unbox into an NPE while listing a pillar's rules.
-     */
-    private static List<Band> bandsOf(Pillar pillar) {
-        Map<String, List<Integer>> thresholds = pillar.getMaturityThresholds();
-        if (thresholds == null) {
-            return List.of();
-        }
-        return thresholds.entrySet().stream()
-                .filter(e -> e.getValue() != null && e.getValue().size() == 2
-                        && e.getValue().get(0) != null && e.getValue().get(1) != null)
-                .sorted(Comparator.comparingInt(
-                        (Map.Entry<String, List<Integer>> e) -> e.getValue().get(0)))
-                .map(e -> new Band(e.getKey(), e.getValue().get(0), e.getValue().get(1)))
-                .toList();
-    }
-
     private List<PillarCourseMappingResponse> toResponses(
             Pillar pillar, List<PillarCourseMapping> mappings) {
 
-        List<Band> bands = bandsOf(pillar);
+        List<PillarBands.Band> bands = PillarBands.ordered(pillar);
         Map<UUID, CourseRef> courses = courseCatalog.findByIdsUnscoped(
                 mappings.stream().map(PillarCourseMapping::getCourseId).collect(Collectors.toSet()));
 
@@ -197,7 +169,7 @@ public class PillarCourseMappingService {
                 .map(mapping -> {
                     // Null when the band set was shrunk under this rule: the row is
                     // kept and marked, never silently deleted or re-pointed.
-                    Band band = mapping.getBandPosition() < bands.size()
+                    PillarBands.Band band = mapping.getBandPosition() < bands.size()
                             ? bands.get(mapping.getBandPosition())
                             : null;
                     CourseRef course = courses.get(mapping.getCourseId());

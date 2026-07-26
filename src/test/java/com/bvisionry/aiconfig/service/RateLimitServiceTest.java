@@ -150,4 +150,37 @@ class RateLimitServiceTest {
 
         rateLimitService.checkContactLimit("ip:1.2.3.4");
     }
+
+    @Test
+    void checkAuthLimit_overLimit_throws() {
+        for (int i = 0; i < 10; i++) {
+            rateLimitService.checkAuthLimit("ip-1");
+        }
+
+        assertThatThrownBy(() -> rateLimitService.checkAuthLimit("ip-1"))
+                .isInstanceOf(RateLimitExceededException.class)
+                .hasMessageContaining("authentication");
+    }
+
+    @Test
+    void checkAcceptLimit_overLimit_throws() {
+        for (int i = 0; i < 10; i++) {
+            rateLimitService.checkAcceptLimit("ip-1");
+        }
+
+        assertThatThrownBy(() -> rateLimitService.checkAcceptLimit("ip-1"))
+                .isInstanceOf(RateLimitExceededException.class)
+                .hasMessageContaining("accept");
+    }
+
+    @Test
+    void checkPasswordResetLimit_overLimit_throws() {
+        for (int i = 0; i < 5; i++) {
+            rateLimitService.checkPasswordResetLimit("email:target@example.com");
+        }
+
+        assertThatThrownBy(() -> rateLimitService.checkPasswordResetLimit("email:target@example.com"))
+                .isInstanceOf(RateLimitExceededException.class)
+                .hasMessageContaining("password-reset");
+    }
 }

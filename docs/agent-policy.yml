@@ -7,7 +7,14 @@
 #   - Decisions below are CLOSED. Do not re-litigate, re-argue, or "improve" them.
 #   - Ambiguity outside them: see `on_ambiguity` — decide, log, keep going.
 #     EXCEPT for `never_auto_decide`, which always parks.
-#   - Only a human amends this file.
+#   - Only a human amends this file. AMENDMENT LOG:
+#       2026-07-26 — operator DELEGATED ruling authority for parked `never_auto_decide`
+#       items to the orchestrator (advised by an independent reviewer, decision recorded
+#       in agent-decisions.md before implementation). Under that delegation:
+#         · decisions.i18n.new_surfaces_use_next_intl  true -> false (SUSPENDED + trigger)
+#         · defaults.new_ui_copy   ENGLISH_VIA_NEXT_INTL -> PLAIN_ENGLISH
+#       Delegation is NOT standing: it covers the four items parked as of that date.
+#       Anything new still parks unless the operator delegates it too.
 #
 # Rationale: docs/roadmap.md §14   Execution: docs/agent-execution-graph.md
 # Decisions made during a run are appended to docs/agent-decisions.md
@@ -89,9 +96,9 @@ run_mode:
 # statement about evidence that exists, never about work believed to be nearly
 # done: if the ticket parked, the flag stays false.
 autonomy_prerequisites:
-  error_tracking: false             # the regression signal
-  e2e_local_green: false            # the frontend's only real evidence at ~2% coverage
-  diff_coverage_and_lint_gate: false  # changed lines are actually covered
+  error_tracking: true              # the regression signal — landed 5e076b1 (be) + 50a2cc0 (web), gates observed by orchestrator, 3/3 veto lenses PASS
+  e2e_local_green: true             # LANDED web 7c0a57b — 89/89 twice, orchestrator-observed on the seeded lane; both validators PASS
+  diff_coverage_and_lint_gate: true # LANDED be ee56126 + web 34b47b7 — READ NARROWLY: backend changed lines + web .ts changed lines + blocking lint; .tsx (84% of web churn) stays on Gate 4 evidence until sweep_fe_test_backfill adds a component coverage project
   scope_manifest_gate: false        # a diff that wandered gets caught
 
 # ---------------------------------------------------------------------------
@@ -129,7 +136,23 @@ decisions:
   calendar: INTEGRATE_CAL_COM                 # §14.3 — never build native booking
   i18n:
     scope: UI_CHROME_ONLY                     # §14.4 — never translate course content
-    new_surfaces_use_next_intl: true          # stop the bill growing now
+    new_surfaces_use_next_intl: false         # SUSPENDED 2026-07-26 (operator-delegated
+                                              # ruling) — English-only until the trigger
+                                              # below fires. Grounds: the clause was
+                                              # structurally unimplementable (next-intl
+                                              # install needs web/package.json, a
+                                              # serialising platform path no feature
+                                              # ticket may claim), and its stated purpose
+                                              # ("stop the bill growing now") had already
+                                              # failed — ~2,000+ hardcoded strings landed
+                                              # regardless. See agent-decisions.md.
+    reactivation_trigger: >-
+      A signed customer commitment or committed launch market requiring a non-English
+      locale, OR the operator schedules the Phase-4 i18n retrofit with a date. On trigger:
+      (1) one serialising platform ticket installs next-intl, wires next.config.ts and the
+      provider, and converts one exemplar route; (2) a ux_p0-shaped fan-out sweep extracts
+      the remaining strings, gated by e2e. Shipped tickets are grandfathered; do not
+      retrofit ahead of the trigger.
   white_label:
     logo: true
     colors: true
@@ -177,7 +200,9 @@ defaults:
   auto_enrolment_explains_why: true   # founder always sees the triggering pillar
 
   empty_state_rule: EVERY_EMPTY_STATE_NAMES_A_NEXT_ACTION
-  new_ui_copy: ENGLISH_VIA_NEXT_INTL  # wrap new strings even though retrofit is deferred
+  new_ui_copy: PLAIN_ENGLISH          # aligned with the suspended i18n decision (2026-07-26).
+                                      # Hardcoded English is COMPLIANT, not a deviation —
+                                      # stop logging per-ticket i18n deviations.
 
 # ---------------------------------------------------------------------------
 # Delivery order — roadmap §12. The graph does not reorder the business case.

@@ -297,7 +297,7 @@ public class AssignmentService {
         pushNotificationService.notifyUser(member.getId(), NotificationType.ASSESSMENT_ASSIGNED,
                 "New assessment assigned",
                 "\"" + pipeline.getName() + "\" is ready for you.",
-                "/my/assessments/" + savedSubmission.getId());
+                "/app/assessments/" + savedSubmission.getId());
 
         return new AssignmentCreated(savedAssignment, savedSubmission);
     }
@@ -436,7 +436,7 @@ public class AssignmentService {
                 member.getName(),
                 pipeline.getName(),
                 assignment.getDeadline(),
-                frontendUrls.path("/my/assessments/" + submission.getId()));
+                frontendUrls.path("/app/assessments/" + submission.getId()));
     }
 
     @Transactional(readOnly = true)
@@ -687,11 +687,11 @@ public class AssignmentService {
                 member.getName(),
                 assignment.getPipeline().getName(),
                 submission.getEffectiveDeadline(),
-                frontendUrls.path("/my/assessments/" + submission.getId()));
+                frontendUrls.path("/app/assessments/" + submission.getId()));
         pushNotificationService.notifyUser(member.getId(), NotificationType.ASSESSMENT_REMINDER,
                 "Assessment reminder",
                 "\"" + assignment.getPipeline().getName() + "\" is still waiting for you.",
-                "/my/assessments/" + submission.getId());
+                "/app/assessments/" + submission.getId());
         // Log user UUID instead of email to keep PII out of application logs
         // — the user can still be looked up via the UUID for support cases.
         log.info("Reminder sent for assignment {} to user {}", assignmentId, member.getId());

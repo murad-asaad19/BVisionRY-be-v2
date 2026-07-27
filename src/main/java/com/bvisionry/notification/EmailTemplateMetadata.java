@@ -156,12 +156,12 @@ public final class EmailTemplateMetadata {
                     "memberName",    "Alex Johnson",
                     "pipelineName",  "Leadership Self-Assessment",
                     "deadline",      Instant.parse("2026-05-15T00:00:00Z").toString(),
-                    "assessmentUrl", urls.path("/my/assessments/sample")
+                    "assessmentUrl", urls.path("/app/assessments/sample")
             );
             case RESULTS_READY -> Map.of(
                     "memberName",          "Alex Johnson",
                     "pipelineName",        "Leadership Self-Assessment",
-                    "resultsUrl",          urls.path("/my/assessments/sample/results"),
+                    "resultsUrl",          urls.path("/app/assessments/sample/results"),
                     "postCompletionUrl",   "https://typeform.com/sample-feedback",
                     "postCompletionLabel", "Continue"
             );
@@ -169,8 +169,8 @@ public final class EmailTemplateMetadata {
                     "memberName",   "Alex Johnson",
                     "pipelineName", "Leadership Self-Assessment",
                     "surveyName",   "Post-Assessment Feedback",
-                    "surveyUrl",    urls.path("/my/assessments/sample/post-completion-survey"),
-                    "resultsUrl",   urls.path("/my/assessments/sample/results")
+                    "surveyUrl",    urls.path("/app/assessments/sample/post-completion-survey"),
+                    "resultsUrl",   urls.path("/app/assessments/sample/results")
             );
             case INVITATION -> Map.of(
                     "inviterName",      "Jordan Lee",

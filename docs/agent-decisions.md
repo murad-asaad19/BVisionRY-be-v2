@@ -2597,3 +2597,19 @@ all eight as new violations.
 Wave 10 = §10 P2-11 org/sub-org URL unification, ALONE. Wave 11 = breadcrumbs, sidebar grouping,
 command palette, notifications page, empty states, onboarding, URL-addressable tabs, orphan route,
 mobile tabs — all eight collide with P2-11's routing changes.
+
+### WAVE 9 · GATE 4 CLOSED — 155 passed x2 consecutive
+Lane 1 (`:8181` / `:3011`), `.next` cleared, servers restarted. Flyway applied **V156 and V157
+against a real seeded database** (155 -> 157, clean) — the migrations ran over actual PREMIUM rows
+rather than an empty schema, which no unit test covers. Corruption probes: anonymous BFF **401,
+not 500**; `/privacy` and `/terms` both 200, so the new legal surfaces render server-side.
+
+**Run 1 was RED and the failure was mine, not the code's.** `/solutions/corporate` returned 500
+while its three sibling slugs passed. Direct curl afterwards: 200. The server log shows
+`500 in 5.5s (next.js: 5.3s)` then `SyntaxError: Unexpected end of JSON input` and `Error: aborted`
+— the test navigated away mid-FIRST-COMPILE and the next request served the same route in 152ms.
+A dev-server cold-compile race. I had cleared `.next` and probed `/privacy` and `/terms` but never
+warmed `/solutions/*`, i.e. I performed the destructive half of the doctrine and skipped the
+compensating half. **The warm-up step is not optional and it must cover every route the suite
+touches, not just the ones the wave changed.** After warming all 14 marketing/app entry points:
+run A 155 passed exit 0, run B 155 passed exit 0.

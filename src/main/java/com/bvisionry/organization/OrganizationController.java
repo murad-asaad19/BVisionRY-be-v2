@@ -3,12 +3,14 @@ package com.bvisionry.organization;
 import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.organization.dto.ActivityFeedResponse;
+import com.bvisionry.organization.dto.BrandingResponse;
 import com.bvisionry.organization.dto.ChangeTierRequest;
 import com.bvisionry.organization.dto.CreateOrganizationRequest;
 import com.bvisionry.organization.dto.ExtendTrialRequest;
 import com.bvisionry.organization.dto.NudgeSettingsDto;
 import com.bvisionry.organization.dto.OrganizationResponse;
 import com.bvisionry.organization.dto.StartTrialRequest;
+import com.bvisionry.organization.dto.UpdateBrandingRequest;
 import com.bvisionry.organization.dto.UpdateOrganizationRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -33,6 +35,7 @@ public class OrganizationController {
     private final SubOrganizationService subOrganizationService;
     private final TrialService trialService;
     private final ActivityService activityService;
+    private final OrganizationBrandingService brandingService;
     /**
      * Reads the notification retention window that bounds the nudge window
      * below. Through {@link Environment} rather than {@code @Value} because
@@ -156,6 +159,41 @@ public class OrganizationController {
                     + retentionDays + "-day notification retention window");
         }
         return ResponseEntity.ok(organizationService.updateNudgeSettings(id, request));
+    }
+
+    // ----------------------------------------------------------------- branding
+    // White-label logo + brand colour (policy decisions.white_label). Two
+    // DELIBERATELY DIFFERENT gates:
+    //
+    // WRITE mirrors nudge-settings exactly — SUPER_ADMIN, or an ORG_ADMIN of
+    // this org (or of its parent, via @orgAccess's one-level hierarchy). The
+    // wholesale PUT /{id} stays SUPER_ADMIN-only; branding gets its own verb so
+    // an org admin can set a logo without also gaining name/description writes.
+    //
+    // READ is wider ON PURPOSE and this is the one deviation worth naming: the
+    // branded surface is EVERY signed-in page, so the app shell fetches this for
+    // every viewer — MEMBER, COACH, INSTRUCTOR included. Gated like the write it
+    // would 403 for everyone except admins and no member would ever see their
+    // own org's brand, which is the entire acceptance criterion. @orgAccess.isInOrg
+    // alone is still the correct tenancy predicate (it is true only for members of
+    // this org, its parent's admins, or a SUPER_ADMIN), and what it exposes is a
+    // logo and a colour that the same viewer sees rendered on every page anyway.
+    @GetMapping("/{id}/branding")
+    @PreAuthorize("hasAuthority('SUPER_ADMIN') or @orgAccess.isInOrg(#id)")
+    public ResponseEntity<BrandingResponse> getBranding(@PathVariable UUID id) {
+        return ResponseEntity.ok(brandingService.get(id));
+    }
+
+    @PutMapping("/{id}/branding")
+    @PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#id))")
+    public ResponseEntity<BrandingResponse> updateBranding(@PathVariable UUID id,
+                                                           @Valid @RequestBody UpdateBrandingRequest request) {
+        // The actor is resolved INSIDE the service, via the shared-kernel
+        // CurrentUserAccessor. SecurityUtils lives in the auth feature and the
+        // ArchUnit ratchet freezes cross-feature calls per CALL SITE, so a
+        // getCurrentUserId() here would be a brand-new violation — and the
+        // frozen store is never written.
+        return ResponseEntity.ok(brandingService.update(id, request));
     }
 
     // The org-scoped activity feed is read by the org dashboard, which is reached

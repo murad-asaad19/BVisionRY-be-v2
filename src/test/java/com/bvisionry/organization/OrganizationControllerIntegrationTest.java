@@ -359,7 +359,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
         java.util.UUID id = organizationRepository.save(target).getId();
 
         OrganizationController tightened = new OrganizationController(
-                organizationService, null, null, null,
+                organizationService, null, null, null, null,
                 new MockEnvironment().withProperty("bvisionry.notifications.retention-days", "30"));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() ->
@@ -371,7 +371,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
         // it. Non-positive retention disables the purge, so history is kept
         // forever and the same 45 is then perfectly safe.
         OrganizationController noPurge = new OrganizationController(
-                organizationService, null, null, null,
+                organizationService, null, null, null, null,
                 new MockEnvironment().withProperty("bvisionry.notifications.retention-days", "0"));
         org.assertj.core.api.Assertions.assertThat(
                         noPurge.updateNudgeSettings(id, new NudgeSettingsDto(45))

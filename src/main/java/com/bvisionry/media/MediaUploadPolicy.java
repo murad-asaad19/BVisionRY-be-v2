@@ -27,6 +27,32 @@ final class MediaUploadPolicy {
 
     private MediaUploadPolicy() {}
 
+    /** The only kind an org-scoped (white-label branding) upload may carry. */
+    static final String ORG_SCOPED_KIND = "image";
+
+    /**
+     * Org-scoped uploads are branding logos and nothing else.
+     *
+     * <p>This is the enforcement half of widening {@code MediaController} to
+     * admit ORG_ADMIN. Authorization admits an ORG_ADMIN <em>only</em> with an
+     * {@code orgId} they pass {@code @orgAccess.isInOrg} for; this method
+     * refuses any org-scoped upload whose kind is not {@code image}. Composed,
+     * the two mean an ORG_ADMIN can upload images and nothing else — no videos,
+     * no PDFs, no generic assets — on BOTH the multipart and the presign path,
+     * because both call it.
+     *
+     * <p>Enforced here rather than in the {@code @PreAuthorize} expression on
+     * purpose: the presign path carries {@code kind} in the request BODY, and
+     * SpEL property access on a record is not something to bet an authorization
+     * rule on. A plain Java guard behaves identically on both paths.
+     */
+    static void requireOrgScopedKindIsImage(String kind, java.util.UUID orgId) {
+        if (orgId != null && !ORG_SCOPED_KIND.equals(kind)) {
+            throw new BadRequestException(
+                    "Org-scoped uploads must use kind '" + ORG_SCOPED_KIND + "', not '" + kind + "'");
+        }
+    }
+
     private record KindPolicy(Set<String> contentTypes, long maxUploadBytes) {}
 
     private static final long MB = 1024L * 1024;

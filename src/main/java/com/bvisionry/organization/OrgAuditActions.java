@@ -13,6 +13,8 @@ public final class OrgAuditActions {
     public static final String ORGANIZATION_SUSPENDED   = "ORGANIZATION_SUSPENDED";
     public static final String ORGANIZATION_REACTIVATED = "ORGANIZATION_REACTIVATED";
     public static final String ORGANIZATION_DELETED     = "ORGANIZATION_DELETED";
+    /** An org admin set or cleared the white-label logo / brand colour. */
+    public static final String ORGANIZATION_BRANDING_UPDATED = "ORGANIZATION_BRANDING_UPDATED";
     public static final String TIER_CHANGE              = "TIER_CHANGE";
 
     // Sub-organization lifecycle — logged against the PARENT org id so the

@@ -45,10 +45,20 @@ import jakarta.annotation.PostConstruct;
  * upload so uploads succeed once MinIO becomes reachable.</p>
  */
 @Service
-public class MediaService {
+public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
 
     private static final Logger log = LoggerFactory.getLogger(MediaService.class);
     private static final String MINIO_SCHEME = "minio://";
+    /**
+     * Key prefix for org-scoped (white-label branding) uploads:
+     * {@code org/<orgId>/branding/…}. The organization feature validates a
+     * persisted marker against this shape for its OWN org id before storing it,
+     * which is what stops an ORG_ADMIN persisting a marker that would presign a
+     * GET for another tenant's objects. Shared with that validation only as a
+     * FORMAT — no code crosses the feature line.
+     */
+    static final String ORG_KEY_PREFIX = "org/";
+    static final String ORG_BRANDING_SEGMENT = "/branding";
     /** Redirect-hop ceiling for external fetches; each hop is re-validated against the SSRF guard. */
     private static final int MAX_EXTERNAL_REDIRECTS = 5;
     /** Shared, thread-safe client for {@link #fetchExternal(String)} — keeps connection reuse across fetches. */
@@ -92,16 +102,21 @@ public class MediaService {
     /**
      * Uploads a multipart file to MinIO.
      *
-     * @param file the uploaded file
-     * @param kind a path prefix / folder name (e.g. {@code "video"}, {@code "asset"})
+     * @param file  the uploaded file
+     * @param kind  a path prefix / folder name (e.g. {@code "video"}, {@code "asset"})
+     * @param orgId when non-null the upload is ORG-SCOPED: it must be
+     *              {@code kind=image} and it lands under
+     *              {@code org/<orgId>/branding/}. This is the only shape an
+     *              ORG_ADMIN is authorized to reach (see MediaController).
      * @return the {@code minio://bucket/objectKey} marker to persist in the database
      */
-    public String upload(MultipartFile file, String kind) {
+    public String upload(MultipartFile file, String kind, UUID orgId) {
+        MediaUploadPolicy.requireOrgScopedKindIsImage(kind, orgId);
         String contentType = MediaUploadPolicy.validate(
                 kind, file.getContentType(), file.getOriginalFilename(), file.getSize());
         lazyEnsureBucket();
 
-        String objectKey = buildObjectKey(kind, file.getOriginalFilename());
+        String objectKey = buildObjectKey(kind, file.getOriginalFilename(), orgId);
 
         try (InputStream is = file.getInputStream()) {
             internalClient.putObject(
@@ -121,11 +136,17 @@ public class MediaService {
     /**
      * Browser-direct upload coordinates returned by {@link #presignUpload}.
      *
-     * @param uploadUrl  short-lived presigned PUT URL the browser uploads bytes to directly
-     * @param marker     the {@code minio://bucket/objectKey} value to persist in the DB
-     * @param previewUrl a presigned GET URL usable for preview once the PUT completes
+     * @param uploadUrl   short-lived presigned PUT URL the browser uploads bytes to directly
+     * @param marker      the {@code minio://bucket/objectKey} value to persist in the DB
+     * @param previewUrl  a presigned GET URL usable for preview once the PUT completes
+     * @param contentType the NORMALIZED content type the server validated. On an
+     *                    org-scoped presign this value is bound into the
+     *                    signature, so the browser's PUT must send exactly it or
+     *                    the upload is refused by the object store; returning it
+     *                    is what lets a client comply (its own {@code File.type}
+     *                    can be blank or differently-cased).
      */
-    public record PresignedUpload(String uploadUrl, String marker, String previewUrl) {}
+    public record PresignedUpload(String uploadUrl, String marker, String previewUrl, String contentType) {}
 
     /**
      * Issues a presigned PUT URL so the browser uploads a file <strong>directly</strong> to
@@ -144,33 +165,59 @@ public class MediaService {
      *
      * @param kind        path prefix / folder (e.g. {@code "pdf"}, {@code "video"}); defaults to {@code "asset"} when blank
      * @param filename    original filename, used only to build a readable object key
-     * @param contentType the file's MIME type; not bound into the signature — the browser applies it on PUT
-     * @return the presigned PUT URL, the {@code minio://} marker to persist, and a presigned GET preview URL
+     * @param contentType the file's MIME type
+     * @param orgId       when non-null the presign is ORG-SCOPED: it must be
+     *                    {@code kind=image}, it lands under
+     *                    {@code org/<orgId>/branding/}, and the normalized
+     *                    content type is BOUND INTO THE SIGNATURE (see below)
+     * @return the presigned PUT URL, the {@code minio://} marker to persist, a presigned GET
+     *         preview URL, and the content type the signature was computed with
      */
-    public PresignedUpload presignUpload(String kind, String filename, String contentType) {
+    public PresignedUpload presignUpload(String kind, String filename, String contentType, UUID orgId) {
         String resolvedKind = (kind == null || kind.isBlank()) ? "asset" : kind;
+        MediaUploadPolicy.requireOrgScopedKindIsImage(resolvedKind, orgId);
         // ponytail: size is unenforceable here — a presigned PUT doesn't bind
         // Content-Length, so only kind + content type are validated on this path.
-        MediaUploadPolicy.validate(resolvedKind, contentType, filename, -1);
+        String normalizedType = MediaUploadPolicy.validate(resolvedKind, contentType, filename, -1);
         lazyEnsureBucket();
 
-        String objectKey    = buildObjectKey(resolvedKind, filename);
+        String objectKey    = buildObjectKey(resolvedKind, filename, orgId);
         String marker       = MINIO_SCHEME + props.getBucket() + "/" + objectKey;
 
         final String uploadUrl;
         try {
-            uploadUrl = publicClient.getPresignedObjectUrl(
-                    GetPresignedObjectUrlArgs.builder()
-                            .method(Method.PUT)
-                            .bucket(props.getBucket())
-                            .object(objectKey)
-                            .expiry(props.getPresignedExpiryMinutes() * 60, TimeUnit.SECONDS)
-                            .build());
+            GetPresignedObjectUrlArgs.Builder args = GetPresignedObjectUrlArgs.builder()
+                    .method(Method.PUT)
+                    .bucket(props.getBucket())
+                    .object(objectKey)
+                    .expiry(props.getPresignedExpiryMinutes() * 60, TimeUnit.SECONDS);
+            if (orgId != null) {
+                // CONTENT-TYPE PINNING, org-scoped paths only. Content-Type in
+                // extraHeaders becomes a SIGNED header, so the PUT is refused
+                // unless it carries exactly this value. Without it the validated
+                // "image/png" is only ever a claim in the presign REQUEST: the
+                // browser could PUT the same object with text/html, and the
+                // object store would then serve stored markup from the
+                // object-store origin off a presigned GET — the same stored-XSS
+                // channel image/svg+xml is excluded to avoid.
+                //
+                // Scoped to org-scoped presigns rather than applied globally
+                // because the existing lesson-media client PUTs its own raw
+                // File.type (and omits the header entirely when that is blank),
+                // so pinning the normalized type for every caller would break
+                // uploads whose declared type the server repaired. That gap is
+                // real but pre-existing and SUPER_ADMIN/INSTRUCTOR-only; closing
+                // it means changing the shared dropzone to PUT the returned
+                // contentType, which is outside this ticket.
+                args.extraHeaders(com.google.common.collect.ImmutableMultimap.of(
+                        "Content-Type", normalizedType));
+            }
+            uploadUrl = publicClient.getPresignedObjectUrl(args.build());
         } catch (Exception ex) {
             throw new MediaUploadException("Failed to presign upload URL: " + ex.getMessage(), ex);
         }
 
-        return new PresignedUpload(uploadUrl, marker, resolveUrl(marker));
+        return new PresignedUpload(uploadUrl, marker, resolveUrl(marker), normalizedType);
     }
 
     // -------------------------------------------------------------------------
@@ -190,6 +237,7 @@ public class MediaService {
      * <p>This method is intentionally {@code public} so the orchestrator can call it from
      * {@code CatalogService} and {@code EnrollmentService} without this class being edited.</p>
      */
+    @Override
     public String resolveUrl(String stored) {
         if (stored == null || !stored.startsWith(MINIO_SCHEME)) {
             return stored;
@@ -475,12 +523,20 @@ public class MediaService {
     }
 
     /**
-     * Builds the {@code kind/uuid-filename} object key shared by the server-proxied
-     * ({@link #upload}) and browser-direct ({@link #presignUpload}) upload paths, so the key
-     * format and filename sanitisation can never drift between them.
+     * Builds the object key shared by the server-proxied ({@link #upload}) and
+     * browser-direct ({@link #presignUpload}) upload paths, so the key format
+     * and filename sanitisation can never drift between them.
+     *
+     * <p>Platform uploads keep the historical {@code kind/uuid-filename} shape.
+     * ORG-SCOPED uploads instead land under {@code org/<orgId>/branding/…} —
+     * the tenant prefix that makes the stored marker checkable against the
+     * caller's own org, which is the whole IDOR defence for white-label logos.
      */
-    private String buildObjectKey(String kind, String filename) {
-        return kind + "/" + UUID.randomUUID() + "-" + sanitizeFilename(filename);
+    private String buildObjectKey(String kind, String filename, UUID orgId) {
+        String folder = orgId == null
+                ? kind
+                : ORG_KEY_PREFIX + orgId + ORG_BRANDING_SEGMENT;
+        return folder + "/" + UUID.randomUUID() + "-" + sanitizeFilename(filename);
     }
 
     /**

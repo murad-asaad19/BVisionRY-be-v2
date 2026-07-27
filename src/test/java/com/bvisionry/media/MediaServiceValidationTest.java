@@ -77,7 +77,7 @@ class MediaServiceValidationTest {
     void uploadRejectsDisallowedContentType() throws Exception {
         MultipartFile file = multipart("evil.html", "text/html", 64);
 
-        assertThatThrownBy(() -> service.upload(file, "asset"))
+        assertThatThrownBy(() -> service.upload(file, "asset", null))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("text/html");
         verify(internalClient, never()).putObject(any(PutObjectArgs.class));
@@ -87,7 +87,7 @@ class MediaServiceValidationTest {
     void uploadRejectsUnknownKind() throws Exception {
         MultipartFile file = multipart("a.png", "image/png", 64);
 
-        assertThatThrownBy(() -> service.upload(file, "../../etc"))
+        assertThatThrownBy(() -> service.upload(file, "../../etc", null))
                 .isInstanceOf(BadRequestException.class);
         verify(internalClient, never()).putObject(any(PutObjectArgs.class));
     }
@@ -97,7 +97,7 @@ class MediaServiceValidationTest {
         // image cap is 10MB — 11MB must be refused before any bytes reach MinIO
         MultipartFile file = multipart("big.png", "image/png", 11L * 1024 * 1024);
 
-        assertThatThrownBy(() -> service.upload(file, "image"))
+        assertThatThrownBy(() -> service.upload(file, "image", null))
                 .isInstanceOf(BadRequestException.class);
         verify(internalClient, never()).putObject(any(PutObjectArgs.class));
     }
@@ -106,7 +106,7 @@ class MediaServiceValidationTest {
     void uploadAcceptsValidImage() throws Exception {
         MultipartFile file = multipart("logo.png", "image/png", 1024);
 
-        String marker = service.upload(file, "image");
+        String marker = service.upload(file, "image", null);
 
         assertThat(marker).startsWith("minio://" + props.getBucket() + "/image/");
         verify(internalClient).putObject(any(PutObjectArgs.class));
@@ -116,7 +116,7 @@ class MediaServiceValidationTest {
     void uploadNormalizesContentTypeParameters() throws Exception {
         MultipartFile file = multipart("doc.pdf", "application/pdf; charset=UTF-8", 1024);
 
-        assertThat(service.upload(file, "pdf"))
+        assertThat(service.upload(file, "pdf", null))
                 .startsWith("minio://" + props.getBucket() + "/pdf/");
     }
 
@@ -126,14 +126,14 @@ class MediaServiceValidationTest {
 
     @Test
     void presignRejectsDisallowedContentType() throws Exception {
-        assertThatThrownBy(() -> service.presignUpload("pdf", "tool.exe", "application/x-msdownload"))
+        assertThatThrownBy(() -> service.presignUpload("pdf", "tool.exe", "application/x-msdownload", null))
                 .isInstanceOf(BadRequestException.class);
         verify(publicClient, never()).getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class));
     }
 
     @Test
     void presignRejectsUnknownKind() throws Exception {
-        assertThatThrownBy(() -> service.presignUpload("secrets", "a.pdf", "application/pdf"))
+        assertThatThrownBy(() -> service.presignUpload("secrets", "a.pdf", "application/pdf", null))
                 .isInstanceOf(BadRequestException.class);
         verify(publicClient, never()).getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class));
     }
@@ -145,14 +145,14 @@ class MediaServiceValidationTest {
         when(publicClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
                 .thenReturn("http://minio.test/presigned");
 
-        MediaService.PresignedUpload result = service.presignUpload("video", "stream.m3u8", "");
+        MediaService.PresignedUpload result = service.presignUpload("video", "stream.m3u8", "", null);
 
         assertThat(result.marker()).startsWith("minio://" + props.getBucket() + "/video/");
     }
 
     @Test
     void presignRejectsBlankContentTypeWithUnknownExtension() throws Exception {
-        assertThatThrownBy(() -> service.presignUpload("asset", "mystery.bin", null))
+        assertThatThrownBy(() -> service.presignUpload("asset", "mystery.bin", null, null))
                 .isInstanceOf(BadRequestException.class);
         verify(publicClient, never()).getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class));
     }
@@ -162,7 +162,7 @@ class MediaServiceValidationTest {
         when(publicClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
                 .thenReturn("http://minio.test/presigned");
 
-        MediaService.PresignedUpload result = service.presignUpload("pdf", "guide.pdf", "application/pdf");
+        MediaService.PresignedUpload result = service.presignUpload("pdf", "guide.pdf", "application/pdf", null);
 
         assertThat(result.uploadUrl()).isEqualTo("http://minio.test/presigned");
         assertThat(result.marker()).startsWith("minio://" + props.getBucket() + "/pdf/");

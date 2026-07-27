@@ -9,6 +9,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -18,20 +20,82 @@ import java.util.UUID;
 
 /**
  * Authenticates requests that carry a short-lived download JWT in the
- * {@code ?token=} query parameter. Used by the SPA when fetching PDF/XLSX
+ * {@code ?token=} query parameter. INTENDED for the SPA when fetching PDF/XLSX
  * binaries directly from Railway (bypassing the Vercel proxy), where cookies
- * cannot ride along cross-site.
+ * cannot ride along cross-site — but no client uses it today (see below); every
+ * export currently goes through the BFF proxy with cookies.
  *
  * <p>Runs <em>before</em> {@link JwtAuthenticationFilter}. If no {@code token}
  * param is present, this is a no-op pass-through and the cookie filter handles
  * auth as usual. The {@code typ} claim must equal {@link TokenType#DOWNLOAD};
  * access and refresh tokens are rejected here.
+ *
+ * <p><b>This is a URL credential.</b> It is copied into access logs, browser
+ * history and {@code Referer} headers by construction, so it is treated as
+ * replayable and is deliberately weaker than a cookie session:
+ *
+ * <ul>
+ *   <li>It authenticates <b>GET and HEAD only</b>, so a leaked token cannot
+ *       ITSELF issue a POST/PUT/PATCH/DELETE anywhere. The method is checked
+ *       before {@code getParameter} is called so a form-encoded body is never
+ *       consumed looking for a token — that ordering is deliberate but rests on
+ *       statement order alone and NO TEST PINS IT (`MockHttpServletRequest`
+ *       populates the parameter map directly and never parses a body, so this
+ *       harness cannot; it would take a container test). Treat it as an
+ *       invariant to preserve by hand when editing this method.
+ *       <p><b>This bounds the token, not its consequences,</b> and the difference
+ *       is not academic: a read can hand back another credential. Today
+ *       {@code GET /api/organizations/{orgId}/invitations} returns raw invitation
+ *       tokens, and {@code POST /api/invitations/{token}/accept} is
+ *       {@code permitAll()} and CSRF-exempt — so a leaked download token still
+ *       buys a permanent account in the tenant, via a state change it never made
+ *       itself. That chain is PRE-EXISTING and strictly harder than it was before
+ *       this filter refused unsafe methods, but it is not closed, and neither is
+ *       {@code GET /api/gdpr/me/export}. Do not read "GET only" as "harmless".</li>
+ *   <li>It does not authenticate {@code /api/auth/**}. That surface contains the
+ *       mint endpoint {@code GET /api/auth/download-token}, which is itself a GET:
+ *       without this, a leaked token could be replayed against it to mint a fresh
+ *       one, and then again, indefinitely — turning a 60-second credential into a
+ *       permanent one and making the TTL (the only real protection this token has)
+ *       meaningless. None of {@code /api/auth} is a download, so excluding the
+ *       whole prefix costs nothing.
+ *       <p>PRECISELY: the matcher refuses the canonical path and its
+ *       matrix-parameter variants. It does NOT match non-canonical spellings
+ *       ({@code /api//auth/…}, {@code /api/./auth/…}, {@code /api/foo/../auth/…},
+ *       {@code /api/auth%2Fdownload-token}, {@code /API/AUTH/…}) — those are
+ *       stopped one layer out, and that layer was MEASURED against a real Tomcat
+ *       rather than assumed: the first four are rejected <b>400</b> by the
+ *       container before any filter runs, and the case variant routes to no
+ *       handler (<b>404</b> authenticated, while the canonical path returns 200).
+ *       So the exclusion holds end-to-end today, but it holds as defence in
+ *       depth. It would break if the app were fronted by a normalising proxy or
+ *       switched to a case-insensitive path matcher — do not read this bullet as
+ *       "the matcher alone is sufficient".</li>
+ *   <li>It refuses any principal {@link AuthenticationEligibility} refuses —
+ *       the same predicate the cookie filter uses, so a suspended user cannot
+ *       authenticate here after being refused there.</li>
+ * </ul>
+ *
+ * <p>What is deliberately NOT restricted: the set of download paths. Binary
+ * responses are served from eight controllers across six feature packages
+ * ({@code certificate}, {@code gdpr}, {@code insights}, {@code reporting},
+ * {@code survey}, {@code workshops}) under no single prefix or suffix convention
+ * — {@code /api/gdpr/me/export} breaks the {@code /pdf}|{@code /excel} pattern
+ * the others nearly share — and no client mints a download token today, so any
+ * path allowlist would be a guess that fails closed on a flow nobody can test.
+ * GET/HEAD is the enforceable half. The token also still carries its owner's
+ * FULL authorities: audit finding H3 named "path-scope the filter, or mint with
+ * reduced authorities" and this closes NEITHER.
  */
 @Component
 @RequiredArgsConstructor
 public class DownloadTokenAuthenticationFilter extends OncePerRequestFilter {
 
     private static final String TOKEN_PARAM = "token";
+
+    /** See the class javadoc: the whole auth surface, mint endpoint included. */
+    private static final RequestMatcher AUTH_SURFACE =
+            PathPatternRequestMatcher.pathPattern("/api/auth/**");
 
     private final JwtProvider jwtProvider;
     private final UserRepository userRepository;
@@ -40,20 +104,30 @@ public class DownloadTokenAuthenticationFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        String token = request.getParameter(TOKEN_PARAM);
-        if (token != null && !token.isBlank()) {
-            jwtProvider.parseAndValidate(token, TokenType.DOWNLOAD).ifPresent(claims -> {
-                UUID userId = UUID.fromString(claims.getSubject());
-                userRepository.findByIdWithOrganization(userId).ifPresent(user -> {
-                    if (user.getOrganization() != null && !user.getOrganization().isActive()) {
-                        return;
-                    }
-                    var authorities = List.of(new SimpleGrantedAuthority(user.getRole().name()));
-                    var authentication = new UsernamePasswordAuthenticationToken(user, null, authorities);
-                    SecurityContextHolder.getContext().setAuthentication(authentication);
+        if (acceptsUrlToken(request)) {
+            String token = request.getParameter(TOKEN_PARAM);
+            if (token != null && !token.isBlank()) {
+                jwtProvider.parseAndValidate(token, TokenType.DOWNLOAD).ifPresent(claims -> {
+                    UUID userId = UUID.fromString(claims.getSubject());
+                    userRepository.findByIdWithOrganization(userId).ifPresent(user -> {
+                        boolean organizationActive = user.getOrganization() == null
+                                || user.getOrganization().isActive();
+                        if (!AuthenticationEligibility.mayAuthenticate(user, organizationActive)) {
+                            return;
+                        }
+                        var authorities = List.of(new SimpleGrantedAuthority(user.getRole().name()));
+                        var authentication = new UsernamePasswordAuthenticationToken(user, null, authorities);
+                        SecurityContextHolder.getContext().setAuthentication(authentication);
+                    });
                 });
-            });
+            }
         }
         filterChain.doFilter(request, response);
+    }
+
+    /** Requests a download token is allowed to authenticate: safe methods, outside /api/auth. */
+    private static boolean acceptsUrlToken(HttpServletRequest request) {
+        String method = request.getMethod();
+        return ("GET".equals(method) || "HEAD".equals(method)) && !AUTH_SURFACE.matches(request);
     }
 }

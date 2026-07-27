@@ -7,6 +7,7 @@ import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
 import com.bvisionry.testsupport.EnabledIfDockerAvailable;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,9 +18,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -55,6 +61,7 @@ class SsoRegistrationAdminIntegrationTest extends AbstractPostgresIntegrationTes
     @Autowired private JdbcTemplate jdbc;
     @Autowired private SecretEncryptionService secretCipher;
     @Autowired private SsoRegistrationService ssoRegistrationService;
+    @Autowired private OidcClientRegistrations oidcClientRegistrations;
 
     /** Local instance: this app exposes no ObjectMapper bean, and none is needed to shape a request body. */
     private final ObjectMapper json = new ObjectMapper();
@@ -440,6 +447,187 @@ class SsoRegistrationAdminIntegrationTest extends AbstractPostgresIntegrationTes
                 String.class);
         assertThat(stored).startsWith("v1:");
         assertThat(secretCipher.decrypt(stored)).isEqualTo(maxSecret);
+    }
+
+    // ------------------------------------- editing a registration you cannot re-key
+
+    /** Loopback OIDC issuer, so discovery is a real HTTP call rather than a stub. */
+    private static HttpServer startDiscoveryServer() throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        String issuer = "http://127.0.0.1:" + server.getAddress().getPort();
+        server.createContext("/.well-known/openid-configuration", exchange -> {
+            byte[] body = """
+                    {"issuer":"%s",
+                     "authorization_endpoint":"%s/authorize",
+                     "token_endpoint":"%s/token",
+                     "jwks_uri":"%s/jwks",
+                     "response_types_supported":["code"],
+                     "subject_types_supported":["public"],
+                     "id_token_signing_alg_values_supported":["RS256"]}
+                    """.formatted(issuer, issuer, issuer, issuer).getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(body);
+            }
+        });
+        server.start();
+        return server;
+    }
+
+    private Map<String, Object> oidcBody(String issuer, String displayName) {
+        Map<String, Object> body = new java.util.HashMap<>(Map.of(
+                "registrationId", "orgb-entra",
+                "orgId", orgId.toString(),
+                "protocol", "OIDC",
+                "emailDomain", "orgb.com",
+                "displayName", displayName,
+                "enabled", true,
+                "oidcIssuerUri", issuer,
+                "oidcClientId", "client-abc"));
+        return body;
+    }
+
+    private String storedSecret(String registrationId) {
+        return jdbc.queryForObject(
+                "SELECT oidc_client_secret FROM sso_registrations WHERE registration_id = ?",
+                String.class, registrationId);
+    }
+
+    private org.springframework.test.web.servlet.ResultActions update(String id, Map<String, Object> body)
+            throws Exception {
+        return mockMvc.perform(put(PATH + "/" + id)
+                .with(authentication(superAdmin())).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(body)));
+    }
+
+    /**
+     * THE DEFECT THIS FIXES: an identity provider displays a client secret ONCE, at
+     * issue. Requiring it on every update meant an operator renaming a registration a
+     * year later — who by construction no longer has the value — could not edit the row
+     * at all. Not the display name, not the enabled flag, not the email domain.
+     *
+     * <p>So a blank secret on update means "keep the stored one", and the assertion
+     * that matters is about the BYTES IN THE COLUMN, not about a 200. Re-encrypting a
+     * decrypted copy would also pass a "the secret still works" test while writing a
+     * fresh IV on every unrelated edit; byte equality is what proves the column was not
+     * touched. And the registration is then resolved for real, through discovery, so
+     * "kept" means the customer's IdP would still receive the same secret rather than
+     * merely that a string survived in a column.
+     */
+    @Test
+    void updatingWithoutResupplyingTheSecretKeepsTheStoredCiphertextByteIdenticalAndTheIdpResolvable()
+            throws Exception {
+        HttpServer idp = startDiscoveryServer();
+        try {
+            String issuer = "http://127.0.0.1:" + idp.getAddress().getPort();
+            Map<String, Object> created = oidcBody(issuer, "OrgB");
+            created.put("oidcClientSecret", "super-secret");
+            String id = json.readTree(create(created).andExpect(status().isCreated())
+                            .andExpect(jsonPath("$.oidcClientSecretConfigured").value(true))
+                            .andReturn().getResponse().getContentAsString())
+                    .get("id").asText();
+            String before = storedSecret("orgb-entra");
+
+            // The rename, with no secret in the body at all — and again with an explicit
+            // empty string, which is what an untouched password input actually submits.
+            update(id, oidcBody(issuer, "OrgB Entra ID")).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.displayName").value("OrgB Entra ID"))
+                    .andExpect(jsonPath("$.oidcClientSecretConfigured").value(true))
+                    .andExpect(jsonPath("$.oidcClientSecret").doesNotExist());
+            Map<String, Object> blank = oidcBody(issuer, "OrgB Entra ID (EU)");
+            blank.put("oidcClientSecret", "");
+            String updateBody = update(id, blank).andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsString();
+
+            // Absent as a KEY is not the claim; absent as a SUBSTRING is. A masked or
+            // truncated echo, or the ciphertext itself, would satisfy the jsonPath
+            // assertion above and still be a read path for a credential that has none.
+            assertThat(updateBody).doesNotContain("super-secret").doesNotContain(before);
+            assertThat(mockMvc.perform(get(PATH).with(authentication(superAdmin())))
+                    .andReturn().getResponse().getContentAsString())
+                    .doesNotContain("super-secret").doesNotContain(before);
+
+            assertThat(storedSecret("orgb-entra"))
+                    .as("the column must not have been rewritten at all")
+                    .isEqualTo(before);
+            assertThat(secretCipher.decrypt(storedSecret("orgb-entra"))).isEqualTo("super-secret");
+
+            // And the IdP still resolves, carrying that same secret to the token endpoint.
+            ClientRegistration client = oidcClientRegistrations.findByRegistrationId("orgb-entra");
+            assertThat(client).isNotNull();
+            assertThat(client.getClientSecret()).isEqualTo("super-secret");
+            assertThat(client.getClientName()).isEqualTo("OrgB Entra ID (EU)");
+        } finally {
+            idp.stop(0);
+        }
+    }
+
+    /** "Keep" must not become "cannot rotate": a supplied secret still replaces the stored one. */
+    @Test
+    void supplyingANewSecretOnUpdateStillRotatesIt() throws Exception {
+        Map<String, Object> created = oidcBody("https://login.microsoftonline.test/t/v2.0", "OrgB");
+        created.put("oidcClientSecret", "old-secret");
+        String id = json.readTree(create(created).andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString()).get("id").asText();
+        String before = storedSecret("orgb-entra");
+
+        Map<String, Object> rotated = oidcBody("https://login.microsoftonline.test/t/v2.0", "OrgB");
+        rotated.put("oidcClientSecret", "new-secret");
+        update(id, rotated).andExpect(status().isOk())
+                .andExpect(jsonPath("$.oidcClientSecret").doesNotExist());
+
+        assertThat(storedSecret("orgb-entra")).isNotEqualTo(before).startsWith("v1:");
+        assertThat(secretCipher.decrypt(storedSecret("orgb-entra"))).isEqualTo("new-secret");
+    }
+
+    /**
+     * "Blank keeps the stored one" is only safe while there IS one, and the two cases
+     * where there is not are a CREATE and a SAML row being switched to OIDC. The second
+     * is the one a naive "is this an update?" test gets wrong: it is an update, and it
+     * would store a registration whose token exchange fails at the customer's IdP with
+     * {@code invalid_client} — after the user has already authenticated.
+     */
+    @Test
+    void aBlankSecretIsStillRefusedWhenThereIsNoStoredOneToKeep() throws Exception {
+        Map<String, Object> blankOnCreate = oidcBody("https://login.microsoftonline.test/t/v2.0", "OrgB");
+        blankOnCreate.put("oidcClientSecret", "  ");
+        create(blankOnCreate).andExpect(status().isBadRequest());
+
+        String samlId = json.readTree(create(samlBody("orgb-okta", "orgb.com"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString())
+                .get("id").asText();
+        Map<String, Object> switched = oidcBody("https://login.microsoftonline.test/t/v2.0", "OrgB");
+        switched.put("registrationId", "orgb-okta");
+        update(samlId, switched).andExpect(status().isBadRequest());
+    }
+
+    /**
+     * The same rule for {@code samlMetadata}, which has the identical shape: it is
+     * write-only, so no editor can pre-fill it, and requiring it on every write made a
+     * SAML registration's display name uneditable without re-fetching a multi-kilobyte
+     * EntityDescriptor from the customer's IdP.
+     */
+    @Test
+    void updatingASamlRegistrationWithoutResupplyingItsMetadataKeepsTheStoredMetadata() throws Exception {
+        String id = json.readTree(create(samlBody("orgb-okta", "orgb.com"))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString())
+                .get("id").asText();
+
+        Map<String, Object> renamed = new java.util.HashMap<>(samlBody("orgb-okta", "orgb.com"));
+        renamed.put("displayName", "OrgB Okta (renamed)");
+        renamed.remove("samlMetadata");
+        update(id, renamed).andExpect(status().isOk())
+                .andExpect(jsonPath("$.displayName").value("OrgB Okta (renamed)"))
+                .andExpect(jsonPath("$.samlConfigured").value(true));
+
+        assertThat(jdbc.queryForObject(
+                "SELECT saml_metadata FROM sso_registrations WHERE registration_id = 'orgb-okta'",
+                String.class)).isEqualTo("<EntityDescriptor/>");
+        // Still discoverable: a kept blob is only kept if the login path still routes to it.
+        assertThat(handshakeLocation("founder@orgb.com"))
+                .endsWith("/auth/sso/enterprise/saml2/authenticate/orgb-okta");
     }
 
     @Test

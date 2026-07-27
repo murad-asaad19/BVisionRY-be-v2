@@ -31,10 +31,20 @@ public record SsoRegistrationRequest(
 
         boolean enabled,
 
-        /* SAML: the IdP EntityDescriptor XML. Required when protocol = SAML. */
+        /* SAML: the IdP EntityDescriptor XML. Required when protocol = SAML, EXCEPT
+           that blank on an update keeps the stored metadata — see below. */
         String samlMetadata,
 
-        /* OIDC: all three required when protocol = OIDC. */
+        /* OIDC: issuer and client id are always required when protocol = OIDC.
+
+           samlMetadata and oidcClientSecret are WRITE-ONLY — SsoRegistrationResponse
+           carries neither — so an editor can never pre-fill them, and blank therefore
+           has to mean "keep what is stored" rather than "clear it". The secret is the
+           case that made this mandatory: an identity provider displays a client secret
+           once, at issue, so an operator renaming a registration a year later cannot
+           re-supply it and, before this, could not edit the row at all. Blank is
+           refused when there is nothing stored to keep (a create, or a SAML row being
+           switched to OIDC). */
         @Size(max = 512) String oidcIssuerUri,
         @Size(max = 255) String oidcClientId,
         @Size(max = 512) String oidcClientSecret

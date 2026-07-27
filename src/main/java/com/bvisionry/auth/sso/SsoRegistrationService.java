@@ -183,25 +183,53 @@ public class SsoRegistrationService {
         registration.setEnabled(request.enabled());
 
         if (request.protocol() == SsoRegistration.Protocol.SAML) {
-            if (isBlank(request.samlMetadata())) {
-                throw new BadRequestException("samlMetadata is required for a SAML registration");
+            // Same "blank means keep" rule as the OIDC secret below, for the same reason:
+            // both of these are WRITE-ONLY (SsoRegistrationResponse carries neither), so
+            // an editor cannot pre-fill either one and requiring it on every write means
+            // the display name of a configured registration cannot be changed without
+            // re-fetching a multi-kilobyte EntityDescriptor from the customer's IdP.
+            if (isBlank(request.samlMetadata()) && isBlank(registration.getSamlMetadata())) {
+                throw new BadRequestException("samlMetadata is required for a SAML registration; "
+                        + "leave it blank when updating to keep the stored metadata");
             }
-            registration.setSamlMetadata(request.samlMetadata());
+            if (!isBlank(request.samlMetadata())) {
+                registration.setSamlMetadata(request.samlMetadata());
+            }
             registration.setOidcIssuerUri(null);
             registration.setOidcClientId(null);
             registration.setOidcClientSecret(null);
         } else {
-            if (isBlank(request.oidcIssuerUri()) || isBlank(request.oidcClientId())
-                    || isBlank(request.oidcClientSecret())) {
+            if (isBlank(request.oidcIssuerUri()) || isBlank(request.oidcClientId())) {
                 throw new BadRequestException(
-                        "oidcIssuerUri, oidcClientId and oidcClientSecret are required for an OIDC registration");
+                        "oidcIssuerUri and oidcClientId are required for an OIDC registration");
+            }
+            // A BLANK SECRET MEANS "KEEP THE STORED ONE" — and the test for whether there
+            // is one to keep is the ENTITY's own column, not whether this is an update.
+            // An identity provider shows a client secret once, at issue; the operator
+            // renaming a registration a year later does not have it. Demanding it on
+            // every write made the display name, the enabled flag and the domain
+            // uneditable for exactly the rows that matter most. Reading the entity
+            // rather than `existingId` also gets the two cases an "is this an update"
+            // test gets wrong: a SAML row switched to OIDC is an update with no stored
+            // secret (blank must still be refused), and it stays correct if creation
+            // ever pre-populates an entity.
+            String stored = registration.getOidcClientSecret();
+            if (isBlank(request.oidcClientSecret()) && isBlank(stored)) {
+                throw new BadRequestException("oidcClientSecret is required for an OIDC registration; "
+                        + "leave it blank when updating to keep the stored one");
             }
             registration.setOidcIssuerUri(request.oidcIssuerUri());
             registration.setOidcClientId(request.oidcClientId());
-            // The ONLY place a client secret is written. Ciphertext from here on: the
-            // column, a database dump and every backup hold an AES-256-GCM value under
-            // a key that lives in the deploy environment, not in this database.
-            registration.setOidcClientSecret(secretCipher.encrypt(request.oidcClientSecret()));
+            if (!isBlank(request.oidcClientSecret())) {
+                // The ONLY place a client secret is written. Ciphertext from here on: the
+                // column, a database dump and every backup hold an AES-256-GCM value under
+                // a key that lives in the deploy environment, not in this database.
+                registration.setOidcClientSecret(secretCipher.encrypt(request.oidcClientSecret()));
+            }
+            // ...and otherwise the column is not touched at all, so the stored ciphertext
+            // stays byte-identical. Re-encrypting a decrypted copy would be a needless
+            // round trip through plaintext, and an unversioned pre-V155 row must keep the
+            // shape the startup back-fill expects to find.
             registration.setSamlMetadata(null);
         }
     }

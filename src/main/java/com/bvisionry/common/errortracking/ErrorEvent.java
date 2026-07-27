@@ -49,7 +49,14 @@ public class ErrorEvent extends BaseEntity {
     @Column(name = "request_id", length = 64)
     private String requestId;
 
-    /** Next.js error digest. A different namespace from {@link #requestId}; never a join key. */
+    /**
+     * Next.js error digest — the WITHIN-WEB-TIER join key. Next stamps a server-render
+     * error with the same digest React later hands the client boundary, so ONE
+     * server-render crash writes two WEB rows — the {@code onRequestError} one and the
+     * {@code error.tsx}/{@code global-error.tsx} one — that join only on this column.
+     * A different namespace from {@link #requestId}, which stays the web-to-backend
+     * correlation column; the two namespaces never mix, so never join across them.
+     */
     @Column(length = 64)
     private String digest;
 }

@@ -35,7 +35,13 @@ public record ReportErrorEventRequest(
         @Size(max = 64, message = "Request id must be at most 64 characters")
         String requestId,
 
-        /** Next.js error digest. Never a join key; see the V145 comment. */
+        /**
+         * Next.js error digest — the within-web-tier join key: it pairs this report with
+         * the OTHER WEB row for the same server-render crash (server-origin row from
+         * {@code onRequestError} ↔ browser boundary row from
+         * {@code error.tsx}/{@code global-error.tsx}). Its own namespace, never mixed
+         * with {@code requestId}, which is the web-to-backend correlation column.
+         */
         @Size(max = 64, message = "Digest must be at most 64 characters")
         String digest) {
 }

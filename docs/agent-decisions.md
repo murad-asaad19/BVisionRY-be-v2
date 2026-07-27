@@ -2501,3 +2501,99 @@ feature has no UI at all, and `update` wrongly demands the client secret be re-s
 was appended beneath it). The routing tickets — breadcrumbs, sidebar grouping, URL-addressable
 tabs, orphan route, command palette, notifications page, onboarding, mobile tabs — are HELD for
 wave 11 because every one of them collides with P2-11's URL unification, which takes wave 10 alone.
+
+## WAVE 9 CLOSED — 48 tickets. The combination gate earned its keep.
+
+**Landed:** `tier_model` (be `4cd1897`+`e165f70`, web `68de7af`), `enrolment_override`
+(be `46f2b36`, web `a6d89f0`), `sso_admin_console` (be `aae219f`, web `4deae81`),
+`legal_surfaces` (web `a06289f`+`760c727`). Plus three orchestrator commits: the Gate 5 ratchet
+fix (web `2453b08`), three stale comments (be `ee48de1`), and the recovered browser error
+capture (web `076fdc3`).
+
+**Combination gates, re-run independently:** backend `./mvnw clean test` **1248 tests, 0 failures,
+0 errors, exit 0**; web lint 0 / typecheck 0 / **809 tests, 65 files**; frozen store untouched;
+contract regenerated from the COMBINED backend and diffed against the cherry-picked patchwork —
+identical but for springdoc's `PageableObject` key-order churn, so every lane's DTOs are present.
+**Gate 4 (e2e) is NOT yet run on this combination.**
+
+### DOCTRINE — Gate 1 on the integration checkout must be `clean test`
+The first combination run was RED: **1 failure + 383 errors**, from three lanes each green alone.
+Not code. `target/classes` still held `reporting/service/PremiumFeatureGuard.class` from before
+the run moved that class to `common/security/`, so component scan found TWO beans named
+`premiumFeatureGuard` (`ConflictingBeanDefinitionException`, cascading into 383 context-startup
+errors) and ArchUnit — which reads compiled classes, not sources — reported a cross-feature
+violation for a file that is not in the tree. `clean test` is green. Lane worktrees never see this
+because their `target/` starts empty; only the long-lived integration checkout accumulates ghosts.
+**The danger is symmetric and the other direction is worse: a stale class can fake a PASS.**
+
+### CORRECTION — the rtk exit-code scare was a pipeline, not the wrapper
+Lane 1 reported that `rtk ./mvnw test` masks Maven's exit code, which would have voided every
+Gate 1 claim in this run. It does not: probed directly, `rtk ./mvnw test -Dtest=ZZZNoSuchTestClass`
+returns exit 1, as do `rtk node` and `rtk pnpm`. Real mechanism, which the lane diagnosed itself:
+`cmd | tail -60` exits with **tail's** status. **The orchestrator had the same bug** — an earlier
+`./mvnw -q compile 2>&1 | tail -12; echo $?` reported tail's 0 (re-run without the pipe:
+genuinely 0). Rule: gate commands redirect to a file and check `$?`, or read `${PIPESTATUS[0]}`.
+The lane's substantive point is the better lesson — it found 3 real failures only by reading
+surefire reports rather than trusting filtered output.
+
+### Worker corrections ratified (seven through ten of the run)
+1. **`samlMetadata` had the identical write-only-field defect as `oidcClientSecret`, and worse.**
+   My brief named only the secret. `SsoRegistrationResponse` deliberately exposes neither, so
+   required-on-every-write meant a SAML registration could not be edited AT ALL without re-fetching
+   an EntityDescriptor from the customer's IdP — and SAML is the university/corporate default. Root
+   cause is "a write-only field is required on every write"; fixed once, at that level. Verified.
+2. **The cohort meter must span the billing family, not the org.** My brief never specified the
+   scoping unit. Cohorts live on sub-orgs; the plan is bought by the root. Per-org counting would
+   let a customer reset a 1-per-quarter ceiling by clicking "new sub-organization" — the ceiling
+   would have been decorative. **Now a ruling.**
+3. **A soft-delete would have been protected by accident.** `enrolIfAbsent` is
+   `INSERT ... ON CONFLICT DO NOTHING`, so keeping the enrolment row makes re-enrolment impossible
+   via the unique index — while the engine writes `outcome = ALREADY_ENROLLED`, a row asserting the
+   founder has a course they do not, on the very table that answers "why does this founder have this
+   course". Protection by index accident, lost the day anyone switches to a hard delete. The explicit
+   `enrolment_overrides` table makes it a decision.
+4. **No AI touches workshops or exercises**, so my instruction to extend the terms' AI-accuracy
+   clause over them rested on a false premise; the lane changed nothing and said so. Verified: the
+   LLM client's only consumers are `EvaluationEngine`, `AiUseDetectionService`, `InsightService`,
+   `PipelineSimulationService`. It did find a fourth call site the terms had missed (`InsightService`).
+
+### Orchestrator finding — Gate 5 was enforcing a repealed clause
+`web/scripts/scope-check.mjs` still had the frozen store in `NEVER_TOUCH` after the 2026-07-27
+amendment to `never_add_lines`. Gate 1 prunes that store itself via `FreezingArchRule`, so Gate 5
+vetoed tickets for the prune Gate 1 had just performed — deadlock, escapable only by editing a gate.
+Found by the governance audit, not by any gate. Fixed with normalisation byte-identical to the CI
+guard's, and **verified against every commit that ever touched the store before shipping**: the four
+genuine-growth commits report 14/60/102/97 and every prune/refreeze reports 0, including `7158012`
+where the raw set-difference I previously shipped wrongly reported 47.
+
+### Fix-cycles issued and closed
+- **lane 1** — V156 dropped `PREMIUM` from the CHECK in the same release that removed the enum
+  constant: a contract step inside an expand release, against EXPAND_CONTRACT_ONLY, breaking under a
+  rolling deploy. `V147` had solved exactly this for `MANAGER`; the lane copied it and added what
+  V147's header omits — the deploy window can mint new `PREMIUM` rows AFTER the UPDATE, so the
+  operator-era contraction must re-run the UPDATE before narrowing the CHECK.
+- **lane 4** — its own new copy carried the defect it was hired to fix. "Cannot read the verbatim
+  text of your **assessment** answers" is true, but `WorkshopAdminController`'s member-answers
+  endpoint has no method-level override and inherits ORG_ADMIN, and `ExerciseAssignmentController.
+  REVIEW_ACCESS` lets an in-org admin and an assigned coach read submission contents. A founder does
+  not distinguish assessment from workshop from exercise. Amended to state the exception AS an
+  exception, name the bulk export, and refuse to sell `ExportNameGuard` masking as anonymity.
+
+### Escalated to the operator, untouchable by policy (never_touch: founder-content.ts)
+The pricing FAQ claims **"All data is encrypted and GDPR-compliant"** — a status claim no code can
+establish, now contradicted in tone by a privacy policy that deliberately never claims it, and
+emitted as `FAQPage` structured data Google can surface standalone. The same answer claims reports
+**"within 24-48 hours"**; evaluation is an async fan-out finishing in seconds. Growth also reads
+"Up to 1 **cohorts**/month".
+
+### Follow-ups recorded, not built
+No undo button for an enrolment removal (restoring is a DB edit today). No consent notice on the
+workshop/exercise entry points, where a founder is not told a coach and their org admin will read
+what they write. `MemberService` is effectively closed to new dependencies — its eight-parameter
+constructor is quoted verbatim in eight frozen ArchUnit lines, so a ninth parameter re-describes
+all eight as new violations.
+
+### Held for later, by dependency not preference
+Wave 10 = §10 P2-11 org/sub-org URL unification, ALONE. Wave 11 = breadcrumbs, sidebar grouping,
+command palette, notifications page, empty states, onboarding, URL-addressable tabs, orphan route,
+mobile tabs — all eight collide with P2-11's routing changes.

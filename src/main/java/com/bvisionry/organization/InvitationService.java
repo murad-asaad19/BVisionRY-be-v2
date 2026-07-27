@@ -95,7 +95,7 @@ public class InvitationService {
                     OrgAuditActions.ENTITY_ORGANIZATION, orgId,
                     Map.of("email", normalizedEmail, "invitationId", saved.getId().toString(),
                             "role", request.role().name()));
-            responses.add(InvitationResponse.from(saved));
+            responses.add(InvitationResponse.withToken(saved));
         }
         return responses;
     }
@@ -112,7 +112,9 @@ public class InvitationService {
         if (invitation.getStatus() == Invitation.InvitationStatus.PENDING) {
             invitationAttemptService.recordView(invitation.getId());
         }
-        return InvitationResponse.from(invitation);
+        // The caller proved possession of the token by putting it in the path, so
+        // echoing it back discloses nothing it did not already have.
+        return InvitationResponse.withToken(invitation);
     }
 
     @Transactional
@@ -326,8 +328,10 @@ public class InvitationService {
         for (InvitationAttemptSummary s : attemptRepository.summarize(ids)) {
             byId.put(s.invitationId(), s);
         }
+        // withoutToken, NOT withToken: an administrator listing invitations must not
+        // be handed the redeemable secret of an invitation someone else issued.
         return invitations.stream()
-                .map(inv -> InvitationResponse.from(inv,
+                .map(inv -> InvitationResponse.withoutToken(inv,
                         byId.getOrDefault(inv.getId(), InvitationAttemptSummary.empty(inv.getId()))))
                 .toList();
     }

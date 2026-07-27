@@ -57,7 +57,12 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // user row and are exported for both sides; assigned_by SET NULL —
             // an admin attribution on the org's record, like assignments.assigned_by.
             "coach_assignments.assigned_by", "coach_assignments.coach_id",
-            "coach_assignments.member_id", "cohort_members.user_id",
+            "coach_assignments.member_id",
+            // coach_profiles (V153): coach_id IS the PK and CASCADEs with the
+            // user row — the booking link is about that coach and nobody else,
+            // so it dies with them. Exported as coach_profile: it is content
+            // they authored about themselves.
+            "coach_profiles.coach_id", "cohort_members.user_id",
             "course.instructor_id", "email_templates.updated_by", "enrollment.user_id",
             "exercise_assignments.user_id", "exercise_comments.author_id",
             "exercise_submissions.user_id", "insight_report_member_ids.member_id",

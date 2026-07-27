@@ -138,6 +138,47 @@ public class CoachingReadRepository {
                 .stream().findFirst();
     }
 
+    public record CoachOfMemberRow(UUID id, String name, String bookingUrl) {}
+
+    /**
+     * The reverse of {@link #roster}: every coach who may see {@code memberId},
+     * with the booking link they published. Composes the SAME assignment-union
+     * relation ({@link CoachAccess#VISIBLE_COACH_PREDICATE}) read backwards, so
+     * a founder can never be shown a coach who cannot see them, nor miss one
+     * who can.
+     *
+     * <p>The two predicates the reverse direction has to add itself, because the
+     * shared fragment deliberately says nothing about the coach's own row (see
+     * its javadoc — forwards, the coach is the authenticated caller):
+     * {@code role = 'COACH'} and {@code status = 'ACTIVE'}. Without them a
+     * suspended coach, or one demoted out of the role while a stale grant
+     * survives, would still be offered to the founder as bookable.
+     *
+     * <p><strong>{@code cu.organization_id = :orgId} is load-bearing on its own.</strong>
+     * The shared relation pins the GRANT and the FOUNDER to {@code :orgId}; it
+     * says nothing about the coach's org, because forwards that is the caller's
+     * own. A hand-written grant naming a foreign coach — {@code org_id} and
+     * {@code member_id} in org A, {@code coach_id} in org B — satisfies the
+     * relation entirely, and without this line the founder would be handed
+     * another tenant's coach and their booking link. Covered by
+     * {@code aCrossOrgGrantNeverSurfacesAForeignCoach}.
+     */
+    public List<CoachOfMemberRow> coachesOfMember(UUID orgId, UUID memberId) {
+        return jdbc.query("""
+                SELECT cu.id, cu.name, cp.booking_url
+                FROM users cu
+                LEFT JOIN coach_profiles cp ON cp.coach_id = cu.id
+                WHERE cu.organization_id = :orgId
+                  AND cu.role = 'COACH'
+                  AND cu.status = 'ACTIVE'
+                  AND %s
+                ORDER BY cu.name, cu.id
+                """.formatted(CoachAccess.VISIBLE_COACH_PREDICATE.formatted("cu.id")),
+                new MapSqlParameterSource("orgId", orgId).addValue("memberId", memberId),
+                (rs, i) -> new CoachOfMemberRow(rs.getObject("id", UUID.class),
+                        rs.getString("name"), rs.getString("booking_url")));
+    }
+
     public record PillarScoreRow(String pillarName, BigDecimal scorePercentage,
                                  String maturityLabel, OffsetDateTime evaluatedAt) {}
 

@@ -6,12 +6,16 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.bvisionry.coaching.domain.CoachProfile;
 import com.bvisionry.coaching.dto.CoachFounderDetailResponse;
 import com.bvisionry.coaching.dto.CoachFounderDetailResponse.CoachExerciseSubmission;
 import com.bvisionry.coaching.dto.CoachFounderDetailResponse.CoachModuleProgress;
 import com.bvisionry.coaching.dto.CoachFounderDetailResponse.CoachPillarScore;
 import com.bvisionry.coaching.dto.CoachFounderSummary;
+import com.bvisionry.coaching.dto.CoachProfileResponse;
 import com.bvisionry.coaching.dto.CoachRosterResponse;
+import com.bvisionry.coaching.dto.UpdateCoachProfileRequest;
+import com.bvisionry.coaching.repository.CoachProfileRepository;
 import com.bvisionry.coaching.repository.CoachingReadRepository;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.security.CurrentUser;
@@ -30,7 +34,52 @@ import lombok.RequiredArgsConstructor;
 public class CoachConsoleService {
 
     private final CoachingReadRepository reads;
+    private final CoachProfileRepository profiles;
     private final CurrentUserAccessor currentUser;
+
+    /* ------------------------------------------------------- the coach's own profile */
+
+    /**
+     * The caller's own profile. Absent row = no link published yet, which is a
+     * legitimate state, not a 404.
+     */
+    @Transactional(readOnly = true)
+    public CoachProfileResponse profile() {
+        return profiles.findById(currentUser.require().userId())
+                .map(p -> new CoachProfileResponse(p.getBookingUrl()))
+                .orElseGet(() -> new CoachProfileResponse(null));
+    }
+
+    /**
+     * Publish or withdraw the caller's Cal.com booking link.
+     *
+     * <p>The row's PK is the authenticated principal's id and nothing in the
+     * request can name a different one — there is no path parameter and no id
+     * field — so "a coach may only write their own row" is structural here
+     * rather than checked. The URL itself is already validated by
+     * {@code @CalComBookingUrl} on the request record (https + cal.com /
+     * *.cal.com, dot-boundary), which is the authoritative check; the web form
+     * mirrors it only for inline feedback.
+     *
+     * <p>Blank normalises to null so "cleared" has one representation in the
+     * column and the founder-side card has one emptiness test.
+     */
+    @Transactional
+    public CoachProfileResponse updateProfile(UpdateCoachProfileRequest request) {
+        UUID coachId = currentUser.require().userId();
+        CoachProfile profile = profiles.findById(coachId).orElseGet(() -> {
+            CoachProfile fresh = new CoachProfile();
+            fresh.setCoachId(coachId);
+            return fresh;
+        });
+        String url = request.bookingUrl();
+        profile.setBookingUrl(url == null || url.isBlank() ? null : url.trim());
+        // saveAndFlush, not save: the founder-side read is raw SQL through the
+        // same connection, so a write left sitting in the persistence context
+        // would be invisible to it inside one transaction. Flushing here costs
+        // nothing on a single-row upsert and removes the ordering hazard.
+        return new CoachProfileResponse(profiles.saveAndFlush(profile).getBookingUrl());
+    }
 
     @Transactional(readOnly = true)
     public CoachRosterResponse roster() {

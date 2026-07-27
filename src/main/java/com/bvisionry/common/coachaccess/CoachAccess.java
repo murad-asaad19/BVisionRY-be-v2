@@ -30,12 +30,13 @@ import java.util.UUID;
 public class CoachAccess {
 
     /**
-     * The assignment-union membership predicate, one fragment for every
-     * caller. Binds the named parameters {@code :orgId} and {@code :coachId};
-     * {@code %1$s} is the member-id SQL expression (a column, parameter, or
-     * subquery supplied by the composing query).
+     * The relation itself, with BOTH sides left as SQL expressions: {@code %1$s}
+     * is the member id, {@code %2$s} the coach id. Every predicate below is this
+     * one template with one side pinned — so "which founders may this coach see"
+     * and "which coaches see this founder" are the same rule read in two
+     * directions, and cannot fork.
      */
-    public static final String VISIBLE_MEMBER_PREDICATE = """
+    private static final String RELATION = """
             EXISTS (
                 SELECT 1
                 FROM coach_assignments ca
@@ -44,13 +45,35 @@ public class CoachAccess {
                              AND mu.role = 'MEMBER'
                              AND mu.status = 'ACTIVE'
                 WHERE ca.org_id = :orgId
-                  AND ca.coach_id = :coachId
+                  AND ca.coach_id = %2$s
                   AND (ca.member_id = mu.id
                        OR EXISTS (SELECT 1
                                   FROM cohort_members cm
                                   WHERE cm.cohort_id = ca.cohort_id
                                     AND cm.user_id = mu.id))
             )""";
+
+    /**
+     * The assignment-union membership predicate, one fragment for every
+     * caller. Binds the named parameters {@code :orgId} and {@code :coachId};
+     * {@code %1$s} is the member-id SQL expression (a column, parameter, or
+     * subquery supplied by the composing query).
+     */
+    public static final String VISIBLE_MEMBER_PREDICATE = RELATION.formatted("%1$s", ":coachId");
+
+    /**
+     * The SAME predicate read backwards: which coaches see the member bound to
+     * {@code :memberId}. Binds {@code :orgId} and {@code :memberId};
+     * {@code %1$s} is the COACH-id SQL expression supplied by the composing
+     * query (typically the outer query's {@code users} alias).
+     *
+     * <p>Note what this fragment does NOT assert: that the coach row is an
+     * ACTIVE COACH. The forward direction gets that from authentication — the
+     * coach is the caller. Here the coach is DATA, so a composing query must
+     * add the role/status predicate on its own alias; {@code CoachingReadRepository}
+     * does exactly that.
+     */
+    public static final String VISIBLE_COACH_PREDICATE = RELATION.formatted(":memberId", "%1$s");
 
     /**
      * The COHORT-grain grant predicate: the coach holds a whole-cohort grant on

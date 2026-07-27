@@ -5,14 +5,19 @@ import java.util.UUID;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.bvisionry.coaching.dto.CoachFounderDetailResponse;
+import com.bvisionry.coaching.dto.CoachProfileResponse;
 import com.bvisionry.coaching.dto.CoachRosterResponse;
+import com.bvisionry.coaching.dto.UpdateCoachProfileRequest;
 
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
 /**
@@ -41,5 +46,26 @@ public class CoachConsoleController {
     @GetMapping("/founders/{founderId}")
     public CoachFounderDetailResponse founderDetail(@PathVariable UUID founderId) {
         return service.founderDetail(founderId);
+    }
+
+    /**
+     * The caller's own bookable profile. It lives on THIS controller rather
+     * than on a {@code /users/{id}} shape for one reason: here the coach's
+     * identity is the scope, so there is no id in the path for a coach to swap
+     * for a colleague's, and the COACH route floor + class {@code @PreAuthorize}
+     * already stand in front of it.
+     */
+    @GetMapping("/profile")
+    public CoachProfileResponse profile() {
+        return service.profile();
+    }
+
+    // Named updateBookingProfile, not updateProfile: springdoc derives the
+    // operationId from the method name, and MemberController already owns
+    // "updateProfile" — a collision renames THAT one to updateProfile_1 in the
+    // generated client, which is churn on an unrelated surface.
+    @PatchMapping(path = "/profile", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public CoachProfileResponse updateBookingProfile(@Valid @RequestBody UpdateCoachProfileRequest request) {
+        return service.updateProfile(request);
     }
 }

@@ -24,11 +24,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -44,7 +46,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *       console's gates;</li>
  *   <li>org-admin grant management resolves every referenced row with the org
  *       predicate;</li>
- *   <li>the exercise review loop admits a coach only inside their union.</li>
+ *   <li>the exercise review loop admits a coach only inside their union;</li>
+ *   <li>a coach publishes a Cal.com booking link on their OWN row only, and
+ *       only for a cal.com host;</li>
+ *   <li>the founder's side is the same union read backwards — they see exactly
+ *       the coaches who can see them.</li>
  * </ul>
  */
 @SpringBootTest
@@ -53,6 +59,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Transactional
 @EnabledIfDockerAvailable
 class CoachConsoleIntegrationTest extends AbstractPostgresIntegrationTest {
+
+    /** The founder's side of the relationship — identity is the scope, no id in the path. */
+    private static final String MY_COACHES = "/api/v1/me/coaches";
 
     @Autowired private MockMvc mockMvc;
     @Autowired private UserRepository userRepository;
@@ -249,6 +258,296 @@ class CoachConsoleIntegrationTest extends AbstractPostgresIntegrationTest {
             TestAuthentication.authenticate(coach);
             mockMvc.perform(get("/api/v1/coach/founders/" + founderB.getId()))
                     .andExpect(status().isNotFound());
+        }
+    }
+
+    /* -------------------------------------- booking profile (calendar_integration) */
+
+    /**
+     * The write side of the Cal.com integration. Two rules carry it, and both
+     * are asserted by mutation rather than by inspection: the host allowlist
+     * (only https cal.com / *.cal.com, dot-boundary) and "a coach writes only
+     * their own row" (structural — the PK is the principal, the request names
+     * no id).
+     */
+    @Nested
+    class BookingProfile {
+
+        @Test
+        void coachPublishesAndWithdrawsTheirCalComLink() throws Exception {
+            TestAuthentication.authenticate(coach);
+
+            // Nothing published yet is a legitimate state, not a 404.
+            mockMvc.perform(get("/api/v1/coach/profile"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.bookingUrl", nullValue()));
+
+            mockMvc.perform(patchProfile("https://cal.com/coach-a/intro"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.bookingUrl", is("https://cal.com/coach-a/intro")));
+            mockMvc.perform(get("/api/v1/coach/profile"))
+                    .andExpect(jsonPath("$.bookingUrl", is("https://cal.com/coach-a/intro")));
+
+            // A subdomain is the same provider; the update replaces, never appends.
+            mockMvc.perform(patchProfile("https://app.cal.com/coach-a"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.bookingUrl", is("https://app.cal.com/coach-a")));
+
+            // Blank withdraws it — one representation of "cleared" in the column.
+            mockMvc.perform(patchProfile("   "))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.bookingUrl", nullValue()));
+            assertThat(jdbc.queryForObject(
+                    "SELECT booking_url FROM coach_profiles WHERE coach_id = ?",
+                    String.class, coach.getId())).isNull();
+        }
+
+        /**
+         * The allowlist. Every rejected value here is a way past a
+         * {@code contains}/{@code endsWith("cal.com")} check — swap the
+         * validator's dot-boundary test for either and this case goes red on
+         * {@code https://evilcal.com/...}.
+         */
+        @Test
+        void aNonCalComHostIsRefusedByTheServer() throws Exception {
+            TestAuthentication.authenticate(coach);
+            for (String hostile : new String[]{
+                    "https://evilcal.com/coach-a",              // no dot boundary
+                    "https://cal.com.phish.example/coach-a",    // suffix, not host
+                    "https://cal.com@evil.example/coach-a",     // userinfo trick
+                    "http://cal.com/coach-a",                   // plaintext
+                    "https://calendly.com/coach-a",             // a different provider
+            }) {
+                mockMvc.perform(patchProfile(hostile))
+                        .andExpect(status().isBadRequest());
+            }
+            // Refused means NOT WRITTEN, not merely not echoed.
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM coach_profiles WHERE coach_id = ?",
+                    Integer.class, coach.getId())).isZero();
+        }
+
+        /**
+         * The length cap. {@code booking_url} is {@code text} with no DB
+         * ceiling on purpose, so {@code @Size} is the only thing stopping a
+         * coach from parking an arbitrarily large blob on their row — a real
+         * cal.com host with a megabyte of query string clears the allowlist.
+         */
+        @Test
+        void anOverlongLinkIsRefusedEvenOnTheRightHost() throws Exception {
+            TestAuthentication.authenticate(coach);
+            String tooLong = "https://cal.com/coach-a?q=" + "a".repeat(500);
+            assertThat(tooLong).hasSizeGreaterThan(512);
+
+            mockMvc.perform(patchProfile(tooLong)).andExpect(status().isBadRequest());
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM coach_profiles WHERE coach_id = ?",
+                    Integer.class, coach.getId())).isZero();
+
+            // One character under the cap on the same host is accepted, so the
+            // case proves the LENGTH rule and not the host rule.
+            String justFits = "https://cal.com/coach-a?q=" + "a".repeat(512 - 26);
+            assertThat(justFits).hasSize(512);
+            mockMvc.perform(patchProfile(justFits)).andExpect(status().isOk());
+        }
+
+        /**
+         * Ownership. The endpoint carries no id, so a coach can only ever write
+         * the row keyed by their own principal — point the service at anything
+         * other than {@code currentUser.require().userId()} and this fails.
+         */
+        @Test
+        void aCoachWritesOnlyTheirOwnRow() throws Exception {
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(patchProfile("https://cal.com/coach-a")).andExpect(status().isOk());
+
+            User otherCoach = saveUser("coach.other@test.invalid", UserRole.COACH, orgA);
+            TestAuthentication.authenticate(otherCoach);
+            // The other coach sees their OWN (empty) profile, never coach A's…
+            mockMvc.perform(get("/api/v1/coach/profile"))
+                    .andExpect(jsonPath("$.bookingUrl", nullValue()));
+            mockMvc.perform(patchProfile("https://cal.com/coach-other"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.bookingUrl", is("https://cal.com/coach-other")));
+
+            // …and coach A's row is untouched.
+            assertThat(jdbc.queryForObject(
+                    "SELECT booking_url FROM coach_profiles WHERE coach_id = ?",
+                    String.class, coach.getId())).isEqualTo("https://cal.com/coach-a");
+            assertThat(jdbc.queryForObject(
+                    "SELECT booking_url FROM coach_profiles WHERE coach_id = ?",
+                    String.class, otherCoach.getId())).isEqualTo("https://cal.com/coach-other");
+        }
+
+        @Test
+        void nonCoachRolesCannotPublishABookingLink() throws Exception {
+            TestAuthentication.authenticate(founderInCohort);
+            mockMvc.perform(patchProfile("https://cal.com/impostor"))
+                    .andExpect(status().isForbidden());
+            mockMvc.perform(get("/api/v1/coach/profile")).andExpect(status().isForbidden());
+
+            TestAuthentication.authenticate(saveUser("orgadmin.profile@test.invalid",
+                    UserRole.ORG_ADMIN, orgA));
+            mockMvc.perform(patchProfile("https://cal.com/impostor"))
+                    .andExpect(status().isForbidden());
+        }
+    }
+
+    /* ------------------------------------- the founder's side of the relationship */
+
+    /**
+     * {@code GET /api/v1/me/coaches} — the first surface in the app that tells a
+     * founder who their coach is. It is the coach console's visibility rule read
+     * backwards, so every asymmetry here is a leak: a founder must see exactly
+     * the coaches who can see them.
+     */
+    @Nested
+    class MyCoaches {
+
+        @Test
+        void founderSeesTheCoachWhoCanSeeThem_withTheBookingLink() throws Exception {
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(patchProfile("https://cal.com/coach-a")).andExpect(status().isOk());
+
+            // Visible through the COHORT grant…
+            TestAuthentication.authenticate(founderInCohort);
+            mockMvc.perform(get(MY_COACHES))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(1)))
+                    .andExpect(jsonPath("$[0].name", is("coach.a")))
+                    .andExpect(jsonPath("$[0].bookingUrl", is("https://cal.com/coach-a")))
+                    // Mirror of the roster's rule: no contact data crosses either way.
+                    .andExpect(jsonPath("$[0].email").doesNotExist());
+
+            // …and through the DIRECT grant.
+            TestAuthentication.authenticate(founderDirect);
+            mockMvc.perform(get(MY_COACHES))
+                    .andExpect(jsonPath("$", hasSize(1)))
+                    .andExpect(jsonPath("$[0].name", is("coach.a")));
+        }
+
+        @Test
+        void aCoachWithNoLinkIsListedHonestly_notHidden() throws Exception {
+            // coach.a published nothing. The founder is still told who their
+            // coach is; the card decides what to say about the missing link.
+            TestAuthentication.authenticate(founderInCohort);
+            mockMvc.perform(get(MY_COACHES))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(1)))
+                    .andExpect(jsonPath("$[0].name", is("coach.a")))
+                    .andExpect(jsonPath("$[0].bookingUrl", nullValue()));
+        }
+
+        @Test
+        void severalCoachesAreAllListed_orderedByName() throws Exception {
+            // The cohort+direct union genuinely allows this: a second coach with
+            // a direct grant on the same founder.
+            User second = saveUser("coach.zz@test.invalid", UserRole.COACH, orgA);
+            insertGrant(orgA.getId(), second.getId(), null, founderInCohort.getId());
+
+            TestAuthentication.authenticate(founderInCohort);
+            mockMvc.perform(get(MY_COACHES))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(2)))
+                    .andExpect(jsonPath("$[0].name", is("coach.a")))
+                    .andExpect(jsonPath("$[1].name", is("coach.zz")));
+        }
+
+        @Test
+        void aFounderOutsideEveryUnionSeesNoCoach() throws Exception {
+            TestAuthentication.authenticate(founderUnassigned);
+            mockMvc.perform(get(MY_COACHES))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(0)));
+
+            // Being in an UNGRANTED cohort is not a relationship either.
+            TestAuthentication.authenticate(founderOtherCohort);
+            mockMvc.perform(get(MY_COACHES)).andExpect(jsonPath("$", hasSize(0)));
+        }
+
+        @Test
+        void anotherTenantsCoachNeverAppears() throws Exception {
+            TestAuthentication.authenticate(founderB);
+            mockMvc.perform(get(MY_COACHES))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(1)))
+                    .andExpect(jsonPath("$[0].name", is("coach.b")));
+        }
+
+        /**
+         * The two predicates the reverse direction has to add itself — the
+         * shared fragment says nothing about the COACH's own row, because
+         * forwards the coach is the authenticated caller.
+         */
+        @Test
+        void aSuspendedOrDemotedCoachStopsBeingOfferedAsBookable() throws Exception {
+            jdbc.update("UPDATE users SET status = 'SUSPENDED' WHERE id = ?", coach.getId());
+            TestAuthentication.authenticate(founderInCohort);
+            mockMvc.perform(get(MY_COACHES)).andExpect(jsonPath("$", hasSize(0)));
+
+            jdbc.update("UPDATE users SET status = 'ACTIVE', role = 'MEMBER' WHERE id = ?",
+                    coach.getId());
+            mockMvc.perform(get(MY_COACHES)).andExpect(jsonPath("$", hasSize(0)));
+        }
+
+        /**
+         * An org-less account reaches the SQL with a null {@code :orgId}:
+         * Postgres infers the parameter type from the comparison, the tenant
+         * equality is never true, and the answer is an empty list rather than
+         * a 500. Pinned because it is a real request shape, not because the
+         * controller guards it — it does not.
+         */
+        @Test
+        void anOrgLessAccountGetsAnEmptyListNotAnError() throws Exception {
+            TestAuthentication.authenticate(saveUser("orgless@test.invalid", UserRole.MEMBER, null));
+            mockMvc.perform(get(MY_COACHES))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(0)));
+        }
+
+        /**
+         * The one case the shared relation cannot catch, and the reason
+         * {@code cu.organization_id = :orgId} exists in its own right.
+         *
+         * <p>This grant is internally consistent as far as the relation is
+         * concerned — {@code org_id} and {@code member_id} are org A's, so the
+         * founder, the grant and {@code :orgId} all agree — but the COACH is
+         * org B's. Nothing in the app writes such a row; a bad migration, a
+         * support script or a future admin surface could. Drop the coach's own
+         * org equality and org B's coach, plus their booking link, lands on an
+         * org-A founder's dashboard.
+         */
+        @Test
+        void aCrossOrgGrantNeverSurfacesAForeignCoach() throws Exception {
+            TestAuthentication.authenticate(coachB);
+            mockMvc.perform(patchProfile("https://cal.com/coach-b")).andExpect(status().isOk());
+
+            // org A's grant row, org A's founder — but org B's coach.
+            insertGrant(orgA.getId(), coachB.getId(), null, founderInCohort.getId());
+
+            TestAuthentication.authenticate(founderInCohort);
+            mockMvc.perform(get(MY_COACHES))
+                    .andExpect(status().isOk())
+                    // Only the legitimate org-A coach; coach.b is not reachable
+                    // from this founder however the grant table is written.
+                    .andExpect(jsonPath("$", hasSize(1)))
+                    .andExpect(jsonPath("$[0].name", is("coach.a")));
+        }
+
+        @Test
+        void aCallerWhoIsNotAVisibleMemberSeesNothing() throws Exception {
+            // Not a 403 — the relation is the authority, and an admin simply has
+            // no coach. The suspended founder drops out of the union both ways.
+            TestAuthentication.authenticate(saveUser("orgadmin.coaches@test.invalid",
+                    UserRole.ORG_ADMIN, orgA));
+            mockMvc.perform(get(MY_COACHES))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(0)));
+
+            jdbc.update("UPDATE users SET status = 'SUSPENDED' WHERE id = ?",
+                    founderInCohort.getId());
+            TestAuthentication.authenticate(founderInCohort);
+            mockMvc.perform(get(MY_COACHES)).andExpect(jsonPath("$", hasSize(0)));
         }
     }
 
@@ -529,6 +828,13 @@ class CoachConsoleIntegrationTest extends AbstractPostgresIntegrationTest {
                 VALUES (?, ?, 'SUBMITTED', now())
                 """, assignmentId, userId);
         return assignmentId;
+    }
+
+    /** {@code PATCH /api/v1/coach/profile} with one booking-link value. */
+    private static org.springframework.test.web.servlet.RequestBuilder patchProfile(String url) {
+        return patch("/api/v1/coach/profile")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"bookingUrl\":\"%s\"}".formatted(url));
     }
 
     private String grants(Organization org) {

@@ -131,6 +131,11 @@ class GdprIntegrationTest extends AbstractPostgresIntegrationTest {
         insertAudit(UUID.randomUUID(), me.getId(), "USER_LOGIN", "Organization", organization.getId(),
                 "{\"email\":\"gdpr-me@t.invalid\",\"provider\":\"password\"}");
 
+        // A coach profile (V153). PersonalDataCoverageTest only proves the FK
+        // was DECIDED about; this proves the export actually carries the row.
+        jdbc.update("INSERT INTO coach_profiles (coach_id, booking_url) VALUES (?, ?)",
+                me.getId(), "https://cal.com/gdpr-me");
+
         seedExerciseThread();
         seedOtherOrg();
     }
@@ -162,6 +167,11 @@ class GdprIntegrationTest extends AbstractPostgresIntegrationTest {
                         is("me@respondent.invalid")))
                 .andExpect(jsonPath("$.data.certificates", hasSize(1)))
                 .andExpect(jsonPath("$.data.survey_responses", hasSize(1)))
+                // The coach profile is content the subject authored about
+                // themselves — drop it from EXPORT_SECTIONS and this fails.
+                .andExpect(jsonPath("$.data.coach_profile", hasSize(1)))
+                .andExpect(jsonPath("$.data.coach_profile[0].booking_url",
+                        is("https://cal.com/gdpr-me")))
                 // Sections with nothing in them are still present, so the shape is stable.
                 .andExpect(jsonPath("$.data.quiz_attempts", hasSize(0)));
     }

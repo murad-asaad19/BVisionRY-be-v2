@@ -41,8 +41,20 @@ public class OrgAccessInterceptor implements HandlerInterceptor {
     // Case-insensitive: UUIDs may arrive upper- or mixed-case in the path. A
     // lowercase-only class let an uppercase-UUID request slip past the membership
     // check entirely (the path no longer matched, so preHandle returned true).
-    private static final Pattern ORG_PATH_PATTERN =
-            Pattern.compile("^/api/organizations/([A-Fa-f0-9-]{36})(/.*)?$");
+    //
+    // Canonical 8-4-4-4-12 SHAPE, not a 36-character COUNT. The previous
+    // `[A-Fa-f0-9-]{36}` matched 36 dashes, which then threw IllegalArgumentException
+    // out of UUID.fromString below — GlobalExceptionHandler has no
+    // IllegalArgumentException handler, so a malformed path answered 500 instead of
+    // 400. Not matching hands the segment to Spring's @PathVariable binder, whose
+    // MethodArgumentTypeMismatchException is mapped to 400.
+    //
+    // Deliberately still NARROWER than UUID.fromString, which also accepts short
+    // group forms such as "0-0-0-0-1". Those skip this interceptor and are left to
+    // the endpoint's own @PreAuthorize — OrganizationBrandingIntegrationTest uses
+    // exactly that path to falsify its predicates.
+    private static final Pattern ORG_PATH_PATTERN = Pattern.compile(
+            "^/api/organizations/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(/.*)?$");
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response,

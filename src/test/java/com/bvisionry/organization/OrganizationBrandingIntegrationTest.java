@@ -197,9 +197,8 @@ class OrganizationBrandingIntegrationTest extends AbstractPostgresIntegrationTes
      * THE FALSIFIER FOR THE READ PREDICATE, and it needs a path the interceptor
      * cannot see.
      *
-     * <p>{@code OrgAccessInterceptor} matches
-     * {@code ^/api/organizations/([A-Fa-f0-9-]{36})(/.*)?$} — exactly 36
-     * characters. {@code UUID.fromString} is LENIENT and accepts short group
+     * <p>{@code OrgAccessInterceptor} matches the canonical 8-4-4-4-12 UUID shape.
+     * {@code UUID.fromString} is LENIENT and accepts short group
      * forms, so {@code 0-0-0-0-1} is a valid path variable that resolves to
      * {@code 00000000-0000-0000-0000-000000000001} while never matching that
      * pattern: the interceptor returns "not an org-scoped request" and the
@@ -212,10 +211,9 @@ class OrganizationBrandingIntegrationTest extends AbstractPostgresIntegrationTes
      * mutant dies. Were such an org to exist, the widened annotation would
      * serve its branding to a foreigner.
      *
-     * <p>The interceptor's 36-character regex is a PRE-EXISTING platform-wide
-     * gap, not something this ticket introduced, and it is not tightened here:
-     * that regex guards every org-scoped endpoint in the app and changing it
-     * belongs to a ticket that can re-test all of them. Branding is closed
+     * <p>That the interceptor abstains here is a PRE-EXISTING platform-wide gap and is
+     * still open after the pattern was tightened to the canonical shape: the tightening
+     * closed the OPPOSITE direction (over-match), not this one. Branding is closed
      * regardless, because it carries the predicate — which is the point.
      */
     @Test
@@ -237,6 +235,28 @@ class OrganizationBrandingIntegrationTest extends AbstractPostgresIntegrationTes
                         .content(body("#0a5cff", null)))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.title", is("Forbidden")));
+    }
+
+    /**
+     * THE OTHER DIRECTION, over HTTP, and the status is the whole assertion.
+     *
+     * <p>36 dashes is 36 characters of the old {@code [A-Fa-f0-9-]} class, so the old
+     * {@code OrgAccessInterceptor} pattern MATCHED and {@code UUID.fromString} threw out
+     * of {@code preHandle}. {@code GlobalExceptionHandler} has no
+     * {@code IllegalArgumentException} handler, so a client sending a malformed org id
+     * got a 500 — an unexpected-error body, and an error event recorded — for what is a
+     * bad request. The canonical-shape pattern abstains instead, and the
+     * {@code @PathVariable UUID} binder answers 400 via {@code handleTypeMismatch}.
+     *
+     * <p>Only an end-to-end test can see this: the interceptor unit test can prove
+     * preHandle no longer throws, but 500-vs-400 is decided in the dispatcher.
+     */
+    @Test
+    void aMalformedOrgIdIsABadRequestNotAServerError() throws Exception {
+        TestAuthentication.authenticateAsOrgAdmin(userRepository, own);
+
+        mockMvc.perform(get("/api/organizations/" + "-".repeat(36) + "/branding"))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

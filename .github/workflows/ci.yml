@@ -40,6 +40,84 @@ jobs:
             exit 1
           fi
 
+      # The ArchUnit frozen-violations store is a RATCHET: it may shrink, never grow.
+      # Shrinking is the ratchet working — FreezingArchRule prunes violations a commit
+      # legitimately solved. Growing means a new architecture violation was baselined
+      # instead of designed away, which greens a build that should have been red.
+      #
+      # WHY DESCRIPTOR-NORMALISED, AND NOT THE TWO SIMPLER THINGS WE TRIED FIRST.
+      # This guard went through three implementations; the first two are recorded here
+      # because each looks obviously right until it is measured against real history.
+      #
+      #   1. `git diff | grep '^+'` — RED ON 9 OF 9 commits that ever touched this
+      #      directory. A stored violation embeds the full method descriptor, so adding
+      #      one constructor parameter rewrites every line naming that member.
+      #   2. Raw sorted-set difference — fixes ordering and re-sorting (FreezingArchRule
+      #      rewrites the file sorted when it prunes, so a genuine 4-violation prune can
+      #      read as `8 insertions, 12 deletions`), but is MAXIMALLY SENSITIVE to
+      #      re-description: new text is a new set element. Measured, it reports
+      #      "47 gained" on 7158012 — a commit whose own message is "baseline size
+      #      unchanged (47/47)" and whose every changed line is a constructor being
+      #      re-described. Net line count passed that one; the raw set diff does not.
+      #      Both #1 and #2 also DEADLOCK against the post-build step below: it tells
+      #      you to commit the prune, and then this step rejects the drift the prune
+      #      necessarily carries. There is no escape except editing this file.
+      #
+      # Normalising the descriptor removes the parameter lists and the `in (File:NN)`
+      # suffix, leaving the dependency EDGE — which is the only thing the ratchet is
+      # about. Verified against all nine historical commits: the four that genuinely
+      # grew the baseline report 14/60/102/97, and every prune, refreeze and
+      # signature-churn commit reports 0. It also still catches an addition hidden
+      # behind a larger prune, which a net line count misses.
+      # CRLF is stripped because the store is committed with native line endings while
+      # `git show` yields LF; without that every line differs.
+      - name: Forbid growth of the ArchUnit frozen store
+        run: |
+          if [ -n "${{ github.base_ref }}" ]; then
+            BASE="origin/${{ github.base_ref }}"
+            git fetch --no-tags --quiet origin "${{ github.base_ref }}"
+            RANGE="$(git merge-base "$BASE" HEAD)..HEAD"
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              echo "No base commit to compare (new branch push) — skipping."
+              exit 0
+            fi
+            RANGE="$BEFORE..HEAD"
+          fi
+          STORE=src/test/resources/architecture/frozen-violations/
+          command -v comm >/dev/null || { echo "::error::'comm' not found — this guard cannot run."; exit 1; }
+          # DESCRIPTOR-NORMALISED set comparison. `norm` strips every parenthesised
+          # group, which removes BOTH the method/constructor parameter lists AND the
+          # trailing `in (File.java:NN)`. What survives is owner + member + target:
+          # the actual dependency edge, which is the only thing the ratchet cares about.
+          norm() { tr -d '\r' | sed -E 's/\([^)]*\)//g' | sort -u; }
+          BASE_SHA=${RANGE%%..*}
+          ADDED=0
+          for f in $(git diff --name-only "$RANGE" -- "$STORE"); do
+            # A newly added store file has no base blob — every line then reads as
+            # added, which is correct. `: >` guarantees the file exists either way.
+            git show "$BASE_SHA:$f" 2>/dev/null | norm > /tmp/store_base.txt || : > /tmp/store_base.txt
+            if [ -f "$f" ]; then norm < "$f" > /tmp/store_head.txt; else : > /tmp/store_head.txt; fi
+            N=$(comm -13 /tmp/store_base.txt /tmp/store_head.txt | wc -l)
+            ADDED=$((ADDED + N))
+            if [ "$N" -gt 0 ]; then
+              echo "--- $f gained $N dependency edge(s):"
+              comm -13 /tmp/store_base.txt /tmp/store_head.txt
+            fi
+          done
+          if [ "$ADDED" -gt 0 ]; then
+            echo "::error::The ArchUnit frozen-violations store GAINED $ADDED violation(s) in $RANGE."
+            echo ""
+            echo "This baseline may only shrink. A new violation is a design problem:"
+            echo "  * cross-feature import  -> move the shared type into common/, or invert the edge"
+            echo "  * bare-ID repo load     -> put it behind a require* guard"
+            echo "If you consciously accept it instead, that is an explicit, reviewed re-freeze:"
+            echo "  ./mvnw -Dtest=ArchitectureRulesTest test -Darchunit.freeze.refreeze=true"
+            echo "and it needs a reviewer who agrees with the debt, not a green pipeline."
+            exit 1
+          fi
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -55,6 +133,25 @@ jobs:
       # Docker is available on ubuntu-latest, so Testcontainers (postgres:16-alpine) runs here.
       - name: Build and verify
         run: ./mvnw -B verify
+
+      # `verify` runs ArchitectureRulesTest, and FreezingArchRule WRITES to its store
+      # (allowStoreUpdate=true, deliberately — see src/test/resources/archunit.properties).
+      # So the build can silently rewrite a committed, policy-protected file and nobody
+      # sees it: the runner is thrown away. That silence is the actual defect. Make it
+      # loud — the diff below is the review artefact.
+      - name: Verify the build did not rewrite the ArchUnit frozen store
+        run: |
+          STORE=src/test/resources/architecture/frozen-violations/
+          if ! git diff --exit-code -- "$STORE"; then
+            echo "::error::The test run rewrote the ArchUnit frozen-violations store (diff above)."
+            echo "This is almost always the ratchet WORKING: your change solved violations and"
+            echo "FreezingArchRule pruned them. Nothing is broken — the store just needs to be"
+            echo "reviewed and committed rather than regenerated invisibly on every machine:"
+            echo "  ./mvnw test -Dtest=ArchitectureRulesTest"
+            echo "  git add $STORE && git commit"
+            echo "Then re-push. If the store GREW, read the guard earlier in this workflow first."
+            exit 1
+          fi
 
       # Changed lines must be ~70% covered. This is separate from — and does not
       # touch — the deliberately low global JaCoCo floor in pom.xml. Runs on pull

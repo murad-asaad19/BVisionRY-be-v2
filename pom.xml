@@ -51,6 +51,12 @@
       defaults to true, so Central stays unfiltered and still serves the whole build.
       The allowlist was generated, not guessed, with
       `-Daether.remoteRepositoryFilter.groupId.record=true`.
+
+      TRUST. Containment says WHAT may come from here; it does not say the bytes are the
+      bytes we reviewed. `.mvn/checksums/checksums-shibboleth-releases.sha1` pins every
+      artifact this repository serves, and Resolver refuses any mismatch — including on a
+      warm-cache offline build. Bumping ${opensaml.version} therefore also means
+      re-recording that file; `.mvn/maven.config` carries the command.
     -->
     <repositories>
         <repository>

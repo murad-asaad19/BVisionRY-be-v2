@@ -60,11 +60,36 @@ Then: re-verify §3 before building on it, and pick up at §5.
 | `backend` | `claude/production-roadmap-requirements-xp8zsf` @ `7cf9999` | All 17 landed tickets' lane branches kept as refs; none live | **`agent/integration` @ `e1b6647`** |
 | `web` | `staging` @ `3dba121` | same | **`agent/integration` @ `fc9acd0`** |
 
-**LIVE TIP: backend `c418963` / web `f7b06ef` — 36 tickets. WAVE 5 CLOSED;
-PHASE 3 COMPLETE. WAVE 6 = PHASE 4, DISPATCHED** — the roadmap's final three
-tickets, three disjoint zones, three lanes (intake manifests in §2a below).
-Next action: gate + validate the three lanes as they report.
-Superseded: 35 at (wave 5 in flight:
+**CORRECTION to a claim this report made in bold.** "THE ROADMAP IS COMPLETE"
+is true of the **24-ticket policy backlog** (phases 0–4), which is what governed
+this run. It is NOT true of `roadmap.md`'s own checklist, which carries **21
+items and has NEVER been ticked** — including items that demonstrably landed
+(e2e in CI, error tracking, diff coverage) and items that plainly did not
+(shorten the 24h access-token TTL, complete the CSP nonce pipeline, and
+`Terms/privacy review for AI evaluation of user content`). The checkboxes were
+never maintained, so they are not evidence in either direction — but the
+unqualified claim was mine and it was overstated. Reconciling that checklist is
+open work.
+
+**LIVE TIP: backend `cb6e54c` / web `30c5e48` — 41 tickets. WAVE 7 CLOSED
+(security backlog, operator-chosen). POLICY BACKLOG COMPLETE since wave 6.**
+Wave 7 landed `download_token_scope` (40) + `showname_server_authority` (41).
+Combination re-gated in full by the orchestrator: backend **1175/0/0/0**,
+frozen store clean, web lint 0 / typecheck 0 / **776 tests, 60 files**,
+**Gate 4 warm-up + 155 passed ×2 consecutive**. Six validator lenses, zero
+vetoes, every lens found something real. Nothing pushed — the merge is still
+an operator action, and there are now **eight** open operator decisions (§10,
+plus the three wave-7 escalations in §11).
+
+**Superseded: backend `2afc53b` / web `06e6acc` — 39 tickets. WAVE 6 CLOSED;
+PHASE 4 COMPLETE; THE ROADMAP IS COMPLETE.** All three final tickets
+(`calendar_integration`, `saml_oidc_sso`, `white_label_theming`) landed and
+re-gated as a combination: backend 1158/0/0/0, frozen store empty, web lint 0 /
+typecheck 0 / 772 tests, **Gate 4 155 passed ×2 consecutive**. The governance
+docs are now synced onto `agent/integration` (§8 closed). Nothing has been
+pushed — LOCAL_COMMITS_ONLY holds; the merge is an operator action.
+**Next action: the operator's, not an agent's — six open decisions in §10.**
+Superseded: 36 at `c418963`/`f7b06ef` (wave 6 dispatched). Superseded: 35 at (wave 5 in flight:
 platform_debts LANDED; dashboard_recommendations + auth_redirect_hardening
 implementing). Wave 4 closed at 33:
 combination **Gate 4 143/143 x2 consecutive** on the full tree (V151 verified
@@ -1664,9 +1689,14 @@ that date. Anything new still parks unless the operator delegates it too.**
    between them it is itself the leak. Make it mechanical once
    `scope_manifest_gate` lands: drive validators from a script whose prompt is
    `git diff` + ticket spec + `agent-policy.yml` and nothing else.
-2. **Gate 4 has never passed.** Until `e2e_local_green` is green, every
-   frontend-touching ticket is landing on backend evidence alone, against a
-   frontend with ~2% unit coverage.
+2. ~~**Gate 4 has never passed.**~~ **RESOLVED at `e2e_local_green` (wave 1) and
+   long since routine** — the combination suite now stands at **155 passed ×2
+   consecutive** (§10). Struck rather than deleted because leaving it standing
+   made this file assert something false about its own evidence, which is the
+   exact defect class this run has spent six waves catching in code comments.
+   The residual truth worth keeping: the frontend still lands largely on Gate 4
+   rather than unit coverage — `.tsx` is ~84% of web churn and stays outside the
+   diff-coverage gate until `sweep_fe_test_backfill` adds a component project.
 
 ---
 
@@ -1778,12 +1808,10 @@ raw-request tests are affected.
 
 ---
 
-## 10. RESUME HERE — WAVE 6 (PHASE 4), mid-Gate-4 (2026-07-27)
+## 10. WAVE 6 = PHASE 4 — CLOSED (2026-07-27). THE ROADMAP IS COMPLETE.
 
-**ALL THREE PHASE-4 TICKETS ARE IMPLEMENTED, VALIDATED, FIX-CYCLED AND ON
-`agent/integration`. Only the combination Gate 4 is outstanding.**
-
-**LIVE TIP: backend `6c1d37f` / web `68838a6` — 39 tickets.**
+**LIVE TIP: backend `2afc53b` / web `06e6acc` — 39 tickets.**
+(Backend code tip `6c1d37f`; `2afc53b` on top is the governance-doc sync, §8.)
 Wave stack point was `c418963`/`f7b06ef`. V152 (sso) · V153 (coach_profiles) ·
 V154 (org_branding) all present; lane 1 Flyway at **154** (V152 applied
 out-of-order because calendar landed alone first — `out-of-order=true` is set,
@@ -1791,53 +1819,238 @@ a fresh DB applies them in sequence).
 
 | ticket | lane commits | landed as |
 |---|---|---|
-| `calendar_integration` | be `1c17c9e` / web `90c3fc2` | be `4d82416` / web `7cda3fe` — **Gate 4 DONE (149 pass ×2 consecutive)** |
+| `calendar_integration` | be `1c17c9e` / web `90c3fc2` | be `4d82416` / web `7cda3fe` |
 | `saml_oidc_sso` | be `d5775ab` / web `11b1c05` | be `d1e7a1a` / web `3d6d80f` |
-| `white_label_theming` | be `ba03515` / web `3ccda56` | be `6c1d37f` / web `68838a6` |
+| `white_label_theming` | be `ba03515` / web `3ccda56` | be `6c1d37f` / web `06e6acc` |
 
-**Combination gates already GREEN (orchestrator-run, not worker-claimed):**
+### Combination evidence — every gate orchestrator-run, none worker-claimed
 backend **1158/0/0/0** · frozen ArchUnit store diff vs `c418963` **EMPTY** ·
-web lint 0 / typecheck 0 / **772 tests, 59 files** · every per-ticket Gate 1/2/3/5
-re-run and reproduced.
+web lint 0 / typecheck 0 / **772 tests, 59 files** · every per-ticket Gate
+1/2/3/5 re-run and reproduced · **Gate 4: 155 passed / 1 skipped, TWICE
+CONSECUTIVELY, exit 0 both** (§9 doctrine satisfied — and see the flake below
+for why one green run would have been a lie).
 
-### THE ONE OPEN ITEM
-`web/e2e/white-label.spec.ts:131` — *"an org admin sets a brand colour and the
-signed-in app renders in it"* fails on its FIRST EVER execution:
+### The white-label Gate 4 failure — root cause was Playwright, not the product
+The open item at the last resume was `white-label.spec.ts` failing its
+first-ever execution: *"the palette is in the SSR'd document"*, expected `> 0`,
+received `0`. Reproduction first, as §9 requires: fetched `/app` server-side
+with a live `bv_access` cookie and grepped the raw HTML. **The product was
+correct** — the served document carried
+`<style>[data-brand]{--primary:#b5179e;…}` plus the `.dark` and
+`body:has([data-brand])` rules, and carried nothing at all once branding was
+cleared. So the spec was wrong, and wrong for a reason worth recording:
+
+```js
+// playwright-core 1.60.0, verified verbatim in node_modules:
+function shouldSkipForTextMatching(element) {
+  return element.nodeName === "SCRIPT" || element.nodeName === "NOSCRIPT"
+      || element.nodeName === "STYLE" || (document.head && document.head.contains(element));
+}
 ```
-Error: the palette is in the SSR'd document, not applied by a client effect
-expect(received).toBeGreaterThan(expected)  Expected: > 0   Received: 0
-```
-The file is `mode: "serial"`, so its other 5 tests did not run. Everything else
-passed (149) on that warm-up run.
+`elementText` returns `""` for anything that function skips, so
+`locator("style").filter({ hasText: "[data-brand]" })` matches **nothing, ever,
+whatever the server sent**. It reads as an SSR assertion and is the constant 0.
 
-**NOT YET DIAGNOSED — do not assume which side is wrong.** Both are live:
-(a) the spec's SSR assertion greps the raw HTML for the palette and its match
-pattern/timing may be wrong (the spec has NEVER run — the worker flagged it
-unverified, incl. `[data-slot="sheet-content"]`, a 390px viewport, and
-`getComputedStyle` custom-property spellings); or (b) `BrandScope` genuinely is
-not in the SSR'd output for that org at that moment. Diagnose by fetching the
-page server-side with a valid `bv_access` cookie and grepping for `--primary`
-— exactly as the calendar CSRF defect was root-caused, reproduction first.
+**THE LESSON, and it is the wave's pattern again in a new costume.** There were
+THREE call sites of that idiom. Two asserted `> 0` and failed honestly. One
+asserted `.toBe(0)` — *"no branding means no injected style at all"* — and
+would have been **green for ever while observing nothing**. This wave's named
+pattern was "comments asserting a security property the code did not have";
+this is its test-side twin: **an assertion whose matcher cannot see the thing it
+names.** A green test is not evidence unless the assertion can fail.
+Generalised rule now standing: *when an assertion's subject is invisible to the
+tool doing the asserting, the test is decoration.* Prefer reading the artefact
+(raw HTML, response body) over asking the DOM about things the DOM abstracts.
 
-### Servers/lane currently up (kill or reuse)
-lane 1: backend :8181 (integration worktree), web :3011 (integration worktree,
-`.next` cleared, both corruption probes clean: anon BFF 401, authenticated deep
-dynamic route 200). Lane 1 DB seeded + migrated to 154.
+Fix: one `ssrBrandCss(page)` helper that fetches the served document and greps
+the `<style>` blocks — which is also the *stronger* claim, since a DOM read at
+`domcontentloaded` cannot distinguish server output from a client effect that
+has already run. Falsified both directions live before the suite ran: branded →
+style present; cleared → zero `data-brand` in the document.
 
-### Remaining work to close the wave
-1. Diagnose + fix the white-label e2e failure (worker-owned spec; Gate 4 is mine).
-2. Gate 4: warm-up, then **two consecutive green runs** (§9 doctrine).
-3. Append landing entries for `saml_oidc_sso` + `white_label_theming` to
-   `agent-decisions.md` (calendar's is already written).
-4. **Sync the three governance docs onto `agent/integration`** — §8, the
-   stale-constitution trap. Not yet done; deliberately deferred to wave close.
-5. Update the LIVE TIP in §2 and write the WAVE 6 / PHASE 4 close-out.
+### The second defect — found only because two runs were required
+Run 1 of the pair: 155 green. Run 2: `"a portalled overlay is branded too"`
+failed, `[data-slot="sheet-content"]` not found. Cause: the spec navigated with
+`waitUntil: "domcontentloaded"` and clicked "Open menu" immediately — a click
+on a painted-but-not-yet-hydrated trigger is a silent no-op. **The isolated run
+passed and the first full run passed; only the second caught it.** This is the
+whole justification for the two-consecutive-runs rule, now paid for twice.
+Fixed by reusing the codebase's existing convergence idiom (`nav.spec.ts`'s
+mega-menu, `robustFill`'s late-remount): poll, click only while still closed,
+bounded by `toPass` so a genuinely broken menu still fails. Both selector
+`[data-slot="sheet-content"]` and the 390px viewport — flagged unverified by
+the worker — are now verified by three passing runs.
+
+Both fixes were folded into the `white_label_theming` web commit (one commit per
+ticket per repo holds; nothing has left this machine).
+
+### §8 closed
+The three governance docs are now on `agent/integration` (`2afc53b`), synced as
+content rather than 80 doc-only cherry-picks (integration had never edited
+`docs/` — verified empty diff). Lanes cut after this commit read the current
+constitution: `new_surfaces_use_next_intl: false`, and the three
+`autonomy_prerequisites` that had landed no longer read `false`.
+
+### Roadmap status
+All roadmap tickets are landed. **39 tickets on `agent/integration`, nothing
+pushed** (LOCAL_COMMITS_ONLY — no remote has ever been touched). The wave-6
+zones (auth, coaching, webapp/platform) are released.
+
+### What is genuinely left — and it is all operator work
+1. **Six decisions awaiting the operator** (listed below). None were
+   auto-decided; the 2026-07-26 delegation covers only the four items parked as
+   of that date, and every one of these is new.
+2. **The integration branch has never been merged anywhere.** Landing it is an
+   operator action by construction.
+3. The follow-up backlog accumulated across waves 1–6 (§7), none of which is a
+   roadmap commitment.
 
 ### Operator decisions still open (do NOT auto-decide)
-plaintext per-tenant `oidc_client_secret`; per-org SSO enforcement; sub-org
-members locked out of SSO (strict org equality, fail-closed); per-tier founder
-ceilings sold in prose and enforced nowhere; the Shibboleth repository trust
-surface (now allowlisted to `org.opensaml`+`net.shibboleth` via
-`.mvn/rrf/`, mutation-proven); `OrgAccessInterceptor:44`'s 36-char regex vs
-lenient `UUID.fromString` (audited: NO authenticated handler relies on the
-interceptor alone — defence-in-depth only, own ticket).
+- plaintext per-tenant `oidc_client_secret` at rest
+- per-org SSO **enforcement** (today SSO is available, never mandatory)
+- sub-org members are locked out of SSO (strict org equality, fail-closed) —
+  correct-but-surprising; a customer with sub-orgs will hit it
+- per-tier founder ceilings are sold in prose and enforced nowhere
+- the Shibboleth repository trust surface (now allowlisted to `org.opensaml` +
+  `net.shibboleth` via `.mvn/rrf/`, mutation-proven — but it is still a second
+  binary source)
+- `OrgAccessInterceptor:44`'s 36-char regex vs lenient `UUID.fromString`
+  (audited: NO authenticated handler relies on the interceptor alone —
+  defence-in-depth only, own ticket)
+- **NEW (wave 7, 2026-07-27) — may an org admin ever see a founder's name?**
+  `/dashboard/overview` already returns `memberName` AND `memberEmail`
+  (`MemberScoreRow`) to every in-org admin. Wave 7's `showname_server_authority`
+  enforces *"no unmasked EXPORTS"* and deliberately stops there: whether org
+  admins may see founder identities AT ALL is a promise question
+  (`never_auto_decide` → "anything that changes what a customer is promised"),
+  and the 2026-07-26 delegation does not reach it. If the answer is "no", the
+  export guard is a partial fix and the overview endpoint is the larger defect.
+
+---
+
+## 11. WAVE 7 — the security backlog (dispatched 2026-07-27, operator-chosen)
+
+Roadmap-complete; this wave is recorded-backlog security work, not roadmap scope.
+Both lanes cut from `agent/integration` AFTER the §8 doc sync — the first workers
+this run to read a current constitution.
+
+| Ticket | Zone | Lane | Branch pair | State |
+|---|---|---|---|---|
+| `showname_server_authority` | insights | 2 | `agent/showname-authority-lane2` | **LANDED** be `cb6e54c` / web `30c5e48` |
+| `download_token_scope` | auth | 3 | `agent/download-token-scope-lane3` | **LANDED** be `14b368a` |
+
+### THREE FINDINGS FROM WAVE 7 THAT OUTLIVE IT
+
+**(a) THE FROZEN STORE IS NOT ACTUALLY IMMUTABLE — and now we know why.**
+`archunit.properties` sets `freeze.store.default.allowStoreUpdate=true`. A
+validator running mutations watched `ArchitectureRulesTest` **silently rewrite**
+`src/test/resources/architecture/frozen-violations/7472acec-…` — pruned 20 lines,
+added 8 — and its own mid-run "cross-feature violation" failures turned out to be
+that self-contamination, not signal. That path is `never_write` by policy, so the
+policy is currently enforced by MY DISCIPLINE ("check the store diff after every
+backend run") rather than by the tool. The doctrine was right; the mechanism was
+never understood until now. **Candidate fix: `allowStoreUpdate=false`, which makes
+the ratchet a ratchet.** It is a config change with real consequences (no agent
+could then add a violation even legitimately — which is arguably the point), so it
+is FLAGGED, not made. Escalated.
+
+**(b) MY OWN BRIEFING CONTRADICTED THE CONSTITUTION, all run.** I have told every
+worker that `agent-policy.yml`, `agent-decisions.md` and `agent-run-report.md` are
+orchestrator-exclusive. The constitution says otherwise: `scope.always_in_scope`
+lists `backend/docs/agent-decisions.md` and `backend/docs/agent-run-report.md`
+explicitly, with the comment *"Deliberately NOT here: agent-policy.yml and
+agent-execution-graph.md"* — and `on_ambiguity` REQUIRES a worker to write the
+decision log. My restriction was stricter than the rule and actively prevented
+compliance with it: worker-level decisions reached that file only by passing
+through my summarising, if at all. Found by a validator I had briefed with the
+wrong claim, checking it against the source. **Corrected for any future ticket:
+workers may and should write `agent-decisions.md`; only `agent-policy.yml` and
+`agent-execution-graph.md` are off limits.**
+
+**(c) A VALIDATOR DISAGREEMENT IS A SIGNAL TO RUN AN EXPERIMENT, not to pick a
+side.** Two lenses contradicted each other on whether five URI shapes evade the
+`/api/auth/**` matcher. One had probed `MockHttpServletRequest`; one had read
+Spring's source. Against a real Tomcat, NEITHER was right: four shapes are
+rejected **400 by the container before any filter runs**, and the case variant
+**404s** (routes nowhere) while the canonical path returns 200. The truthful
+conclusion — the exclusion holds as defence in depth, not because the matcher is
+sufficient — was available to neither lens alone.
+
+**Two backlog items were struck at intake, by verification rather than dispatch:**
+- §7.0a item (1), the ArchUnit `@*Mapping` → `@PreAuthorize` rule recorded as
+  "highest leverage, next platform ticket", **already exists and passes**
+  (`ArchitectureRulesTest:199`).
+- §7.0a item (5), `LessonContentController` recorded as "the one bare handler
+  set", **is properly defended** — gated by ENROLLMENT at the data layer, with
+  the reasoning already in the code, and deliberately not org-gated because the
+  course catalog is cross-org by design.
+A third, §7.0a item (2)'s prescription for `showNames`, was **wrong in a way that
+would have shipped a regression** — see the decision-log ruling. Three of the
+audit's five recorded items did not survive contact with the code they described.
+The lesson is cheap and worth keeping: **a backlog entry is a claim about the
+past, and this codebase moves. Re-verify before dispatching, never after.**
+
+`download_token_scope` found MORE than was recorded: the filter misses the
+`user.getStatus()` check that `JwtAuthenticationFilter` has (a SUSPENDED user
+authenticates on an unexpired token), AND the token authenticates ANY method on
+ANY path for its lifetime — one minted for a PDF will authorise a DELETE
+elsewhere.
+
+### New backlog, surfaced by the wave-7 validator panel (NOT fixed — out of manifest)
+
+1. **A read-only credential still buys a permanent tenant account.** Found by the
+   RBAC lens while attacking the "GET/HEAD only" claim.
+   `GET /api/organizations/{orgId}/invitations` returns **raw invitation tokens**
+   in `InvitationResponse`, and `POST /api/invitations/{token}/accept` is
+   `@PreAuthorize("permitAll()")` **and** CSRF-exempt. So any leaked read
+   credential — a download token in a proxy log, a `Referer`, browser history —
+   converts into a permanent account inside the org, via a state change the
+   leaked credential never made itself. **PRE-EXISTING and strictly harder after
+   `download_token_scope`**, but not closed. The same shape applies to
+   `GET /api/organizations/{orgId}/join-link`. Own ticket; the honest fix is
+   probably that a list endpoint should never return the redeemable secret.
+2. **`AuthService.login/refresh` and `SsoLoginService` never check
+   organization-active** (they check `status`). A suspended ORGANISATION's active
+   user can still MINT fresh tokens at login; they are then refused per-request
+   by the filters. Inconsistent rather than exploitable — the filters hold the
+   line — but the mint path and the accept path disagree, which is exactly the
+   asymmetry `download_token_scope` just removed one instance of.
+3. **`GET /api/gdpr/me/export`** remains reachable by a leaked download token
+   (full personal-data export, and it breaks the `/pdf`|`/excel` convention that
+   made a path allowlist untenable).
+4. **H3 is PARTIALLY closed, and the code now says so.** The decision log's
+   recorded remedies were "path-scope the filter, **or** mint with reduced
+   authorities" — `download_token_scope` did NEITHER; it added an orthogonal
+   method restriction. The token still carries its owner's full authorities on
+   every non-`/api/auth` GET.
+5. **IN-ORG FOUNDER ANONYMITY IS NOT DELIVERED, AND CANNOT BE BY AN EXPORT GUARD
+   ALONE — OPERATOR DECISION (the eighth, and the biggest).** Wave 7 landed
+   "no unmasked exports". It did NOT land "founders are anonymous to their org
+   admin", and the gap is not narrow:
+   - `/dashboard/overview` returns `memberName` **and** `memberEmail` as JSON to
+     every in-org ORG_ADMIN;
+   - workshop `/analytics`, `/live`, `/teams`, `/members/{userId}/answers` all
+     return real names unguarded, on the same controllers as the guarded exports;
+   - **the masked export is REVERSIBLE.** `OrgInsight{Excel,Pdf}Service` orders
+     `Member 1..N` by `user.id` deliberately (to keep the mapping stable across
+     the AI prompt and both exports). Sort `/dashboard/overview` by `userId` and
+     the anonymised report re-identifies itself row for row.
+   In-org anonymity appears in NO pricing copy, NO roadmap clause and NO policy
+   decision — the only anonymity rule, `benchmark_anonymity: AGGREGATE_ONLY`, is
+   about cross-org benchmarks. So either (a) it was never promised, and the guard
+   is document hygiene — in which case the code must stop implying otherwise
+   (done), or (b) it was, and this is one door in a room with six windows. That
+   is `never_auto_decide` ("what a customer is promised") and was NOT guessed.
+6. **Follow-ups, non-blocking:** workshop XLSX export has authority coverage but
+   no content assertion (fixture seeds no exercises, so its Answers sheet is
+   headers-only and a `doesNotContain` there would be VACUOUS — the ticket
+   declared this rather than faking it; close by seeding one exercise + answer
+   row). `verifySubmissionOwnership` returns **400** for an authorization refusal
+   and 404 for absence, which is a mild existence oracle — pinned as-is by
+   `anotherMemberCannotReadThisFoundersOwnReport` because changing a status the
+   web app may branch on had no place in a comment-truth ticket.
+
+### Servers/lane currently up (kill or reuse)
+lane 1: backend :8181 (integration worktree), web :3011 (integration worktree).
+Lane 1 DB seeded + migrated to 154. Branding restored to `null` after the
+manual reproduction — the lane is where the suite expects it.

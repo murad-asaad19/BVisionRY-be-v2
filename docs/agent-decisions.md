@@ -1854,3 +1854,437 @@ honest to the founder, silent to the coach (only reachable via a bad migration o
 script, judged speculative to build for); `pnpm coverage:diff` defaults to `--base staging` and
 so measures the whole stack on any stacked agent branch (a `web/package.json` serialising-path
 fix, not a feature ticket's to take).
+
+## saml_oidc_sso · LANDED — an enterprise IdP may speak for one verified domain, and nothing else
+**Record** — be `d5775ab` → integration `d1e7a1a`, web `11b1c05` → `3d6d80f` (integration = 38
+tickets). **V152 consumed.**
+**What shipped:** per-tenant SAML2 and OIDC via Spring Security's own
+`spring-security-saml2-service-provider` / `oauth2-client` (framework implementation, not a
+hand-rolled one — the standing rule), fronted by a SECOND filter chain
+(`SsoSecurityConfig`, `securityMatcher("/api/auth/sso/handshake/**")`,
+`@Order(HIGHEST_PRECEDENCE + 10)`, `IF_REQUIRED` sessions, CSRF disabled *scoped to that
+matcher only*) so the stateless JWT chain is untouched. A registration binds to ONE verified
+email domain; `EmailDomains.matches` compares canonicalised domains with `Optional::equals`
+(lowercase + `IDN.toASCII`) — never `endsWith`, so `evil-acme.com` cannot ride `acme.com`.
+Admin surface is `SUPER_ADMIN`-only at the route floor AND the method.
+**Decisions taken, with grounds:**
+- **Cross-site cookie settings are load-bearing, not hygiene.** The SAML ACS is a cross-site
+  POST from the IdP, so `same-site=None; Secure; HttpOnly` on the session cookie is what makes
+  the handshake work at all. Recorded because it looks like a security *loosening* on review
+  and is the opposite: without it the relay state is dropped and the handshake fails into a
+  retry loop.
+- **Repository trust surface, contained.** OpenSAML is not on Central, so the Shibboleth repo
+  is declared — and my own earlier claim that "Central stays first in the resolution order" was
+  FALSE: verified `help:effective-pom` gives `['shibboleth-releases','central']`. Contained
+  with Maven 3.9.16 remote-repository group filtering (`.mvn/maven.config` +
+  `.mvn/rrf/groupId-shibboleth-releases.txt` = exactly `net.shibboleth`, `org.opensaml`),
+  mutation-proven by the worker: dropping `org.opensaml` makes resolution fail from Central
+  alone. The trust surface still EXISTS and stays on the operator's list.
+- **Strict org equality, fail-closed** — a sub-org member cannot use the parent's SSO. Correct
+  but surprising; escalated, not auto-decided.
+- **`sessionCreationPolicy` is NOT load-bearing** — the worker measured it and refused to write
+  a test implying otherwise (Spring's session repositories call `request.getSession(true)`
+  themselves). Pushback RATIFIED: a passing test that misattributes a mechanism is worse than
+  no test.
+**Worker self-found defects, both real:** `@Component` on the handshake filter auto-registered
+it container-wide at `/*` AND the container copy consumed `OncePerRequestFilter`'s
+already-filtered marker, so the in-chain copy silently did nothing; and per-IP rate limiting
+across the *whole* handshake would cut enterprise NAT users off mid-flow — scoped to `/start`.
+**Validator history:** the punycode comment for `xn--rgb-red.com` was written as
+`xn--rgb-8cd.com` — WRONG, and caught independently by THREE lenses. Fifth instance this wave
+of *a comment asserting a property the code does not have*; see §10 of the run report for the
+test-side twin.
+**Left open for the operator:** plaintext `oidc_client_secret` at rest; per-org SSO
+*enforcement* (today SSO is available, never mandatory); the sub-org lockout above; the
+Shibboleth trust surface.
+
+## white_label_theming · LANDED — an org sets a logo and one colour, its own tenant prefix
+**Record** — be `ba03515` → integration `6c1d37f`, web `3ccda56` → `06e6acc` (integration = 39
+tickets). **V154 consumed.** Web commit amended twice at gate time with two orchestrator-owned
+Gate-4 fixes (below); one commit per ticket per repo holds.
+**What shipped:** logo + brand colour only — policy `decisions.white_label`, and the ticket
+deliberately grew neither a custom domain nor a branded email sender. `BrandScope` is a Server
+Component that emits a `<style>` block into the SSR'd document (never a `useEffect`, which
+would paint stock-then-branded — the exact flash a white-label customer pays not to see), and
+renders `children` and *nothing else* when the org has no branding, so "an unbranded org
+renders exactly as today" is a structural property of the tree rather than a CSS claim.
+Four rules are emitted, including `body:has([data-brand])` so portalled overlays (the mobile
+nav Sheet) are reached too. Logo markers are validated against the org's own key prefix — an
+ORG_ADMIN cannot point their logo at another tenant's objects (pinned, and the upload endpoint
+refuses non-images for org-scoped callers).
+**Decisions taken, with grounds:**
+- **Dark contrast is grounded on `#0b1840`, not `#051647`.** I specified the latter; the worker
+  pushed back that `#0b1840` is the lightest `.dark` surface and therefore the binding
+  constraint for a contrast guarantee. **Pushback RATIFIED** — a contrast ratio computed
+  against a surface the user never sees is a number, not a guarantee.
+- **The cascade is asserted, not assumed.** `globals.css` re-declares `--primary` on `.dark`
+  and the app rail carries that class, so the override is written at
+  `[data-brand] .dark` specificity *deliberately* rather than trusting stylesheet order — and
+  the e2e proves it with `getComputedStyle` on a real engine, which is a claim about the
+  cascade rather than about the string we emitted.
+- **A `MediaController` tenancy hole was found and closed on the way past.**
+  `UPLOAD_AUTHORIZATION`'s first disjunct short-circuited, letting an org-scoped INSTRUCTOR
+  write into another org's prefix; split on `#orgId == null`. Found by two lenses independently.
+**Two Gate-4 defects, BOTH harness not product** (Gate 4 is orchestrator-owned; see run report
+§10 for the full write-up):
+1. `locator("style").filter({ hasText: "[data-brand]" })` can never match — playwright-core's
+   `shouldSkipForTextMatching` skips `<style>` outright, so `elementText` is `""`. THREE call
+   sites; two failed honestly at `> 0`, **one asserted `.toBe(0)` and would have been green for
+   ever while observing nothing.** Replaced with a helper that greps the *served document*,
+   which is also the stronger SSR claim. Reproduction first: the product was verified correct
+   by fetching `/app` with a live cookie before a single line was changed.
+2. A hydration race — clicking "Open menu" after `domcontentloaded` is a silent no-op on a
+   not-yet-hydrated trigger. **Passed in isolation AND in the first full run; caught only by
+   the second.** Fixed with the codebase's existing convergence idiom rather than a new one.
+**Evidence:** backend 1158/0/0/0 · frozen store empty · web lint 0 / typecheck 0 / 772 tests ·
+**Gate 4 155 passed x2 consecutive**.
+
+## WAVE 6 CLOSED · PHASE 4 COMPLETE · THE ROADMAP IS COMPLETE — 39 tickets
+Landed this wave: `calendar_integration` (37) → `saml_oidc_sso` (38) →
+`white_label_theming` (39). Integration: **backend `2afc53b` / web `06e6acc`.**
+Twelve fresh-context validators (four lenses per ticket), zero vetoes survived, every finding
+either fixed or ratified with grounds. Combination re-gated in full by the orchestrator.
+**The governance-doc sync (§8) is done** — lanes cut from `agent/integration` from now on read
+the current constitution instead of the Phase-0 baseline.
+**Nothing has been pushed.** LOCAL_COMMITS_ONLY held for all 39 tickets; no remote has been
+contacted, no PR opened, staging and main untouched. Merging is an operator action.
+**The pattern this wave is named for:** five separate defects were *comments asserting a
+security property the code did not have*, and none broke a test — plus, at the very end, its
+test-side twin: an assertion whose matcher could not see the thing it named. Both are invisible
+to a green suite. The countermeasures that actually worked, twice each, were **quoting the
+binding clause into the validator briefing** (which is what exposed the stale constitution) and
+**requiring two consecutive runs** (the only reason the hydration race was caught).
+
+## showname_server_authority — ADVISORY RULING (2026-07-27, pre-implementation)
+Wave 7, ticket 1. Recorded BEFORE implementation per the amendment-log protocol. Independent
+adviser consulted (fresh context, read-only, given the verified facts and asked to check the
+orchestrator's own reasoning rather than accept it).
+
+**THE DEFECT (orchestrator-verified before dispatch).** `showNames` is a bare
+`@RequestParam(defaultValue=…)` on three org-scoped export surfaces —
+`OrgInsightController` (`/api/organizations/{orgId}/org-insights`), `TeamDashboardController`
+(`/api/organizations/{orgId}/dashboard`) and `WorkshopAdminController` — each carrying the same
+class-level `@PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and
+@orgAccess.isInOrg(#orgId))")`. So any in-org ORG_ADMIN can unmask founder names, while
+`insights-body.tsx:557` states *"Only a Super Admin may unmask member names (showNames
+toggle)."* **A client-only privacy control on a product that sells founder anonymity.** This is
+the sixth instance this run of a comment asserting a security property the code does not have.
+
+**THE PRIOR AUDIT'S PRESCRIPTION WAS WRONG, and this is why advisers are asked to check us.**
+§7.0a recorded "one guard in the display-name resolver fixes all 11 call sites". The orchestrator
+doubted it and asked the adviser to falsify it. Confirmed wrong: there are **four independent
+name-resolution paths** — `MemberDisplayNameResolver` (serving `/api/my` *and* the per-member
+admin exports), `MemberIdentityFactory.identityFor` (team insights), `OrgInsight*Service`'s own
+private `resolveMemberNames` reading `submission.getUser().getName()`, and
+`WorkshopAnswersExportService` reading `m.getName()` directly. The prescribed guard would have
+covered 4 of 11 sites **and broken the member's legitimate self-export**, because that resolver
+serves both an admin surface and `/api/my`, where `showNames=true` is correct. A fix that had
+been implemented as recorded would have shipped a regression while appearing to close a hole.
+
+**RULINGS — binding on the implementation:**
+1. **DENY, not mask.** Non-SUPER_ADMIN + `showNames=true` → `AccessDeniedException` → 403.
+   Grounds: silent downgrade hides two bugs permanently — the client that sent `true`, and any
+   future regression that stops masking (a client that "works" against a silently-downgrading
+   server leaks the day the guard slips). The stale-bookmark objection fails on inspection: that
+   URL never worked as designed, it leaked. No new logging machinery; the existing
+   AccessDeniedException handler already logs the 403.
+2. **One guard bean, called imperatively — the `PremiumFeatureGuard` idiom already in this
+   codebase.** `ExportNameGuard` in `common/security`, one method `checkShowNames(boolean)`.
+   REJECTED: per-handler `@PreAuthorize` conditions (8 handlers, and Spring REPLACES the
+   class-level expression rather than ANDing it — the run's standing footgun). REJECTED:
+   service-layer guards, which provably lack the context to distinguish an admin surface from
+   `/api/my`.
+3. **An ArchUnit rule, unfrozen** (Rules 5/6 shape): every request handler with a boolean
+   `showNames` parameter must either call `ExportNameGuard.checkShowNames` or carry a
+   `@NamesVisibleToSelf("reason")` marker. **Stated ceilings, in the javadoc, per the Rule 5
+   precedent:** it cannot catch a param renamed `revealNames`, `showNames` nested inside a
+   request DTO, or a service that resolves names unconditionally. Falsification test required
+   (`RequestHandlerAuthorizationRuleTest` precedent).
+4. **`MemberResultsController` and `CertificateController` are OUT of the guard, IN the marker** —
+   both pin the row to the caller (`verifySubmissionOwnership`; `findForUserAndCourse(callerId,…)`),
+   so the name revealed is the caller's own.
+5. **Evidence standard:** content assertions on the extracted PDF/XLSX text, never mock-verifies —
+   four resolution paths means four independent chances to lie, so one seeded name per export
+   family. Each test names the mutation that reddens it.
+
+**TWO CONSEQUENCES THE IMPLEMENTATION MUST HANDLE:**
+- `TeamDashboardController`'s per-member exports default `showNames="true"`; that flips to
+  `"false"`. `reports-body.tsx` and `analytics-panel.tsx` rely on the export dialog's
+  `allowShowNames` default of `true`, so org admins are currently *offered* the toggle and would
+  start receiving 403s — they must pass `allowShowNames={isSuperAdmin}`. Deny-not-mask is only
+  safe because the web change ships with it.
+
+**ESCALATED TO THE OPERATOR — NOT AUTO-DECIDED (`never_auto_decide`: "anything that changes what
+a customer is promised"):** `/dashboard/overview` already returns `memberName` **and**
+`memberEmail` (`MemberScoreRow`) to every in-org admin. This ticket enforces *"no unmasked
+exports"*; it does not and cannot decide *"may an org admin ever see a founder's name?"*. If the
+product promise is the latter, the export guard is a partial fix and the overview is a second,
+larger defect. The adviser's instruction was "escalate, don't guess", and that is what this is.
+The delegation of 2026-07-26 covers only the four items parked as of that date and does not
+reach this.
+
+## download_token_scope · LANDED — a download token authenticates read-only requests by an active principal only
+**Record** — be `61c91de` → integration `14b368a` (40 tickets). Web zero-diff. No migration.
+**What shipped:** the `user.getStatus()` check the filter never had — fixed by REMOVING THE
+DIVERGENCE rather than copying the line: one shared `AuthenticationEligibility.mayAuthenticate`
+that both `JwtAuthenticationFilter` and `DownloadTokenAuthenticationFilter` call, so a third
+filter cannot drift tomorrow (mutation-proven: one edit reddens BOTH filters' tests). Plus
+GET/HEAD only — a replayable URL credential now drives no state change — and an `/api/auth/**`
+exclusion, which the worker added unprompted for a good reason: the mint endpoint is ITSELF a
+GET, so without it a leaked token renews itself indefinitely and the 60s TTL means nothing.
+The method/path check runs BEFORE `getParameter`, so a form-encoded body is no longer consumed
+hunting for a token (a pre-existing latent bug).
+**A path allowlist was OFFERED and correctly DECLINED.** Binary responses come from 8
+controllers across 6 feature packages with no shared prefix, and `/api/gdpr/me/export` breaks
+the near-convention, so an allowlist would fail closed on a real surface. Decisive evidence,
+which I verified myself: **no client mints a download token at all** — the only web hit is the
+generated schema; every export goes through the BFF with cookies. The mechanism is dormant
+attack surface.
+**FIX CYCLE — three lenses, and the run's signature defect INVERTED.** The worker deleted a
+TRUE risk marker (`"FULL-AUTHORITY, path-unscoped … (audit finding H3, tracked separately)"`)
+and replaced it with text naming only the new protections. Both properties are still true, and
+`agent-decisions.md:647` records H3's remedies as "path-scope the filter, OR mint with reduced
+authorities" — this closes NEITHER. Found independently by the policy AND rbac lenses. So: not
+a comment overstating protection but one UNDERSTATING residual risk, which fails the same way —
+the next reader believes the work is finished. Restored, with "PARTIALLY closed" stated at the
+mint site.
+**A VACUOUS TEST, and the fix for it was vacuous too.** `accessTokenPresentedAsDownloadToken_isRejected`
+stayed GREEN with the entire `typ` guard disabled: it never stubbed the repository, so the
+authenticating branch was unreachable whatever the filter did. The validator's prescribed
+one-line fix (add a strict stub) FAILS — with the guard working the filter never reaches the
+repository, so Mockito errors the stub as unnecessary. And my own first comment on the fix
+claimed "Mockito strictness now enforces reachability", which is false: strictness cannot police
+reachability on a negative test, only the mutation can. Corrected to `lenient()` with the reason
+stated, then proven — the same mutation that left it green now reddens it at line 136.
+**A VALIDATOR DISAGREEMENT, SETTLED BY EXPERIMENT.** The test-integrity lens probed 14 URI
+shapes and found five that evade the `/api/auth/**` matcher; the rbac lens reasoned from Spring
+source that they fail closed. Neither was quite right, and I resolved it against a REAL TOMCAT
+rather than by preferring a validator: `/api//auth/…`, `/api/./auth/…`, `/api/foo/../auth/…`
+and `%2F` are rejected **400 by the container before any filter**; `/API/AUTH/download-token`
+returns **404 authenticated** (routes nowhere) while the canonical path returns **200**. So the
+exclusion holds end-to-end — as DEFENCE IN DEPTH, not because the matcher is sufficient. The
+javadoc now says exactly that, including what would break it (a normalising proxy, a
+case-insensitive matcher).
+**Evidence:** Gate 1 **1163/0/0/0** re-run by the orchestrator on the FINAL tree · frozen store
+untouched after MY run (the auto-prune happens during the run, so only my run counts) ·
+diff coverage **22/22 = 100%** · Gate 5 PASS with the widening declared · web zero-diff.
+
+## showname_server_authority · LANDED — only a super admin may export unmasked founder names
+**Record** — be `437bf95` → integration `cb6e54c`, web `72fd7c2` → `30c5e48` (41 tickets).
+No migration.
+**What shipped:** `ExportNameGuard.checkShowNames` as the first line of all **8** org-scoped
+export handlers (403 unless SUPER_ADMIN, never a silent mask), `@NamesVisibleToSelf` on the 3
+self-scoped ones, the per-member export default flipped `true`→`false`, an **unfrozen ArchUnit
+Rule 7** forcing one or the other onto any future handler taking the flag (with its ceilings
+stated in-code), and the web dialog's `allowShowNames` default flipped closed.
+**BOTH DEVIATIONS FROM MY RULED ENVELOPE WERE THE WORKER CORRECTING ME, and I verified both:**
+(1) The guard is `static`, not the ruled bean — `TeamDashboardController.<init>` is pinned WITH
+ITS FULL SIGNATURE in the frozen store, so a tenth constructor parameter rewrites a `never_write`
+file. Second time this wave the frozen ratchet dictated a design. (2) My prop-drill instruction
+for `analytics-panel.tsx` rested on a FALSE premise — its only route is `requireSuperAdmin`, so
+threading `isSuperAdmin` would have drilled a constant `true` through three components. Flipping
+the shared default closed fixes the CLASS instead of two instances, and is strictly more
+restrictive.
+**THE FINDING THAT MATTERS MOST IS NOT THE CODE — IT IS WHAT THE CODE CLAIMED.** The rbac lens
+proved the guard COMPLETE (all 11 call sites, no bypass, exemptions sound) and then proved it
+does not deliver what the diff said it delivered:
+- the same in-org ORG_ADMIN who gets 403 on `/answers/pdf?showNames=true` reassembles
+  byte-equivalent content from `/analytics` (userId+userName) + `/members/{userId}/answers`,
+  unguarded siblings on the SAME controller under the SAME class-level `@PreAuthorize`;
+- **the masked export de-anonymises itself** — I verified this in source:
+  `resolveMemberNames` orders `Member 1..N` by `user.getId()` DELIBERATELY (the comment says so,
+  to keep the mapping stable across the AI prompt and both exports), and `/dashboard/overview`
+  hands the same admin `memberName` + `userId` for every member. Sort one against the other.
+So this ships **document hygiene, not an anonymity boundary.** Three comments claimed the
+boundary — including one in the shared-kernel guard asserting founder anonymity is "a product
+promise", which appears in NO pricing copy, NO roadmap clause and NO policy decision (the only
+anonymity rule, `benchmark_anonymity: AGGREGATE_ONLY`, is about CROSS-org benchmarks). Inventing
+a promise in the class future tickets will cite is the cheapest way to have one auto-decided into
+existence. All three now state the limits.
+**THE `@NamesVisibleToSelf` EXEMPTION RESTED ON AN UNVERIFIED CLAIM.** Its reason string cites
+`verifySubmissionOwnership`; ArchUnit reads `carries()` and never `value()`; the test-integrity
+lens measured that DELETING that ownership check left the ENTIRE suite green. The exemption I
+ruled was sound only if the check held, and nothing checked it. Pinned with
+`anotherMemberCannotReadThisFoundersOwnReport`, mutation-proven (deletion now yields 200 against
+an expected 400). **That test also corrected me mid-write:** I asserted 403; the real refusal is
+`BadRequestException` → **400**. I pinned the TRUE value — changing a status the web app may
+branch on has no place in a comment-truth ticket — and recorded that 400-vs-404 distinguishes
+"exists but not yours" from "does not exist", a mild existence oracle.
+**Evidence:** Gate 1 **1175/0/0/0** orchestrator-re-run on the final tree (incl. the
+content-assertion IT at `Tests run: 10, Skipped: 0` — it did NOT silently skip, which the policy
+lens specifically asked me to confirm) · frozen store untouched · coverage **21/21 = 100%** ·
+web lint 0 / typecheck 0 / **776 tests, 60 files** · 34 mutations run by the test-integrity lens,
+**31 killed**, all four name-resolution paths separately CONTENT-proven (real `PdfTextExtractor`
+output and XSSF cells, not mock-verifies).
+**LIVE VERIFICATION THE VALIDATORS COULD NOT DO** (every one of them ran MockMvc with
+`addFilters = false` and said so): against the running lane-1 server through the real filter
+chain — ORG_ADMIN `showNames=true` → **403**, `showNames=false` → **200**, SUPER_ADMIN
+`showNames=true` → **200**.
+**Declared evidence gap, left open:** the workshop XLSX export has authority coverage only. Its
+"Answers" sheet writes names solely inside `for (RecapRow row : member.recap())`, and the fixture
+seeds a workshop with no exercises — so the sheet has headers and zero rows and a
+`.doesNotContain(FOUNDER)` there would have been VACUOUS. The ticket did not write that vacuous
+assertion; it wrote `// covered for authority only` and said why. Cheap close: seed one exercise
++ one answer row.
+
+## WAVE 7 CLOSED — 41 tickets, the security backlog
+Landed: `download_token_scope` (40) → `showname_server_authority` (41).
+Integration: **backend `cb6e54c` / web `30c5e48`.**
+**Combination Gate 4: warm-up green, then 155 passed x2 CONSECUTIVE, exit 0 on all three runs**
+(§9 doctrine: restart → clear `.next` → probe → warm → only then judge; both corruption probes
+clean, anon BFF 401 and authenticated deep dynamic route 200).
+Six validator lenses across two tickets. Zero vetoes. Every lens found something real.
+
+**THREE OF THE AUDIT'S FIVE BACKLOG ITEMS DID NOT SURVIVE RE-VERIFICATION AT INTAKE** — the
+ArchUnit rule already existed and passed; `LessonContentController` was already enrollment-gated
+with the reasoning in-code; and the `showNames` prescription would have shipped a regression.
+**A backlog entry is a claim about the past, and this codebase moves. Re-verify before
+dispatching, never after.** That single discipline saved two wasted tickets and one broken one.
+
+**THE WAVE'S PATTERN, now at EIGHT instances and mutating.** It began as "a comment asserting a
+security property the code does not have". This wave it appeared as: a comment UNDERSTATING
+residual risk (H3); a comment inventing a product promise that was never made; an annotation
+whose stated justification nothing verified; and — twice — MY OWN prose doing it, once claiming
+Mockito strictness enforced reachability and once relaying a ruling premised on a route guard I
+had not checked. The countermeasures that actually worked, every time: **quoting binding clauses
+INTO validator briefings**, **requiring two consecutive runs**, **demanding the mutation be RUN
+and its red output quoted**, and **resolving validator disagreements by experiment rather than
+by preferring a validator**.
+
+## OPERATOR RULINGS — all eight open decisions closed (2026-07-27)
+Put to the operator with recommendations, after a research pass that FALSIFIED several of the
+premises the recommendations rested on. Two of the operator's first four answers were REVERSED
+on the evidence and re-put. Recording the corrections as prominently as the rulings, because the
+corrections are the reusable part.
+
+### WHAT THE RESEARCH OVERTURNED — read this before trusting any recommendation in this file
+1. **My "founder ceiling" framing was the wrong unit.** Pricing meters TWO things and the primary
+   is a COHORT RATE (Starter 1/quarter · Growth 1/month · Success unlimited); the founder numbers
+   (20/40/unlimited) are a PER-COHORT SIZE cap. `founder-content.ts:1123` states it. Counting
+   founders-per-org would enforce a number the copy never promises.
+2. **Those numbers are not under `pricing/**` at all** — they live in `founder-content.ts:998-1035`.
+   Both are `never_touch`, so access is unchanged, but a ticket aimed at `pricing/**` would have
+   found nothing to edit.
+3. **"Enforced nowhere" was 95% right.** `AssignmentService:119-126` refuses an ORG_ADMIN who
+   assigns a pipeline the platform has not provisioned. Binary, manually granted by a SUPER_ADMIN
+   — currently the ONLY thing between a Starter customer and unlimited assessment volume.
+4. **`SubscriptionTier` is `FREE|PREMIUM` only.** `STARTER|GROWTH|FOUNDER_SUCCESS` appear ZERO
+   times in backend main. A FREE/PREMIUM org cannot be resolved to "20 founders" — so the
+   soft-enforce ticket the operator first approved was unbuildable as specified.
+5. **My `allowStoreUpdate=false` suggestion was WRONG and would have made things worse.** New
+   violations already fail (via `filterOutKnownViolations`) — the flag is NOT the ratchet. Its
+   only effect is to hard-fail when a developer IMPROVES the architecture, and it breaks the
+   documented `refreeze` escape. Measured: 8 of the last 150 commits touched the store, ALL 8
+   contained deletions, EVERY ONE would have been blocked.
+6. **"THE ROADMAP IS COMPLETE" (my own claim, in bold, in this run's report) was overstated.**
+   True of the 24-ticket policy backlog; `roadmap.md` carries a separate 21-item checklist that
+   was NEVER maintained (0 ticked, including items that demonstrably landed). Corrected in §2.
+
+### 1. FOUNDER VISIBILITY — org admins keep names + scores + AI narrative. Guard stays.
+REVISITED after the red team found the codebase ships a NARROWER tier: a coach — assigned to that
+specific founder, named in the founder's own UI — gets pillar scores and progress but NEVER the AI
+narrative (`agent-policy.yml:180 coach_sees`, `CoachFounderDetailResponse:14-17`). So an ORG_ADMIN,
+who sits outside that relationship and is scoped to everyone, holds strictly more than the coach.
+**Operator UPHELD the unqualified form**, on the grounds that the accelerator BOUGHT the readiness
+assessment and the narrative is the product's value; the coach limit is a decision about coaches,
+not a general sensitivity ranking. The asymmetry is now DELIBERATE and recorded rather than silent.
+`ExportNameGuard` stays as document hygiene — narrower than anonymity, and its javadoc says so.
+**Consequence accepted:** the guard blocks a paid workflow while the same data leaves as JSON via
+`/dashboard/overview`. Tolerated, not resolved.
+
+### 2. TIER CEILINGS — model Starter/Growth FIRST, then enforce the COHORT RATE. (REVERSED)
+The operator's first answer (soft-enforce founder counts) was reversed once research showed it was
+unbuildable: the tiers do not exist in the domain. The ticket is now: new tier enum + Flyway
+migration + **an operator backfill ruling on which existing PREMIUM orgs are Starter vs Growth**
+(a billing decision, `never_auto_decide`), and only then enforcement against the cohort RATE —
+1/quarter vs 1/month is a 4× throughput difference for 2× price, which is where the revenue
+actually leaks. **BLOCKED on the backfill ruling; not dispatched.**
+
+### 3. OIDC CLIENT SECRETS — encrypt at rest with the app-held key. UPHELD, two caveats.
+The "theatre + new key management" attack FAILED on the facts: `ApiKeyEncryptionService:16-27`
+already ships AES-256-GCM with a random 12-byte IV and an env-held key, and AI provider keys are
+already encrypted this way. This is reuse, not construction. Honest threat table: mitigates stolen
+backup, read-only analytics grant, insider-with-DB-access, accidental DB-shaped disclosure; does
+NOT mitigate full host compromise or a compromised Railway account. Three of six is the normal
+return on envelope encryption — not theatre.
+**CAVEAT A (binding):** `application-prod.properties:46-50` already documents that rotating
+`BVISIONRY_ENCRYPTION_KEY` makes stored AI keys undecryptable *permanently*. Adding OIDC secrets
+widens that from "AI features degrade" to "every enterprise SSO login breaks" — an auth-layer
+outage on the tier that pays most. **Store a key-version prefix with the ciphertext now** so a
+future rotation is a backfill rather than data loss.
+**CAVEAT B:** the cipher lives in the `aiconfig` FEATURE package. Move it to `common/crypto/`
+first — a cross-feature edge here may not fail loudly, given finding 5 above.
+
+### 4. INVITATION TOKENS — stop returning the raw token from the list endpoint. UPHELD.
+The red team hunted every consumer: **no shipped UI breaks.** `pending-invitations.tsx:76-78` reads
+`email, role, createdAt, viewCount, lastViewedAt, attemptCount, failedAttemptCount, id` and never
+`.token`. No copy-link, no resend, no QR.
+**The decision is BETTER than the argument I made for it.** `POST /api/invitations/{token}/accept`
+is `permitAll()` and mints a session with a caller-chosen password. So an ORG_ADMIN reading a
+listed token can COMPLETE AN ACCOUNT CREATED BY SOMEONE ELSE'S INVITATION — including a
+SUPER_ADMIN's invite of a new ORG_ADMIN into that org — and hold its credentials. That is a real,
+narrow privilege escalation, not merely a leak amplifier.
+**THREE COMPANION CHANGES ARE MANDATORY, and one is a trap:**
+ (a) `e2e/auth.setup.ts:99-109` mints the COACH identity by reading the token from exactly this
+     endpoint. Break it and every coach spec fails looking like an auth bug. Mint from the POST
+     `/invite` response instead — `benchmarking.spec.ts:99` already does this and documents it as
+     the better pattern.
+ (b) `contract-check.ts:447` pins `SameKeys<Invitation, InvitationResponse>`; `admin-types.ts:111`
+     must drop `token` in the same change, plus `OpenApiExportTest` → `pnpm gen:api`.
+ (c) **ONE DTO, THREE ENDPOINTS.** `InvitationResponse` also serves `POST /members/invite` and the
+     public `GET /api/invitations/{token}`; `benchmarking.spec.ts:99` and `roi-report.spec.ts:99`
+     read the token from the POST response. Null per-endpoint or split the DTO — do not delete the
+     field.
+**DO NOT GENERALISE TO `join-link`.** Same shape, OPPOSITE requirement: `join-link-card.tsx:313-316`,
+`teams-panel.tsx:552` and the public-assessment QR/share surfaces BUILD the shareable URL from the
+listed token. Those tokens have no email channel — the link IS the feature. Stripping them breaks
+Copy, Regenerate and QR outright.
+
+### 5. PER-ORG SSO ENFORCEMENT — do not build it now.
+`V152__sso_registrations.sql:27-30` already ruled, deliberately: *"NO enforcement flag,
+deliberately… turning either off for a tenant is an operator decision, not an agent's."* And it is
+not a flag — sessions are minted at EIGHT call sites across four packages (password login,
+self-signup, password RESET, Google OAuth, invitation-accept ×2, join-link ×2). A half-done version
+is worse than none: it produces a security claim that cannot be honoured.
+**Break-glass verified working today:** SUPER_ADMIN can never be minted by a customer IdP
+(`SsoLoginService:106`), only SUPER_ADMIN may edit a registration
+(`SsoRegistrationAdminController:33-34` + route floor), and changes take effect with no restart
+(SAML metadata re-parsed per hop; OIDC cache keyed on `updatedAt`). Cert expiry → phone Bvisionry →
+`enabled=false` → password login resumes in seconds. Residual: the tenant's own ORG_ADMIN cannot
+self-rescue, and no on-call rotation is encoded anywhere.
+**When a contract forces it, build the MEMBER-only variant** so tenants keep self-rescue. Never the
+one-call-site version.
+
+### 6. SUB-ORG SSO LOCKOUT — fix it with a one-level parent walk. (DISPATCHING)
+`SsoLoginService:118` refuses on strict org equality. `OrgHierarchyPort` already lives in the shared
+kernel and is already imported by `OrgAccessGuard` in the same package — so the fix creates NO new
+ArchUnit edge, needs no migration and no frozen-store churn. ~4 lines + a test.
+**Escalation trace is CLEAN:** claims are built from the user entity, which `SsoLoginService:54-55`
+never mutates — a sub-org member keeps their own org and role.
+**The code comment's own suggested workaround is UNAVAILABLE in the case that hurts:**
+`uq_sso_registrations_email_domain` is globally unique, so when sub-orgs share the parent's domain
+you cannot register both. Those customers have no path at all today.
+Residual, pre-existing and NOT introduced by this fix: JIT provisioning writes the REGISTRATION's
+org, so a brand-new user lands in the parent. Backlog.
+
+### 7. FROZEN STORE — CI diff guard, and AMEND THE POLICY CLAUSE. (DISPATCHING)
+Not `allowStoreUpdate=false` — see correction 5. Instead: ~10 lines in `ci.yml` modelled on the
+existing *"Forbid edits to committed Flyway migrations"* step — fail if the CI run itself mutated
+the store, and fail on ADDED lines base..HEAD. Makes every write loud and reviewable, which is the
+actual defect, without touching how the ratchet behaves.
+**AND amend `agent-policy.yml` `never_write: frozen-violations/**` → `never_add_lines`**, because
+as written the constraint is UNSATISFIABLE: Gate 1 is `./mvnw test`, and running the mandatory gate
+can itself write the store. A rule that the mandatory gate can violate is not a rule.
+
+### 8. TWO SMALL ITEMS — fix both now. (DISPATCHING)
+**`OrgAccessInterceptor` is NOT a vulnerability** — independently re-verified two ways (145
+operations from the generated OpenAPI; 22 controllers from source). Every route pins the org or is
+stricter, and unfrozen ArchUnit Rule 6 keeps it structural. Fix the regex anyway (one line, nil
+blast radius — the interceptor only ever denies): today an over-match throws inside `preHandle` and
+yields 500 where 400 belongs, and Rule 6 can only prove a `@PreAuthorize` EXISTS, not that it pins
+the org. The interceptor is the net for exactly that future mistake.
+**Shibboleth:** well contained — the groupId allowlist was GENERATED with
+`-Daether.remoteRepositoryFilter.groupId.record=true`, not hand-guessed, and Central stays
+unfiltered. Operator chose to add dependency checksum verification NOW rather than at the next
+bump. **Do NOT vendor the jars** — that trades supply-chain risk for patch latency on an XML
+signature verifier, which is the wrong direction for a component whose CVEs matter.

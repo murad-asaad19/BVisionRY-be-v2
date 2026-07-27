@@ -15,6 +15,12 @@
 #         · defaults.new_ui_copy   ENGLISH_VIA_NEXT_INTL -> PLAIN_ENGLISH
 #       Delegation is NOT standing: it covers the four items parked as of that date.
 #       Anything new still parks unless the operator delegates it too.
+#       2026-07-27 — operator ruled on all EIGHT open decisions after a research pass
+#       that falsified several premises the recommendations rested on (two of the
+#       operator's first four answers were reversed on the evidence and re-put).
+#       Full rulings + the corrections in agent-decisions.md → "OPERATOR RULINGS".
+#       Amendment made under that session: hard_constraints never_write →
+#       never_add_lines on the frozen-violations store (see the clause for why).
 #
 # Rationale: docs/roadmap.md §14   Execution: docs/agent-execution-graph.md
 # Decisions made during a run are appended to docs/agent-decisions.md
@@ -406,7 +412,21 @@ hard_constraints:
 
   # An ArchUnit failure means REDESIGN THE DEPENDENCY or park. Adding a violation
   # here turns a design error into permanent, silent debt and greens the build.
-  - never_write: "backend/src/test/resources/architecture/frozen-violations/**"
+  #
+  # AMENDED 2026-07-27 (operator-directed): `never_write` -> `never_add_lines`.
+  # As written the clause was UNSATISFIABLE. Gate 1 is `./mvnw test`, and
+  # FreezingArchRule PRUNES this store whenever a developer legitimately removes a
+  # violation (`allowStoreUpdate=true`) — so running the mandatory gate could
+  # itself breach the hard constraint, and did: a validator watched the suite
+  # silently drop ~20 lines mid-run. Setting allowStoreUpdate=false was considered
+  # and REJECTED: new violations already fail via filterOutKnownViolations (the
+  # flag is not the ratchet), it would hard-fail every legitimate cleanup, and it
+  # breaks the documented `refreeze` escape. 8 of the last 150 commits touched
+  # this store and all 8 contained deletions.
+  # The direction that matters is ADDITIONS — a violation added by hand to green a
+  # build. Pruning is the ratchet working. Enforced in CI by a diff guard modelled
+  # on the existing "Forbid edits to committed Flyway migrations" step.
+  - never_add_lines: "backend/src/test/resources/architecture/frozen-violations/**"
 
   # Money path and public pricing claims.
   - never_touch:

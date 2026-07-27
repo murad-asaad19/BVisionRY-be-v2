@@ -71,7 +71,21 @@ never maintained, so they are not evidence in either direction — but the
 unqualified claim was mine and it was overstated. Reconciling that checklist is
 open work.
 
-**LIVE TIP: backend `cb6e54c` / web `30c5e48` — 41 tickets. WAVE 7 CLOSED
+**LIVE TIP: backend `aaac1f6` / web `0a04602` — 44 tickets. WAVE 8 CLOSED —
+the operator's eight rulings are implemented.** Combination: backend
+**1216/0/0/0**, frozen store 0 added / 4 removed, V155 applied 154→155, web
+lint 0 / typecheck 0 / **776 tests, 60 files**, **Gate 4 155 passed ×2
+consecutive**. Four validator lenses, zero vetoes, every lens found something
+real. The invitation escalation is closed and verified LIVE rather than only
+under MockMvc: same invitation id, `POST` → token present, `LISTING` →
+`"token":null`.
+**Three orchestration defects this wave were mine** — the §8 sync trap recurred,
+I extended a permission that should have stayed a practice (and a worker was
+right to refuse it), and I shipped an unverified CI guard twice. All three are
+written up in the decision log rather than smoothed over.
+**Still nothing pushed. The merge remains an operator action.**
+
+**Superseded: backend `cb6e54c` / web `30c5e48` — 41 tickets. WAVE 7 CLOSED
 (security backlog, operator-chosen). POLICY BACKLOG COMPLETE since wave 6.**
 Wave 7 landed `download_token_scope` (40) + `showname_server_authority` (41).
 Combination re-gated in full by the orchestrator: backend **1175/0/0/0**,

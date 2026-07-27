@@ -2288,3 +2288,170 @@ the org. The interceptor is the net for exactly that future mistake.
 unfiltered. Operator chose to add dependency checksum verification NOW rather than at the next
 bump. **Do NOT vendor the jars** — that trades supply-chain risk for patch latency on an XML
 signature verifier, which is the wrong direction for a component whose CVEs matter.
+
+## sso_hierarchy_and_secrets · LANDED — a parent's IdP speaks for its sub-orgs, and the client secret stops being readable
+**Record** — be `90ae7b0` → integration `0fa4956` (42 tickets). Web zero-diff. **V155 consumed.**
+Implements operator rulings 6 and 3.
+**Part 1 (ruling 6).** `SsoLoginService`'s invariant-3 refusal now also passes when
+`OrgHierarchyPort.isParentOf(registration.getOrgId(), currentOrgId)` — the port already lives in
+the shared kernel and is already imported by `OrgAccessGuard`, so no new ArchUnit edge. Domain
+match, SUPER_ADMIN refusal and `provision()` all untouched. The code comment claiming an operator
+could "register the sub-org" as a workaround was FALSE when sub-orgs share the parent's domain
+(`uq_sso_registrations_email_domain` is globally unique) and now says so.
+**A HOLE THE RULING DID NOT NAME, found and closed by the worker.**
+`requireActiveOrganization`'s javadoc argued that checking the REGISTRATION's org sufficed
+*because* invariant 3 forced equality. The walk falsifies that premise — a suspended sub-org's
+members would have kept signing in through the active parent's IdP. It now re-checks the user's
+own org when the two differ. **Relaxing one invariant invalidated another's proof**; that is the
+generalisable lesson, and the crypto validator confirmed no other guard in the class had the same
+dependency.
+**Part 2 (ruling 3).** Cipher moved `aiconfig` → `common/crypto` as `SecretEncryptionService`,
+unchanged crypto (AES-256-GCM, fresh 12-byte `SecureRandom` IV per call — validator-verified no
+reuse), plus a `v1:` key-version stamp so a future rotation is a backfill rather than data loss
+(CAVEAT A). Unversioned legacy values still decrypt; a stamped-but-undecryptable value resolves to
+NO registration rather than a handshake with a wrong secret.
+**THE FROZEN-STORE TRAP, and the right response to it.** Moving the cipher RE-DESCRIBES
+`AIConfigService`'s frozen `aiconfig → audit` violation: old line pruned, new text unknown,
+`FreezingArchRule` fails regardless of `allowStoreUpdate`, and greening it would need a line
+ADDED — forbidden. The worker removed the underlying EDGE instead, routing `AIConfigService`
+through the existing `common.audit.AuditLogger` port. Net: **4 pruned, 0 added** (orchestrator-
+verified by sorted-set comparison, not by trusting the numstat, which reads 8/12 because the store
+re-sorts on prune). This is the ratchet doing exactly what it is for: redesign the dependency,
+never the baseline.
+**VALIDATOR FIX CYCLE — two findings that were bugs, not prose.**
+1. The back-fill's `try/catch` sat INSIDE `@Transactional`, so a swallowed failure re-surfaces as
+   `UnexpectedRollbackException` at commit and an exception escaping an `ApplicationReadyEvent`
+   listener fails `SpringApplication.run` — while the comment promised "a failure must not stop
+   the application". Removed `@Transactional`; the comment is now true rather than aspirational.
+2. `Character.digit` returns −1 for a non-hex char, so `(-1<<4)+(-1) = 0xEF`: a 64-character
+   BASE64 key passed the length check and parsed into runs of identical bytes with NO error.
+   Now rejected at startup — which matters because V155's header claims the encryption is real
+   against a stolen backup, and that is only true if the key is what the operator thinks it is.
+**THREE MUTATIONS THAT REDDENED NOTHING, two of them load-bearing** (test-integrity lens):
+ (a) deleting `@EventListener(ApplicationReadyEvent.class)` left 42/42 green — the back-fill's
+     TRIGGER had zero coverage;
+ (b) reverting V155's widening to `VARCHAR(512)` left the suite green, because every test used a
+     12-character secret — a real Entra secret at the DTO's own validated 512 maximum would 409
+     in production, the exact failure V155's header claims to prevent;
+ (c) swapping `findByOidcClientSecretIsNotNull()` for `findAll()` left it green — a SAML row's
+     NULL secret would enter the batch, `encrypt(null)` throws, and the blanket catch turns the
+     WHOLE back-fill into a silent no-op logged as handled. The existing test seeded one row into
+     a table its `@BeforeEach` had just emptied, so the mixed-protocol shape — the normal
+     production shape — was never exercised.
+(b) and (c) now have tests. Writing them, the orchestrator hit a real schema error
+(`saml_metadata_uri` does not exist; the column is `saml_metadata`) — a small argument for running
+what you write.
+**Evidence:** Gate 1 **1206/0/0/0** on the final tree · diff coverage 78/84 = 92.9% · frozen store
+0 added / 4 removed · crypto+tenancy lens **PASS**, test-integrity lens PASS-WITH-BLOCKERS, all
+cleared.
+**Left open:** JIT provisioning still writes the registration's org (pre-existing, documented in
+`provision()`); ~13 other classes keep frozen `audit.AuditService` edges — a free ratchet win for
+a sweep; existing `ai_configurations` keys stay unversioned until re-entered; no AAD binds a
+ciphertext to its column, so a party with DB WRITE could transplant the platform's AI key into a
+tenant's `oidc_client_secret` (outside the read-oriented threat model; the `v1:` scheme exists so
+a `v2:` with AAD is a backfill).
+
+## invitation_token_disclosure · LANDED — the admin listing stops handing out a redeemable secret
+**Record** — be `b589753` → integration `584b1f5`, web `a509345` → `0a04602` (43 tickets).
+No migration. Implements operator ruling 4.
+**The defect was a privilege escalation, not just a leak.** `GET /organizations/{orgId}/invitations`
+returned the RAW token and `POST /api/invitations/{token}/accept` is `permitAll()`, CSRF-exempt,
+and mints a session with a CALLER-CHOSEN password. So an ORG_ADMIN could complete an account
+created by someone else's invitation — including a SUPER_ADMIN's invite of a new ORG_ADMIN — and
+hold its credentials.
+**What shipped:** one DTO, audience-named factories — `withToken` (POST `/members/invite`, public
+`GET /api/invitations/{token}`) and `withoutToken` (the admin listing), with `@Schema(nullable)`
+putting the guarantee in the public contract. NULLED PER-ENDPOINT rather than splitting the DTO:
+a future listing endpoint can return the wrong DTO exactly as easily as it can call the wrong
+factory, so the split future-proofs nothing the naming does not, and it would have churned two
+web components that never read the field.
+**The worker found a bug in the ORCHESTRATOR's harness.** `auth.setup.ts` uses a FIXED coach
+address, so a leftover PENDING invite from an interrupted run makes `inviteMembers` silently skip
+and return `[]` — with no readable token anywhere. It now revokes the stale invite first.
+**MY PREMISE WAS WRONG AND THE WORKER PROVED IT BOTH WAYS.** I briefed that the contract pin would
+force `admin-types.ts` to change. Mutation A (revert `string | null` → `string`): typecheck exits
+**0** — `SameKeys` is key-based and blind to nullability. Mutation B (delete the key): `TS2344`,
+the pin fires. The pin is live, just not on this axis; the security property is guarded by the
+integration test, not the contract.
+**The strongest mutation was the RENAME.** `@JsonProperty("inviteCode")` plus re-emitting the
+token: the `jsonPath("$[0].token")` assertion PASSED (the path legitimately resolves to nothing)
+and only the raw-body scan caught it. That single line is what makes the test evidence rather
+than decoration.
+**Evidence:** Gate 1 **1192/0/0/0** · coverage 6/6 · frozen store untouched · Gate 2 regen +5/−2
+with springdoc churn reverted · web lint/tc 0, 776/60 · validator **PASS**, with an independent
+inventory of every path `getToken()` can reach a client (attempts, audit, GDPR export, email
+templates, logs — all clean; the listing was genuinely the only leak).
+**Residual, pre-existing:** an ORG_ADMIN can still DELETE a pending invite and reissue it to the
+same address to obtain a token. It gains no privilege they lack — and this fix converts a SILENT
+READ into a LOUD, ATTRIBUTABLE WRITE (status flips to REVOKED, the replacement carries the
+attacker's `invitedBy`, and a `MEMBER_INVITED` audit row lands). Roadmap note, not a blocker.
+
+## platform_guards · LANDED — frozen-store writes made loud, the interceptor's over-match closed, Shibboleth bytes verified
+**Record** — be `d785f66` → integration `aaac1f6` (44 tickets). Web zero-diff. No migration.
+Implements operator rulings 7 and 8.
+**THE CI GUARD TOOK THREE IMPLEMENTATIONS AND THE ORCHESTRATOR GOT IT WRONG TWICE.**
+ 1. `^+` (my original spec) — RED ON 9 OF 9 commits that ever touched the store. A stored
+    violation embeds the full method descriptor, so one added constructor parameter rewrites every
+    line naming it. Both wave-8 lanes reported this independently, from opposite directions.
+ 2. A RAW sorted-set diff (my "fix" after those reports) — repairs ordering and re-sorting, but is
+    MAXIMALLY SENSITIVE to re-description. It reports **47 gained** on `7158012`, a commit whose
+    own message reads "baseline size unchanged (47/47)". **Net line count passed that one; my
+    upgrade did not — strictly worse on the case my own comment claimed it handled.** The
+    validator caught both the regression and the false comment in the same breath: the NINTH
+    instance of this run's signature defect, and the FIRST authored by the orchestrator.
+    Both forms also DEADLOCK against the post-build step — commit the prune, then be rejected for
+    the drift it carries, with no escape but editing the workflow.
+ 3. SHIPPED: descriptor-NORMALISED set comparison. Strip every parenthesised group (parameter
+    lists AND the `in (File:NN)` suffix), leaving the dependency EDGE. Verified against all nine
+    historical store commits before shipping this time: prunes, the pure refreeze and signature
+    churn all report **0**; the four that genuinely grew report **14/60/102/97**. Still catches an
+    addition hidden behind a larger prune, which net line count misses. Plus a `command -v comm`
+    self-check, because the earlier version failed OPEN if `comm` were absent.
+**Interceptor regex (ruling 8i).** Over-match closed: 36 dashes previously matched the pattern,
+then threw inside `preHandle` → 500 where 400 belongs (mutation-proven through the real
+dispatcher). **The UNDER-match is DELIBERATELY LEFT OPEN** — the research claim that the canonical
+pattern "closes both directions" was WRONG, and the worker caught it: `0-0-0-0-1` fails a strict
+pattern exactly as it failed the old one. **Orchestrator ruling: leave it.** It is defence-in-depth
+only (twice independently verified that no handler relies on the interceptor alone), and closing
+it would require rebuilding two branding falsification tests that use that exact path as their
+only way to falsify a `@PreAuthorize`. Now pinned as a named residual rather than silently absent.
+**Checksums (ruling 8ii).** 37 generated entries for the two Shibboleth groupIds. Verification
+fires on a cache hit AND a genuinely cold download, fails closed on mismatch, and — the veto
+condition — **offline builds still work** (`./mvnw -o` verified by both worker and validator). On
+a cold fetch the repo's own published `.sha1` matched while the recorded trusted checksum still
+rejected the corrupted entry: TOFU actually closing. Stated ceiling: `failIfMissing=false`, so a
+NEW coordinate resolves unverified until re-recorded.
+**Evidence:** Gate 1 **1190/0/0/0** · coverage 1/1 · frozen store untouched · validator
+PASS-WITH-BLOCKERS, all three blockers cleared (the guard rewrite, its comment, and the decision
+entry that described the superseded implementation).
+
+## WAVE 8 CLOSED — 44 tickets; the operator's eight rulings implemented
+Landed: `sso_hierarchy_and_secrets` (42) → `invitation_token_disclosure` (43) →
+`platform_guards` (44). Integration: **backend `aaac1f6` / web `0a04602`.**
+**Combination:** backend **1216/0/0/0** · frozen store 0 added / 4 removed · V155 applied 154→155
+on the lane · web lint 0 / typecheck 0 / **776 tests, 60 files** · **Gate 4 155 passed ×2
+CONSECUTIVE** (runs C+D, after a green warm-up and a green run A; run B failed on an exercise-
+autosave timeout at `/api/bff/my/exercises/{id}/rows` — a path `OrgAccessInterceptor` never sees
+and nothing in wave 8's diff reaches, with the spec's own comment documenting it as a load
+fingerprint. NOT attributed away: the broken pair restarted the count, as the doctrine requires).
+**LIVE VERIFICATION the validators could not do** (all ran MockMvc with `addFilters=false`):
+against the running lane, same invitation id in both responses —
+`POST` (creator) → `"token":"a7301053-…"` present; `LISTING` → `"token":null` withheld.
+The escalation is closed through the real BFF and filter chain. The warm-up run also validated
+the reworked `auth.setup.ts`, the change its author flagged as unverifiable.
+
+### THREE ORCHESTRATION DEFECTS THIS WAVE, ALL MINE
+1. **The §8 stale-constitution trap RECURRED.** I closed it at `2afc53b`, then reopened it hours
+   later by committing the wave-7 close-out and all eight rulings to the roadmap branch only. Two
+   lanes reported it independently ("grep for OPERATOR RULINGS returns nothing at `cb6e54c`").
+   **Standing correction: the sync is not a wave-close ritual. Any governance commit must be
+   mirrored onto `agent/integration` before the next lane is cut.**
+2. **I extended a permission that should have stayed a practice.** Correcting my earlier briefing,
+   I told wave-8 workers they MAY write `agent-decisions.md` (the policy's `always_in_scope` does
+   list it). The lane-2 worker DECLINED, arguing N parallel workers appending on N branches lands
+   a conflicted stack on the operator. Lanes 1 and 3 accepted — and landing them produced exactly
+   that: two `UU docs/agent-decisions.md` conflicts resolved by hand. **The worker was right.
+   Permission is not obligation; the orchestrator stays the sole writer.**
+3. **I shipped an unverified guard, twice.** See platform_guards above. The rule I now hold myself
+   to is the one I have been giving workers all run: *name the case that would falsify it, RUN it,
+   and quote the output* — before shipping, not after a validator asks.

@@ -7,6 +7,7 @@ import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.exception.SsoFlowException;
+import com.bvisionry.common.security.OrgHierarchyPort;
 import com.bvisionry.organization.entity.Organization;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -54,17 +55,20 @@ class SsoLoginServiceTest {
     private static final String REGISTRATION = "orgb-okta";
     private static final UUID TENANT = UUID.randomUUID();
     private static final UUID OTHER_TENANT = UUID.randomUUID();
+    /** A sub-organization OF {@link #TENANT} — the shape ruling 6 unblocked. */
+    private static final UUID SUB_TENANT = UUID.randomUUID();
 
     @Mock private SsoRegistrationRepository registrationRepository;
     @Mock private UserRepository userRepository;
     @Mock private AuthService authService;
+    @Mock private OrgHierarchyPort orgHierarchy;
 
     private SsoLoginService service;
     private SsoRegistration registration;
 
     @BeforeEach
     void setUp() {
-        service = new SsoLoginService(registrationRepository, userRepository, authService);
+        service = new SsoLoginService(registrationRepository, userRepository, authService, orgHierarchy);
 
         registration = new SsoRegistration();
         registration.setRegistrationId(REGISTRATION);
@@ -268,6 +272,108 @@ class SsoLoginServiceTest {
 
         verify(userRepository, never()).assignOrganization(any(), any());
         assertSessionCarriedUnchanged(UserRole.MEMBER, null);
+    }
+
+    // ------------------------------------------- invariant 3 · the sub-org walk (ruling 6)
+
+    @ParameterizedTest(name = "[{index}] {0} login")
+    @ValueSource(strings = {"returning", "first"})
+    void invariant3_aSubOrgMemberSignsInThroughTheParentsIdpAndKeepsTheirOwnOrg(String shape) {
+        // The lockout ruling 6 fixes. The registration belongs to the PARENT; this
+        // member belongs to a sub-org of it, which is where members actually live, so
+        // strict equality refused the customer's entire population.
+        when(orgHierarchy.isParentOf(TENANT, SUB_TENANT)).thenReturn(true);
+        when(registrationRepository.findOrganizationActive(SUB_TENANT)).thenReturn(true);
+        User member = shaped(shape, UserRole.MEMBER);
+        Organization subOrg = organization(SUB_TENANT);
+        member.setOrganization(subOrg);
+        existing(member, SUB_TENANT);
+
+        assertThat(login("founder@orgb.com").token()).isEqualTo("access");
+        // Admitted, NOT absorbed: the session still carries the sub-org, so every
+        // downstream tenancy guard scopes them to their own org rather than the parent's.
+        assertSessionCarriedUnchanged(UserRole.MEMBER, subOrg);
+        verify(userRepository, never()).assignOrganization(any(), any());
+        // Argument ORDER is the whole security property. Pinned explicitly: inverting
+        // these turns a lockout fix into "a sub-org's IdP authenticates the parent's
+        // org admins", and with the arguments swapped the unstubbed call returns false
+        // and this test fails at the login above.
+        verify(orgHierarchy).isParentOf(TENANT, SUB_TENANT);
+    }
+
+    @ParameterizedTest(name = "[{index}] {0} login")
+    @ValueSource(strings = {"returning", "first"})
+    void invariant3_anUnrelatedOrgSharingNothingButTheDomainIsStillRefused(String shape) {
+        // The walk must not have widened the gate to "any other org". This tenant is a
+        // sibling/stranger: same verified domain, no hierarchy relationship.
+        when(orgHierarchy.isParentOf(TENANT, OTHER_TENANT)).thenReturn(false);
+        existing(shaped(shape, UserRole.MEMBER), OTHER_TENANT);
+
+        assertThatThrownBy(() -> login("founder@orgb.com"))
+                .extracting(e -> ((SsoFlowException) e).getErrorCode())
+                .isEqualTo("sso_other_org");
+        verifyNoInteractions(authService);
+    }
+
+    @Test
+    void invariant3_aChildOrgsIdpCannotAuthenticateAMemberOfItsParent() {
+        // The walk is DOWNWARDS ONLY. A parent's org admins are reachable from a
+        // sub-org's identity provider the moment someone "simplifies" this to a
+        // symmetric relatedness check — and a sub-org may be a cohort the customer
+        // hands to an outside program manager.
+        registration.setOrgId(SUB_TENANT);
+        when(registrationRepository.findOrganizationActive(SUB_TENANT)).thenReturn(true);
+        when(orgHierarchy.isParentOf(SUB_TENANT, TENANT)).thenReturn(false);
+        when(orgHierarchy.isParentOf(TENANT, SUB_TENANT)).thenReturn(true);
+        existing(returningUser(UserRole.ORG_ADMIN, UserStatus.ACTIVE), TENANT);
+
+        assertThatThrownBy(() -> login("founder@orgb.com"))
+                .extracting(e -> ((SsoFlowException) e).getErrorCode())
+                .isEqualTo("sso_other_org");
+        verifyNoInteractions(authService);
+    }
+
+    @Test
+    void aSuspendedSubOrgIsRefusedEvenThoughItsParentHoldsTheRegistrationAndIsActive() {
+        // Before the walk, checking the registration's org covered the user's org
+        // because they were the same row. They no longer are, so the sub-org's own
+        // suspension has to be checked or the parent's IdP is a way around it.
+        when(orgHierarchy.isParentOf(TENANT, SUB_TENANT)).thenReturn(true);
+        when(registrationRepository.findOrganizationActive(SUB_TENANT)).thenReturn(false);
+        existing(returningUser(UserRole.MEMBER, UserStatus.ACTIVE), SUB_TENANT);
+
+        assertThatThrownBy(() -> login("founder@orgb.com"))
+                .extracting(e -> ((SsoFlowException) e).getErrorCode())
+                .isEqualTo("sso_org_suspended");
+        verifyNoInteractions(authService);
+    }
+
+    @Test
+    void invariant2_aPlatformAdminInASubOrgIsStillRefused() {
+        // The walk widened invariant 3 only. Invariant 2 sits above it and is
+        // unconditional, so relaxing the org check must not open a route to a
+        // platform-admin session through a sub-org.
+        when(orgHierarchy.isParentOf(TENANT, SUB_TENANT)).thenReturn(true);
+        existing(returningUser(UserRole.SUPER_ADMIN, UserStatus.ACTIVE), SUB_TENANT);
+
+        assertThatThrownBy(() -> login("founder@orgb.com"))
+                .extracting(e -> ((SsoFlowException) e).getErrorCode())
+                .isEqualTo("sso_platform_account");
+        verifyNoInteractions(authService);
+    }
+
+    @Test
+    void theHierarchyIsNotConsultedWhenTheUserIsAlreadyInTheRegistrationsOwnOrg() {
+        // The ordinary login must not pay for a database round-trip it does not need,
+        // and — more to the point — a same-org login must not depend on the hierarchy
+        // port answering at all.
+        User member = returningUser(UserRole.MEMBER, UserStatus.ACTIVE);
+        member.setOrganization(organization(TENANT));
+        existing(member, TENANT);
+
+        login("founder@orgb.com");
+
+        verifyNoInteractions(orgHierarchy);
     }
 
     // ------------------------------------------------------- provider-mismatch rule

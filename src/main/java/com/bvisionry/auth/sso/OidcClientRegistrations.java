@@ -1,5 +1,6 @@
 package com.bvisionry.auth.sso;
 
+import com.bvisionry.common.crypto.SecretEncryptionService;
 import com.bvisionry.config.FrontendUrls;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -40,6 +41,7 @@ public class OidcClientRegistrations implements ClientRegistrationRepository {
 
     private final SsoRegistrationRepository repository;
     private final FrontendUrls frontendUrls;
+    private final SecretEncryptionService secretCipher;
 
     /**
      * Discovery result per registration, invalidated by the row's own
@@ -61,6 +63,22 @@ public class OidcClientRegistrations implements ClientRegistrationRepository {
     private final Map<String, Discovered> discoveryCache = new ConcurrentHashMap<>();
 
     private record Discovered(Instant updatedAt, ClientRegistration registration) {
+    }
+
+    /**
+     * The stored client secret, decrypted — the ONLY place that happens.
+     *
+     * <p>The unstamped branch is not a fallback for "decryption might fail": it is the
+     * pre-{@code V155} shape, when this column held plaintext. Those rows are converted
+     * once at startup by {@code SsoRegistrationService#encryptLegacyPlaintextSecrets},
+     * so this covers the window between the web server accepting requests and that
+     * runner finishing, plus a row inserted by direct SQL. It cannot mask a decryption
+     * failure: a stamped value that will not decrypt throws, and the caller logs and
+     * returns no registration rather than handshaking with a wrong secret.
+     */
+    private String clientSecretOf(SsoRegistration row) {
+        String stored = row.getOidcClientSecret();
+        return SecretEncryptionService.isVersioned(stored) ? secretCipher.decrypt(stored) : stored;
     }
 
     /** Browser-visible redirect_uri; the frontend relays it to the backend's redirection endpoint. */
@@ -90,18 +108,20 @@ public class OidcClientRegistrations implements ClientRegistrationRepository {
             ClientRegistration built = ClientRegistrations.fromIssuerLocation(row.getOidcIssuerUri())
                     .registrationId(registrationId)
                     .clientId(row.getOidcClientId())
-                    .clientSecret(row.getOidcClientSecret())
+                    .clientSecret(clientSecretOf(row))
                     .redirectUri(redirectUri(frontendUrls, registrationId))
                     .scope("openid", "email", "profile")
                     .clientName(row.getDisplayName())
                     .build();
             discoveryCache.put(registrationId, new Discovered(row.getUpdatedAt(), built));
             return built;
-        } catch (RuntimeException unreachableIssuer) {
-            // Deliberately NOT cached: a transient outage at the IdP must not pin a
-            // failure until someone edits the row.
-            log.error("OIDC discovery failed for registration {} at {}: {}",
-                    registrationId, row.getOidcIssuerUri(), unreachableIssuer.getMessage());
+        } catch (RuntimeException notUsable) {
+            // Deliberately NOT cached: a transient outage at the IdP — or an encryption
+            // key that has been rotated out from under the stored secret — must not pin
+            // a failure until someone edits the row. The message is the cause's own and
+            // never the secret; SecretEncryptionService reports the key VERSION only.
+            log.error("Could not build the OIDC client registration for {} at {}: {}",
+                    registrationId, row.getOidcIssuerUri(), notUsable.getMessage());
             return null;
         }
     }

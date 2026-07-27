@@ -7,6 +7,7 @@ import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.exception.SsoFlowException;
+import com.bvisionry.common.security.OrgHierarchyPort;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,7 +40,9 @@ import java.util.UUID;
  *   <li><strong>No other tenant, on every login</strong> — checked for existing
  *       users at every sign-in, not only at provisioning. Domain uniqueness stops
  *       two registrations claiming one domain; it does NOT stop an in-domain user
- *       who was invited into a different org earlier.</li>
+ *       who was invited into a different org earlier. "Other tenant" means a
+ *       different CUSTOMER: a registration owned by a parent org also speaks for
+ *       that parent's own sub-organizations, one level, downwards only.</li>
  * </ol>
  *
  * <h2>What this path deliberately does NOT do</h2>
@@ -63,6 +66,13 @@ public class SsoLoginService {
     private final SsoRegistrationRepository registrationRepository;
     private final UserRepository userRepository;
     private final AuthService authService;
+    /**
+     * Shared-kernel hierarchy port, NOT the organization feature. Already imported by
+     * {@code OrgAccessGuard} in the parent package {@code com.bvisionry.auth} (NOT this one),
+     * which is what matters for the rule — so invariant 3's sub-org walk adds
+     * no dependency edge the ArchUnit ratchet has not already accepted.
+     */
+    private final OrgHierarchyPort orgHierarchy;
 
     /**
      * @param registrationId which registration completed the handshake
@@ -92,7 +102,7 @@ public class SsoLoginService {
                     "This sign-in is only available to members of the connected organization's email domain.");
         }
 
-        requireActiveOrganization(registration);
+        requireActiveOrganization(registration.getOrgId());
 
         User user = userRepository.findByEmail(email).orElse(null);
         if (user == null) {
@@ -115,24 +125,43 @@ public class SsoLoginService {
         // user's organization, so a user who predates the connection signs in as
         // themselves rather than being silently absorbed into the tenant.
         UUID currentOrgId = userRepository.findOrganizationIdByUserId(user.getId());
-        if (currentOrgId != null && !currentOrgId.equals(registration.getOrgId())) {
+        if (currentOrgId != null && !currentOrgId.equals(registration.getOrgId())
+                && !orgHierarchy.isParentOf(registration.getOrgId(), currentOrgId)) {
             log.warn("SSO registration {} attempted to authenticate a member of another organization",
                     registrationId);
-            // STRICT EQUALITY, and that is a decision rather than an oversight. This
-            // org model is one level deep: members live in SUB-organizations, so a
-            // registration created against a PARENT org refuses every one of its own
-            // children's members. Whether a parent's identity provider may speak for
-            // its sub-orgs is a trust question about what customers were promised, not
-            // a coding one, and it is ESCALATED TO THE OPERATOR — do not relax this to
-            // a hierarchy walk without that answer. Shipping fail-closed is the
-            // recoverable direction: an operator can register the sub-org, but cannot
-            // un-issue a session that should never have existed.
+            // ONE LEVEL, ONE DIRECTION. The org model is one level deep and members
+            // live in SUB-organizations, so strict equality refused every one of a
+            // parent's own children's members — the customer's whole population.
+            // Operator ruling (docs/agent-decisions.md, "OPERATOR RULINGS", item 6):
+            // a parent's platform-verified domain may speak for its own sub-orgs.
             //
-            // The message therefore avoids "another organization", which is actively
-            // misleading in the sub-org case (it is the SAME customer) and would send
-            // an admin hunting for a membership conflict that does not exist.
+            // The argument is only sound DOWNWARDS. isParentOf(registration, current)
+            // is the sole call and the order matters: a CHILD org's registration must
+            // never authenticate a member of the PARENT, which is where the customer's
+            // org admins sit. Inverting the arguments turns a lockout fix into a
+            // privilege escalation, so the argument order is pinned by a test.
+            //
+            // The workaround the previous comment here named — "an operator can
+            // register the sub-org" — was FALSE in precisely the case that hurts.
+            // uq_sso_registrations_email_domain is GLOBALLY unique, so when sub-orgs
+            // share the parent's email domain (the normal shape: one company, several
+            // cohorts) only ONE of them can hold a registration at all. Those
+            // customers had no path, not an inconvenient one.
+            //
+            // The message avoids "another organization", which is actively misleading
+            // when it fires for a genuinely unrelated tenant sharing nothing but a
+            // verified domain, and would send an admin hunting for a membership
+            // conflict that does not exist.
             throw new SsoFlowException("sso_other_org",
                     "This account is not a member of the organization connected to this identity provider.");
+        }
+
+        // A sub-org admitted by the walk above is a DIFFERENT row from the one
+        // requireActiveOrganization already checked, and suspending a sub-org has to
+        // lock its members out through the parent's identity provider too — otherwise
+        // the parent's IdP becomes a way around a suspension.
+        if (currentOrgId != null && !currentOrgId.equals(registration.getOrgId())) {
+            requireActiveOrganization(currentOrgId);
         }
 
         if (user.getStatus() != UserStatus.ACTIVE) {
@@ -154,6 +183,12 @@ public class SsoLoginService {
      * <p>MEMBER is hard-coded, which is also what makes invariant 2 total: no code
      * path here can mint a role, so a brand-new account can never arrive as an
      * admin of any kind.
+     *
+     * <p>KNOWN RESIDUAL, deliberately not fixed here (operator ruling 6 puts it on the
+     * backlog): this writes the REGISTRATION's org, so when a parent org holds the
+     * registration a brand-new user lands in the PARENT rather than in whichever
+     * sub-org they belong to. That is pre-existing behaviour, unchanged by the sub-org
+     * walk in invariant 3 — which only affects users who ALREADY have an org.
      *
      * <p>No {@code MemberJoinedEvent} is published. That is the invitation/join-link
      * signal and it fans out to auto-assignment, which materialises pipeline work
@@ -188,13 +223,16 @@ public class SsoLoginService {
     /**
      * A suspended tenant must not be reachable through its IdP either.
      *
-     * <p>Checking the REGISTRATION's org is sufficient for every outcome: a
-     * provisioned user lands in exactly this org, and an existing user only gets
-     * past invariant 3 if their org is this one or null. A user whose org is
-     * something else is refused by invariant 3 regardless of what this returns.
+     * <p>Called TWICE, and the second call is not redundant. The registration's own
+     * org is checked before anything else, which covers provisioning (a new user
+     * lands in exactly that org) and the ordinary same-org login. Since invariant 3
+     * began admitting SUB-organizations, an existing user's org is no longer
+     * necessarily the registration's — so the caller checks that org separately when
+     * the two differ. Were it not, a suspended sub-org's members would keep signing
+     * in through their parent's identity provider.
      */
-    private void requireActiveOrganization(SsoRegistration registration) {
-        Boolean active = registrationRepository.findOrganizationActive(registration.getOrgId());
+    private void requireActiveOrganization(UUID orgId) {
+        Boolean active = registrationRepository.findOrganizationActive(orgId);
         if (!Boolean.TRUE.equals(active)) {
             throw new SsoFlowException("sso_org_suspended",
                     "This organization is no longer active. Contact support for assistance.");

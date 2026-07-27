@@ -68,6 +68,23 @@ class SsoLoginIntegrationTest extends AbstractPostgresIntegrationTest {
         return id;
     }
 
+    /** A real sub-organization row — the {@code parent_organization_id} column V135 added. */
+    private UUID subOrganization(String name, UUID parentId) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("INSERT INTO organizations (id, name, is_active, parent_organization_id) VALUES (?, ?, TRUE, ?)",
+                id, name, parentId);
+        return id;
+    }
+
+    private UUID member(String email, UUID orgId) {
+        UUID userId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO users (id, email, name, role, status, organization_id, created_at, updated_at)
+                VALUES (?, ?, 'Member', 'MEMBER', 'ACTIVE', ?, NOW(), NOW())
+                """, userId, email, orgId);
+        return userId;
+    }
+
     private void registration(String registrationId, UUID orgId, String domain, boolean enabled) {
         jdbc.update("""
                 INSERT INTO sso_registrations
@@ -127,6 +144,68 @@ class SsoLoginIntegrationTest extends AbstractPostgresIntegrationTest {
                 .isInstanceOf(SsoFlowException.class)
                 .extracting(e -> ((SsoFlowException) e).getErrorCode())
                 .isEqualTo("sso_other_org");
+    }
+
+    /**
+     * Ruling 6, against the real {@code parent_organization_id} column and the real
+     * {@code OrgHierarchyAdapter} query. The unit test mocks {@code isParentOf}, so it
+     * proves the branch and not the relationship: a query that read the column the
+     * wrong way round (or matched on the wrong id) is green there and is either a
+     * lockout or a cross-tenant sign-in here.
+     */
+    @Test
+    void aSubOrgMemberSignsInThroughTheParentsRegistrationAndKeepsTheirOwnOrg() {
+        UUID subOrgId = subOrganization("OrgB Cohort 1", tenantId);
+        member("cohort@orgb.com", subOrgId);
+
+        AuthResponse auth = login("cohort@orgb.com");
+
+        assertThat(auth.token()).isNotBlank();
+        assertThat(auth.user().organizationId())
+                .as("admitted by the parent's IdP, but still scoped to their own sub-org")
+                .isEqualTo(subOrgId);
+        assertThat(jdbc.queryForObject(
+                "SELECT organization_id FROM users WHERE email = 'cohort@orgb.com'", UUID.class))
+                .as("an assertion authenticates; it never re-parents the account")
+                .isEqualTo(subOrgId);
+    }
+
+    @Test
+    void aSubOrgOfANOTHERTenantIsStillRefusedAgainstTheRealColumn() {
+        // The near-miss the adapter has to get right: a real sub-org row, parented to
+        // an org that is NOT the one holding the registration.
+        UUID foreignSubOrgId = subOrganization("OrgC Cohort 1", otherTenantId);
+        member("foreign@orgb.com", foreignSubOrgId);
+
+        assertThatThrownBy(() -> login("foreign@orgb.com"))
+                .extracting(e -> ((SsoFlowException) e).getErrorCode())
+                .isEqualTo("sso_other_org");
+    }
+
+    @Test
+    void aChildRegistrationCannotAuthenticateAMemberOfItsParentAgainstTheRealColumn() {
+        // Downwards only. Registered against the SUB-org, attempted by someone in the
+        // parent — where the customer's org admins live.
+        UUID subOrgId = subOrganization("OrgB Cohort 1", tenantId);
+        jdbc.update("DELETE FROM sso_registrations");
+        registration(REGISTRATION, subOrgId, "orgb.com", true);
+        member("parentadmin@orgb.com", tenantId);
+
+        assertThatThrownBy(() -> login("parentadmin@orgb.com"))
+                .extracting(e -> ((SsoFlowException) e).getErrorCode())
+                .isEqualTo("sso_other_org");
+    }
+
+    @Test
+    void aSuspendedSubOrgIsRefusedThroughItsActiveParentsIdp() {
+        UUID subOrgId = subOrganization("OrgB Cohort 1", tenantId);
+        member("suspended@orgb.com", subOrgId);
+        jdbc.update("UPDATE organizations SET is_active = FALSE WHERE id = ?", subOrgId);
+
+        assertThatThrownBy(() -> login("suspended@orgb.com"))
+                .as("the parent is active; the member's own org is not")
+                .extracting(e -> ((SsoFlowException) e).getErrorCode())
+                .isEqualTo("sso_org_suspended");
     }
 
     @Test

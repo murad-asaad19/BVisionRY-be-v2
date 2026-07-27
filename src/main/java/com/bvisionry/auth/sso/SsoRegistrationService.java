@@ -4,8 +4,13 @@ import com.bvisionry.common.audit.AuditLogger;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.DuplicateResourceException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.crypto.SecretEncryptionService;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,6 +34,8 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class SsoRegistrationService {
 
+    private static final Logger log = LoggerFactory.getLogger(SsoRegistrationService.class);
+
     /** Action constants for the audit trail below; local because this is auth's surface, not the org feature's. */
     static final String SSO_REGISTRATION_CREATED = "SSO_REGISTRATION_CREATED";
     static final String SSO_REGISTRATION_UPDATED = "SSO_REGISTRATION_UPDATED";
@@ -38,6 +45,55 @@ public class SsoRegistrationService {
     private final SsoRegistrationRepository repository;
     private final AuditLogger auditLogger;
     private final CurrentUserAccessor currentUser;
+    private final SecretEncryptionService secretCipher;
+
+    /**
+     * One-shot conversion of client secrets stored before {@code V155} made this
+     * column encrypted. Idempotent: a row that already carries a key-version stamp is
+     * skipped, so every boot after the first does one indexed-free scan of a table
+     * with one row per enterprise customer and writes nothing.
+     *
+     * <p>Runs here rather than in the migration because the encryption key is an
+     * environment variable and Flyway cannot reach it, and eagerly at startup rather
+     * than lazily on read because the read happens on the anonymous OIDC handshake
+     * path — which has no transaction and must not write. See V155's header.
+     *
+     * <p>A failure must not stop the application: the reader still handles an
+     * unstamped value, so the worst case is that the rows stay plaintext and say so in
+     * the log, which is exactly the state before this change. Refusing to boot would
+     * turn a data-hygiene problem into an outage.
+     *
+     * <p><b>NOT {@code @Transactional}, and that is what makes the sentence above
+     * true.</b> With a transaction on this method the {@code catch} below would sit
+     * INSIDE the boundary: a JPA failure marks the transaction rollback-only, the
+     * swallowed exception then re-surfaces as {@code UnexpectedRollbackException} when
+     * the proxy commits — after this method has returned — and an exception escaping an
+     * {@code ApplicationReadyEvent} listener fails {@code SpringApplication.run}. The
+     * comment would have promised availability the code did not deliver. Without it the
+     * read runs in its own transaction and returns detached entities, {@code saveAll}
+     * opens its own (and is atomic per call), and the catch genuinely contains the
+     * failure. The mutation below is therefore an explicit save, never dirty-checking.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void encryptLegacyPlaintextSecrets() {
+        try {
+            List<SsoRegistration> legacy = repository.findByOidcClientSecretIsNotNull().stream()
+                    .filter(r -> !SecretEncryptionService.isVersioned(r.getOidcClientSecret()))
+                    .toList();
+            if (legacy.isEmpty()) {
+                return;
+            }
+            legacy.forEach(r -> r.setOidcClientSecret(secretCipher.encrypt(r.getOidcClientSecret())));
+            repository.saveAll(legacy);
+            log.info("Encrypted {} SSO registration client secret(s) that predated encryption at rest",
+                    legacy.size());
+        } catch (RuntimeException e) {
+            // No secret in the message, and none in the exception either — it carries
+            // the cipher's own text, never the value.
+            log.error("Could not encrypt pre-existing SSO client secrets; they remain in plaintext "
+                    + "at rest and enterprise sign-in is unaffected. Cause: {}", e.toString());
+        }
+    }
 
     @Transactional(readOnly = true)
     public List<SsoRegistrationResponse> list() {
@@ -142,7 +198,10 @@ public class SsoRegistrationService {
             }
             registration.setOidcIssuerUri(request.oidcIssuerUri());
             registration.setOidcClientId(request.oidcClientId());
-            registration.setOidcClientSecret(request.oidcClientSecret());
+            // The ONLY place a client secret is written. Ciphertext from here on: the
+            // column, a database dump and every backup hold an AES-256-GCM value under
+            // a key that lives in the deploy environment, not in this database.
+            registration.setOidcClientSecret(secretCipher.encrypt(request.oidcClientSecret()));
             registration.setSamlMetadata(null);
         }
     }

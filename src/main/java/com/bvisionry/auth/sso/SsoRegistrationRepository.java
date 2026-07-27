@@ -30,6 +30,20 @@ public interface SsoRegistrationRepository extends JpaRepository<SsoRegistration
     List<SsoRegistration> findAllByOrderByEmailDomainAsc();
 
     /**
+     * Every OIDC row, for the one-shot plaintext conversion in
+     * {@link SsoRegistrationService#encryptLegacyPlaintextSecrets()}. Filtering
+     * "already encrypted" in Java rather than SQL on purpose: the key-version stamp
+     * is a code-owned format, and a {@code LIKE 'v1:%'} here would be a second place
+     * that has to change when a rotation bumps the version. One row per enterprise
+     * customer, read once per boot.
+     *
+     * <p>A derived query with a predicate, not a bare-ID load, so the ArchUnit tenancy
+     * rule does not require a {@code require*} guard — and there is no tenant to scope
+     * to: registrations are platform-scoped and only startup calls this.
+     */
+    List<SsoRegistration> findByOidcClientSecretIsNotNull();
+
+    /**
      * Is the organization behind a registration still active?
      *
      * <p>Raw SQL against another feature's table on purpose. The Java answer —

@@ -1,6 +1,7 @@
 package com.bvisionry.auth.sso;
 
 import com.bvisionry.auth.entity.User;
+import com.bvisionry.common.crypto.SecretEncryptionService;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
@@ -52,6 +53,8 @@ class SsoRegistrationAdminIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Autowired private MockMvc mockMvc;
     @Autowired private JdbcTemplate jdbc;
+    @Autowired private SecretEncryptionService secretCipher;
+    @Autowired private SsoRegistrationService ssoRegistrationService;
 
     /** Local instance: this app exposes no ObjectMapper bean, and none is needed to shape a request body. */
     private final ObjectMapper json = new ObjectMapper();
@@ -306,6 +309,137 @@ class SsoRegistrationAdminIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(jdbc.queryForObject("""
                 SELECT details_json::text FROM audit_logs WHERE entity_type = 'SsoRegistration'
                 """, String.class)).doesNotContain("super-secret");
+    }
+
+    // ------------------------------------------------- encryption at rest (ruling 3)
+
+    /**
+     * The claim is about the DATABASE, so the assertion is about the bytes in the
+     * column — not about a mock, and not about the response (which never carried the
+     * secret anyway, and would have passed this test before encryption existed).
+     */
+    @Test
+    void anOidcClientSecretIsUnreadableInTheColumnItIsStoredIn() throws Exception {
+        create(Map.of("registrationId", "orgb-entra", "orgId", orgId.toString(), "protocol", "OIDC",
+                "emailDomain", "orgb.com", "displayName", "OrgB", "enabled", true,
+                "oidcIssuerUri", "https://login.microsoftonline.test/t/v2.0",
+                "oidcClientId", "client-abc", "oidcClientSecret", "super-secret"))
+                .andExpect(status().isCreated());
+
+        String stored = jdbc.queryForObject(
+                "SELECT oidc_client_secret FROM sso_registrations WHERE registration_id = 'orgb-entra'",
+                String.class);
+
+        assertThat(stored)
+                .as("a database dump must not contain the credential")
+                .isNotNull()
+                .doesNotContain("super-secret")
+                .isNotEqualTo("super-secret");
+        assertThat(stored)
+                .as("stamped with the key version, so a future rotation is a backfill and not data loss")
+                .startsWith("v1:");
+        // And it is genuinely THIS secret, encrypted — not a truncation, a hash, or a
+        // placeholder that happens to differ from the plaintext.
+        assertThat(secretCipher.decrypt(stored)).isEqualTo("super-secret");
+    }
+
+    /**
+     * The V155 backfill: rows written before encryption existed hold plaintext, and
+     * Flyway cannot encrypt them because the key is not in the database.
+     */
+    @Test
+    void aPlaintextSecretWrittenBeforeV155IsEncryptedByTheStartupConversion() {
+        jdbc.update("""
+                INSERT INTO sso_registrations
+                    (id, registration_id, org_id, protocol, email_domain, display_name, enabled,
+                     oidc_issuer_uri, oidc_client_id, oidc_client_secret)
+                VALUES (?, 'legacy-entra', ?, 'OIDC', 'legacy.test', 'Legacy', TRUE,
+                        'https://login.microsoftonline.test/t/v2.0', 'client-abc', 'plaintext-secret')
+                """, UUID.randomUUID(), orgId);
+
+        ssoRegistrationService.encryptLegacyPlaintextSecrets();
+
+        String stored = jdbc.queryForObject(
+                "SELECT oidc_client_secret FROM sso_registrations WHERE registration_id = 'legacy-entra'",
+                String.class);
+        assertThat(stored).startsWith("v1:").doesNotContain("plaintext-secret");
+        assertThat(secretCipher.decrypt(stored))
+                .as("converted, not destroyed — the customer's IdP still expects this exact value")
+                .isEqualTo("plaintext-secret");
+
+        // Idempotent: a second boot must not encrypt the ciphertext a second time.
+        ssoRegistrationService.encryptLegacyPlaintextSecrets();
+        assertThat(jdbc.queryForObject(
+                "SELECT oidc_client_secret FROM sso_registrations WHERE registration_id = 'legacy-entra'",
+                String.class)).isEqualTo(stored);
+    }
+
+    /**
+     * THE PREDICATE IS LOAD-BEARING, and nothing pinned it.
+     *
+     * <p>A SAML registration has a NULL {@code oidc_client_secret}. Measured: swapping
+     * {@code findByOidcClientSecretIsNotNull()} for {@code findAll()} leaves the whole
+     * suite GREEN, because the existing back-fill test seeds one OIDC row into a table
+     * its {@code @BeforeEach} just emptied — the mixed-protocol shape, which is the
+     * normal production shape, was never exercised. Under that swap a NULL enters the
+     * batch, {@code isVersioned(null)} is false, {@code encrypt(null)} throws, and the
+     * blanket {@code catch (RuntimeException)} turns the ENTIRE back-fill into a silent
+     * no-op logged as a handled error — leaving the real OIDC secret in plaintext for
+     * ever while the log says the problem was handled.
+     */
+    @Test
+    void theBackfillIgnoresSamlRowsAndStillConvertsTheOidcOneBesideThem() {
+        jdbc.update("""
+                INSERT INTO sso_registrations
+                    (id, registration_id, org_id, protocol, email_domain, display_name, enabled,
+                     saml_metadata)
+                VALUES (?, 'legacy-saml', ?, 'SAML', 'saml.test', 'Legacy SAML', TRUE,
+                        '<EntityDescriptor/>')
+                """, UUID.randomUUID(), orgId);
+        jdbc.update("""
+                INSERT INTO sso_registrations
+                    (id, registration_id, org_id, protocol, email_domain, display_name, enabled,
+                     oidc_issuer_uri, oidc_client_id, oidc_client_secret)
+                VALUES (?, 'legacy-oidc-beside-saml', ?, 'OIDC', 'oidc.test', 'Legacy OIDC', TRUE,
+                        'https://login.microsoftonline.test/t/v2.0', 'client-abc', 'plaintext-beside-saml')
+                """, UUID.randomUUID(), orgId);
+
+        ssoRegistrationService.encryptLegacyPlaintextSecrets();
+
+        assertThat(jdbc.queryForObject(
+                "SELECT oidc_client_secret FROM sso_registrations WHERE registration_id = 'legacy-oidc-beside-saml'",
+                String.class))
+                .as("the SAML row's NULL secret must not abort the conversion of the OIDC row beside it")
+                .startsWith("v1:");
+        assertThat(jdbc.queryForObject(
+                "SELECT oidc_client_secret FROM sso_registrations WHERE registration_id = 'legacy-saml'",
+                String.class))
+                .as("a SAML row has no client secret and must be left exactly as it was")
+                .isNull();
+    }
+
+    /**
+     * V155's ONLY DDL is a column widening, and nothing pinned it: every other test uses
+     * a 12-character secret, so reverting the column to VARCHAR(512) leaves the suite
+     * green. Measured. But the request DTO validates {@code @Size(max = 512)}, and a
+     * 512-character plaintext Base64-expands past 512 once encrypted — so a real Entra
+     * or Okta secret at the accepted maximum would 409 on the admin's save in
+     * production, which is precisely the failure V155's header claims to prevent.
+     */
+    @Test
+    void aSecretAtTheValidatedMaximumLengthSurvivesEncryptionAndRoundTrips() throws Exception {
+        String maxSecret = "s".repeat(512);
+        create(Map.of("registrationId", "max-len", "orgId", orgId.toString(), "protocol", "OIDC",
+                "emailDomain", "maxlen.test", "displayName", "MaxLen", "enabled", true,
+                "oidcIssuerUri", "https://login.microsoftonline.test/t/v2.0",
+                "oidcClientId", "client-abc", "oidcClientSecret", maxSecret))
+                .andExpect(status().isCreated());
+
+        String stored = jdbc.queryForObject(
+                "SELECT oidc_client_secret FROM sso_registrations WHERE registration_id = 'max-len'",
+                String.class);
+        assertThat(stored).startsWith("v1:");
+        assertThat(secretCipher.decrypt(stored)).isEqualTo(maxSecret);
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.bvisionry.auth.sso;
 
+import com.bvisionry.common.crypto.SecretEncryptionService;
 import com.bvisionry.config.FrontendProperties;
 import com.bvisionry.config.FrontendUrls;
 import com.sun.net.httpserver.HttpServer;
@@ -47,6 +48,10 @@ class SsoRegistrationAdapterTest {
     private static final String REGISTRATION = "orgb-idp";
 
     @Mock private SsoRegistrationRepository repository;
+
+    /** Real cipher, not a mock: the point of these tests is what actually reaches the IdP. */
+    private static final SecretEncryptionService CIPHER = new SecretEncryptionService(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
 
     private final FrontendUrls frontendUrls = frontendUrls();
 
@@ -116,7 +121,7 @@ class SsoRegistrationAdapterTest {
                 .findByRegistrationId(REGISTRATION)).isNull();
 
         stored(row(SsoRegistration.Protocol.SAML));
-        assertThat(new OidcClientRegistrations(repository, frontendUrls)
+        assertThat(new OidcClientRegistrations(repository, frontendUrls, CIPHER)
                 .findByRegistrationId(REGISTRATION)).isNull();
     }
 
@@ -125,7 +130,7 @@ class SsoRegistrationAdapterTest {
         stored(null);
         assertThat(new SamlRelyingPartyRegistrations(repository, frontendUrls)
                 .findByRegistrationId(REGISTRATION)).isNull();
-        assertThat(new OidcClientRegistrations(repository, frontendUrls)
+        assertThat(new OidcClientRegistrations(repository, frontendUrls, CIPHER)
                 .findByRegistrationId(REGISTRATION)).isNull();
     }
 
@@ -161,11 +166,15 @@ class SsoRegistrationAdapterTest {
             SsoRegistration registration = row(SsoRegistration.Protocol.OIDC);
             registration.setOidcIssuerUri(issuer);
             registration.setOidcClientId("client-abc");
-            registration.setOidcClientSecret("shhh");
+            // The stored form since V155: ciphertext. If the reader stopped decrypting,
+            // the client below would carry "v1:<base64>" and every token exchange at the
+            // customer's IdP would fail with invalid_client — a fault that only shows up
+            // AFTER the user has authenticated, at the least debuggable moment.
+            registration.setOidcClientSecret(CIPHER.encrypt("shhh"));
             stored(registration);
 
             ClientRegistration client =
-                    new OidcClientRegistrations(repository, frontendUrls).findByRegistrationId(REGISTRATION);
+                    new OidcClientRegistrations(repository, frontendUrls, CIPHER).findByRegistrationId(REGISTRATION);
 
             assertThat(client).isNotNull();
             assertThat(client.getClientId()).isEqualTo("client-abc");
@@ -177,6 +186,23 @@ class SsoRegistrationAdapterTest {
             // The JWKS the id_token signature is verified against came from discovery,
             // which is the entire reason this half is not hand-rolled.
             assertThat(client.getProviderDetails().getJwkSetUri()).isEqualTo(issuer + "/jwks");
+
+            // A row written BEFORE V155 holds plaintext and no version stamp. It must
+            // still work — the startup conversion runs after the port is open, and a
+            // registration that briefly refuses to handshake is an outage.
+            registration.setOidcClientSecret("legacy-plaintext");
+            stored(registration);
+            assertThat(new OidcClientRegistrations(repository, frontendUrls, CIPHER)
+                    .findByRegistrationId(REGISTRATION).getClientSecret())
+                    .isEqualTo("legacy-plaintext");
+
+            // A stamp this process has no key for (someone rotated BVISIONRY_ENCRYPTION_KEY)
+            // resolves to NO registration — the handshake dies at the login page instead
+            // of being attempted with an unusable secret.
+            registration.setOidcClientSecret("v9:" + CIPHER.encrypt("shhh").substring(3));
+            stored(registration);
+            assertThat(new OidcClientRegistrations(repository, frontendUrls, CIPHER)
+                    .findByRegistrationId(REGISTRATION)).isNull();
         } finally {
             server.stop(0);
         }
@@ -191,7 +217,7 @@ class SsoRegistrationAdapterTest {
         registration.setOidcClientSecret("shhh");
         stored(registration);
 
-        assertThat(new OidcClientRegistrations(repository, frontendUrls)
+        assertThat(new OidcClientRegistrations(repository, frontendUrls, CIPHER)
                 .findByRegistrationId(REGISTRATION)).isNull();
     }
 }

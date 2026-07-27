@@ -60,8 +60,22 @@ public class SsoRegistration extends BaseEntity {
     @Column(name = "oidc_client_id", length = 255)
     private String oidcClientId;
 
-    /** Never leaves the backend — {@link SsoRegistrationResponse} does not carry it. */
-    @Column(name = "oidc_client_secret", length = 512)
+    /**
+     * ENCRYPTED AT REST, and this field holds the CIPHERTEXT — never the secret the
+     * customer's identity provider issued. Written through
+     * {@code SecretEncryptionService#encrypt} by {@link SsoRegistrationService} and
+     * read back by {@link OidcClientRegistrations}, which is the only consumer.
+     *
+     * <p>1024 rather than 512 because AES-GCM + Base64 + the key-version stamp expands
+     * a 512-character secret to roughly 720; see {@code V155}. Rows written before
+     * V155 hold PLAINTEXT with no version stamp — {@code SsoRegistrationService}
+     * converts them once at startup, and the reader tolerates one until it does.
+     *
+     * <p>Never leaves the backend either: {@link SsoRegistrationResponse} does not
+     * carry it, {@link SsoRegistrationRequest#toString()} redacts it, and the audit
+     * trail omits it. Encryption is the layer BELOW those, for a database dump.
+     */
+    @Column(name = "oidc_client_secret", length = 1024)
     private String oidcClientSecret;
 
     public enum Protocol {

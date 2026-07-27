@@ -1,0 +1,46 @@
+-- =============================================================================
+-- V155__encrypt_oidc_client_secret.sql — room for the ciphertext, and a
+-- correction to V152's header.
+-- =============================================================================
+-- Expand-only: one column WIDENED. Nothing dropped, renamed or narrowed.
+--
+-- WHY. V152's header states, of oidc_client_secret: "It is NOT encrypted at rest,
+-- and this is a REAL exposure... Encryption at rest is ESCALATED TO THE OPERATOR."
+-- The operator has now ruled (docs/agent-decisions.md, "OPERATOR RULINGS", item 3):
+-- ENCRYPT IT, reusing the AES-256-GCM cipher the platform already ships for AI
+-- provider keys. V152 is committed and immutable, so this header is the correction;
+-- read the two together, and treat V152's paragraph as superseded.
+--
+-- V152's stated reason for not encrypting was "a cipher whose key sits in the same
+-- config file would be theatre". The research that produced the ruling falsified the
+-- premise rather than the conclusion: the key does NOT sit in a config file. It is
+-- BVISIONRY_ENCRYPTION_KEY, supplied as a deploy-time environment variable with no
+-- inline fallback in application-prod.properties, so a dump of this database does not
+-- contain it. That is what makes the encryption real against the threats it claims:
+-- a stolen backup, a read-only analytics grant, an insider with DB access, an
+-- accidentally-shared dump. It does NOT mitigate full host compromise, and nothing
+-- envelope encryption can do would.
+--
+-- WHY WIDER. AES-GCM + Base64 expands a secret to roughly 4/3 * (len + 28) bytes, and
+-- a key-version stamp ("v1:") is prepended. The 512-character maximum the request DTO
+-- validates therefore stores as ~720. 512 would have silently truncated -- or, with
+-- Postgres, thrown 22001 on the admin's save -- at exactly the length a real IdP
+-- secret can reach. 1024 leaves headroom for one more version stamp.
+--
+-- BACKFILL — WHY THERE IS NO UPDATE STATEMENT HERE. The rows hold plaintext, and
+-- encrypting them needs the key, which lives in the application's environment and
+-- deliberately not in the database. Flyway cannot reach it. So the conversion is
+-- SERVICE-SIDE and eager: SsoRegistrationService#encryptLegacyPlaintextSecrets runs
+-- once on ApplicationReadyEvent, finds every row whose secret carries no key-version
+-- stamp, and re-saves it encrypted. Chosen over a lazy convert-on-read because a read
+-- happens on the anonymous handshake path, which has no transaction and must not
+-- write; and over marking rows here with a 'plain:' prefix because that would break
+-- the CURRENTLY DEPLOYED code the instant this migration ran, before the new code
+-- boots -- a migration must never make the running release wrong.
+--
+-- Until that runner completes, OidcClientRegistrations reads an unstamped value as
+-- plaintext. That window is one startup long and closes for good.
+-- =============================================================================
+
+ALTER TABLE sso_registrations
+    ALTER COLUMN oidc_client_secret TYPE VARCHAR(1024);

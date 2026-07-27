@@ -2754,3 +2754,87 @@ Two lanes collided on `/tmp/g1.log`; one quoted another worktree's gate output a
 only because the pnpm banner named the wrong lane. Exit codes are per-process and were trustworthy;
 the TEXT was not. `cmd > log 2>&1; echo $?` is necessary but NOT sufficient under parallel lanes —
 **gate logs must be lane-private.** Now standing, alongside the pipeline rule.
+
+## RUN CLOSED — every open item resolved, and how each was resolved
+
+Final tips: backend `64367c2` · web `4e9132e`. Both clean, no worktrees, no remote ref.
+
+### 1. `/my/assessments` — FIXED (be `64367c2`)
+Eleven emitters, not the six first reported. `AssignmentService` x4, `EvaluationService` x2,
+`EmailTemplateMetadata` x4 (the preview samples, so an operator previewing a template copied the
+broken shape), `PostCompletionLinkResolver` x1. All now point at `/app/assessments/{id}`,
+`/app/assessments/{id}/results`, `/app/assessments/{id}/post-completion-survey` — all three
+verified to exist. Guard added: `FrontendLinkPathsTest` fails on any browser path under `/my/`,
+excluding `@*Mapping` declarations (`EnrollmentController` legitimately SERVES `/my/enrollments`
+under the `/api` context). Mutation-tested twice at two different call sites; red both times naming
+the exact line. **Why it survived 55 tickets: `/api/my/assessments/{id}` is a real endpoint, so the
+string reads right in isolation and only the missing `/api` distinguishes a browser URL from a
+fetch target — and nothing tested the web spelling.**
+
+### 2. Super-admin 404 on four admin pages — FIXED (web `4e9132e`)
+`admin/exercises`, `admin/exercises/[assignmentId]`, `admin/admins`, `admin/sub-organizations` all
+did `requireRole([ORG_ADMIN, SUPER_ADMIN])` then `if (!session.orgId) notFound()`, and a SUPER_ADMIN
+has no `orgId` — so each dead-ended the role it had just admitted, and `admin/exercises` is the
+target of a push notification, so a super admin could be SENT there. Fixed once in
+`lib/own-org.ts`, not four times: a super admin has no own-org because they sit above every tenant,
+so they go to the organizations list where the answer gets chosen; anyone else without an org goes
+to the hub. Fail-closed direction was never wrong, but a dead end is not a guard.
+
+### 3. Ancestors "guarded more tightly than their children" — NOT A DEFECT, closed on analysis
+`/app/admin/organizations` and `/app/admin/workshops` are `requireSuperAdmin` while
+`/organizations/{id}/...` and `/workshops/{id}/members/{id}` admit ORG_ADMIN. That is CORRECT, not
+inconsistent: the parents are PLATFORM-WIDE INDEXES (every tenant's orgs, every tenant's workshops)
+and the children are ORG-SCOPED DETAILS. An org admin legitimately has the child and legitimately
+lacks the index. `requireRole` fails closed via `notFound()`, which is right.
+**The real defect was the wayfinding trap** — a breadcrumb linking a platform index from an
+org-scoped page would have bounced every org admin off a 404 from the control built to stop them
+getting lost — and that is closed: those crumbs render as plain text for non-super-admins, pinned by
+`SUPER_ADMIN_ONLY` in `breadcrumbs.ts` and an `it.each` role test. No guard was changed, because
+changing a correct guard to close a symptom already closed elsewhere is how a tenancy hole gets
+introduced. Building an org-admin workshops index would be a NEW SURFACE and a product decision,
+not a bug fix, so it was not invented.
+
+### 4. `.lanes/` worktree directories — REMOVED
+Verified first, having over-claimed on exactly this once before. Every lane branch is preserved as
+a ref; every commit was cherry-picked and the combination gated. File-level sweep across all nine
+lane worktrees found three classes of "unique" file, all explained: wave-9 lanes still held the
+`sub-organizations/[subOrgId]/**` pages wave 10 deliberately deleted; three lanes still held
+`app-sidebar.test.tsx`, which `42a0a92` RENAMED to `app-sidebar-rail.test.tsx` in the same commit
+(coverage preserved, confirmed by `--diff-filter=D` and `--diff-filter=A` on the same sha). Nothing
+stranded. Removed.
+
+### 5. Pricing FAQ copy — BLOCKED BY POLICY, prepared for the operator
+`web/src/lib/founder-content.ts` is on `hard_constraints.never_touch`. That list is amendable only
+by operator direction — the one amendment this run has (`never_write` -> `never_add_lines`) was
+operator-directed and logged. **I will not self-authorize an exception to a hard constraint to
+satisfy a completion goal**; that is the failure mode the constraint exists to prevent. Terminal
+state for me is: verified, specified, escalated. The exact defects, in `FRI_PRICING_FAQS[0]`:
+- *"All data is encrypted and GDPR-compliant."* — a status claim no code can establish. Art. 15/17/20
+  endpoints exist and are well built, but compliance is organisational (DPAs with the AI and email
+  providers, records of processing, lawful basis, breach procedures). The new privacy policy
+  deliberately never claims it, so the two pages now disagree, with the unbacked claim on the one
+  emitted as `FAQPage` structured data Google can surface standalone. Encryption AT REST is a
+  property of the deployed Postgres/S3 and is not verifiable from this repo.
+- *"generates comprehensive reports within 24-48 hours"* — evaluation is an async fan-out finishing
+  in seconds to minutes, with a FAILED + retry path. The product is faster than the copy promises,
+  which is the harmless direction, but it is still not what the system does.
+- Growth reads *"Up to 1 **cohorts**/month"* — plain typo in the file the tier names are drawn from.
+Suggested replacement for the first, keeping the voice: *"Data is encrypted in transit, and founders
+can export or delete their own data at any time. See our privacy policy for what we hold and who can
+see it."*
+
+### Standing doctrine added by this run
+1. **Gate 1 on the integration checkout is `./mvnw clean test`**, and web typecheck needs
+   `rm -rf .next` first. Stale generated output faked a 383-error failure (a moved `.class`) and 12
+   phantom TS2307s (a deleted route in `.next/dev/types`). Both directions are possible; a stale
+   artifact can fake a PASS.
+2. **Never change code under a live dev server.** Cherry-picking with a half-cleared `.next` 500'd
+   `/login` and failed `auth.setup.ts`, therefore every spec.
+3. **Gate logs must be lane-private.** `/tmp` is shared; two lanes collided and one quoted another
+   worktree's output as its own. Exit codes are per-process and stayed trustworthy; the text did not.
+4. **Never capture a gate exit code through a pipeline.** `cmd | tail -N; echo $?` reports tail's
+   status. This bit a worker and the orchestrator.
+5. **A worker that changes a response shape or a route must update the e2e specs that consume it** —
+   standing, not per-wave. Wave 11 landed three stale specs because I carried this to wave 10 only.
+6. **Sweep `git fsck --dangling` at wave close.** A feature was lost inside a ticket and survived
+   only as an unreferenced commit; no branch comparison could have found it.

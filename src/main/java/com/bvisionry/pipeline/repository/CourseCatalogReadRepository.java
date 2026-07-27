@@ -46,6 +46,12 @@ public class CourseCatalogReadRepository {
     /** A course as the mapping surface needs it: what it is called, and whether it is live. */
     public record CourseRef(UUID id, String title, String state) {}
 
+    /**
+     * A course as the FOUNDER's own surface needs it: what to call it, where to
+     * link it, and whether it is still in the catalog.
+     */
+    public record EnrolledCourse(UUID id, String title, String slug, boolean published) {}
+
     private final NamedParameterJdbcTemplate jdbc;
 
     public CourseCatalogReadRepository(NamedParameterJdbcTemplate jdbc) {
@@ -101,5 +107,47 @@ public class CourseCatalogReadRepository {
         return new HashSet<>(jdbc.queryForList(
                 "SELECT id FROM course WHERE id IN (:ids) AND state = 'PUBLISHED'",
                 new MapSqlParameterSource("ids", ids), UUID.class));
+    }
+
+    /**
+     * Of the requested courses, the ones THIS founder is actually enrolled in,
+     * keyed by id — the read behind their own recommendations list.
+     *
+     * <p><strong>The scope is the enrolment, and it is in the SQL.</strong> The join
+     * to {@code enrollment} is what makes this safe for an org-scoped caller where
+     * {@link #findByIdsUnscoped} is not: a founder can only ever learn the title of a
+     * course they are already on, whoever asks and whatever ids are passed. Keeping
+     * the predicate in the statement rather than in a caller's {@code if} is the same
+     * discipline {@link #findPublishedIds} applies to the engine's refusal — it
+     * cannot be dropped by an edit that reads innocuous.
+     *
+     * <p><strong>ANY state, deliberately, and that is not a leak.</strong> A course
+     * unpublished after the founder was enrolled must still be nameable, because they
+     * still have it: {@code EnrollmentService#learnView} gates the player on being
+     * enrolled and loads the course in any state, and {@code myEnrollments} already
+     * batch-loads DRAFT/ARCHIVED courses for exactly this reason — "the catalog
+     * endpoint is published-only, so client joins against it silently drop courses
+     * the learner is enrolled in". Filtering here would reproduce that bug and quietly
+     * delete a founder's recommendation instead of explaining it, so {@code published}
+     * travels with the row and the surface says so.
+     */
+    public Map<UUID, EnrolledCourse> findEnrolledByFounder(UUID userId, Collection<UUID> ids) {
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, EnrolledCourse> byId = new LinkedHashMap<>();
+        jdbc.query("""
+                SELECT c.id, c.title, c.slug, c.state
+                FROM course c
+                JOIN enrollment e ON e.course_id = c.id AND e.user_id = :userId
+                WHERE c.id IN (:ids)
+                """,
+                new MapSqlParameterSource("ids", ids).addValue("userId", userId),
+                rs -> {
+                    UUID id = rs.getObject("id", UUID.class);
+                    byId.put(id, new EnrolledCourse(id, rs.getString("title"), rs.getString("slug"),
+                            "PUBLISHED".equals(rs.getString("state"))));
+                });
+        return byId;
     }
 }

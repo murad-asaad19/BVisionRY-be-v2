@@ -1,6 +1,7 @@
 package com.bvisionry.pipeline.repository;
 
 import com.bvisionry.pipeline.entity.AutoEnrolment;
+import com.bvisionry.pipeline.entity.AutoEnrolmentOutcome;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -11,10 +12,9 @@ import java.util.UUID;
  * The auto-enrolment ledger: what the engine decided, per (founder, course,
  * evaluation).
  *
- * <p>ponytail: one query, the only one the engine needs. The founder-facing read
- * ("recommended because of &lt;pillar&gt;") belongs to {@code dashboard_recommendations}
- * and arrives with the surface that consumes it — the {@code (user_id, ...)} unique
- * index in V151 already serves it.
+ * <p>Two queries: the engine's idempotency read, and the founder's own read of the
+ * decisions made about them. Both are keyed on {@code user_id} first and are served
+ * by {@code uq_auto_enrolments} (V151); neither needed a new index.
  */
 @Repository
 public interface AutoEnrolmentRepository extends JpaRepository<AutoEnrolment, UUID> {
@@ -33,4 +33,27 @@ public interface AutoEnrolmentRepository extends JpaRepository<AutoEnrolment, UU
      * being silently wrong.
      */
     List<AutoEnrolment> findBySubmissionIdAndUserId(UUID submissionId, UUID userId);
+
+    /**
+     * One founder's own decisions, newest first — the read behind "recommended
+     * because of &lt;pillar&gt;".
+     *
+     * <p><strong>The founder id is a parameter, and its only legitimate argument is
+     * the AUTHENTICATED caller's own id</strong> (resolved server-side from
+     * {@code CurrentUserAccessor}, never from a path or a body). There is
+     * deliberately no all-founders overload: this ledger records what an assessment
+     * concluded about a named person, which is theirs.
+     *
+     * <p>{@code outcome} is a parameter rather than a hard-coded {@code ENROLLED}
+     * because the same query answers the operator's "why wasn't X enrolled" —
+     * but the founder surface passes {@code ENROLLED} and only {@code ENROLLED}:
+     * {@code ALREADY_ENROLLED} is a course they already had, and
+     * {@code COURSE_NOT_PUBLISHED} enrolled nobody.
+     *
+     * <p>Ordered by id after {@code createdAt} because a single evaluation writes
+     * its rows in one loop and {@code Instant.now()} can repeat within it; without
+     * the tie-break the founder's list would be free to reshuffle between requests.
+     */
+    List<AutoEnrolment> findByUserIdAndOutcomeOrderByCreatedAtDescIdAsc(
+            UUID userId, AutoEnrolmentOutcome outcome);
 }

@@ -2,7 +2,8 @@ package com.bvisionry.notification.push;
 
 import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.auth.entity.User;
-import com.bvisionry.notification.push.dto.NotificationsResponse;
+import com.bvisionry.common.security.CurrentUserAccessor;
+import com.bvisionry.notification.push.dto.NotificationItem;
 import com.bvisionry.notification.push.dto.PreferencesResponse;
 import com.bvisionry.notification.push.dto.SubscribeRequest;
 import com.bvisionry.notification.push.dto.UnreadCountResponse;
@@ -10,6 +11,7 @@ import com.bvisionry.notification.push.dto.UpdatePreferenceRequest;
 import com.bvisionry.notification.push.dto.VapidPublicKeyResponse;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -36,21 +38,42 @@ public class NotificationController {
 
     private final NotificationSettingsService settingsService;
     private final NotificationHistoryService historyService;
+    /**
+     * The feature-neutral "who is calling" port, NOT {@link SecurityUtils}.
+     * Both answer the same question, but every call to SecurityUtils from this
+     * package is a cross-feature ArchUnit violation pinned in the frozen store,
+     * and that store may only shrink — so the paged handler below would have had
+     * to ADD a line to build. {@code CurrentUserAccessor} lives in
+     * {@code common} (the shared kernel, exempt from rule 1) and exists for
+     * exactly this. The remaining SecurityUtils call sites are left alone: this
+     * ticket does not own them.
+     */
+    private final CurrentUserAccessor currentUser;
     private final String vapidPublicKey;
 
     public NotificationController(NotificationSettingsService settingsService,
                                   NotificationHistoryService historyService,
+                                  CurrentUserAccessor currentUser,
                                   @Value("${bvisionry.push.vapid.public-key:}") String vapidPublicKey) {
         this.settingsService = settingsService;
         this.historyService = historyService;
+        this.currentUser = currentUser;
         this.vapidPublicKey = vapidPublicKey;
     }
 
-    /** Recent history for the bell, newest first. */
+    /**
+     * The caller's history, newest first — ONE endpoint for both readers of it.
+     * The bell asks for {@code ?size=20&page=0} and shows the first page; the
+     * full inbox at {@code /app/notifications} walks the pages and can narrow to
+     * {@code ?unread=true}. It replaces a {@code ?limit=} list capped at 100 with
+     * no way to reach anything older (roadmap §10 friction #8).
+     */
     @GetMapping
-    public ResponseEntity<NotificationsResponse> list(@RequestParam(defaultValue = "20") int limit) {
-        return ResponseEntity.ok(new NotificationsResponse(
-                historyService.list(SecurityUtils.getCurrentUserId(), limit)));
+    public ResponseEntity<Page<NotificationItem>> list(@RequestParam(defaultValue = "0") int page,
+                                                      @RequestParam(defaultValue = "20") int size,
+                                                      @RequestParam(defaultValue = "false") boolean unread) {
+        return ResponseEntity.ok(
+                historyService.page(currentUser.require().userId(), page, size, unread));
     }
 
     @GetMapping("/unread-count")

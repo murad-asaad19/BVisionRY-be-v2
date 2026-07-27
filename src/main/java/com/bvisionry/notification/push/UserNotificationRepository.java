@@ -1,6 +1,7 @@
 package com.bvisionry.notification.push;
 
-import org.springframework.data.domain.Limit;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -14,7 +15,15 @@ import java.util.UUID;
 
 public interface UserNotificationRepository extends JpaRepository<UserNotification, UUID> {
 
-    List<UserNotification> findByUserIdOrderByCreatedAtDesc(UUID userId, Limit limit);
+    /**
+     * The caller's own history, newest first — ordering comes from the
+     * {@link Pageable} rather than the method name so both this and the
+     * unread-only variant below share one definition of "newest first".
+     */
+    Page<UserNotification> findByUserId(UUID userId, Pageable pageable);
+
+    /** Same page, restricted to what the caller has not opened yet. */
+    Page<UserNotification> findByUserIdAndReadAtIsNull(UUID userId, Pageable pageable);
 
     long countByUserIdAndReadAtIsNull(UUID userId);
 

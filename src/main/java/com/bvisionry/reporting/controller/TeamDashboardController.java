@@ -13,6 +13,7 @@ import com.bvisionry.reporting.service.MemberDisplayNameResolver;
 import com.bvisionry.reporting.service.MemberResultsExcelService;
 import com.bvisionry.reporting.service.MemberResultsService;
 import com.bvisionry.reporting.service.PdfReportService;
+import com.bvisionry.common.security.ExportNameGuard;
 import com.bvisionry.common.security.PremiumFeatureGuard;
 import com.bvisionry.reporting.service.TeamDashboardService;
 import com.bvisionry.reporting.service.TeamInsightsExcelService;
@@ -87,6 +88,11 @@ public class TeamDashboardController {
      * Per-member results PDF export (admin view) — reuses the member-report
      * pipeline ({@link PdfReportService}). {@code showNames=false} masks the
      * learner as "Member" via {@link MemberDisplayNameResolver}.
+     *
+     * <p>{@code showNames} defaults to FALSE and true is SUPER_ADMIN-only
+     * ({@link ExportNameGuard}). This is the admin view of somebody else's
+     * report; the member's own copy is {@code /api/my/assessments/...}, where
+     * the default stays true because the name is their own.
      */
     @GetMapping("/members/{userId}/results/{submissionId}/pdf")
     public ResponseEntity<byte[]> getMemberResultsPdf(
@@ -94,7 +100,8 @@ public class TeamDashboardController {
             @PathVariable UUID userId,
             @PathVariable UUID submissionId,
             @RequestParam(defaultValue = "download") String mode,
-            @RequestParam(defaultValue = "true") boolean showNames) {
+            @RequestParam(defaultValue = "false") boolean showNames) {
+        ExportNameGuard.checkShowNames(showNames);
         verifySubmissionBelongsToOrg(submissionId, orgId);
         MemberDisplayNameResolver.ReportIdentity identity =
                 memberDisplayNameResolver.resolveIdentity(submissionId, showNames);
@@ -111,7 +118,8 @@ public class TeamDashboardController {
 
     /**
      * Per-member results Excel export (admin view) — reuses the member-report
-     * pipeline ({@link MemberResultsExcelService}).
+     * pipeline ({@link MemberResultsExcelService}). Same masking default and
+     * same SUPER_ADMIN-only {@code showNames} as the PDF above.
      */
     @GetMapping("/members/{userId}/results/{submissionId}/excel")
     public ResponseEntity<byte[]> getMemberResultsExcel(
@@ -119,7 +127,8 @@ public class TeamDashboardController {
             @PathVariable UUID userId,
             @PathVariable UUID submissionId,
             @RequestParam(defaultValue = "download") String mode,
-            @RequestParam(defaultValue = "true") boolean showNames) {
+            @RequestParam(defaultValue = "false") boolean showNames) {
+        ExportNameGuard.checkShowNames(showNames);
         verifySubmissionBelongsToOrg(submissionId, orgId);
         MemberDisplayNameResolver.ReportIdentity identity =
                 memberDisplayNameResolver.resolveIdentity(submissionId, showNames);
@@ -167,6 +176,7 @@ public class TeamDashboardController {
             @RequestParam(defaultValue = "download") String mode,
             @RequestParam(defaultValue = "false") boolean showNames,
             @RequestParam(required = false) List<UUID> memberIds) {
+        ExportNameGuard.checkShowNames(showNames);
         byte[] xlsx = teamInsightsExcelService.generateReport(orgId, pipelineId, memberIds, showNames);
         String safeName = XlsxResponse.sanitizeFilename(
                 pipelineName == null || pipelineName.isBlank() ? "pipeline" : pipelineName);
@@ -187,6 +197,7 @@ public class TeamDashboardController {
             @RequestParam(defaultValue = "download") String mode,
             @RequestParam(defaultValue = "false") boolean showNames,
             @RequestParam(required = false) List<UUID> memberIds) {
+        ExportNameGuard.checkShowNames(showNames);
         byte[] pdf = teamInsightsPdfService.generateReport(orgId, pipelineId, memberIds, showNames);
         String safeName = (pipelineName == null || pipelineName.isBlank() ? "pipeline" : pipelineName)
                 .replaceAll("[^a-zA-Z0-9 _-]", "").replace(" ", "_");

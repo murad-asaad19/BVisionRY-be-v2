@@ -21,6 +21,7 @@ import com.bvisionry.certificate.dto.CertificateDto;
 import com.bvisionry.certificate.dto.CertificateVerifyDto;
 import com.bvisionry.certificate.service.CertificateService;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.security.NamesVisibleToSelf;
 import com.bvisionry.common.web.ClientIpResolver;
 
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -76,6 +77,8 @@ public class CertificateController {
      * @param showNames {@code true} (default) to show the real learner name;
      *                  {@code false} to show "Member"
      */
+    @NamesVisibleToSelf("findForUserAndCourse(SecurityUtils.getCurrentUserId(), ...) can only "
+            + "return the caller's own certificate, so the learner name on it is their own")
     @GetMapping(value = "/courses/{slug}/certificate/pdf",
                 produces = MediaType.APPLICATION_PDF_VALUE)
     @PreAuthorize("isAuthenticated()")

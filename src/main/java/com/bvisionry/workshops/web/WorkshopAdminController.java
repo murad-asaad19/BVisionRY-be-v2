@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.bvisionry.common.excel.XlsxResponse;
+import com.bvisionry.common.security.ExportNameGuard;
 
 import com.bvisionry.workshops.dto.AssignmentsResponse;
 import com.bvisionry.workshops.dto.BoardStyleRequest;
@@ -187,13 +188,30 @@ public class WorkshopAdminController {
         return service.analytics(orgId, workshopId);
     }
 
-    /** Branded PDF of every team's member answers (scope=all|leads, names maskable). */
+    /**
+     * Branded PDF of every team's member answers (scope=all|leads, names
+     * maskable). {@code showNames=true} is SUPER_ADMIN-only
+     * ({@link ExportNameGuard}).
+     *
+     * <p><b>This is a document-hygiene control, NOT an anonymity boundary, and
+     * the distinction is load-bearing.</b> The same in-org ORG_ADMIN this gate
+     * refuses can assemble byte-equivalent content from unguarded JSON siblings
+     * on THIS controller: {@code GET /{workshopId}/analytics} returns
+     * {@code userId} + {@code userName} for every completion, and
+     * {@code GET /{workshopId}/members/{userId}/answers} returns that member's
+     * {@code userName} and full recap — the very call
+     * {@code WorkshopAnswersExportService} makes, minus the masking. What this
+     * guard buys is that a NAMED FILE is not produced and circulated, not that
+     * the admin cannot learn the names. Do not write anything here implying the
+     * roster is protected.
+     */
     @GetMapping("/{workshopId}/answers/pdf")
     public ResponseEntity<byte[]> answersPdf(
             @PathVariable UUID orgId, @PathVariable UUID workshopId,
             @RequestParam(defaultValue = "all") String scope,
             @RequestParam(defaultValue = "false") boolean showNames,
             @RequestParam(defaultValue = "download") String mode) {
+        ExportNameGuard.checkShowNames(showNames);
         byte[] pdf = answersExport.pdf(orgId, workshopId, "leads".equals(scope), showNames);
         String filename = "Workshop_Answers_" + XlsxResponse.sanitizeFilename(
                 answersExport.workshopName(orgId, workshopId)) + ".pdf";
@@ -206,13 +224,14 @@ public class WorkshopAdminController {
                 .body(pdf);
     }
 
-    /** Excel workbook of every team's member answers (scope=all|leads, names maskable). */
+    /** Same answers as the PDF, same SUPER_ADMIN-only {@code showNames}. */
     @GetMapping("/{workshopId}/answers/excel")
     public ResponseEntity<byte[]> answersExcel(
             @PathVariable UUID orgId, @PathVariable UUID workshopId,
             @RequestParam(defaultValue = "all") String scope,
             @RequestParam(defaultValue = "false") boolean showNames,
             @RequestParam(defaultValue = "download") String mode) {
+        ExportNameGuard.checkShowNames(showNames);
         byte[] xlsx = answersExport.excel(orgId, workshopId, "leads".equals(scope), showNames);
         String filename = "Workshop_Answers_" + XlsxResponse.sanitizeFilename(
                 answersExport.workshopName(orgId, workshopId)) + ".xlsx";

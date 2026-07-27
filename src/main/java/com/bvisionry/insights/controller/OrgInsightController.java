@@ -7,6 +7,7 @@ import com.bvisionry.insights.dto.InsightReportResponse;
 import com.bvisionry.insights.service.InsightService;
 import com.bvisionry.insights.service.OrgInsightExcelService;
 import com.bvisionry.insights.service.OrgInsightPdfService;
+import com.bvisionry.common.security.ExportNameGuard;
 import com.bvisionry.common.security.PremiumFeatureGuard;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -80,6 +81,20 @@ public class OrgInsightController {
 
     /**
      * Download org insight report as PDF.
+     *
+     * <p>{@code showNames=true} is SUPER_ADMIN-only ({@link ExportNameGuard}).
+     *
+     * <p><b>Document hygiene, NOT anonymity.</b> Two things defeat it for a
+     * determined in-org ORG_ADMIN, and both are open by design pending an
+     * operator ruling: {@code GET /api/organizations/{orgId}/dashboard/overview}
+     * hands the same caller {@code memberName} + {@code userId} + scores for
+     * every member; and the masked labels are REVERSIBLE, because
+     * {@code OrgInsight{Excel,Pdf}Service.resolveMemberNames} orders
+     * {@code Member 1..N} by {@code user.id} (deliberately, to keep the mapping
+     * stable across the AI prompt and both exports). Sort the overview by
+     * {@code userId} and the anonymised report de-anonymises itself. This gate
+     * stops an unmasked FILE being generated; it does not stop the admin
+     * knowing who is who.
      */
     @GetMapping("/{reportId}/pdf")
     public ResponseEntity<byte[]> downloadPdf(
@@ -88,6 +103,7 @@ public class OrgInsightController {
             @RequestParam(defaultValue = "") String orgName,
             @RequestParam(defaultValue = "download") String mode,
             @RequestParam(defaultValue = "false") boolean showNames) {
+        ExportNameGuard.checkShowNames(showNames);
         premiumFeatureGuard.checkPremium(orgId, "org_insights");
         byte[] pdf = pdfService.generatePdf(orgId, reportId, orgName, showNames);
         String safeName = orgName.replaceAll("[^a-zA-Z0-9 _-]", "").replace(" ", "_");
@@ -101,6 +117,7 @@ public class OrgInsightController {
                 .body(pdf);
     }
 
+    /** Same report as the PDF, same SUPER_ADMIN-only {@code showNames}. */
     @GetMapping("/{reportId}/excel")
     public ResponseEntity<byte[]> downloadExcel(
             @PathVariable UUID orgId,
@@ -108,6 +125,7 @@ public class OrgInsightController {
             @RequestParam(defaultValue = "") String orgName,
             @RequestParam(defaultValue = "download") String mode,
             @RequestParam(defaultValue = "false") boolean showNames) {
+        ExportNameGuard.checkShowNames(showNames);
         premiumFeatureGuard.checkPremium(orgId, "org_insights");
         byte[] xlsx = excelService.generate(orgId, reportId, orgName, showNames);
         String filename = "Org_Insights_" + XlsxResponse.sanitizeFilename(orgName) + ".xlsx";

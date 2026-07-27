@@ -13,6 +13,7 @@ import com.bvisionry.reporting.service.MemberDisplayNameResolver;
 import com.bvisionry.reporting.service.MemberResultsExcelService;
 import com.bvisionry.reporting.service.MemberResultsService;
 import com.bvisionry.reporting.service.PdfReportService;
+import com.bvisionry.common.security.NamesVisibleToSelf;
 import com.bvisionry.common.security.PremiumFeatureGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
@@ -56,6 +57,9 @@ public class MemberResultsController {
         return ResponseEntity.ok(memberResultsService.getPillarDetail(submissionId, pillarId));
     }
 
+    @NamesVisibleToSelf("verifySubmissionOwnership pins the submission to the caller before "
+            + "any name is read; its only bypass is SUPER_ADMIN, whom ExportNameGuard would "
+            + "have admitted anyway")
     @GetMapping("/assessments/{submissionId}/results/pdf")
     public ResponseEntity<byte[]> getPdf(
             @PathVariable UUID submissionId,
@@ -78,6 +82,9 @@ public class MemberResultsController {
                 .body(pdf);
     }
 
+    @NamesVisibleToSelf("verifySubmissionOwnership pins the submission to the caller before "
+            + "any name is read; its only bypass is SUPER_ADMIN, whom ExportNameGuard would "
+            + "have admitted anyway")
     @GetMapping("/assessments/{submissionId}/results/excel")
     public ResponseEntity<byte[]> getExcel(
             @PathVariable UUID submissionId,

@@ -64,6 +64,14 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // they authored about themselves.
             "coach_profiles.coach_id", "cohort_members.user_id",
             "course.instructor_id", "email_templates.updated_by", "enrollment.user_id",
+            // enrolment_overrides (V157): user_id CASCADEs with the user row — "an admin
+            // took this founder off this course" is about that founder and nobody else,
+            // so it dies with them. Exported as course_removals for auto_enrolments'
+            // reason: it is an automated-journey decision about them that the enrolment
+            // row does not record. removed_by is SET NULL — an admin attribution on the
+            // ORG's record, like assignments.assigned_by; erasing the admin must not
+            // erase the fact that the removal happened.
+            "enrolment_overrides.removed_by", "enrolment_overrides.user_id",
             "exercise_assignments.user_id", "exercise_comments.author_id",
             "exercise_submissions.user_id", "insight_report_member_ids.member_id",
             "invitations.invited_by", "join_links.created_by", "notification_optouts.user_id",

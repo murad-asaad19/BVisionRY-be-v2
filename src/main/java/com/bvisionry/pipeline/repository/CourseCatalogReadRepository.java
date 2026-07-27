@@ -121,6 +121,14 @@ public class CourseCatalogReadRepository {
      * discipline {@link #findPublishedIds} applies to the engine's refusal — it
      * cannot be dropped by an edit that reads innocuous.
      *
+     * <p><strong>Live enrolments only.</strong> {@code status <> 'CANCELLED'} is
+     * the admin override (V157) reaching this surface: the ledger records what an
+     * evaluation DECIDED, this join is what the founder still HAS, and a course an
+     * admin removed them from must stop being recommended rather than linger as a
+     * card linking to a player that now refuses them. The predicate is in the SQL
+     * for {@link #findPublishedIds}' reason — a caller's {@code if} can be dropped
+     * by an edit that reads innocuous.
+     *
      * <p><strong>ANY state, deliberately, and that is not a leak.</strong> A course
      * unpublished after the founder was enrolled must still be nameable, because they
      * still have it: {@code EnrollmentService#learnView} gates the player on being
@@ -140,7 +148,7 @@ public class CourseCatalogReadRepository {
                 SELECT c.id, c.title, c.slug, c.state
                 FROM course c
                 JOIN enrollment e ON e.course_id = c.id AND e.user_id = :userId
-                WHERE c.id IN (:ids)
+                WHERE c.id IN (:ids) AND e.status <> 'CANCELLED'
                 """,
                 new MapSqlParameterSource("ids", ids).addValue("userId", userId),
                 rs -> {

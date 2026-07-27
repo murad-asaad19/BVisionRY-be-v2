@@ -209,6 +209,13 @@ public class PersonalDataRepository {
         // why not. The enrolment rows above do not say any of that.
         EXPORT_SECTIONS.put("course_recommendations",
                 "SELECT * FROM auto_enrolments WHERE user_id = :userId");
+        // The other half of that decision: a course an ADMIN took them off, with the
+        // reason. Exported for the same Art. 15(1)(h) argument as the row above — it
+        // shapes what learning they are given and nothing else records it — and
+        // separately because a founder asking "where did my course go" is entitled
+        // to the answer. Erased by the FK CASCADE with the user row.
+        EXPORT_SECTIONS.put("course_removals",
+                "SELECT * FROM enrolment_overrides WHERE user_id = :userId");
         EXPORT_SECTIONS.put("course_progress",
                 "SELECT * FROM content_progress WHERE enrollment_id IN "
                         + "(SELECT id FROM enrollment WHERE user_id = :userId)");

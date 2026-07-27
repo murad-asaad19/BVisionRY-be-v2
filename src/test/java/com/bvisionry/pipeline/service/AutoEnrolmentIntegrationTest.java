@@ -3,6 +3,7 @@ package com.bvisionry.pipeline.service;
 import com.bvisionry.common.enums.PillarType;
 import com.bvisionry.common.enums.PipelineStatus;
 import com.bvisionry.common.event.EvaluationEvents;
+import com.bvisionry.organization.MemberCourseRepository;
 import com.bvisionry.organization.OrganizationRepository;
 import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.pipeline.entity.Pillar;
@@ -67,6 +68,14 @@ class AutoEnrolmentIntegrationTest extends AbstractPostgresIntegrationTest {
     @Autowired private JdbcTemplate jdbc;
 
     /**
+     * The admin's side of the override, driven directly rather than through HTTP.
+     * The endpoint's own job is tenancy (does this founder belong to the caller's
+     * org), which {@code MemberControllerCoursesIntegrationTest} covers; what
+     * belongs HERE is whether the write it performs actually survives the engine.
+     */
+    @Autowired private MemberCourseRepository memberCourses;
+
+    /**
      * Spied, not mocked, and only to stage the one thing a test cannot otherwise
      * reach: the instant between the idempotency read and the write. See
      * {@link #aMidLoopUniqueViolationDoesNotKillTheRemainingCourses()}.
@@ -110,9 +119,13 @@ class AutoEnrolmentIntegrationTest extends AbstractPostgresIntegrationTest {
     @AfterEach
     void cleanUp() {
         jdbc.update("DELETE FROM auto_enrolments WHERE user_id = ?", founderId);
+        jdbc.update("DELETE FROM enrolment_overrides WHERE user_id = ?", founderId);
         jdbc.update("DELETE FROM enrollment WHERE user_id = ?", founderId);
-        jdbc.update("DELETE FROM pillar_evaluations WHERE submission_id = ?", submissionId);
-        jdbc.update("DELETE FROM submissions WHERE id = ?", submissionId);
+        // By assignment, not by the seeded id: the override tests add a SECOND
+        // submission (that is the whole point of them) and the container is shared.
+        jdbc.update("DELETE FROM pillar_evaluations WHERE submission_id IN "
+                + "(SELECT id FROM submissions WHERE assignment_id = ?)", assignmentId);
+        jdbc.update("DELETE FROM submissions WHERE assignment_id = ?", assignmentId);
         jdbc.update("DELETE FROM assignments WHERE id = ?", assignmentId);
         jdbc.update("DELETE FROM pillar_course_mappings WHERE pillar_id = ?", vision.getId());
         courseIds.forEach(id -> jdbc.update("DELETE FROM course WHERE id = ?", id));
@@ -264,8 +277,104 @@ class AutoEnrolmentIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ------------------------------------------------------------------
+    // The admin override (roadmap §7 item 10)
+    // ------------------------------------------------------------------
+
+    /**
+     * THE acceptance criterion, against the real schema: a founder an admin removed
+     * is not put back by their next assessment.
+     *
+     * <p>The second evaluation carries a NEW submission id, so the engine's
+     * idempotency read — keyed
+     * {@code [founder_id, course_id, source_evaluation_id]} — comes back empty and
+     * every other input still says "enrol them": the band maps to the course and the
+     * course is PUBLISHED. That is the falsifying case, and before V157 it re-enrolled
+     * them silently. Only {@code enrolment_overrides}, which carries no submission id
+     * and therefore speaks for evaluations that did not exist when it was written,
+     * stops it.
+     *
+     * <p>Also pins the progress promise: removal flips ONE column. The
+     * {@code enrollment} row survives, and with it every {@code content_progress},
+     * {@code quiz_attempts} and {@code certificates} row that cascades off its id —
+     * which a DELETE would have taken with it.
+     */
+    @Test
+    void anAdminRemovalIsNotUndoneByTheFoundersNextAssessment() {
+        mapCourse(0, publishedCourse);
+        storeMaturityLabel("Emerging");
+        publish();
+        assertThat(enrolmentCount(publishedCourse)).isEqualTo(1);
+
+        // They got 60% through before the admin decided it was the wrong module.
+        jdbc.update("UPDATE enrollment SET progress_pct = 60 WHERE user_id = ? AND course_id = ?",
+                founderId, publishedCourse);
+
+        // The real production write — same two statements the endpoint runs.
+        memberCourses.removeFromCourse(founderId, publishedCourse, founderId, "Wrong module for this cohort");
+        assertThat(enrolmentStatus(publishedCourse)).isEqualTo("CANCELLED");
+
+        UUID reassessment = reassess("Emerging");
+
+        // Not re-enrolled...
+        assertThat(enrolmentStatus(publishedCourse)).isEqualTo("CANCELLED");
+        // ...and no ledger row claiming otherwise. The engine writes nothing for an
+        // overridden course: a fourth outcome would need V151's CHECK widened, which
+        // that migration reserves to a human.
+        assertThat(ledgerCountFor(reassessment)).isZero();
+        // ...and their 60% is still there, because the row was never deleted.
+        assertThat(jdbc.queryForObject(
+                "SELECT progress_pct FROM enrollment WHERE user_id = ? AND course_id = ?",
+                Integer.class, founderId, publishedCourse)).isEqualTo(60);
+    }
+
+    /**
+     * The override is per (founder, course), so it must not quarantine the founder
+     * from the engine altogether — a later assessment still adds anything else their
+     * bands ask for.
+     */
+    @Test
+    void anOverrideBlocksOneCourseAndNotTheFoundersNextRecommendation() {
+        mapCourse(0, publishedCourse);
+        storeMaturityLabel("Emerging");
+        publish();
+        memberCourses.removeFromCourse(founderId, publishedCourse, founderId, null);
+
+        UUID newCourse = insertCourse(insertOrg("Later Catalog"), "PUBLISHED");
+        mapCourse(0, newCourse);
+        UUID reassessment = reassess("Emerging");
+
+        assertThat(enrolmentStatus(publishedCourse)).isEqualTo("CANCELLED");
+        assertThat(enrolmentCount(newCourse)).isEqualTo(1);
+        assertThat(ledgerCountFor(reassessment)).isEqualTo(1);
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
+
+    /** A whole new assessment of the same founder: new submission id, new event. */
+    private UUID reassess(String label) {
+        UUID id = insertEvaluatedSubmission(assignmentId, founderId);
+        jdbc.update("""
+                INSERT INTO pillar_evaluations (submission_id, pillar_id, score_percentage, maturity_label)
+                VALUES (?, ?, 42.0, ?)
+                """, id, vision.getId(), label);
+        events.publishEvent(new EvaluationEvents.SubmissionEvaluated(
+                id, founderId, Map.of(vision.getId(), label)));
+        return id;
+    }
+
+    private String enrolmentStatus(UUID courseId) {
+        return jdbc.queryForObject(
+                "SELECT status FROM enrollment WHERE user_id = ? AND course_id = ?",
+                String.class, founderId, courseId);
+    }
+
+    private int ledgerCountFor(UUID submission) {
+        return jdbc.queryForObject(
+                "SELECT count(*) FROM auto_enrolments WHERE submission_id = ?",
+                Integer.class, submission);
+    }
 
     private void publish() {
         events.publishEvent(new EvaluationEvents.SubmissionEvaluated(

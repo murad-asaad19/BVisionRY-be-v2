@@ -74,6 +74,13 @@ public class EnrollmentService {
     /**
      * Creates or returns the existing enrollment for the current user and the
      * course identified by {@code slug}.
+     *
+     * <p>Uses {@code findAny...} — the one read here that still sees an
+     * admin-removed (CANCELLED) row — for two reasons. The mechanical one: the row
+     * keeps its slot in {@code uq_enrollment_user_course}, so the filtered read
+     * would report "not enrolled" and send this straight into a constraint
+     * violation. The deliberate one: {@link #reactivateIfRemoved} then hands the
+     * founder their course back with every lesson they had completed still ticked.
      */
     @Transactional
     public EnrollmentDto enroll(String slug) {
@@ -81,9 +88,37 @@ public class EnrollmentService {
         var course = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
 
-        return enrollments.findByUserIdAndCourseId(userId, course.getId())
-                .map(e -> toDto(e, course))
+        return enrollments.findAnyByUserIdAndCourseId(userId, course.getId())
+                .map(e -> toDto(reactivateIfRemoved(e), course))
                 .orElseGet(() -> createEnrollment(userId, course));
+    }
+
+    /**
+     * A founder self-enrolling in a course an admin removed them from gets it back,
+     * progress intact.
+     *
+     * <p><strong>This does not weaken the override, and the distinction is the
+     * point.</strong> What an admin overrides is the ENGINE's automatic decision —
+     * "on evaluation completion a founder is automatically enrolled in modules
+     * matched to their weak pillars ... and an admin can override" (roadmap §7 item
+     * 10). The {@code enrolment_overrides} row survives this and keeps blocking
+     * every future evaluation; what it never claimed to be is a ban on a public
+     * cross-org catalog. A founder who navigates to a course and presses Enroll is
+     * not an assessment quietly undoing an admin, which is the thing the override
+     * exists to prevent.
+     *
+     * <p>The restored status is derived rather than assumed ACTIVE: removal only
+     * ever changed {@code status}, so a founder who had FINISHED the course comes
+     * back COMPLETED, with their certificate still valid.
+     */
+    private Enrollment reactivateIfRemoved(Enrollment enrollment) {
+        if (enrollment.getStatus() != EnrollmentStatus.CANCELLED) {
+            return enrollment;
+        }
+        enrollment.setStatus(enrollment.getCompletedAt() != null
+                ? EnrollmentStatus.COMPLETED
+                : EnrollmentStatus.ACTIVE);
+        return enrollments.save(enrollment);
     }
 
     /**
@@ -181,6 +216,16 @@ public class EnrollmentService {
         UUID userId = SecurityUtils.getCurrentUserId();
         if (!enrollment.getUserId().equals(userId)) {
             throw new org.springframework.security.access.AccessDeniedException("Not your enrollment");
+        }
+
+        // Removal check. This is the one enrolment read in the codebase that is
+        // BY ID rather than by (user, course), so the repository's status filter
+        // cannot cover it — and a player tab already open when an admin removed
+        // the founder still holds a perfectly valid enrollment id. Without this,
+        // that tab could keep completing lessons, drive progress to 100% and
+        // mint a certificate for a course they are no longer on.
+        if (enrollment.getStatus() == EnrollmentStatus.CANCELLED) {
+            throw new NotEnrolledException(enrollment.getCourseId().toString());
         }
 
         // Cross-course guard: completing a content item recomputes progress_pct and can

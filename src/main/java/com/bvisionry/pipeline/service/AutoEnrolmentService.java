@@ -7,6 +7,7 @@ import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.PillarCourseMapping;
 import com.bvisionry.pipeline.repository.AutoEnrolmentRepository;
 import com.bvisionry.pipeline.repository.CourseCatalogReadRepository;
+import com.bvisionry.pipeline.repository.EnrolmentOverrideReadRepository;
 import com.bvisionry.pipeline.repository.FounderEnrolmentWriteRepository;
 import com.bvisionry.pipeline.repository.PillarCourseMappingRepository;
 import com.bvisionry.pipeline.repository.PillarRepository;
@@ -88,6 +89,23 @@ import java.util.stream.Collectors;
  * founder already has, and never an unenrolment
  * ({@code auto_enrolment_on_reassessment: NEW_ENROLMENTS_ONLY}).
  *
+ * <h2>The admin override, and why it could not be a ledger row</h2>
+ * The key above is the reason {@code enrolment_overrides} (V157) is a separate
+ * table rather than a fourth {@link AutoEnrolmentOutcome}. Per-submission grain
+ * is exactly wrong for an override: a re-assessment carries a new submission id,
+ * finds no ledger row for it, and would cheerfully re-enrol the founder in the
+ * course an admin just removed. The override table is keyed
+ * {@code (user_id, course_id)} with no submission at all, so it outlives every
+ * evaluation — and this engine consults it FIRST, before the per-evaluation
+ * idempotency read, because "an admin said no" outranks "this evaluation has not
+ * decided yet".
+ *
+ * <p>An overridden course writes NO ledger row — the same silence an off-axis
+ * pillar produces. Recording it would need a fourth {@code outcome} value, and
+ * V151 pins that set with a CHECK it explicitly reserves widening to a human
+ * ({@code never_auto_decide}). The override row is the record instead, and a
+ * better one: it carries who removed them, when, and why in their own words.
+ *
  * <h2>No endpoint</h2>
  * Engine and data only. There is no controller, no DTO and no route, so there is no
  * new authorization surface to defend — the only entry point is an in-process event
@@ -105,6 +123,7 @@ public class AutoEnrolmentService {
     private final CourseCatalogReadRepository courseCatalog;
     private final AutoEnrolmentRepository ledger;
     private final FounderEnrolmentWriteRepository founderEnrolments;
+    private final EnrolmentOverrideReadRepository overrides;
     private final MeterRegistry meterRegistry;
 
     /**
@@ -160,6 +179,12 @@ public class AutoEnrolmentService {
             return;
         }
 
+        // Courses an admin has taken this founder off (V157). Read once per
+        // evaluation, ahead of everything else, because it is the only input here
+        // that a HUMAN authored: it is not scoped to a submission, so unlike the
+        // ledger read below it still speaks for assessments taken years later.
+        Set<UUID> overridden = overrides.findCourseIdsFor(event.founderId());
+
         // Already decided by an earlier pass over THIS evaluation — the idempotent
         // skip. Outcome is irrelevant: a course refused as DRAFT last time stays
         // refused, so a re-run neither re-refuses it nor quietly changes its mind.
@@ -173,6 +198,17 @@ public class AutoEnrolmentService {
                 candidates.stream().map(Candidate::courseId).collect(Collectors.toSet()));
 
         for (Candidate candidate : candidates) {
+            // An admin removed this founder from this course. Nothing happens for
+            // it — no enrolment, and no ledger row, because a row would have to
+            // carry an outcome the V151 CHECK does not admit. The
+            // enrolment_overrides row IS the record; see the class doc.
+            if (overridden.contains(candidate.courseId())) {
+                log.info("Auto-enrolment skipped course {} for founder {}: an admin removed them "
+                        + "from it (pillar '{}', submission {})",
+                        candidate.courseId(), event.founderId(), candidate.pillarName(),
+                        event.submissionId());
+                continue;
+            }
             // add() is false when this evaluation already decided this course —
             // either on an earlier run, or a moment ago because a second pillar
             // maps to it too. Both mean "leave it alone".

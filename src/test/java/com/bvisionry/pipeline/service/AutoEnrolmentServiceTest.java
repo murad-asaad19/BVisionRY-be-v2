@@ -7,6 +7,7 @@ import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.PillarCourseMapping;
 import com.bvisionry.pipeline.repository.AutoEnrolmentRepository;
 import com.bvisionry.pipeline.repository.CourseCatalogReadRepository;
+import com.bvisionry.pipeline.repository.EnrolmentOverrideReadRepository;
 import com.bvisionry.pipeline.repository.FounderEnrolmentWriteRepository;
 import com.bvisionry.pipeline.repository.PillarCourseMappingRepository;
 import com.bvisionry.pipeline.repository.PillarRepository;
@@ -51,6 +52,7 @@ class AutoEnrolmentServiceTest {
     @Mock private CourseCatalogReadRepository courseCatalog;
     @Mock private AutoEnrolmentRepository ledger;
     @Mock private FounderEnrolmentWriteRepository founderEnrolments;
+    @Mock private EnrolmentOverrideReadRepository overrides;
 
     private AutoEnrolmentService service;
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
@@ -66,7 +68,7 @@ class AutoEnrolmentServiceTest {
     void setUp() {
         service = new AutoEnrolmentService(
                 pillarRepository, mappingRepository, courseCatalog, ledger, founderEnrolments,
-                meterRegistry);
+                overrides, meterRegistry);
 
         pillar = pillar("Vision Clarity", 1);
     }
@@ -178,6 +180,54 @@ class AutoEnrolmentServiceTest {
 
         assertThat(captureLedgerRow().getOutcome())
                 .isEqualTo(AutoEnrolmentOutcome.ALREADY_ENROLLED);
+    }
+
+    // ------------------------------------------------------------------
+    // The admin override (roadmap §7 item 10)
+    // ------------------------------------------------------------------
+
+    /**
+     * THE falsifying case for the whole ticket.
+     *
+     * <p>Every input here says "enrol them": the band maps to the course, the course
+     * is PUBLISHED, and the ledger read comes back EMPTY — which is what a NEW
+     * evaluation always sees, because the idempotency key includes the submission id
+     * and this submission has never been processed. Before the override existed
+     * that combination re-enrolled the founder in a course an admin had just removed
+     * them from, and nothing anywhere said so. The override table is the only reason
+     * this now enrols nobody.
+     */
+    @Test
+    void aCourseAnAdminRemovedIsNotReEnrolledByAFreshEvaluation() {
+        stubPillars(pillar);
+        stubRules(pillarId, 0, courseId);
+        when(overrides.findCourseIdsFor(founderId)).thenReturn(Set.of(courseId));
+
+        service.enrol(event(Map.of(pillarId, "Emerging")));
+
+        verify(founderEnrolments, never()).enrolIfAbsent(any(), any());
+        // And no ledger row: a fourth outcome would need the V151 CHECK widened,
+        // which that migration reserves to a human. The override row is the record.
+        verify(ledger, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void anOverrideRemovesOneCourseAndLeavesTheRestOfTheJourneyIntact() {
+        Pillar second = pillar("Runway", 2);
+        UUID keptCourse = UUID.randomUUID();
+        stubPillars(pillar, second);
+        stubRules(pillarId, 0, courseId);
+        stubRules(second.getId(), 0, keptCourse);
+        when(overrides.findCourseIdsFor(founderId)).thenReturn(Set.of(courseId));
+        when(courseCatalog.findPublishedIds(anyCollection())).thenReturn(Set.of(courseId, keptCourse));
+        when(ledger.findBySubmissionIdAndUserId(submissionId, founderId)).thenReturn(List.of());
+        when(founderEnrolments.enrolIfAbsent(founderId, keptCourse)).thenReturn(true);
+
+        service.enrol(event(labels(pillarId, "Emerging", second.getId(), "Emerging")));
+
+        verify(founderEnrolments, never()).enrolIfAbsent(founderId, courseId);
+        verify(founderEnrolments).enrolIfAbsent(founderId, keptCourse);
+        assertThat(captureLedgerRow().getCourseId()).isEqualTo(keptCourse);
     }
 
     // ------------------------------------------------------------------

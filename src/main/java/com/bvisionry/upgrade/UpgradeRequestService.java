@@ -110,7 +110,7 @@ public class UpgradeRequestService {
         }
         if (billingOrg.getSubscriptionTier() != SubscriptionTier.FREE) {
             throw new BadRequestException(
-                    "Your organization is already on the " + billingOrg.getSubscriptionTier() + " plan.");
+                    "Your organization is already on the " + billingOrg.getSubscriptionTier().label() + " plan.");
         }
     }
 

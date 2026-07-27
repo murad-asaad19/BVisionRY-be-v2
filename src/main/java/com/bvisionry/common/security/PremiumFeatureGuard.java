@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -46,6 +47,25 @@ public class PremiumFeatureGuard {
     }
 
     /**
+     * The tier that governs {@code orgId}'s CAPACITY, or empty when the caller
+     * bypasses entitlement entirely (SUPER_ADMIN).
+     *
+     * <p>Exists so a capacity meter that this class cannot own — the cohort
+     * rate, which needs to count cohorts and therefore lives in
+     * {@code programflow} — still resolves "effective tier" and "does this
+     * caller bypass" through the SAME two collaborators as every other gate,
+     * instead of forking the super-admin rule or the sub-org inheritance rule.
+     * The shared kernel must not depend on a feature package, so the count
+     * stays out there and only the verdict inputs come from here.
+     *
+     * <p>Empty means "no ceiling applies", not "FREE" — mixing those up is how
+     * a bypass turns into a refusal.
+     */
+    public Optional<SubscriptionTier> governingTier(UUID orgId) {
+        return isSuperAdmin() ? Optional.empty() : Optional.of(orgHierarchy.effectiveTierOf(orgId));
+    }
+
+    /**
      * The ORIGINAL principal-based check, preserved exactly through
      * {@link CurrentUserAccessor} (whose adapter reads
      * {@code SecurityUtils.getCurrentUser().getRole()}).
@@ -69,14 +89,22 @@ public class PremiumFeatureGuard {
     }
 
     /**
-     * Returns true if the organization's EFFECTIVE subscription is Premium —
+     * Returns true if the organization's EFFECTIVE subscription is a PAID one —
      * sub-organizations inherit the parent's plan, so a FREE sub-org under a
-     * PREMIUM parent passes. Resolved through {@link OrgHierarchyPort} (which
+     * paying parent passes. Resolved through {@link OrgHierarchyPort} (which
      * throws ResourceNotFoundException for unknown orgs, preserving the
      * previous findById behaviour).
+     *
+     * <p>Was {@code == PREMIUM} before V156 split paid into Starter / Growth /
+     * Founder Success. {@link SubscriptionTier#isPaid()} is the SAME question
+     * that test always asked, so every gated surface behaves exactly as it did:
+     * ex-PREMIUM orgs are GROWTH and still pass, FREE orgs still fail. The name
+     * stays "premium" because the whole vocabulary around it does —
+     * {@code PremiumRequiredException}, {@code checkPremium}, the 403 body — and
+     * renaming that is churn, not a behaviour change.
      */
     public boolean isPremium(UUID orgId) {
-        return orgHierarchy.effectiveTierOf(orgId) == SubscriptionTier.PREMIUM;
+        return orgHierarchy.effectiveTierOf(orgId).isPaid();
     }
 
     /**

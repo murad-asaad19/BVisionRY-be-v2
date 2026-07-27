@@ -80,7 +80,7 @@ class InvitationTokenDisclosureIntegrationTest extends AbstractPostgresIntegrati
         org = new Organization();
         org.setName("Token Disclosure Org");
         org.setActive(true);
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         org = organizationRepository.save(org);
     }
 

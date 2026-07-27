@@ -121,7 +121,7 @@ class AttentionRuleServiceTest {
 
     @Test
     void trialExpiring_emitsWarning() {
-        Organization o = org("Acme", true, SubscriptionTier.PREMIUM,
+        Organization o = org("Acme", true, SubscriptionTier.GROWTH,
                 Instant.now().plus(3, ChronoUnit.DAYS),
                 Instant.now().minus(60, ChronoUnit.DAYS));
         when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));
@@ -135,7 +135,7 @@ class AttentionRuleServiceTest {
 
     @Test
     void trialExpiringInOneDay_usesSingularDay() {
-        Organization o = org("Acme", true, SubscriptionTier.PREMIUM,
+        Organization o = org("Acme", true, SubscriptionTier.GROWTH,
                 // Just over 1 day — DAYS.between truncates to 1.
                 Instant.now().plus(36, ChronoUnit.HOURS),
                 Instant.now().minus(60, ChronoUnit.DAYS));
@@ -191,7 +191,7 @@ class AttentionRuleServiceTest {
         // Org has members but no one has ever logged in, and it's older than the
         // idle threshold — fire IDLE with the "never logged in" wording instead
         // of the misleading "Idle for over N days".
-        Organization o = org("Razan Org", true, SubscriptionTier.PREMIUM, null,
+        Organization o = org("Razan Org", true, SubscriptionTier.GROWTH, null,
                 Instant.now().minus(26, ChronoUnit.DAYS));
         when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));
         stubStats(o, 2L, null);
@@ -222,7 +222,7 @@ class AttentionRuleServiceTest {
 
     @Test
     void onTrial_isNotFlaggedIdle() {
-        Organization o = org("Trialing", true, SubscriptionTier.PREMIUM,
+        Organization o = org("Trialing", true, SubscriptionTier.GROWTH,
                 Instant.now().plus(10, ChronoUnit.DAYS),
                 Instant.now().minus(60, ChronoUnit.DAYS));
         when(orgRepo.findByParentOrganizationIsNull()).thenReturn(List.of(o));

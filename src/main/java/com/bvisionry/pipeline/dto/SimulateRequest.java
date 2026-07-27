@@ -15,9 +15,9 @@ public record SimulateRequest(
         /**
          * When true, simulate the public (QR-link) assessment flow: evaluation uses
          * the {@code PUBLIC_ASSESSMENT_SYSTEM_PROMPT} and the configured public
-         * assessment model. The real public flow always runs at PREMIUM gating
-         * (see {@code EvaluationService} — tier is PREMIUM when there is no
-         * assignment), so callers send {@code tier=PREMIUM} alongside this flag.
+         * assessment model. The real public flow always runs at PAID gating
+         * (see {@code EvaluationService} — tier is GROWTH when there is no
+         * assignment), so callers send any paid {@code tier} alongside this flag.
          * Defaults to false (a normal member free/premium simulation).
          */
         boolean publicAssessment

@@ -143,7 +143,7 @@ class EvaluationServiceTest {
 
         Organization organization = new Organization();
         organization.setId(UUID.randomUUID());
-        organization.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        organization.setSubscriptionTier(SubscriptionTier.GROWTH);
 
         Assignment assignment = new Assignment();
         assignment.setId(UUID.randomUUID());

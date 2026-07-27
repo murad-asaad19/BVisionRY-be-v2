@@ -45,8 +45,12 @@ public class DashboardService {
         long suspendedCount = totalOrgs - activeCount;
         long onTrial = orgRepo.countOnActiveTrial(now);
         long trialsExpiring = orgRepo.countTrialsExpiringWithin(now, in7d);
-        long premiumTotal = orgRepo.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.PREMIUM);
+        // "Premium" here has always meant "paying", which since V156 spans
+        // Starter / Growth / Founder Success. Subtraction, matching
+        // PlatformAnalyticsService: it cannot miss a tier the way an enumerated
+        // query can, and both counts are root-scoped identically.
         long freeTotal = orgRepo.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.FREE);
+        long premiumTotal = totalOrgs - freeTotal;
         long totalMembers = userRepo.count();
 
         long createdLast30d = auditRepo.countByActionTypeAndOccurredAtAfter(

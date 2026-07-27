@@ -81,14 +81,14 @@ class UpgradeRequestServiceTest {
         when(userRepo.findByIdWithOrganization(memberId)).thenReturn(Optional.of(member));
     }
 
-    /** The sub-org row is FREE, but the plan that matters is the parent's PREMIUM. */
+    /** The sub-org row is FREE, but the plan that matters is the parent's paid one. */
     @Test
     void create_subOrgMemberUnderPremiumParent_rejectedAsAlreadyPremium() {
-        parent.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        parent.setSubscriptionTier(SubscriptionTier.GROWTH);
 
         assertThatThrownBy(() -> service.create(memberId, new UpgradeRequestCreateRequest(null, null)))
                 .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("already on the PREMIUM plan");
+                .hasMessageContaining("already on the Growth plan");
     }
 
     @Test

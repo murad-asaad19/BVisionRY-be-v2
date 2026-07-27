@@ -33,7 +33,6 @@ class DashboardServiceTest {
         when(orgRepo.countByIsActiveTrueAndParentOrganizationIsNull()).thenReturn(7L);
         when(orgRepo.countOnActiveTrial(any())).thenReturn(1L);
         when(orgRepo.countTrialsExpiringWithin(any(), any())).thenReturn(1L);
-        when(orgRepo.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.PREMIUM)).thenReturn(5L);
         when(orgRepo.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.FREE)).thenReturn(5L);
         when(userRepo.count()).thenReturn(213L);
         when(auditRepo.countByActionTypeAndOccurredAtAfter(any(), any())).thenReturn(2L);
@@ -46,8 +45,10 @@ class DashboardServiceTest {
         assertThat(resp.kpis().suspendedCount()).isEqualTo(3);  // total - active
         assertThat(resp.kpis().trialsExpiringSoon()).isEqualTo(1);
         assertThat(resp.kpis().totalMembers()).isEqualTo(213);
-        // Tier mix: Premium = total PREMIUM - active trials
-        assertThat(resp.tierMix().premium()).isEqualTo(4);  // 5 - 1
+        // Tier mix: paying = (root total - FREE) - active trials. Since V156 the
+        // 5 paying orgs may be any mix of Starter / Growth / Founder Success —
+        // the KPI counts customers, not plans, so subtraction is tier-blind.
+        assertThat(resp.tierMix().premium()).isEqualTo(4);  // (10 - 5) - 1
         assertThat(resp.tierMix().trial()).isEqualTo(1);
         assertThat(resp.tierMix().free()).isEqualTo(5);
     }

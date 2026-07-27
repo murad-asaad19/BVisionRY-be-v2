@@ -104,12 +104,15 @@ public class Organization extends BaseEntity {
     }
 
     /**
-     * True iff this org currently has an active Premium trial.
+     * True iff this org currently has an active trial.
      * Defensive against a manual tier-downgrade leaving a future trial_ends_at:
-     * "on trial" requires both PREMIUM tier and a future expiry.
+     * "on trial" requires both a PAID tier and a future expiry. (Was
+     * {@code == PREMIUM} before V156 split paid into three sold plans; a trial
+     * grants {@code GROWTH}, and a super admin may reclassify a trialling org
+     * to any paid tier without that ending the trial.)
      */
     public boolean isOnTrial() {
-        return subscriptionTier == SubscriptionTier.PREMIUM
+        return subscriptionTier.isPaid()
             && trialEndsAt != null
             && trialEndsAt.isAfter(Instant.now());
     }

@@ -112,19 +112,19 @@ public interface OrganizationRepository extends JpaRepository<Organization, UUID
     List<Object[]> findOrgStatsByIds(@Param("orgIds") List<UUID> orgIds);
     // Page<Organization> findAll(Pageable pageable) is inherited from JpaRepository.
 
-    /** Orgs whose trial has lapsed but are still tier=PREMIUM — used by TrialExpiryJob. */
+    /** Orgs whose trial has lapsed but are still on a PAID tier — used by TrialExpiryJob. */
     @Query("""
         SELECT o FROM Organization o
         WHERE o.trialEndsAt IS NOT NULL
           AND o.trialEndsAt < :now
-          AND o.subscriptionTier = com.bvisionry.common.enums.SubscriptionTier.PREMIUM
+          AND o.subscriptionTier <> com.bvisionry.common.enums.SubscriptionTier.FREE
         """)
     List<Organization> findLapsedTrials(@Param("now") Instant now);
 
     /** Count orgs currently on an active Premium trial. */
     @Query("""
         SELECT COUNT(o) FROM Organization o
-        WHERE o.subscriptionTier = com.bvisionry.common.enums.SubscriptionTier.PREMIUM
+        WHERE o.subscriptionTier <> com.bvisionry.common.enums.SubscriptionTier.FREE
           AND o.trialEndsAt IS NOT NULL
           AND o.trialEndsAt > :now
         """)
@@ -133,7 +133,7 @@ public interface OrganizationRepository extends JpaRepository<Organization, UUID
     /** Count trials whose end date falls in [now, cutoff]. */
     @Query("""
         SELECT COUNT(o) FROM Organization o
-        WHERE o.subscriptionTier = com.bvisionry.common.enums.SubscriptionTier.PREMIUM
+        WHERE o.subscriptionTier <> com.bvisionry.common.enums.SubscriptionTier.FREE
           AND o.trialEndsAt IS NOT NULL
           AND o.trialEndsAt BETWEEN :now AND :cutoff
         """)
@@ -142,7 +142,7 @@ public interface OrganizationRepository extends JpaRepository<Organization, UUID
     /** Active Premium trials whose end date falls in [now, cutoff] — used by the heads-up notifier. */
     @Query("""
         SELECT o FROM Organization o
-        WHERE o.subscriptionTier = com.bvisionry.common.enums.SubscriptionTier.PREMIUM
+        WHERE o.subscriptionTier <> com.bvisionry.common.enums.SubscriptionTier.FREE
           AND o.trialEndsAt IS NOT NULL
           AND o.trialEndsAt BETWEEN :now AND :cutoff
         """)

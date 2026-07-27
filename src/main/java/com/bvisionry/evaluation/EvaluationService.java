@@ -367,9 +367,12 @@ public class EvaluationService implements ApplicationEventPublisherAware {
         Pipeline pipeline = pipelineRepository.findByIdWithPillars(pipelineId)
                 .orElseThrow(() -> new IllegalStateException("Pipeline not found: " + pipelineId));
         List<Answer> answers = answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId);
+        // Public (QR-link) submissions have no assignment and therefore no org:
+        // they evaluate at paid gating. GROWTH is where V156 landed every org
+        // that used to be PREMIUM, so this default is unchanged in effect.
         SubscriptionTier tier = assignment != null
                 ? assignment.getOrganization().getSubscriptionTier()
-                : SubscriptionTier.PREMIUM;
+                : SubscriptionTier.GROWTH;
 
         // Generation is tier-agnostic: every submission gets the full premium summary so
         // an upgrade reveals the stored detail with no re-evaluation. Free/premium is a

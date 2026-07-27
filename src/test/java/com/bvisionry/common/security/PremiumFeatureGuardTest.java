@@ -63,7 +63,7 @@ class PremiumFeatureGuardTest {
     void checkPremium_premiumOrg_doesNotThrow() {
         UUID orgId = UUID.randomUUID();
         Organization org = new Organization();
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         when(organizationRepository.findWithParentById(orgId)).thenReturn(Optional.of(org));
 
         premiumFeatureGuard.checkPremium(orgId, "pillar_detail");
@@ -86,7 +86,7 @@ class PremiumFeatureGuardTest {
     void isPremium_premiumOrg_returnsTrue() {
         UUID orgId = UUID.randomUUID();
         Organization org = new Organization();
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         when(organizationRepository.findWithParentById(orgId)).thenReturn(Optional.of(org));
 
         assertThat(premiumFeatureGuard.isPremium(orgId)).isTrue();
@@ -107,7 +107,7 @@ class PremiumFeatureGuardTest {
     void checkPremium_freeSubOrgUnderPremiumParent_doesNotThrow() {
         UUID subOrgId = UUID.randomUUID();
         Organization parent = new Organization();
-        parent.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        parent.setSubscriptionTier(SubscriptionTier.GROWTH);
         Organization subOrg = new Organization();
         subOrg.setSubscriptionTier(SubscriptionTier.FREE);
         subOrg.setParentOrganization(parent);
@@ -129,6 +129,55 @@ class PremiumFeatureGuardTest {
 
         assertThatThrownBy(() -> premiumFeatureGuard.checkPremium(subOrgId, "pillar_detail"))
                 .isInstanceOf(PremiumRequiredException.class);
+    }
+
+    /* --------------------------------- V156: paid is three tiers, not one */
+
+    /**
+     * The non-regression that matters most about V156: the gate asks "does this
+     * org PAY", so every sold plan clears it and nothing about benchmarks / ROI /
+     * insights narrows. GROWTH is where every ex-PREMIUM org landed, so the
+     * middle row of this loop IS the old {@code == PREMIUM} case.
+     */
+    @Test
+    void everyPaidTierClearsTheGate_andOnlyFreeIsRefused() {
+        for (SubscriptionTier tier : SubscriptionTier.values()) {
+            UUID orgId = UUID.randomUUID();
+            Organization org = new Organization();
+            org.setSubscriptionTier(tier);
+            when(organizationRepository.findWithParentById(orgId)).thenReturn(Optional.of(org));
+
+            assertThat(premiumFeatureGuard.isPremium(orgId))
+                    .describedAs("isPremium(%s)", tier)
+                    .isEqualTo(tier != SubscriptionTier.FREE);
+        }
+    }
+
+    /* ------------------------------------------------ governingTier */
+
+    @Test
+    void governingTier_resolvesTheParentsPlanForASubOrg() {
+        UUID subOrgId = UUID.randomUUID();
+        Organization parent = new Organization();
+        parent.setSubscriptionTier(SubscriptionTier.STARTER);
+        Organization subOrg = new Organization();
+        subOrg.setSubscriptionTier(SubscriptionTier.FREE);
+        subOrg.setParentOrganization(parent);
+        when(organizationRepository.findWithParentById(subOrgId)).thenReturn(Optional.of(subOrg));
+
+        assertThat(premiumFeatureGuard.governingTier(subOrgId)).contains(SubscriptionTier.STARTER);
+    }
+
+    /**
+     * Empty means "no ceiling applies", NOT "FREE" — a caller that collapsed the
+     * two would turn the operator bypass into the strictest possible refusal.
+     * Nothing is stubbed, so the bypass must short-circuit before any tier read.
+     */
+    @Test
+    void governingTier_isEmptyForSuperAdmin_withoutTouchingTheRepository() {
+        authenticate(UserRole.SUPER_ADMIN);
+
+        assertThat(premiumFeatureGuard.governingTier(UUID.randomUUID())).isEmpty();
     }
 
     /* ------------------------------------------- the super-admin bypass */

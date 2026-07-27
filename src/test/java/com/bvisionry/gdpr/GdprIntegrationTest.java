@@ -85,7 +85,7 @@ class GdprIntegrationTest extends AbstractPostgresIntegrationTest {
     void seed() {
         organization = new Organization();
         organization.setName("Erasure Test Org");
-        organization.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        organization.setSubscriptionTier(SubscriptionTier.GROWTH);
         organization.setActive(true);
         organization = organizationRepository.saveAndFlush(organization);
 

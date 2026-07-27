@@ -1,5 +1,6 @@
 package com.bvisionry.programflow.repository;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -47,6 +48,35 @@ public interface CohortRepository extends JpaRepository<Cohort, UUID> {
             ORDER BY p.name, o.name
             """, nativeQuery = true)
     List<OrgProgramRow> findOrgProgramRows();
+
+    /**
+     * Cohorts created since {@code since} anywhere in {@code orgId}'s BILLING
+     * FAMILY — the root org plus every sub-org under it.
+     *
+     * <p>Family-wide and not per-org on purpose. Cohorts live on sub-orgs (see
+     * {@link #findOrgProgramRows()}: only sub-orgs are program surfaces) while
+     * the plan is bought by the root org and merely inherited downwards, so a
+     * per-org count would let a customer reset a "1 cohort per quarter" ceiling
+     * by creating a new sub-organization. {@code COALESCE(parent_organization_id,
+     * id)} is the billing root of any row (the hierarchy is one level deep), so
+     * two orgs are in the same family iff those coincide.
+     *
+     * <p>Native + soft-coupled by SQL, like {@link #findOrgProgramRows()} above:
+     * reading {@code organizations} from here costs no Java dependency edge on
+     * the organization feature, which the ArchUnit ratchet would otherwise flag.
+     */
+    @Query(value = """
+            SELECT count(*) FROM cohorts c
+            WHERE c.created_at >= :since
+              AND c.org_id IN (
+                  SELECT fam.id FROM organizations fam, organizations self
+                  WHERE self.id = :orgId
+                    AND COALESCE(fam.parent_organization_id, fam.id)
+                      = COALESCE(self.parent_organization_id, self.id)
+              )
+            """, nativeQuery = true)
+    long countCreatedInBillingFamilySince(@Param("orgId") UUID orgId,
+                                          @Param("since") OffsetDateTime since);
 
     /** Lists the org on a console. Idempotent — re-adding an already-listed org is a no-op. */
     @Modifying

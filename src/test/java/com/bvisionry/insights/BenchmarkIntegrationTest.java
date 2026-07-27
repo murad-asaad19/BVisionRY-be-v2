@@ -495,7 +495,7 @@ class BenchmarkIntegrationTest extends AbstractPostgresIntegrationTest {
         Organization org = new Organization();
         org.setName(name);
         org.setActive(true);
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         return organizationRepository.saveAndFlush(org);
     }
 

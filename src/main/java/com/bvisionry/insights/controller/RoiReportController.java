@@ -68,7 +68,10 @@ public class RoiReportController {
     public RoiReportResponse get(@PathVariable UUID orgId,
                                  @RequestParam UUID cohortId,
                                  @RequestParam UUID pipelineId) {
-        // ponytail: binary PREMIUM gate — sold as Founder Success; split per-tier when the Starter/Growth/FS ladder exists as data.
+        // ponytail: binary PAID gate. The ladder exists as data since V156 and the
+        // pricing page sells ROI reporting as Founder Success only, but narrowing it
+        // here would revoke the surface from every org that has it today. Deliberately
+        // left binary; upgrade path: tier == FOUNDER_SUCCESS.
         premiumFeatureGuard.checkPremium(orgId, "roi_report");
         return roiReportService.report(orgId, cohortId, pipelineId);
     }

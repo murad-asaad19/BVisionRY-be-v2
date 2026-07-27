@@ -132,10 +132,10 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
         mockMvc.perform(patch("/api/organizations/" + org.getId() + "/tier")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"tier": "PREMIUM"}
+                                {"tier": "GROWTH"}
                                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.subscriptionTier", is("PREMIUM")));
+                .andExpect(jsonPath("$.subscriptionTier", is("GROWTH")));
     }
 
     @Test
@@ -150,7 +150,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
     }
 
     @Test
-    void startTrial_returns200_setsPremium() throws Exception {
+    void startTrial_returns200_setsGrowth() throws Exception {
         Organization org = new Organization();
         org.setName("TrialOrg"); org.setActive(true);
         org = organizationRepository.save(org);
@@ -159,7 +159,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"durationDays\": 14}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.subscriptionTier", is("PREMIUM")))
+                .andExpect(jsonPath("$.subscriptionTier", is("GROWTH")))
                 .andExpect(jsonPath("$.trialEndsAt", notNullValue()))
                 .andExpect(jsonPath("$.displayState", is("TRIAL")));
     }
@@ -180,7 +180,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
     void startTrial_alreadyOnTrial_returns400() throws Exception {
         Organization org = new Organization();
         org.setName("DupTrial"); org.setActive(true);
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         org.setTrialEndsAt(Instant.now().plus(2, ChronoUnit.DAYS));
         org = organizationRepository.save(org);
 
@@ -193,7 +193,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
     void extendTrial_addsDays() throws Exception {
         Organization org = new Organization();
         org.setName("ExtendOrg"); org.setActive(true);
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         org.setTrialEndsAt(Instant.now().plus(2, ChronoUnit.DAYS));
         org = organizationRepository.save(org);
 
@@ -208,7 +208,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
     void endTrialEarly_returnsFree() throws Exception {
         Organization org = new Organization();
         org.setName("EndEarly"); org.setActive(true);
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         org.setTrialEndsAt(Instant.now().plus(2, ChronoUnit.DAYS));
         org = organizationRepository.save(org);
 
@@ -220,7 +220,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
     @Test
     void dashboard_returnsKpisAndTierMix() throws Exception {
         Organization a = new Organization(); a.setName("A"); a.setActive(true);
-        a.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        a.setSubscriptionTier(SubscriptionTier.GROWTH);
         organizationRepository.save(a);
         Organization b = new Organization(); b.setName("B"); b.setActive(false);
         organizationRepository.save(b);

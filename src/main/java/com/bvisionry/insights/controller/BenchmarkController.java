@@ -54,8 +54,11 @@ public class BenchmarkController {
     public BenchmarkResponse get(@PathVariable UUID orgId,
                                  @RequestParam UUID pipelineId,
                                  @RequestParam(required = false) UUID cohortId) {
-        // ponytail: binary PREMIUM gate — sold from Growth up; split per-tier when
-        // the Starter/Growth/FS ladder exists as data.
+        // ponytail: binary PAID gate. The Starter/Growth/FS ladder now exists as
+        // data (V156), and the pricing page sells benchmarking from Growth up —
+        // but narrowing this to GROWTH+ would silently take the surface away from
+        // orgs that have it today, so it stays binary until that is a decision
+        // someone makes on purpose. Upgrade path: tier.compareTo(GROWTH) >= 0.
         premiumFeatureGuard.checkPremium(orgId, "benchmarks");
         return benchmarkService.benchmarks(orgId, pipelineId, cohortId);
     }

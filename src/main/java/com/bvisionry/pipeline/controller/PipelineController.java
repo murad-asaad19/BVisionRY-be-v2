@@ -124,7 +124,7 @@ public class PipelineController {
 
     /**
      * Simulate a full assessment evaluation without persisting.
-     * Admin provides sample answers + tier (FREE/PREMIUM) and gets back the full results
+     * Admin provides sample answers + tier (FREE or any paid plan) and gets back the full results
      * as if a real member had submitted and been evaluated.
      */
     @PostMapping("/{id}/simulate")

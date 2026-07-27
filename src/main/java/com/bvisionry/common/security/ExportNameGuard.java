@@ -11,7 +11,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
  * copy of this org's data with the founders' real names on it".
  *
  * <p>Orthogonal to tenancy, RBAC and entitlement, exactly as
- * {@link PremiumFeatureGuard} is: an ORG_ADMIN of a PREMIUM org clears all three
+ * {@link PremiumFeatureGuard} is: an ORG_ADMIN of a PAYING org clears all three
  * on their own org's exports and is still refused here.
  *
  * <h2>What this is NOT — read before citing this class</h2>

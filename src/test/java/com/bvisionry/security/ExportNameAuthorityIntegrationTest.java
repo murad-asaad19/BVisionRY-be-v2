@@ -406,7 +406,7 @@ class ExportNameAuthorityIntegrationTest extends AbstractPostgresIntegrationTest
         Organization organization = new Organization();
         organization.setName("Export Org");
         organization.setActive(true);
-        organization.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        organization.setSubscriptionTier(SubscriptionTier.GROWTH);
         return organizationRepository.saveAndFlush(organization);
     }
 

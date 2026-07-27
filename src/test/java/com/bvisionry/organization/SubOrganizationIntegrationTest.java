@@ -69,7 +69,7 @@ class SubOrganizationIntegrationTest extends AbstractPostgresIntegrationTest {
         // constructor overwrites the shared static with an adapter bound to a
         // different DataSource, which would 403 every traversal check here.
         new OrgAccessGuard(orgHierarchyPort);
-        parentOrg = saveOrg("Parent Org", SubscriptionTier.PREMIUM, null);
+        parentOrg = saveOrg("Parent Org", SubscriptionTier.GROWTH, null);
         subOrg = saveOrg("Existing Sub", SubscriptionTier.FREE, parentOrg);
         otherOrg = saveOrg("Other Org", SubscriptionTier.FREE, null);
     }
@@ -96,7 +96,7 @@ class SubOrganizationIntegrationTest extends AbstractPostgresIntegrationTest {
                 .andExpect(jsonPath("$.parentOrganizationName", is("Parent Org")))
                 // Own row starts FREE, but the effective plan is the parent's PREMIUM.
                 .andExpect(jsonPath("$.subscriptionTier", is("FREE")))
-                .andExpect(jsonPath("$.effectiveSubscriptionTier", is("PREMIUM")))
+                .andExpect(jsonPath("$.effectiveSubscriptionTier", is("GROWTH")))
                 .andExpect(jsonPath("$.active", is(true)))
                 .andExpect(jsonPath("$.subOrganizationCount", is(0)));
     }
@@ -132,7 +132,7 @@ class SubOrganizationIntegrationTest extends AbstractPostgresIntegrationTest {
                 .andExpect(jsonPath("$[0].name", is("Existing Sub")))
                 .andExpect(jsonPath("$[0].memberCount", is(1)))
                 .andExpect(jsonPath("$[0].parentOrganizationId", is(parentOrg.getId().toString())))
-                .andExpect(jsonPath("$[0].effectiveSubscriptionTier", is("PREMIUM")));
+                .andExpect(jsonPath("$[0].effectiveSubscriptionTier", is("GROWTH")));
     }
 
     /**
@@ -257,7 +257,7 @@ class SubOrganizationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         mockMvc.perform(patch("/api/organizations/{id}/tier", subOrg.getId())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"tier\": \"PREMIUM\"}"))
+                        .content("{\"tier\": \"GROWTH\"}"))
                 .andExpect(status().isBadRequest());
     }
 
@@ -512,7 +512,7 @@ class SubOrganizationIntegrationTest extends AbstractPostgresIntegrationTest {
         mockMvc.perform(get("/api/auth/me"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.organizationId", is(subOrg.getId().toString())))
-                .andExpect(jsonPath("$.organizationTier", is("PREMIUM")));
+                .andExpect(jsonPath("$.organizationTier", is("GROWTH")));
     }
 
     // -------------------------------------------------------------------------

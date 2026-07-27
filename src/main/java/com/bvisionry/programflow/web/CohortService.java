@@ -1,5 +1,6 @@
 package com.bvisionry.programflow.web;
 
+import java.time.OffsetDateTime;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -10,9 +11,12 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.security.PremiumFeatureGuard;
 import com.bvisionry.programflow.domain.Cohort;
 import com.bvisionry.programflow.domain.ProgramSurface;
 import com.bvisionry.programflow.dto.CohortDto;
@@ -35,6 +39,8 @@ public class CohortService {
     private final CohortRepository cohorts;
     private final TeamRepository teams;
     private final ApplicationEventPublisher events;
+    /** Shared-kernel entitlement gate — supplies the effective tier and the super-admin bypass. */
+    private final PremiumFeatureGuard entitlements;
 
     @Transactional(readOnly = true)
     public List<CohortDto> list(UUID orgId) {
@@ -66,6 +72,7 @@ public class CohortService {
     }
 
     public CohortDto create(UUID orgId, CreateCohortRequest req) {
+        requireCohortAllowance(orgId);
         Cohort c = new Cohort();
         c.setOrgId(orgId);
         c.setName(req.name());
@@ -108,6 +115,47 @@ public class CohortService {
             events.publishEvent(new ProgramFlowEvents.CohortEnrolled(orgId, c.getName(), added));
         }
         return CohortDto.of(c);
+    }
+
+    /**
+     * Refuses a cohort the org's plan has no room for. The plan meters a RATE —
+     * cohorts per quarter (Starter) or per month (Growth), unlimited on Founder
+     * Success — never a founder headcount.
+     *
+     * <p>Enforcement is deliberately SOFT and one-sided: it runs on CREATE only.
+     * Nothing here ever disables, hides or reclassifies a cohort that already
+     * exists, so a downgrade (or this rule shipping at all) can never take an
+     * accelerator's running programme away mid-cohort.
+     *
+     * <p>The window is ROLLING, not calendar. "1 cohort per quarter" is a rate,
+     * and a calendar quarter lets an org create one on 31 Mar and another on
+     * 1 Apr — two cohorts in two days on a plan sold as one per quarter. Rolling
+     * is also the cheaper thing to explain in the refusal message: "in the past
+     * quarter" needs no reference to which quarter we are in.
+     *
+     * <p>SUPER_ADMIN bypasses, exactly as it bypasses every other entitlement
+     * gate ({@code PremiumFeatureGuard.checkPremium}) — an operator running a
+     * demo or seeding a customer must not be blocked by the customer's plan, and
+     * it is the escape hatch that keeps "soft" honest.
+     */
+    private void requireCohortAllowance(UUID orgId) {
+        // Empty = super admin, i.e. no ceiling applies at all. Do NOT read it as FREE.
+        SubscriptionTier tier = entitlements.governingTier(orgId).orElse(null);
+        if (tier == null) return;
+
+        SubscriptionTier.CohortRate rate = tier.cohortRate();
+        if (rate == null) return; // Founder Success — unlimited.
+
+        long used = cohorts.countCreatedInBillingFamilySince(
+                orgId, OffsetDateTime.now().minus(rate.window()));
+        if (used < rate.max()) return;
+
+        throw new IllegalOperationException(
+                "The " + tier.label() + " plan allows " + rate.describe()
+                        + ". Your organization has already created " + used
+                        + (used == 1 ? " cohort" : " cohorts") + " in the past " + rate.windowLabel()
+                        + " — sub-organizations share the parent organization's plan. Upgrade the plan"
+                        + " to run more cohorts; the cohorts you already have are unaffected.");
     }
 
     /** The cohort, guarded to the org path (tenant isolation). */

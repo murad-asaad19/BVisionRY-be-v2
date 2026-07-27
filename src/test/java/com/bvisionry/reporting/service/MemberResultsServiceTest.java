@@ -108,7 +108,7 @@ class MemberResultsServiceTest {
 
         Organization org = new Organization();
         org.setId(orgId);
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
 
         Pipeline pipeline = new Pipeline();
         pipeline.setName("Leadership Assessment");
@@ -220,7 +220,7 @@ class MemberResultsServiceTest {
 
         Organization org = new Organization();
         org.setId(orgId);
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
 
         Pipeline pipeline = new Pipeline();
         pipeline.setName("Pipeline With Survey");

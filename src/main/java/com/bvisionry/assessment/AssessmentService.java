@@ -341,7 +341,7 @@ public class AssessmentService {
             pushNotificationService.notifyOrgAdmins(orgId, NotificationType.MEMBER_SUBMITTED,
                     "Assessment completed",
                     memberName + " completed \"" + pipelineName + "\".",
-                    "/app/admin/assignments",
+                    "/app/admin/organizations/" + orgId + "/assignments",
                     "/app/admin/organizations/" + orgId + "/assignments");
         });
 

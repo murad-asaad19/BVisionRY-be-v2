@@ -69,10 +69,18 @@ public class PushNotificationService {
 
     /**
      * Notify the org's active ORG_ADMINs plus all active SUPER_ADMINs about an
-     * event in {@code orgId}. The two roles land on different routes for the
-     * same thing (org admins use the flat {@code /app/admin/*} console, super
-     * admins the {@code /app/admin/organizations/<id>/*} drill-in), hence the
-     * two paths.
+     * event in {@code orgId}.
+     *
+     * <p>The two URL parameters date from a web app in which the two roles
+     * reached the same resource through different route families — org admins a
+     * flat {@code /app/admin/*} console, super admins the
+     * {@code /app/admin/organizations/<id>/*} drill-in. The web app has since
+     * collapsed those into ONE canonical URL per resource, so callers should
+     * normally pass the same path twice. The flat org-admin console had in fact
+     * already been deleted, leaving two notification types deep-linking admins
+     * to a 404; the parameter survives only because it still lets a caller send
+     * the two roles to genuinely different places, and because narrowing this
+     * signature would re-describe three frozen ArchUnit violations as new ones.
      */
     @Async("pushExecutor")
     public void notifyOrgAdmins(UUID orgId, NotificationType type, String title, String body,

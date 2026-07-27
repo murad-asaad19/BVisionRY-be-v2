@@ -16,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -54,6 +55,7 @@ class CohortAllowanceIntegrationTest extends AbstractPostgresIntegrationTest {
     @Autowired private CohortService cohortService;
     @Autowired private CohortRepository cohorts;
     @Autowired private OrganizationRepository orgs;
+    @Autowired private JdbcTemplate jdbc;
 
     private Organization root;
     private Organization subA;
@@ -193,6 +195,28 @@ class CohortAllowanceIntegrationTest extends AbstractPostgresIntegrationTest {
         setTier(root, SubscriptionTier.FREE);
 
         assertThatCode(() -> cohortService.create(subA.getId(), req("First ever")))
+                .doesNotThrowAnyException();
+    }
+
+    /**
+     * V156 is EXPAND-ONLY: it widens the tier CHECK and retires PREMIUM in the
+     * data, but leaves 'PREMIUM' in the allowed set so an old instance still
+     * serving during a rolling deploy can write it without hitting a constraint
+     * violation on a live request. The contraction is a later, operator-era
+     * migration (V147 did the same for 'MANAGER').
+     *
+     * <p>Lives in this class rather than its own: it needs a real Postgres with
+     * Flyway applied, which this context already has, and a second
+     * {@code @SpringBootTest} would cost a whole extra Spring context for one
+     * assertion. Raw SQL because the Java enum deliberately cannot produce the
+     * value any more — which is exactly the situation being pinned.
+     */
+    @Test
+    void v156_isExpandOnly_theRetiredPremiumValueIsStillWritable() {
+        assertThatCode(() -> jdbc.update(
+                "INSERT INTO organizations (id, name, subscription_tier, is_active) "
+                        + "VALUES (?, ?, 'PREMIUM', true)",
+                UUID.randomUUID(), "Written by a pre-deploy instance"))
                 .doesNotThrowAnyException();
     }
 

@@ -44,14 +44,22 @@ import java.util.UUID;
  *       harness cannot; it would take a container test). Treat it as an
  *       invariant to preserve by hand when editing this method.
  *       <p><b>This bounds the token, not its consequences,</b> and the difference
- *       is not academic: a read can hand back another credential. Today
- *       {@code GET /api/organizations/{orgId}/invitations} returns raw invitation
- *       tokens, and {@code POST /api/invitations/{token}/accept} is
- *       {@code permitAll()} and CSRF-exempt — so a leaked download token still
- *       buys a permanent account in the tenant, via a state change it never made
- *       itself. That chain is PRE-EXISTING and strictly harder than it was before
- *       this filter refused unsafe methods, but it is not closed, and neither is
- *       {@code GET /api/gdpr/me/export}. Do not read "GET only" as "harmless".</li>
+ *       is not academic: a read can hand back another credential.
+ *       <p>The worst instance of that has since been CLOSED, and this paragraph
+ *       is kept rather than deleted because the shape of the risk has not
+ *       changed. Until {@code invitation_token_disclosure}, {@code GET
+ *       /api/organizations/{orgId}/invitations} returned raw invitation tokens,
+ *       and {@code POST /api/invitations/{token}/accept} is {@code permitAll()}
+ *       and CSRF-exempt — so a leaked download token bought a permanent account
+ *       in the tenant, via a state change it never made itself. The listing now
+ *       returns {@code token: null} ({@code InvitationResponse#withoutToken}),
+ *       which severs that chain. Redemption is deliberately unchanged: a
+ *       brand-new invitee has no session.
+ *       <p>What remains open: {@code GET /api/gdpr/me/export} still returns the
+ *       caller's full personal-data export to anyone holding a download token
+ *       for them, and the token still carries its owner's FULL authorities on
+ *       every other GET. Do not read "GET only" as "harmless" — read it as
+ *       "cannot itself write".</li>
  *   <li>It does not authenticate {@code /api/auth/**}. That surface contains the
  *       mint endpoint {@code GET /api/auth/download-token}, which is itself a GET:
  *       without this, a leaked token could be replayed against it to mint a fresh

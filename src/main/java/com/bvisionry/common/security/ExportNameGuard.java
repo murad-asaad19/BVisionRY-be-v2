@@ -37,9 +37,17 @@ import org.springframework.security.core.context.SecurityContextHolder;
  *
  * So what this guard buys is that an UNMASKED FILE is not generated and
  * circulated — a real and worthwhile control, and a much narrower one than
- * "founders are anonymous to their org admin". Whether the latter should be
- * true at all is an OPEN OPERATOR QUESTION, escalated and deliberately not
- * decided here.
+ * "founders are anonymous to their org admin".
+ *
+ * <p><b>Whether the latter should be true was escalated and has been DECIDED:
+ * it should not.</b> Operator ruling, 2026-07-27 — an org admin may see their
+ * own founders' names, because they administer a cohort they are accountable
+ * for and already correspond with those people by email. So the bullets above
+ * are not a backlog; they are the intended product, and nothing here should be
+ * "hardened" into hiding names from an in-org admin. This guard survives the
+ * ruling for a different and narrower reason: a FILE leaves the building, gets
+ * forwarded and outlives the session, so who may generate one is a separate
+ * question from who may see a name on screen.
  *
  * <h2>Why a guard called imperatively, and not {@code @PreAuthorize}</h2>
  *

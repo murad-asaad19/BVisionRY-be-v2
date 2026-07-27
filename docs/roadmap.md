@@ -8,6 +8,21 @@ listed in §6.
 Last revised: 2026-07-25 · Verified against `main`
 Scope: `backend` (Spring Boot 4 / Java 21) + `web` (Next.js 16 / React 19)
 
+> **STATUS BANNER — read before Part I.** Parts I and II were written on
+> 2026-07-25 and describe the state *before* delivery began. They have not been
+> rewritten, so **§3 "the delivery gap", §4 "verified current state" and §5's
+> requirements table are deliberately historical** — §3 still lists the coach
+> console, ROI reporting, coaching calendar and white-label as unbuilt, and §4
+> still says there is no enterprise SSO. All of those shipped.
+>
+> **For current state, read §7's status column and §11's checkboxes, which ARE
+> reconciled against the tree**, then `agent-decisions.md` (per-ticket detail,
+> newest last) and `agent-run-report.md`. As of 2026-07-27 the §7 backlog is
+> delivered except item 13 (multi-language, deliberately deferred) and item 8
+> (superseded by #16); §10's UI/UX requirements are partly delivered and the
+> remainder is in flight; §11 has 15 of 21 items genuinely open, most of them
+> compliance and operations work that no amount of engineering closes.
+
 **Companions:** `agent-policy.yml` (closed decisions + hard constraints — what
 agents load) · `agent-execution-graph.md` (how the work is executed)
 
@@ -205,24 +220,24 @@ needs, not how long it takes:
 |---|---|---|---|---|
 | 1 | Authoring honesty | ✅ | Every lesson type offered in authoring renders in the player. Types with no runtime are removed from the authoring UI. | S |
 | 2 | Mindset tracking | ✅ | A learner records a reflection against a completed lesson; an admin can see it. Reuse the existing assessment or quiz mechanism if it fits. | S |
-| 3 | Founder dashboard | 🟡 | A member's home shows assigned modules, completion %, the single next action, and a pillar snapshot — without navigating to separate hubs. All data already exists. | M |
-| 4 | **Coach console** *(sold as Mentor Portal)* | ❌ | A coach sees **only** founders on their assigned cohorts; sees completion per founder; can review and comment on submissions; **cannot reach any other cohort's data, enforced server-side**. An org admin can assign coaches to cohorts. Founder detail shows pillar scores + module progress. | L |
+| 3 | Founder dashboard | ✅ | A member's home shows assigned modules, completion %, the single next action, and a pillar snapshot — without navigating to separate hubs. All data already exists. | M |
+| 4 | **Coach console** *(sold as Mentor Portal)* | ✅ | A coach sees **only** founders on their assigned cohorts; sees completion per founder; can review and comment on submissions; **cannot reach any other cohort's data, enforced server-side**. An org admin can assign coaches to cohorts. Founder detail shows pillar scores + module progress. | L |
 | 5 | Reflection prompts | ✅ | Met by quizzes + embedded pillar assessments. Optional: a lighter free-text type where a quiz is too heavy. | S |
 | 6 | Certificates | ✅ | Met. | — |
-| 7 | Inactivity reminders | 🟡 | A founder with no progress on an assigned course for N days is nudged on their preferred channel. N configurable per org. Notification infrastructure exists; only the trigger is missing. | S |
+| 7 | Inactivity reminders | ✅ | A founder with no progress on an assigned course for N days is nudged on their preferred channel. N configurable per org. Notification infrastructure exists; only the trigger is missing. | S |
 | 8 | Cohort completion analytics | 🟡 | Superseded by #16 — same data, materially more value. | — |
-| 9 | Pillar → module mapping | 🟡 | An admin declares which modules address which pillar at which score band. A founder viewing results sees recommended modules. | M |
-| 10 | **Automated course selection** ⏰ *contractual* | 🟡 | On evaluation completion a founder is automatically enrolled in modules matched to their weak pillars, told **why**, and an admin can override. **Re-running an evaluation must not duplicate enrolments.** | L |
+| 9 | Pillar → module mapping | ✅ | An admin declares which modules address which pillar at which score band. A founder viewing results sees recommended modules. | M |
+| 10 | **Automated course selection** ⏰ *contractual* | ✅ | On evaluation completion a founder is automatically enrolled in modules matched to their weak pillars, told **why**, and an admin can override. **Re-running an evaluation must not duplicate enrolments.** | L |
 | 11 | Self-paced library | ✅ | Full QA across every lesson type on desktop and mobile, then the flag flips. Assigned vs self-selected content is visually distinguishable. | S |
 | 12 | Mobile / PWA | ✅ | Installable, and the player works on a phone. | S |
 | 13 | Multi-language | ❌ | **Deferred.** New surfaces adopt the i18n library now so the retrofit bill stops growing. | L |
-| 14 | White-label | 🟡 | An org admin sets a logo and palette; the app renders in their brand. **No custom domains, no branded email sender.** | L |
-| 15 | Coaching calendar | ❌ | A founder books a session with their assigned coach. **Integrate an existing provider — do not build booking.** | M |
-| 16 | **ROI / impact reporting** *(sold)* | ❌ | A program operator produces a report showing pillar movement per cohort over time and per-founder deltas, exportable and presentable to a funder. **This is the renewal driver.** | M |
-| 17 | **Competency matrix** *(new)* | ❌ | The 11 pillars render as a mastery matrix per founder and per cohort, with movement over time. Mostly presentation over existing data. | S |
-| 18 | **Proactive AI nudges** *(new)* | 🟡 | The AI coach initiates contact on detected inactivity or a score drop instead of waiting to be asked. Merges with #7. | S |
-| 19 | **Quantitative benchmarking** *(sold)* | 🟡 | A cohort's pillar scores are compared against a real cross-tenant distribution, not an AI-written narrative. Compounds with every customer added. | M |
-| 20 | Cohort announcements | ❌ | A coach or org admin broadcasts to a cohort; members receive it on their preferred channel with existing opt-out respected. **Announcements only — no threads, no DMs** (policy). | M |
+| 14 | White-label | ✅ | An org admin sets a logo and palette; the app renders in their brand. **No custom domains, no branded email sender.** | L |
+| 15 | Coaching calendar | ✅ | A founder books a session with their assigned coach. **Integrate an existing provider — do not build booking.** | M |
+| 16 | **ROI / impact reporting** *(sold)* | ✅ | A program operator produces a report showing pillar movement per cohort over time and per-founder deltas, exportable and presentable to a funder. **This is the renewal driver.** | M |
+| 17 | **Competency matrix** *(new)* | ✅ | The 11 pillars render as a mastery matrix per founder and per cohort, with movement over time. Mostly presentation over existing data. | S |
+| 18 | **Proactive AI nudges** *(new)* | ✅ | The AI coach initiates contact on detected inactivity or a score drop instead of waiting to be asked. Merges with #7. | S |
+| 19 | **Quantitative benchmarking** *(sold)* | ✅ | A cohort's pillar scores are compared against a real cross-tenant distribution, not an AI-written narrative. Compounds with every customer added. | M |
+| 20 | Cohort announcements | ✅ | A coach or org admin broadcasts to a cohort; members receive it on their preferred channel with existing opt-out respected. **Announcements only — no threads, no DMs** (policy). | M |
 
 ---
 
@@ -329,25 +344,25 @@ and the program task player's exemplary next-step flow.
 - [ ] Shorten access-token TTL from 24h to 15–30 min — refresh rotation already works, and access tokens are not revocable today
 - [ ] Audit anonymous read endpoints — confirm no non-preview lesson body is ever returned to an anonymous caller
 - [ ] Complete the CSP nonce pipeline (deliberately deferred)
-- [ ] Every new secret gets the same fail-closed startup validation as existing ones
+- [x] Every new secret gets the same fail-closed startup validation as existing ones
 - [ ] Pen-test the public token flows before scale marketing
 
 ### Quality & CI
-- [ ] Fix the pre-existing lint errors and make lint **blocking** in frontend CI
-- [ ] **Diff coverage ~70% on changed lines.** Do *not* chase a global coverage percentage — it produces tests over code nobody is changing. The frontend at ~2% is the real risk.
+- [x] Fix the pre-existing lint errors and make lint **blocking** in frontend CI
+- [x] **Diff coverage ~70% on changed lines.** Do *not* chase a global coverage percentage — it produces tests over code nobody is changing. The frontend at ~2% is the real risk.
 - [ ] Component/integration tests for the major app pages
 - [ ] **e2e in CI** against a compose stack — the specs exist and have never run. *Autonomy prerequisite.*
-- [ ] Full QA across every lesson type before the courses flag flips
+- [x] Full QA across every lesson type before the courses flag flips
 
 ### Observability & operations
-- [ ] **Error tracking on both ends** — metrics exist, exception aggregation does not. *Autonomy prerequisite: it is the rollback trigger.*
+- [x] **Error tracking on both ends** — metrics exist, exception aggregation does not. *Autonomy prerequisite: it is the rollback trigger.*
 - [ ] Alerting on scheduled jobs — a silently dead reaper or reminder job is invisible today
 - [ ] Uptime + synthetic checks on the public token flows
 - [ ] Backup/restore drill for Postgres and object storage; documented RPO/RTO
 - [ ] Load-test the anonymous public-assessment path — it is the marketing funnel
 
 ### Compliance & data
-- [ ] **GDPR account export + deletion** — the pricing FAQ already claims compliance
+- [x] **GDPR account export + deletion** — the pricing FAQ already claims compliance
 - [ ] Retention policy surfaced to users
 - [ ] Terms/privacy review for AI evaluation of user content
 - [ ] SOC 2 Type II observation window opened

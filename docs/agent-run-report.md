@@ -32,13 +32,15 @@ A fresh agent starts here. Nothing below assumes prior context.
 #    backend/docs/agent-policy.yml
 #    backend/docs/agent-execution-graph.md
 
-# 1. Read the decision log: backend/docs/agent-decisions.md (on the base branch).
+# 1. Read the decision log: backend/docs/agent-decisions.md ON agent/integration.
+#    NOT the base branch - integration is now AHEAD of it, and the base copy is
+#    missing every wave-8/9 ruling. Reading the stale one is the recurring trap.
 
 # 2. Create the worktree PAIR for the lane you claim (both repos, matching
 #    branch names — an agent holding one repo is broken undetectably).
 #    Branch naming: agent/<ticket-id>-lane<n>, off the base branches in §2.
-git -C backend worktree add ../.agent-wt/lane<n>/backend -b agent/<ticket>-lane<n> <backend-base>
-git -C web     worktree add ../.agent-wt/lane<n>/web     -b agent/<ticket>-lane<n> <web-base>
+git -C backend worktree add /e/projects/bvisionry-lms/.lanes/lane<n>/backend -b agent/<ticket>-lane<n> <backend-base>
+git -C web     worktree add /e/projects/bvisionry-lms/.lanes/lane<n>/web     -b agent/<ticket>-lane<n> <web-base>
 
 # 3. Claim the runtime lane. Never :5432 (dev), never lane 0 (operator's).
 bash docker/sandbox/sandbox.sh up <n>
@@ -96,7 +98,8 @@ an operator action, and there are now **eight** open operator decisions (§10,
 plus the three wave-7 escalations in §11).
 
 **Superseded: backend `2afc53b` / web `06e6acc` — 39 tickets. WAVE 6 CLOSED;
-PHASE 4 COMPLETE; THE ROADMAP IS COMPLETE.** All three final tickets
+PHASE 4 COMPLETE; the 24-ticket POLICY BACKLOG complete — NOT roadmap.md
+§§10–11, and four more waves followed this "completion".** All three final tickets
 (`calendar_integration`, `saml_oidc_sso`, `white_label_theming`) landed and
 re-gated as a combination: backend 1158/0/0/0, frozen store empty, web lint 0 /
 typecheck 0 / 772 tests, **Gate 4 155 passed ×2 consecutive**. The governance
@@ -284,7 +287,7 @@ integration tree is byte-identical to the spine branch it was generated from.
 they need the landed gates and error store beneath them. Phase 0 lane worktrees
 were retired (their stale dev servers killed, directories removed); the landed
 branches remain as refs for review. Fresh pairs live at
-`.agent-wt/lane<n>/{backend,web}`.
+`/e/projects/bvisionry-lms/.lanes/lane<n>/{backend,web}` (OUTSIDE both repos, so no linter walks one; a worker NEVER removes its own worktree).
 
 Integration tip carries **all five landed Phase 0 tickets**, combined-regated
 2026-07-26 at `47f2b4f` (be) / `2c81aae` (web): backend **716/0** · web
@@ -314,14 +317,14 @@ web lint/typecheck/unit green, e2e **89/89** on seeded lane 3; the one
 first-run e2e failure was cold-compile flake on the fresh worktree — rerun
 clean). The two tickets' only collision was the generated `api-schema.d.ts`;
 resolved by re-running the contract pipeline against the integrated backend,
-never by hand-merge. Worktrees: `.agent-wt/integration/{backend,web}`.
+never by hand-merge. Worktrees: none - the orchestrator gates in the repo directories themselves, with `./mvnw CLEAN test` (a stale .class from a moved class has faked both a failure and, more dangerously, could fake a pass).
 Future landings: cherry-pick onto integration → re-gate combined.
 
 The backend base is docs-ahead of `staging` only (no code drift), so both repos
 have code-identical bases — `pnpm gen:api` output on `staging` is valid for
 either.
 
-Worktree pairs live at `.agent-wt/lane<n>/{backend,web}`. Lanes 0–3 are up and
+Worktree pairs live at `/e/projects/bvisionry-lms/.lanes/lane<n>/{backend,web}` (OUTSIDE both repos, so no linter walks one; a worker NEVER removes its own worktree). Lanes 0–3 are up and
 healthy (`sandbox.sh status`); lane 0 is the operator's and is never taken.
 Lane 1 → api `:8181` web `:3011`. Lane 2 → api `:8182` web `:3012`.
 
@@ -1822,7 +1825,13 @@ raw-request tests are affected.
 
 ---
 
-## 10. WAVE 6 = PHASE 4 — CLOSED (2026-07-27). THE ROADMAP IS COMPLETE.
+## 10. WAVE 6 = PHASE 4 — CLOSED (2026-07-27). [SUPERSEDED HEADING]
+
+> This section once read "THE ROADMAP IS COMPLETE". That was true of the
+> 24-ticket POLICY BACKLOG only. It was never true of roadmap.md §10 (UI/UX),
+> nor of §11, and the operator has since redefined "done" to include §10 P0/P1/P2.
+> Waves 7-10 followed this "completion". See the wave-9 close in
+> agent-decisions.md for current state.
 
 **LIVE TIP: backend `2afc53b` / web `06e6acc` — 39 tickets.**
 (Backend code tip `6c1d37f`; `2afc53b` on top is the governance-doc sync, §8.)

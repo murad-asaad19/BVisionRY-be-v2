@@ -23,7 +23,48 @@
         <resilience4j.version>2.2.0</resilience4j.version>
         <!-- 7.x is the line that targets Spring Boot 4 / Spring 7 and requires JVM 17+. -->
         <shedlock.version>7.7.0</shedlock.version>
+        <!-- OpenSAML is declared `optional` by spring-security-saml2-service-provider,
+             so the two artifacts we compile against must be requested explicitly. Pinned
+             exactly (never a range) because they resolve from the Shibboleth repository
+             declared below, where a floating version is a supply-chain surface. NOTE this
+             pins only the two coordinates we declare; their transitives (opensaml-core-*,
+             opensaml-xmlsec-*, net.shibboleth:shib-*) are pinned by OpenSAML's own poms,
+             not here — `./mvnw dependency:list` is the way to see the resolved set. -->
+        <opensaml.version>5.1.6</opensaml.version>
     </properties>
+
+    <!--
+      Maven Central carried OpenSAML up to 4.0.1 and stops there; the 5.x line — the only
+      one Spring Security 7 supports — is published solely by the Shibboleth Foundation,
+      so spring-security-saml2-service-provider cannot resolve without this repository.
+
+      RELEASES ONLY: snapshots are disabled, so a build can never silently pick up an
+      unreviewed artifact.
+
+      CONTAINMENT. A POM-declared repository is searched BEFORE the inherited Central
+      (`mvn help:effective-pom` shows the order as shibboleth-releases, central), so
+      declaring it alone would send every artifact in the build to Shibboleth first on a
+      cold cache, and take its checksums from there. That is closed in `.mvn/maven.config`
+      by Resolver's groupId remote-repository filter: `.mvn/rrf/groupId-shibboleth-releases.txt`
+      allows exactly `org.opensaml` and `net.shibboleth` from this repository, and nothing
+      else is ever requested from it. Central has no filter file, and `noInputOutcome`
+      defaults to true, so Central stays unfiltered and still serves the whole build.
+      The allowlist was generated, not guessed, with
+      `-Daether.remoteRepositoryFilter.groupId.record=true`.
+    -->
+    <repositories>
+        <repository>
+            <id>shibboleth-releases</id>
+            <name>Shibboleth Releases</name>
+            <url>https://build.shibboleth.net/maven/releases/</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
 
     <dependencies>
         <!-- Web -->
@@ -75,6 +116,44 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!-- Enterprise SSO. Both are Spring Security's own modules (versions managed by
+             the Boot parent), deliberately NOT the `spring-boot-starter-oauth2-client`
+             starter: registrations are per-tenant rows in the DB, so the starter's
+             properties-driven auto-config has nothing to build and would only add a
+             second, competing ClientRegistrationRepository source.
+
+             saml2-service-provider brings OpenSaml5AuthenticationProvider, which does the
+             signature / audience / InResponseTo / recipient validation. oauth2-client
+             brings OidcAuthorizationCodeAuthenticationProvider + (transitively)
+             spring-security-oauth2-jose, which verifies the id_token's JWS against the
+             issuer's JWKS. Neither validation is ever hand-rolled here. -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-saml2-service-provider</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-client</artifactId>
+        </dependency>
+        <!-- oauth2-client declares this `optional`, but OidcAuthorizationCodeAuthenticationProvider
+             needs it: it is the JWS/JWKS verification of the id_token. Omitting it would leave
+             the OIDC half unable to verify a signature at all. -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-jose</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.opensaml</groupId>
+            <artifactId>opensaml-saml-api</artifactId>
+            <version>${opensaml.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.opensaml</groupId>
+            <artifactId>opensaml-saml-impl</artifactId>
+            <version>${opensaml.version}</version>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- JWT -->

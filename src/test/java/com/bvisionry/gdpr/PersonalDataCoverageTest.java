@@ -94,12 +94,19 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
      *       contacts under a separate purpose; deliberately out of an ACCOUNT
      *       deletion's reach.</li>
      *   <li>{@code *_email_mode} — enum settings ("ASK"/"HIDE"), not addresses.</li>
+     *   <li>{@code sso_registrations.email_domain} — a DNS domain a CUSTOMER
+     *       organization was verified to own ("orgb.com"), never a person's
+     *       address. It identifies no data subject, and a user erasure must not
+     *       touch it: clearing it would break single sign-on for every remaining
+     *       member of that tenant. Deliberately out of reach of both export and
+     *       erasure; it goes when the organization goes (FK ON DELETE CASCADE).</li>
      * </ul>
      */
     private static final Set<String> KNOWN_EMAIL_COLUMNS = Set.of(
             "invitations.email", "lead_magnet_requests.email", "leads.email",
-            "public_assessment_links.respondent_email_mode", "submissions.respondent_email",
-            "survey_responses.respondent_email", "surveys.respondent_email_mode", "users.email");
+            "public_assessment_links.respondent_email_mode", "sso_registrations.email_domain",
+            "submissions.respondent_email", "survey_responses.respondent_email",
+            "surveys.respondent_email_mode", "users.email");
 
     @Autowired private JdbcTemplate jdbc;
 

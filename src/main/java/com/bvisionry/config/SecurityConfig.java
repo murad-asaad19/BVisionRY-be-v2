@@ -205,6 +205,17 @@ public class SecurityConfig {
                         // collection path, and PillarRouteSecurityIntegrationTest
                         // pins that rather than trusting it.
                         .requestMatchers("/api/pipelines/*/pillars/**").hasAuthority("SUPER_ADMIN")
+                        // Enterprise SSO registrations. A registration declares which
+                        // email domain an identity provider may speak for, so whoever
+                        // can write one can decide whose accounts a customer's IdP
+                        // reaches — the highest-value write surface added by that
+                        // feature. SUPER_ADMIN at the route layer as well as the
+                        // controller's class-level @PreAuthorize, so losing the
+                        // annotation degrades to "platform admins only", not to "any
+                        // signed-in user". The handshake endpoints are NOT here: they
+                        // are pre-auth by nature and live on their own filter chain
+                        // (SsoSecurityConfig), which matches them before this one.
+                        .requestMatchers("/api/admin/sso-registrations/**").hasAuthority("SUPER_ADMIN")
                         .requestMatchers("/api/pipelines/published").authenticated()
                         .requestMatchers("/api/pipelines/*/simulate").authenticated()
                         .anyRequest().authenticated()

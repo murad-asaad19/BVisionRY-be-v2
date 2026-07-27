@@ -2455,3 +2455,49 @@ the reworked `auth.setup.ts`, the change its author flagged as unverifiable.
 3. **I shipped an unverified guard, twice.** See platform_guards above. The rule I now hold myself
    to is the one I have been giving workers all run: *name the case that would falsify it, RUN it,
    and quote the output* — before shipping, not after a validator asks.
+
+## WAVE 9 INTAKE — operator rulings, and two findings the merge audit did not cover
+
+**RULING · scope of "done".** The operator will not review until every code-able roadmap item is
+built. That is roadmap §7's remaining gaps + §10 UI/UX **P0, P1 AND P2** — including P2-11, the
+org/sub-org URL unification. OUT of scope, explicitly: non-code compliance (SOC 2, VPAT, pen-test,
+backup/restore drill), and i18n, which §7 item 13 marks Deferred and no ruling has reopened.
+
+**RULING · tier ceilings (the eighth ruling, previously blocked).** `SubscriptionTier` grows from
+`FREE|PREMIUM` to model Starter / Growth / Founder Success. **Every existing PREMIUM org backfills
+to GROWTH** — the higher self-serve ceiling, so no paying customer loses capacity on deploy — and a
+SUPER_ADMIN surface reclassifies individual orgs afterwards. The meter is a **cohort rate**
+(cohorts per quarter/month), NOT a founder headcount; do not invent a seat count. Enforcement is
+soft, per the earlier ruling: refuse the create, never retroactively disable an existing cohort.
+
+**FINDING · a feature was lost inside a ticket, not by the merge.** Every committed lane change is
+on `agent/integration`: verified by patch-id across all 116 branches, then by tree comparison for
+the 5 whose patch-ids differed (they differ because a cherry-pick onto a moved base re-hashes; the
+source content is byte-identical). But `git fsck` found `7bb434bb`, an unreferenced commit holding
+`instrumentation-client.ts` — the global `error`/`unhandledrejection` listeners. It was built
+during `error_tracking` and dropped between the worker's draft and its final commit, so **no branch
+comparison could ever have found it**. Roadmap §11 calls error tracking on both ends the rollback
+trigger; what shipped covered render crashes only. Restored as web `076fdc3`, rebuilt against the
+architecture that actually shipped (`error-report.ts` became server-only, so the browser reporter
+is a separate client-safe module) rather than the draft's. **Standing addition to the close
+protocol: sweep `git fsck --dangling` at wave close, not just branch diffs.**
+
+**FINDING · the gate evidence was greener than the checkout.** `pnpm lint` could not pass from the
+web repo directory at all — all 255 errors came from `.agent-wt/verify3`, an orphaned worktree
+snapshot ESLint walks; and `pnpm typecheck` failed on every `.test.tsx` because
+`@testing-library/react` is declared in `package.json` but was never installed here. Both are
+artifacts of gating inside worktrees carrying their own `node_modules`. The CODE was fine; the
+recorded "lint 0 / typecheck 0" was simply not reproducible from the repo. Orphan removed after
+verifying it held no file the branch lacks and that all 239 differing files had the branch ahead.
+**Consequence for wave 9: lane worktrees live at `/e/projects/bvisionry-lms/.lanes/`, OUTSIDE both
+repos, so no linter or compiler can ever walk one. Workers never remove their own worktree; the
+orchestrator does, centrally, after landing.**
+
+**WAVE 9 DISPATCH — four lanes, chosen for zero file overlap.** `tier_model` (backend enum +
+V156 + entitlement + admin reclassification), `enrolment_override` (the one acceptance criterion of
+§7 item 10 never built — nothing can currently un-enrol a founder), `sso_admin_console` (the
+feature has no UI at all, and `update` wrongly demands the client secret be re-sent), and
+`legal_surfaces` (the privacy policy is affirmatively false, and got worse when GDPR self-service
+was appended beneath it). The routing tickets — breadcrumbs, sidebar grouping, URL-addressable
+tabs, orphan route, command palette, notifications page, onboarding, mobile tabs — are HELD for
+wave 11 because every one of them collides with P2-11's URL unification, which takes wave 10 alone.

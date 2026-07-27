@@ -2672,3 +2672,85 @@ The `MemberService` frozen-constructor trap generalises: it is not only NEW para
 second call to an already-frozen method adds a violation the store cannot absorb.** This wave hit
 it — a third `event.organizationId()` call where the store freezes two — and fixed it by hoisting
 to a local, which pruned a line instead of adding one.
+
+## WAVE 11 CLOSED — 55 tickets. Roadmap §10 P0/P1/P2 delivered.
+
+**Landed:** `nav_findability` (web `f2a8bb5`), `navigation_shell` (web `31c99bc`),
+`onboarding_and_empty_states` (web `8444027`+`3eb5529`), `notifications_and_landing`
+(be `aa6547b`, web `e9a0f66`+`87fea9d`), plus orchestrator `a51dc28`.
+
+**Combination gates:** backend `./mvnw clean test` **1253 / 0F / 0E**; web lint 0, typecheck 0,
+**943 tests / 73 files**; frozen store **0 added, 1 pruned**; **Gate 4 157 passed x2 consecutive**.
+
+### THE FINDING THAT OUTWEIGHS THE WAVE — the founder email loop points at a 404
+Six backend call sites emit `/my/assessments/...` as a WEB link. **There is no `/my` route in the
+app**, no `redirects()` entry, no rewrite. Verified: `AssignmentService` :300 :439 :690 :694 and
+`EvaluationService` :546 :555, plus `PostCompletionLinkResolver` :60. Three are in-app
+notifications; **three are EMAILS** — assessment assigned, reminder, results ready. Every founder
+who ever clicked through from those emails hit a 404, in the channel where a broken link is least
+recoverable, and it has been live the whole time. Real routes are
+`/app/assessments/{id}` and `/app/assessments/{id}/results`. NOT fixed here: it is a string change
+plus tests and it deserves its own ticket with real verification, not a tack-on to a UI wave.
+
+### TEST-INTEGRITY — a rename disarmed two guards that stayed GREEN
+`nav_findability` split the single "Platform console" nav section into five. Two e2e guards
+asserted `getByText("Platform Console")).toHaveCount(0)` as the "an ORG_ADMIN / MEMBER must not see
+the platform console" check. With the string gone those pass for a SUPER_ADMIN too — **a vacuous
+pass, already shipped, invisible to every gate.** Caught by the notifications lane while fixing
+something else. All four assertions now pin a DESTINATION (a route only a super admin's hub
+carries) rather than a section heading, because a route cannot be regrouped out of existence.
+The post-login map is now genuinely asserted in `auth.setup.ts` — the only place the suite signs
+each role in for real; without it the map could point every role at the hub and stay green.
+
+### MY DIAGNOSIS WAS WRONG ON TWO OF THREE
+I attributed all three Gate 4 failures to the role-landing change. Only one was
+(`announcements.spec.ts` read `feed.notifications` off a `Page` payload). The other two broke on
+the nav rename above — both specs `goto("/app")` explicitly and cannot observe a post-login
+redirect at all. The lane checked instead of complying.
+
+### ORCHESTRATOR ERRORS THIS WAVE, BOTH MINE
+1. **I briefed wave 10's lane to update the e2e specs it would break and did not repeat it to wave
+   11.** Three specs consequently landed stale. The instruction is now standing, not per-wave.
+2. **I cherry-picked under a running dev server and half-cleared `.next`.** `/login` went 500 with
+   `Cannot find module '[turbopack]_runtime.js'` and missing manifests, which failed `auth.setup.ts`
+   and therefore every spec. Not a regression — my own corruption, and exactly what the Gate 4
+   doctrine's restart-and-clear step exists to prevent. **Never change code under a live dev server;
+   restart and clear before judging.**
+
+### Worker corrections ratified (thirteen through sixteen)
+1. **Org-admin promotion is org-SHAPE-dependent, not role-dependent.** `requireOrgConsoleAccess`
+   admits an ORG_ADMIN only when their org is itself a sub-organization, so a root-org admin gets
+   nothing promoted — every promotable destination would 404 for them. A shape-blind fix would have
+   shipped 404s to half the org admins.
+2. **The "lost" organizations `EmptyState` was not lost.** It landed in `0d3ffb5` (`ux_p0`) and is
+   in the tree. My orphan sweep checked whether FILES existed, not whether their CONTENT had landed
+   by another route, so it could not have caught this. My claim of a "bonus find" was wrong.
+3. **The roadmap's "horizontal tab scroll" does not exist.** `org-tabs.tsx` carried both
+   `flex-wrap` and `overflow-x-auto`, which contradict; the scroll container was dead code from the
+   day it was written. The real defect was worse — ten tabs wrapped onto four sticky rows, ~190px of
+   permanent chrome on a 667px phone. Fixed by deleting one class. §10 P2-14's wording should be
+   corrected so the next reader does not go hunting for a scroller.
+4. **The bottom tab bar was declined, with reasoning.** `MobileSheetNav` already puts every member
+   destination two taps away; a bottom bar saves one tap and costs a second nav system plus ~56px of
+   viewport. §10 says "consider". Ratified — inventing it would have been work for its own sake.
+
+### Routed to the operator, deliberately unfixed
+- **Two ancestors are guarded MORE TIGHTLY than the pages beneath them.**
+  `/app/admin/organizations` and `/app/admin/workshops` are `requireSuperAdmin` while their own
+  children admit ORG_ADMIN (verified). A breadcrumb linking every ancestor would bounce an org admin
+  off a 403 from the wayfinding control itself; handled by rendering those crumbs as plain text, but
+  the console inconsistency is real and the honest fix is an org-admin-scoped list view.
+- **The `session.orgId` super-admin 404 is FOUR pages, not one** — `admin/exercises`,
+  `admin/exercises/[assignmentId]`, `admin/admins`, `admin/sub-organizations`.
+- **Coach onboarding CTAs self-link.** Both `coachSteps` hrefs are `/app/coach`, and the checklist
+  now renders there, so "Open my founders" is a no-op soft navigation. Anchors or dropping the CTA
+  when already on target — a design call in the step definitions.
+- Breadcrumbs resolve nine resource types to real names; the rest render a type noun because the
+  backend has no cheap by-id lookup. Member name is the one worth adding and would need a
+  `GET /organizations/{orgId}/members/{userId}` that does not exist.
+
+### Doctrine addition — `/tmp` is shared across concurrent lanes
+Two lanes collided on `/tmp/g1.log`; one quoted another worktree's gate output as its own, caught
+only because the pnpm banner named the wrong lane. Exit codes are per-process and were trustworthy;
+the TEXT was not. `cmd > log 2>&1; echo $?` is necessary but NOT sufficient under parallel lanes —
+**gate logs must be lane-private.** Now standing, alongside the pipeline rule.

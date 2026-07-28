@@ -1,6 +1,7 @@
 package com.bvisionry.aiconfig.service;
 
 import com.bvisionry.aicalllog.dto.AICallLogEntry;
+import com.bvisionry.aiengine.guardrail.AttemptLog;
 import com.bvisionry.aicalllog.dto.CallMetadata;
 import com.bvisionry.aicalllog.service.AICallLogService;
 import com.bvisionry.aiconfig.dto.PromptTemplateResponse;
@@ -117,9 +118,11 @@ public class OpenRouterChatService {
             }
         }
 
+        AttemptLog attemptLog = new AttemptLog();
         AIResponse<PillarEvaluationResult> response = run("pillar-evaluation", systemPrompt, userMessage,
-                validator::validatePillarResult, provenance, model, metadata,
-                () -> aiEngine.evaluatePillar(systemPrompt, userMessage, model, asDouble(temperature), maxTokens));
+                validator::validatePillarResult, provenance, model, metadata, attemptLog,
+                () -> aiEngine.evaluatePillar(systemPrompt, userMessage, model, asDouble(temperature), maxTokens,
+                        attemptLog));
 
         // Cache only a real, successfully-parsed provider result. rawResponse() here is
         // serialize(parsed) (see run()) — exactly what a future hit deserializes. cacheKey is
@@ -199,9 +202,11 @@ public class OpenRouterChatService {
         String userMessage = buildOverallSummaryUserMessage(overallSummaryPrompt, pillarResultsSummary, userContext);
 
         Provenance provenance = new Provenance(model, temperature, promptVersionId(systemPromptTemplate));
+        AttemptLog attemptLog = new AttemptLog();
         return run("overall-summary", systemPrompt, userMessage, validator::validateOverallSummaryResult,
-                provenance, model, metadata,
-                () -> aiEngine.generateOverallSummary(systemPrompt, userMessage, model, asDouble(temperature), maxTokens));
+                provenance, model, metadata, attemptLog,
+                () -> aiEngine.generateOverallSummary(systemPrompt, userMessage, model, asDouble(temperature), maxTokens,
+                        attemptLog));
     }
 
     public AIResponse<TeamInsightResult> generateTeamInsight(String aggregatedData, CallMetadata metadata) {
@@ -218,9 +223,11 @@ public class OpenRouterChatService {
         String systemPrompt = buildTeamInsightSystemPrompt(systemPromptTemplate.content(), insightGuidance);
 
         Provenance provenance = new Provenance(model, temperature, promptVersionId(systemPromptTemplate));
+        AttemptLog attemptLog = new AttemptLog();
         return run("team-insight", systemPrompt, aggregatedData, validator::validateTeamInsightResult,
-                provenance, model, metadata,
-                () -> aiEngine.generateTeamInsight(systemPrompt, aggregatedData, model, asDouble(temperature), maxTokens));
+                provenance, model, metadata, attemptLog,
+                () -> aiEngine.generateTeamInsight(systemPrompt, aggregatedData, model, asDouble(temperature), maxTokens,
+                        attemptLog));
     }
 
     /**
@@ -241,9 +248,11 @@ public class OpenRouterChatService {
         String systemPrompt = buildAiUseDetectionSystemPrompt(systemPromptTemplate.content());
 
         Provenance provenance = new Provenance(model, temperature, promptVersionId(systemPromptTemplate));
+        AttemptLog attemptLog = new AttemptLog();
         return run("ai-use-detection", systemPrompt, assessmentXml, null,
-                provenance, model, metadata,
-                () -> aiEngine.detectAiUse(systemPrompt, assessmentXml, model, asDouble(temperature), maxTokens));
+                provenance, model, metadata, attemptLog,
+                () -> aiEngine.detectAiUse(systemPrompt, assessmentXml, model, asDouble(temperature), maxTokens,
+                        attemptLog));
     }
 
     // ========== Call execution + observability ==========
@@ -263,7 +272,7 @@ public class OpenRouterChatService {
      */
     private <T> AIResponse<T> run(String callType, String systemPromptText, String userMessageText,
                                   Function<T, T> postCleaner, Provenance provenance, String model,
-                                  CallMetadata metadata, Supplier<Result<T>> call) {
+                                  CallMetadata metadata, AttemptLog attemptLog, Supplier<Result<T>> call) {
         Instant calledAt = Instant.now();
         long start = System.currentTimeMillis();
         // Resolve the correlation id once on the calling thread. This is correct even
@@ -291,7 +300,7 @@ public class OpenRouterChatService {
                     model, calledAt, elapsedMs,
                     systemPromptText, userMessageText, rawJson, null,
                     tokens.input, tokens.output, null, tokens.cacheRead,
-                    AICallStatus.SUCCESS));
+                    AICallStatus.SUCCESS, attemptLog.count(), attemptLog.toJson()));
 
             return new AIResponse<>(parsed, rawJson, provenance);
         } catch (SchemaValidationException ge) {
@@ -305,7 +314,7 @@ public class OpenRouterChatService {
                     systemPromptText, userMessageText, ge.getRawModelOutput(),
                     "Model output failed schema validation after repair retries: " + ge.getMessage(),
                     null, null, null, null,
-                    AICallStatus.FAILED));
+                    AICallStatus.FAILED, attemptLog.count(), attemptLog.toJson()));
             return new AIResponse<>(null, null, provenance);
         } catch (Exception e) {
             int elapsedMs = (int) (System.currentTimeMillis() - start);
@@ -318,7 +327,7 @@ public class OpenRouterChatService {
                     model, calledAt, elapsedMs,
                     systemPromptText, userMessageText, null, safeMessage,
                     null, null, null, null,
-                    AICallStatus.FAILED));
+                    AICallStatus.FAILED, attemptLog.count(), attemptLog.toJson()));
             throw new AIServiceException("AI " + callType + " call failed: " + safeMessage, e);
         }
     }

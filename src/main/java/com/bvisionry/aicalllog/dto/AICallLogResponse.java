@@ -24,7 +24,9 @@ public record AICallLogResponse(
         Integer outputTokens,
         Integer cacheCreationTokens,
         Integer cacheReadTokens,
-        AICallStatus status
+        AICallStatus status,
+        Integer attempts,
+        String attemptHistory
 ) {
     public static AICallLogResponse from(AICallLog e) {
         return new AICallLogResponse(
@@ -45,7 +47,9 @@ public record AICallLogResponse(
                 e.getOutputTokens(),
                 e.getCacheCreationTokens(),
                 e.getCacheReadTokens(),
-                e.getStatus()
+                e.getStatus(),
+                e.getAttempts(),
+                e.getAttemptHistory()
         );
     }
 }

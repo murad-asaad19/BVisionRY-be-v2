@@ -1,6 +1,7 @@
 package com.bvisionry.aiengine.service;
 
 import com.bvisionry.aiconfig.service.AIConfigService;
+import com.bvisionry.aiengine.guardrail.AttemptLog;
 import com.bvisionry.aiengine.mock.MockLangChainChatModel;
 import com.bvisionry.aiengine.resilience.AiResilience;
 import com.bvisionry.aiengine.transport.Lc4jChatModelProvider;
@@ -58,7 +59,7 @@ class AiEvaluationEngineRepairTest {
         Result<PillarEvaluationResult> result = engine.evaluatePillar(
                 "You are an evaluator. Return scorePercentage.",
                 "assessment data",
-                "anthropic/claude-sonnet-4", 0.3, 1024);
+                "anthropic/claude-sonnet-4", 0.3, 1024, new AttemptLog());
 
         assertThat(result.content()).isNotNull();
         assertThat(result.content().scorePercentage()).isEqualTo(72);
@@ -96,7 +97,7 @@ class AiEvaluationEngineRepairTest {
         Result<PillarEvaluationResult> result = engine.evaluatePillar(
                 "You are an evaluator. Return scorePercentage.",
                 "assessment data",
-                "anthropic/claude-sonnet-4", 0.3, 1024);
+                "anthropic/claude-sonnet-4", 0.3, 1024, new AttemptLog());
         assertThat(result.content()).isNotNull();
 
         assertThat(model.requests).hasSize(2);
@@ -114,6 +115,54 @@ class AiEvaluationEngineRepairTest {
         assertThat(((UserMessage) last).singleText()).contains("scorePercentage");
     }
 
+    /**
+     * The repair round-trips happen inside LangChain4j, so without an explicit capture
+     * the audit trail records only a call's FINAL state. Pins that the AttemptLog
+     * collects every draft with its outcome and the corrective message that followed,
+     * so ai_call_logs can show the whole history.
+     */
+    @Test
+    void attemptLog_capturesEveryDraftAndCorrection() {
+        MockLangChainChatModel model = new MockLangChainChatModel()
+                .enqueue("{\"scorePercentage\": null, \"evidence\": []}");
+        AttemptLog attemptLog = new AttemptLog();
+
+        engineWith(model, 2).evaluatePillar(
+                "You are an evaluator. Return scorePercentage.",
+                "assessment data",
+                "anthropic/claude-sonnet-4", 0.3, 1024, attemptLog);
+
+        // Draft 1 rejected, draft 2 (canned valid default) accepted.
+        assertThat(attemptLog.count()).isEqualTo(2);
+        assertThat(attemptLog.hasRepairs()).isTrue();
+
+        String json = attemptLog.toJson();
+        assertThat(json)
+                .contains("\"attempt\":1")
+                .contains("\"outcome\":\"REPROMPTED\"")
+                .contains("\"attempt\":2")
+                .contains("\"outcome\":\"ACCEPTED\"")
+                // The rejected draft and the reason/correction are all preserved.
+                .contains("scorePercentage")
+                .contains("\"reason\"")
+                .contains("\"correction\"");
+    }
+
+    @Test
+    void attemptLog_cleanFirstPass_recordsSingleAcceptedAttempt() {
+        AttemptLog attemptLog = new AttemptLog();
+
+        engineWith(new MockLangChainChatModel(), 2).evaluatePillar(
+                "You are an evaluator. Return scorePercentage.",
+                "assessment data",
+                "anthropic/claude-sonnet-4", 0.3, 1024, attemptLog);
+
+        assertThat(attemptLog.count()).isEqualTo(1);
+        // No repair → the existing prompt/response columns already tell the story,
+        // so AICallLogService skips persisting the history for this shape.
+        assertThat(attemptLog.hasRepairs()).isFalse();
+    }
+
     @Test
     void noRepairBudget_malformedResponse_failsHard_withRawOutputAttached() {
         MockLangChainChatModel model = new MockLangChainChatModel()
@@ -127,7 +176,7 @@ class AiEvaluationEngineRepairTest {
         assertThatThrownBy(() -> engine.evaluatePillar(
                 "You are an evaluator. Return scorePercentage.",
                 "assessment data",
-                "anthropic/claude-sonnet-4", 0.3, 1024))
+                "anthropic/claude-sonnet-4", 0.3, 1024, new AttemptLog()))
                 .isInstanceOf(SchemaValidationException.class)
                 .satisfies(ex -> assertThat(((SchemaValidationException) ex).getRawModelOutput())
                         .isEqualTo("I'm sorry, I cannot produce a score for this."));

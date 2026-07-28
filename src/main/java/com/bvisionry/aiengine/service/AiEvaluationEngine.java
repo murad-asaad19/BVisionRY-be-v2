@@ -1,5 +1,6 @@
 package com.bvisionry.aiengine.service;
 
+import com.bvisionry.aiengine.guardrail.AttemptLog;
 import com.bvisionry.aiengine.guardrail.SchemaValidationException;
 import com.bvisionry.aiengine.guardrail.StructuredOutputGuardrail;
 import com.bvisionry.aiengine.resilience.AiResilience;
@@ -73,9 +74,10 @@ public class AiEvaluationEngine {
     }
 
     public Result<PillarEvaluationResult> evaluatePillar(String systemPrompt, String userMessage,
-                                                         String model, double temperature, int maxTokens) {
+                                                         String model, double temperature, int maxTokens,
+                                                         AttemptLog attemptLog) {
         StructuredOutputGuardrail guardrail =
-                new StructuredOutputGuardrail(MAPPER, PILLAR_REQUIRED_FIELDS, "scorePercentage");
+                new StructuredOutputGuardrail(MAPPER, PILLAR_REQUIRED_FIELDS, "scorePercentage", attemptLog);
         PillarEvaluator service = AiServices.builder(PillarEvaluator.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
                 // Per-call memory (each service instance serves exactly one call, so
@@ -104,9 +106,10 @@ public class AiEvaluationEngine {
     }
 
     public Result<OverallSummaryResult> generateOverallSummary(String systemPrompt, String userMessage,
-                                                              String model, double temperature, int maxTokens) {
+                                                              String model, double temperature, int maxTokens,
+                                                              AttemptLog attemptLog) {
         StructuredOutputGuardrail guardrail =
-                new StructuredOutputGuardrail(MAPPER, SUMMARY_REQUIRED_FIELDS, "overallScorePercentage");
+                new StructuredOutputGuardrail(MAPPER, SUMMARY_REQUIRED_FIELDS, "overallScorePercentage", attemptLog);
         SummaryGenerator service = AiServices.builder(SummaryGenerator.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
                 // Per-call memory (each service instance serves exactly one call, so
@@ -135,9 +138,10 @@ public class AiEvaluationEngine {
     }
 
     public Result<TeamInsightResult> generateTeamInsight(String systemPrompt, String userMessage,
-                                                        String model, double temperature, int maxTokens) {
+                                                        String model, double temperature, int maxTokens,
+                                                        AttemptLog attemptLog) {
         StructuredOutputGuardrail guardrail =
-                new StructuredOutputGuardrail(MAPPER, List.of("teamThemes"), null);
+                new StructuredOutputGuardrail(MAPPER, List.of("teamThemes"), null, attemptLog);
         TeamInsightGenerator service = AiServices.builder(TeamInsightGenerator.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
                 // Per-call memory (each service instance serves exactly one call, so
@@ -166,9 +170,10 @@ public class AiEvaluationEngine {
     }
 
     public Result<AiUseDetectionResult> detectAiUse(String systemPrompt, String userMessage,
-                                                    String model, double temperature, int maxTokens) {
+                                                    String model, double temperature, int maxTokens,
+                                                    AttemptLog attemptLog) {
         StructuredOutputGuardrail guardrail =
-                new StructuredOutputGuardrail(MAPPER, List.of("answerFindings"), "aiLikelihoodScore");
+                new StructuredOutputGuardrail(MAPPER, List.of("answerFindings"), "aiLikelihoodScore", attemptLog);
         AiUseDetector service = AiServices.builder(AiUseDetector.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
                 // Per-call memory (each service instance serves exactly one call, so

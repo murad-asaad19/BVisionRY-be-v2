@@ -72,4 +72,12 @@ public class AICallLog extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private AICallStatus status;
+
+    /** Model round-trips this call made; 1 = accepted on the first pass, >1 = repaired. */
+    @Column(name = "attempts")
+    private Integer attempts;
+
+    /** Ordered per-attempt JSON (draft + outcome + corrective message); null when no repair happened. */
+    @Column(name = "attempt_history", columnDefinition = "TEXT")
+    private String attemptHistory;
 }

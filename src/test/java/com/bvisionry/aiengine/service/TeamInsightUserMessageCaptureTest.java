@@ -1,6 +1,7 @@
 package com.bvisionry.aiengine.service;
 
 import com.bvisionry.aiconfig.service.AIConfigService;
+import com.bvisionry.aiengine.guardrail.AttemptLog;
 import com.bvisionry.aiengine.resilience.AiResilience;
 import com.bvisionry.aiengine.transport.Lc4jChatModelProvider;
 import com.bvisionry.aiengine.transport.ModelCapabilityRegistry;
@@ -67,7 +68,7 @@ class TeamInsightUserMessageCaptureTest {
         engine.generateTeamInsight(
                 "<output_contract> teamThemes ... </output_contract>",
                 aggregate,
-                "anthropic/claude-sonnet-4", 0.6, 2048);
+                "anthropic/claude-sonnet-4", 0.6, 2048, new AttemptLog());
 
         assertThat(model.last).as("model was called").isNotNull();
 

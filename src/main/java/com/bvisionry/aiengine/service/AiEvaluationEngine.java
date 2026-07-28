@@ -1,5 +1,6 @@
 package com.bvisionry.aiengine.service;
 
+import com.bvisionry.aiengine.guardrail.AttemptLog;
 import com.bvisionry.aiengine.guardrail.SchemaValidationException;
 import com.bvisionry.aiengine.guardrail.StructuredOutputGuardrail;
 import com.bvisionry.aiengine.resilience.AiResilience;
@@ -11,6 +12,7 @@ import com.bvisionry.common.dto.TeamInsightResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.guardrail.OutputGuardrailException;
 import dev.langchain4j.guardrail.config.OutputGuardrailsConfig;
+import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.service.Result;
@@ -72,11 +74,20 @@ public class AiEvaluationEngine {
     }
 
     public Result<PillarEvaluationResult> evaluatePillar(String systemPrompt, String userMessage,
-                                                         String model, double temperature, int maxTokens) {
+                                                         String model, double temperature, int maxTokens,
+                                                         AttemptLog attemptLog) {
         StructuredOutputGuardrail guardrail =
-                new StructuredOutputGuardrail(MAPPER, PILLAR_REQUIRED_FIELDS, "scorePercentage");
+                new StructuredOutputGuardrail(MAPPER, PILLAR_REQUIRED_FIELDS, "scorePercentage", attemptLog);
         PillarEvaluator service = AiServices.builder(PillarEvaluator.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
+                // Per-call memory (each service instance serves exactly one call, so
+                // nothing leaks across submissions). REQUIRED for the guardrail repair
+                // loop to be conversational: OutputGuardrailExecutor builds each retry
+                // from chatMemory().messages() + the corrective message — with no
+                // memory the retry is sent as ONLY the corrective text, so the model
+                // re-answers without the system prompt, the assessment data, or its
+                // own prior draft (and can only fabricate).
+                .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
                 .systemMessageProvider(memoryId -> systemPrompt)
                 .outputGuardrails(guardrail)
                 .outputGuardrailsConfig(retryConfig())
@@ -95,11 +106,20 @@ public class AiEvaluationEngine {
     }
 
     public Result<OverallSummaryResult> generateOverallSummary(String systemPrompt, String userMessage,
-                                                              String model, double temperature, int maxTokens) {
+                                                              String model, double temperature, int maxTokens,
+                                                              AttemptLog attemptLog) {
         StructuredOutputGuardrail guardrail =
-                new StructuredOutputGuardrail(MAPPER, SUMMARY_REQUIRED_FIELDS, "overallScorePercentage");
+                new StructuredOutputGuardrail(MAPPER, SUMMARY_REQUIRED_FIELDS, "overallScorePercentage", attemptLog);
         SummaryGenerator service = AiServices.builder(SummaryGenerator.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
+                // Per-call memory (each service instance serves exactly one call, so
+                // nothing leaks across submissions). REQUIRED for the guardrail repair
+                // loop to be conversational: OutputGuardrailExecutor builds each retry
+                // from chatMemory().messages() + the corrective message — with no
+                // memory the retry is sent as ONLY the corrective text, so the model
+                // re-answers without the system prompt, the assessment data, or its
+                // own prior draft (and can only fabricate).
+                .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
                 .systemMessageProvider(memoryId -> systemPrompt)
                 .outputGuardrails(guardrail)
                 .outputGuardrailsConfig(retryConfig())
@@ -118,11 +138,20 @@ public class AiEvaluationEngine {
     }
 
     public Result<TeamInsightResult> generateTeamInsight(String systemPrompt, String userMessage,
-                                                        String model, double temperature, int maxTokens) {
+                                                        String model, double temperature, int maxTokens,
+                                                        AttemptLog attemptLog) {
         StructuredOutputGuardrail guardrail =
-                new StructuredOutputGuardrail(MAPPER, List.of("teamThemes"), null);
+                new StructuredOutputGuardrail(MAPPER, List.of("teamThemes"), null, attemptLog);
         TeamInsightGenerator service = AiServices.builder(TeamInsightGenerator.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
+                // Per-call memory (each service instance serves exactly one call, so
+                // nothing leaks across submissions). REQUIRED for the guardrail repair
+                // loop to be conversational: OutputGuardrailExecutor builds each retry
+                // from chatMemory().messages() + the corrective message — with no
+                // memory the retry is sent as ONLY the corrective text, so the model
+                // re-answers without the system prompt, the assessment data, or its
+                // own prior draft (and can only fabricate).
+                .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
                 .systemMessageProvider(memoryId -> systemPrompt)
                 .outputGuardrails(guardrail)
                 .outputGuardrailsConfig(retryConfig())
@@ -141,11 +170,20 @@ public class AiEvaluationEngine {
     }
 
     public Result<AiUseDetectionResult> detectAiUse(String systemPrompt, String userMessage,
-                                                    String model, double temperature, int maxTokens) {
+                                                    String model, double temperature, int maxTokens,
+                                                    AttemptLog attemptLog) {
         StructuredOutputGuardrail guardrail =
-                new StructuredOutputGuardrail(MAPPER, List.of("answerFindings"), "aiLikelihoodScore");
+                new StructuredOutputGuardrail(MAPPER, List.of("answerFindings"), "aiLikelihoodScore", attemptLog);
         AiUseDetector service = AiServices.builder(AiUseDetector.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
+                // Per-call memory (each service instance serves exactly one call, so
+                // nothing leaks across submissions). REQUIRED for the guardrail repair
+                // loop to be conversational: OutputGuardrailExecutor builds each retry
+                // from chatMemory().messages() + the corrective message — with no
+                // memory the retry is sent as ONLY the corrective text, so the model
+                // re-answers without the system prompt, the assessment data, or its
+                // own prior draft (and can only fabricate).
+                .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
                 .systemMessageProvider(memoryId -> systemPrompt)
                 .outputGuardrails(guardrail)
                 .outputGuardrailsConfig(retryConfig())

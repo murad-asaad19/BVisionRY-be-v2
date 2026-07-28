@@ -144,6 +144,59 @@ class StructuredOutputGuardrailTest {
         assertThat(validate(summaryGuard, missingCorePattern).isReprompt()).isTrue();
     }
 
+    /**
+     * Production incident regression (FOCUS/FLOW pillar): a first draft missing the
+     * narrative fields AND carrying a null score. The old short-circuit reprompted
+     * for the narratives only; the model complied and nulled the score; the next
+     * reprompt asked for the score only — the repair loop never converged. One
+     * reprompt must now name BOTH problems and restate the full contract.
+     */
+    @Test
+    void pillarGuard_missingNarrativesAndNullScore_singleRepromptNamesEverything() {
+        String draft = "{\"scorePercentage\": null, \"evidence\": []}";
+        OutputGuardrailResult r = validate(pillarGuard, draft);
+        assertThat(r.isReprompt()).isTrue();
+        var failure = (OutputGuardrailResult.Failure) r.failures().get(0);
+        assertThat(failure.message())
+                .contains("whatThisScoreMeans")
+                .contains("whatsWorking")
+                .contains("whatCanImprove")
+                .contains("scorePercentage");
+        assertThat(failure.reprompt())
+                .contains("scorePercentage")
+                .contains("whatThisScoreMeans")
+                .contains("whatsWorking")
+                .contains("whatCanImprove")
+                .contains("never null");
+    }
+
+    @Test
+    void pillarGuard_repromptRestatesFullContract_notJustTheDelta() {
+        // A draft that only misses the score must still be corrected with the FULL
+        // field list, so fixing the score can't come at the cost of dropping the
+        // fields the model already produced.
+        String scoreMissing = "{\"whatThisScoreMeans\": \"x\","
+                + " \"whatsWorking\": [\"a\"], \"whatCanImprove\": [\"b\"]}";
+        OutputGuardrailResult r = validate(pillarGuard, scoreMissing);
+        assertThat(r.isReprompt()).isTrue();
+        assertThat(((OutputGuardrailResult.Failure) r.failures().get(0)).reprompt())
+                .contains("scorePercentage")
+                .contains("whatThisScoreMeans")
+                .contains("whatsWorking")
+                .contains("whatCanImprove");
+    }
+
+    @Test
+    void pillarGuard_outOfRangeScoreAndMissingField_bothNamedInOneReprompt() {
+        String draft = "{\"scorePercentage\": 150,"
+                + " \"whatThisScoreMeans\": \"x\", \"whatsWorking\": [\"a\"]}";
+        OutputGuardrailResult r = validate(pillarGuard, draft);
+        assertThat(r.isReprompt()).isTrue();
+        assertThat(r.failures().get(0).message())
+                .contains("whatCanImprove")
+                .contains("out of range: 150");
+    }
+
     @Test
     void summaryGuard_completeResponse_passes() {
         String complete = "{\"overallScorePercentage\": 68,"

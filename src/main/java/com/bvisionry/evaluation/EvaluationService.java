@@ -778,6 +778,16 @@ public class EvaluationService {
                 evaluation.setAiWhatCanImprove(pr.aiResult().whatCanImprove());
                 evaluation.setAiBusinessRelevance(pr.aiResult().whyThisMattersForBusiness());
                 evaluation.setAiEvidence(pr.aiResult().evidence());
+            } else {
+                // Re-evaluation reuses the existing row (upsert above). When THIS run
+                // produced no parsed result, the previous run's narrative must not
+                // survive next to the new zeroed score/ai_failed flag — a re-failed
+                // pillar would otherwise render stale commentary as if it were fresh.
+                evaluation.setAiScoreMeans(null);
+                evaluation.setAiWhatsWorking(null);
+                evaluation.setAiWhatCanImprove(null);
+                evaluation.setAiBusinessRelevance(null);
+                evaluation.setAiEvidence(null);
             }
 
             if (pr.selfAssessmentGap() != null) {

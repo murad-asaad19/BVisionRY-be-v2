@@ -27,7 +27,7 @@ public final class AttemptLog {
 
     private record Attempt(int number, String response, Outcome outcome, String reason, String correction) {}
 
-    // Escalation samples run concurrently against their own guardrails, but a single
+    // Pillar calls run concurrently, each against its own guardrail, but a single
     // guardrail's validate() can still be re-entered by the retry loop — keep it safe.
     private final List<Attempt> attempts = new CopyOnWriteArrayList<>();
 

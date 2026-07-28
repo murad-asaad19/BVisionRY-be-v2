@@ -2,7 +2,6 @@ package com.bvisionry.evaluation;
 
 import com.bvisionry.aiconfig.service.AIConfigService;
 import com.bvisionry.aiconfig.service.OpenRouterChatService;
-import com.bvisionry.aiengine.confidence.ConfidenceGate;
 import com.bvisionry.assessment.entity.Answer;
 import com.bvisionry.common.enums.QuestionType;
 import com.bvisionry.common.exception.AIServiceException;
@@ -28,16 +27,14 @@ class EvaluationEngineTest {
     @Mock private ScoringService scoringService;
     @Mock private OpenRouterChatService openRouterChatService;
     @Mock private AIConfigService aiConfigService;
-    @Mock private ConfidenceGate confidenceGate;
 
     private EvaluationEngine engine;
 
     @BeforeEach
     void setUp() {
-        // Executors run inline so the engine's fan-out is deterministic in the test.
+        // Executor runs inline so the engine's fan-out is deterministic in the test.
         Executor inline = Runnable::run;
-        engine = new EvaluationEngine(scoringService, openRouterChatService, aiConfigService,
-                confidenceGate, inline, inline, true, 3, 2, "");
+        engine = new EvaluationEngine(scoringService, openRouterChatService, aiConfigService, inline);
     }
 
     @Test

@@ -77,7 +77,7 @@ public class AiUseDetectionService {
 
         AIResponse<AiUseDetectionResult> response = chatService.detectAiUse(
                 buildAssessmentData(proseAnswers),
-                new CallMetadata(submissionId, null, "ai-use-detection", false));
+                new CallMetadata(submissionId, null, "ai-use-detection"));
         if (!response.isParsed()) {
             throw new AIServiceException(
                     "The AI-use detector returned an unusable response after retries — please try again.");

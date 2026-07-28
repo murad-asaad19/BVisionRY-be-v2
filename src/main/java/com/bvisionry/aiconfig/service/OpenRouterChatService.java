@@ -106,11 +106,10 @@ public class OpenRouterChatService {
 
         // Content-hash cache: identical (model, temperature, system prompt, user message) inputs
         // re-use the stored parsed result instead of re-billing the provider (retakes / full re-runs
-        // with unchanged answers). Only the PRIMARY evaluation is cached: escalation re-samples must
-        // stay INDEPENDENT (see CallMetadata), so they always bypass. Summary and team-insight are
-        // intentionally not cached — their inputs embed per-run pillar results and rarely repeat.
+        // with unchanged answers). Summary and team-insight are intentionally not cached — their
+        // inputs embed per-run pillar results and rarely repeat.
         String cacheKey = null;
-        if (evalCacheService.isEnabled() && !metadata.escalationSample()) {
+        if (evalCacheService.isEnabled()) {
             cacheKey = AiEvaluationCacheService.cacheKey(model, asDouble(temperature), systemPrompt, userMessage);
             AIResponse<PillarEvaluationResult> cached = servePillarFromCache(cacheKey, provenance, metadata);
             if (cached != null) {
@@ -126,7 +125,7 @@ public class OpenRouterChatService {
 
         // Cache only a real, successfully-parsed provider result. rawResponse() here is
         // serialize(parsed) (see run()) — exactly what a future hit deserializes. cacheKey is
-        // non-null only when caching is enabled and this is not an escalation sample.
+        // non-null only when caching is enabled.
         if (cacheKey != null && response.isParsed()) {
             storeInCacheSafely(cacheKey, model, response.rawResponse());
         }

@@ -11,6 +11,7 @@ import com.bvisionry.common.dto.TeamInsightResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.guardrail.OutputGuardrailException;
 import dev.langchain4j.guardrail.config.OutputGuardrailsConfig;
+import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.service.Result;
@@ -77,6 +78,14 @@ public class AiEvaluationEngine {
                 new StructuredOutputGuardrail(MAPPER, PILLAR_REQUIRED_FIELDS, "scorePercentage");
         PillarEvaluator service = AiServices.builder(PillarEvaluator.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
+                // Per-call memory (each service instance serves exactly one call, so
+                // nothing leaks across submissions). REQUIRED for the guardrail repair
+                // loop to be conversational: OutputGuardrailExecutor builds each retry
+                // from chatMemory().messages() + the corrective message — with no
+                // memory the retry is sent as ONLY the corrective text, so the model
+                // re-answers without the system prompt, the assessment data, or its
+                // own prior draft (and can only fabricate).
+                .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
                 .systemMessageProvider(memoryId -> systemPrompt)
                 .outputGuardrails(guardrail)
                 .outputGuardrailsConfig(retryConfig())
@@ -100,6 +109,14 @@ public class AiEvaluationEngine {
                 new StructuredOutputGuardrail(MAPPER, SUMMARY_REQUIRED_FIELDS, "overallScorePercentage");
         SummaryGenerator service = AiServices.builder(SummaryGenerator.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
+                // Per-call memory (each service instance serves exactly one call, so
+                // nothing leaks across submissions). REQUIRED for the guardrail repair
+                // loop to be conversational: OutputGuardrailExecutor builds each retry
+                // from chatMemory().messages() + the corrective message — with no
+                // memory the retry is sent as ONLY the corrective text, so the model
+                // re-answers without the system prompt, the assessment data, or its
+                // own prior draft (and can only fabricate).
+                .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
                 .systemMessageProvider(memoryId -> systemPrompt)
                 .outputGuardrails(guardrail)
                 .outputGuardrailsConfig(retryConfig())
@@ -123,6 +140,14 @@ public class AiEvaluationEngine {
                 new StructuredOutputGuardrail(MAPPER, List.of("teamThemes"), null);
         TeamInsightGenerator service = AiServices.builder(TeamInsightGenerator.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
+                // Per-call memory (each service instance serves exactly one call, so
+                // nothing leaks across submissions). REQUIRED for the guardrail repair
+                // loop to be conversational: OutputGuardrailExecutor builds each retry
+                // from chatMemory().messages() + the corrective message — with no
+                // memory the retry is sent as ONLY the corrective text, so the model
+                // re-answers without the system prompt, the assessment data, or its
+                // own prior draft (and can only fabricate).
+                .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
                 .systemMessageProvider(memoryId -> systemPrompt)
                 .outputGuardrails(guardrail)
                 .outputGuardrailsConfig(retryConfig())
@@ -146,6 +171,14 @@ public class AiEvaluationEngine {
                 new StructuredOutputGuardrail(MAPPER, List.of("answerFindings"), "aiLikelihoodScore");
         AiUseDetector service = AiServices.builder(AiUseDetector.class)
                 .chatModel(modelFor(model, temperature, maxTokens))
+                // Per-call memory (each service instance serves exactly one call, so
+                // nothing leaks across submissions). REQUIRED for the guardrail repair
+                // loop to be conversational: OutputGuardrailExecutor builds each retry
+                // from chatMemory().messages() + the corrective message — with no
+                // memory the retry is sent as ONLY the corrective text, so the model
+                // re-answers without the system prompt, the assessment data, or its
+                // own prior draft (and can only fabricate).
+                .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
                 .systemMessageProvider(memoryId -> systemPrompt)
                 .outputGuardrails(guardrail)
                 .outputGuardrailsConfig(retryConfig())

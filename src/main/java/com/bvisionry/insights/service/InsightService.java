@@ -108,7 +108,7 @@ public class InsightService {
         try {
             var aiResponse = openRouterChatService.generateTeamInsight(
                     anonymizedData,
-                    new com.bvisionry.aicalllog.dto.CallMetadata(null, pipelineId, null, false));
+                    new com.bvisionry.aicalllog.dto.CallMetadata(null, pipelineId, null));
 
             if (aiResponse.isParsed()) {
                 @SuppressWarnings("unchecked")

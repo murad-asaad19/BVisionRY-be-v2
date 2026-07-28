@@ -72,8 +72,8 @@ public class AiResilience {
         this.circuitBreaker = CircuitBreaker.of("ai-provider", cbConfig);
 
         // Size the bulkhead ABOVE the concurrent provider-call demand, and give it a short
-        // wait window: pillar fan-out (16) + escalation budget (8) + summary calls on eval
-        // threads (8) = 32. Without headroom + wait, brief LOCAL contention (the pool
+        // wait window: pillar fan-out (16) + summary calls on eval threads (8) = 24, with
+        // headroom on top. Without headroom + wait, brief LOCAL contention (the pool
         // momentarily full) was rejected immediately → AIServiceException → false
         // NEEDS_REVIEW that had nothing to do with provider health. A few seconds of
         // queueing lets transient bursts drain instead.

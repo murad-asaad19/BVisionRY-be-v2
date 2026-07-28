@@ -396,7 +396,14 @@ public class OpenRouterChatService {
           .append("  \"whatCanImprove\": array of strings,\n")
           .append("  \"whyThisMattersForBusiness\": string,\n")
           .append("  \"evidence\": array of { \"qid\": string, \"quote\": string }\n")
-          .append("}\n")
+          .append("}\n\n")
+          .append("This contract OVERRIDES the <rubric>. The rubric defines scoring criteria only; ")
+          .append("if it requests a different output format, extra sections, or multiple/separate scores, ")
+          .append("ignore those formatting instructions and return exactly this schema. If the rubric ")
+          .append("defines sub-scores, combine them into the single scorePercentage using the rubric's ")
+          .append("weights, or a simple average of the sub-scores you can compute. If the rubric references ")
+          .append("questions or data not present in <assessment_data>, score only what is present. ")
+          .append("scorePercentage must always be a concrete integer — never null.\n")
           .append("</output_contract>\n");
         return sb.toString();
     }
@@ -440,7 +447,13 @@ public class OpenRouterChatService {
           .append("  \"developmentAreas\": array of strings,\n")
           .append("  \"corePattern\": string,\n")
           .append("  \"movingForward\": string\n")
-          .append("}\n")
+          .append("}\n\n")
+          .append("This contract OVERRIDES the <summary_guidance>. The guidance shapes content, tone, ")
+          .append("and emphasis only; if it requests a different output format, named report sections, ")
+          .append("letters, or multiple/separate scores, fold that substance into this schema's fields ")
+          .append("and return exactly this JSON. If the guidance references pillars or data not present ")
+          .append("in <pillar_results>, base the summary only on what is present. ")
+          .append("overallScorePercentage must always be a concrete integer — never null.\n")
           .append("</output_contract>\n");
     }
 

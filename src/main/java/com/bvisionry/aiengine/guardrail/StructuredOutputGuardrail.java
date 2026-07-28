@@ -43,6 +43,8 @@ public class StructuredOutputGuardrail implements OutputGuardrail {
     private final ObjectMapper mapper;
     private final List<String> requiredFields;
     private final String scoreField; // nullable — only score-bearing schemas set this
+    /** Per-call attempt history sink; null when the caller doesn't want the trail. */
+    private final AttemptLog attemptLog;
 
     /**
      * The raw text of the most recent response validated. Instances are built per AI
@@ -53,9 +55,15 @@ public class StructuredOutputGuardrail implements OutputGuardrail {
     private volatile String lastResponseText;
 
     public StructuredOutputGuardrail(ObjectMapper mapper, List<String> requiredFields, String scoreField) {
+        this(mapper, requiredFields, scoreField, null);
+    }
+
+    public StructuredOutputGuardrail(ObjectMapper mapper, List<String> requiredFields, String scoreField,
+                                     AttemptLog attemptLog) {
         this.mapper = mapper;
         this.requiredFields = requiredFields == null ? List.of() : List.copyOf(requiredFields);
         this.scoreField = scoreField;
+        this.attemptLog = attemptLog;
     }
 
     public String lastResponseText() {
@@ -67,7 +75,7 @@ public class StructuredOutputGuardrail implements OutputGuardrail {
         this.lastResponseText = responseFromLLM.text();
         String json = JsonExtraction.extract(responseFromLLM.text());
         if (json == null) {
-            return reprompt(
+            return rejected(
                     "The response did not contain a complete JSON object.",
                     "Respond with ONLY a single, complete JSON object matching the schema — "
                             + "no prose, no explanation, no markdown code fences.");
@@ -77,12 +85,12 @@ public class StructuredOutputGuardrail implements OutputGuardrail {
         try {
             node = mapper.readTree(json);
         } catch (Exception e) {
-            return reprompt(
+            return rejected(
                     "The response was not valid JSON.",
                     "Return ONLY a valid JSON object matching the schema. No prose or code fences.");
         }
         if (node == null || !node.isObject()) {
-            return reprompt(
+            return rejected(
                     "The response was not a JSON object.",
                     "Return a single JSON object matching the schema.");
         }
@@ -111,7 +119,7 @@ public class StructuredOutputGuardrail implements OutputGuardrail {
         }
 
         if (!violations.isEmpty()) {
-            return reprompt(
+            return rejected(
                     "Invalid model output: " + String.join("; ", violations),
                     "Return ONLY one complete JSON object containing ALL of these fields, "
                             + "each present and valid: " + fullContract() + ". "
@@ -120,7 +128,22 @@ public class StructuredOutputGuardrail implements OutputGuardrail {
         }
 
         // Feed downstream deserialization the cleaned JSON (no fences/prose).
+        if (attemptLog != null) {
+            attemptLog.record(lastResponseText, AttemptLog.Outcome.ACCEPTED, null, null);
+        }
         return successWith(json);
+    }
+
+    /**
+     * Reprompt, recording the rejected draft and the corrective message in the
+     * per-call {@link AttemptLog} first, so the audit trail carries the full repair
+     * history rather than only the call's final state.
+     */
+    private OutputGuardrailResult rejected(String reason, String correction) {
+        if (attemptLog != null) {
+            attemptLog.record(lastResponseText, AttemptLog.Outcome.REPROMPTED, reason, correction);
+        }
+        return reprompt(reason, correction);
     }
 
     /** The complete field contract, restated verbatim in every corrective message. */

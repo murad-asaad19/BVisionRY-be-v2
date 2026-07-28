@@ -70,6 +70,12 @@ public class AICallLogService {
             e.setCacheCreationTokens(entry.cacheCreationTokens());
             e.setCacheReadTokens(entry.cacheReadTokens());
             e.setStatus(entry.status());
+            e.setAttempts(entry.attempts() > 0 ? entry.attempts() : null);
+            // Store the repair trail only when a repair actually happened: on a clean
+            // single-attempt call the system_prompt/user_message/raw_response columns
+            // already carry the whole story, so duplicating them here would double the
+            // table's dominant growth term for no diagnostic gain.
+            e.setAttemptHistory(entry.attempts() > 1 ? truncate(entry.attemptHistory()) : null);
             repository.save(e);
         } catch (Exception ex) {
             // Never let a logging failure surface — but make it loud in the logs

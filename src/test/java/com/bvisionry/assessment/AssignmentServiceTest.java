@@ -33,6 +33,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -147,7 +148,7 @@ class AssignmentServiceTest {
             return s;
         });
 
-        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null);
+        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null, null);
         List<AssignmentResponse> responses = assignmentService.createAssignment(orgId, request);
 
         assertThat(responses).hasSize(2);
@@ -173,7 +174,7 @@ class AssignmentServiceTest {
         when(userRepository.findAllById(List.of(foreign.getId()))).thenReturn(List.of(foreign));
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, List.of(foreign.getId()), null, null, false, false, null);
+                pipelineId, List.of(foreign.getId()), null, null, false, false, null, null);
 
         assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
                 .isInstanceOf(ResourceNotFoundException.class);
@@ -197,7 +198,7 @@ class AssignmentServiceTest {
         });
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, List.of(member1.getId()), null, null, false, false, null);
+                pipelineId, List.of(member1.getId()), null, null, false, false, null, null);
         List<AssignmentResponse> responses = assignmentService.createAssignment(orgId, request);
 
         assertThat(responses).hasSize(1);
@@ -224,7 +225,7 @@ class AssignmentServiceTest {
             return s;
         });
 
-        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null);
+        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null, null);
         List<AssignmentResponse> responses = assignmentService.createAssignment(orgId, request);
 
         assertThat(responses).hasSize(1);
@@ -240,7 +241,7 @@ class AssignmentServiceTest {
         when(assignmentRepository.findExistingAssignedUserIdsIn(eq(orgId), eq(pipelineId), any()))
                 .thenReturn(List.of(member1.getId()));
 
-        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null);
+        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null, null);
 
         assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
                 .isInstanceOf(BadRequestException.class)
@@ -253,7 +254,7 @@ class AssignmentServiceTest {
         when(organizationRepository.findById(orgId)).thenReturn(Optional.of(organization));
         when(pipelineRepository.findById(pipelineId)).thenReturn(Optional.of(pipeline));
 
-        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null);
+        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null, null);
 
         assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
                 .isInstanceOf(BadRequestException.class)
@@ -264,7 +265,7 @@ class AssignmentServiceTest {
     void createAssignment_orgNotFound_throwsNotFound() {
         when(organizationRepository.findById(orgId)).thenReturn(Optional.empty());
 
-        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null);
+        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null, null);
 
         assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
                 .isInstanceOf(ResourceNotFoundException.class);
@@ -288,11 +289,12 @@ class AssignmentServiceTest {
         });
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, null, null, null, false, true, null);
+                pipelineId, null, null, null, false, true, null, null);
         assignmentService.createAssignment(orgId, request);
 
         verify(pipelineAutoAssignmentService).upsertRule(
-                eq(organization), eq(pipeline), eq(null), eq(null), eq(assignedBy), eq(1));
+                eq(organization), eq(pipeline), eq(null), eq(null), eq(assignedBy), eq(1),
+                eq(EnumSet.of(UserRole.MEMBER)));
     }
 
     @Test
@@ -300,7 +302,7 @@ class AssignmentServiceTest {
         // Auto-assign is incoherent with explicit memberIds — reject up-front.
         // Service should NOT touch any other dependency before rejecting.
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, List.of(member1.getId()), null, null, false, true, null);
+                pipelineId, List.of(member1.getId()), null, null, false, true, null, null);
 
         assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
                 .isInstanceOf(BadRequestException.class)
@@ -319,7 +321,7 @@ class AssignmentServiceTest {
                 .thenReturn(List.of(member1));
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, null, null, null, false, false, 3);
+                pipelineId, null, null, null, false, false, 3, null);
 
         assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
                 .isInstanceOf(BadRequestException.class)
@@ -351,7 +353,7 @@ class AssignmentServiceTest {
         });
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, null, null, null, false, false, 3);
+                pipelineId, null, null, null, false, false, 3, null);
         assignmentService.createAssignment(orgId, request);
 
         verify(assignmentRepository).save(argThat(a -> a.getMaxCheckIns() == 3));
@@ -368,12 +370,13 @@ class AssignmentServiceTest {
                 .thenReturn(List.of());
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, null, null, null, false, true, null);
+                pipelineId, null, null, null, false, true, null, null);
         List<AssignmentResponse> responses = assignmentService.createAssignment(orgId, request);
 
         assertThat(responses).isEmpty();
         verify(pipelineAutoAssignmentService).upsertRule(
-                eq(organization), eq(pipeline), eq(null), eq(null), eq(assignedBy), eq(1));
+                eq(organization), eq(pipeline), eq(null), eq(null), eq(assignedBy), eq(1),
+                eq(EnumSet.of(UserRole.MEMBER)));
         verify(assignmentRepository, never()).save(any(Assignment.class));
         // Empty member list must short-circuit the dedup query — passing an
         // empty IN-list to JPQL is a needless round-trip and historically a
@@ -388,7 +391,7 @@ class AssignmentServiceTest {
         when(userRepository.findByOrganizationIdAndStatus(orgId, UserStatus.ACTIVE))
                 .thenReturn(List.of());
 
-        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null);
+        CreateAssignmentRequest request = new CreateAssignmentRequest(pipelineId, null, null, null, false, false, null, null);
 
         assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
                 .isInstanceOf(BadRequestException.class)
@@ -407,12 +410,13 @@ class AssignmentServiceTest {
                 .thenReturn(List.of(member1.getId()));
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, null, null, null, false, true, null);
+                pipelineId, null, null, null, false, true, null, null);
         List<AssignmentResponse> responses = assignmentService.createAssignment(orgId, request);
 
         assertThat(responses).isEmpty();
         verify(pipelineAutoAssignmentService).upsertRule(
-                eq(organization), eq(pipeline), eq(null), eq(null), eq(assignedBy), eq(1));
+                eq(organization), eq(pipeline), eq(null), eq(null), eq(assignedBy), eq(1),
+                eq(EnumSet.of(UserRole.MEMBER)));
     }
 
     @Test
@@ -524,6 +528,114 @@ class AssignmentServiceTest {
         verify(assignmentRepository, never()).save(any(Assignment.class));
     }
 
+    // ---------- role scope (V158) -----------------------------------------
+    //
+    // Found by manual QA: inviting a COACH into an org immediately created
+    // founder assessment assignments for them, because applicability was
+    // decided by (org, user_type) and never consulted the role. The coach then
+    // appeared in the cohort's Team Score Grid and its "Total Assigned" count —
+    // staff inside the denominator of the number this product sells.
+
+    @Test
+    void applyAutoAssignRule_coach_isNoOp_underTheDefaultMemberScope() {
+        UUID ruleId = UUID.randomUUID();
+        PipelineAutoAssignment rule = ruleFor(pipeline, organization, /* userType */ null);
+        rule.setId(ruleId);   // default targetRoles = {MEMBER}
+
+        User coach = memberInOrg(member1, organization);
+        coach.setRole(UserRole.COACH);
+
+        when(pipelineAutoAssignmentService.findByIdLoaded(ruleId)).thenReturn(Optional.of(rule));
+        when(userRepository.findById(member1.getId())).thenReturn(Optional.of(coach));
+
+        assignmentService.applyAutoAssignRule(ruleId, member1.getId(), orgId);
+
+        verify(assignmentRepository, never()).save(any(Assignment.class));
+        // The role guard must short-circuit BEFORE the dedup probe — otherwise
+        // it is only skipping the write, not the decision.
+        verify(assignmentRepository, never())
+                .existsByOrganizationIdAndPipelineIdAndUserId(any(), any(), any());
+    }
+
+    @Test
+    void applyAutoAssignRule_orgAdmin_isNoOp_underTheDefaultMemberScope() {
+        UUID ruleId = UUID.randomUUID();
+        PipelineAutoAssignment rule = ruleFor(pipeline, organization, null);
+        rule.setId(ruleId);
+
+        User orgAdmin = memberInOrg(member1, organization);
+        orgAdmin.setRole(UserRole.ORG_ADMIN);
+
+        when(pipelineAutoAssignmentService.findByIdLoaded(ruleId)).thenReturn(Optional.of(rule));
+        when(userRepository.findById(member1.getId())).thenReturn(Optional.of(orgAdmin));
+
+        assignmentService.applyAutoAssignRule(ruleId, member1.getId(), orgId);
+
+        verify(assignmentRepository, never()).save(any(Assignment.class));
+    }
+
+    @Test
+    void applyAutoAssignRule_coach_isAssigned_whenAnAdminOptedCoachesIn() {
+        // The operator's decision was "default MEMBER, but let an admin
+        // deliberately opt a role in" — so widening the scope must actually
+        // work, or the guard is just a ban.
+        UUID ruleId = UUID.randomUUID();
+        PipelineAutoAssignment rule = ruleFor(pipeline, organization, null);
+        rule.setId(ruleId);
+        rule.setTargetRoles(EnumSet.of(UserRole.MEMBER, UserRole.COACH));
+
+        User coach = memberInOrg(member1, organization);
+        coach.setRole(UserRole.COACH);
+
+        when(pipelineAutoAssignmentService.findByIdLoaded(ruleId)).thenReturn(Optional.of(rule));
+        when(userRepository.findById(member1.getId())).thenReturn(Optional.of(coach));
+        when(assignmentRepository.existsByOrganizationIdAndPipelineIdAndUserId(
+                orgId, pipelineId, member1.getId())).thenReturn(false);
+        stubAssignmentAndSubmissionSaves();
+
+        assignmentService.applyAutoAssignRule(ruleId, member1.getId(), orgId);
+
+        verify(assignmentRepository).save(any(Assignment.class));
+    }
+
+    @Test
+    void applyAutoAssignRule_emptyRoleScope_matchesNobody() {
+        // An empty set must mean "nobody", not "everybody". The bug being fixed
+        // WAS an absent filter read as universal; a permissive empty case would
+        // reinstate it by another spelling.
+        UUID ruleId = UUID.randomUUID();
+        PipelineAutoAssignment rule = ruleFor(pipeline, organization, null);
+        rule.setId(ruleId);
+        rule.setTargetRoles(EnumSet.noneOf(UserRole.class));
+
+        when(pipelineAutoAssignmentService.findByIdLoaded(ruleId)).thenReturn(Optional.of(rule));
+        when(userRepository.findById(member1.getId()))
+                .thenReturn(Optional.of(memberInOrg(member1, organization)));
+
+        assignmentService.applyAutoAssignRule(ruleId, member1.getId(), orgId);
+
+        verify(assignmentRepository, never()).save(any(Assignment.class));
+    }
+
+    @Test
+    void applyAutoAssignRule_member_isStillAssigned() {
+        // The control: the guard must not have broken the case it exists to protect.
+        UUID ruleId = UUID.randomUUID();
+        PipelineAutoAssignment rule = ruleFor(pipeline, organization, null);
+        rule.setId(ruleId);
+
+        when(pipelineAutoAssignmentService.findByIdLoaded(ruleId)).thenReturn(Optional.of(rule));
+        when(userRepository.findById(member1.getId()))
+                .thenReturn(Optional.of(memberInOrg(member1, organization)));
+        when(assignmentRepository.existsByOrganizationIdAndPipelineIdAndUserId(
+                orgId, pipelineId, member1.getId())).thenReturn(false);
+        stubAssignmentAndSubmissionSaves();
+
+        assignmentService.applyAutoAssignRule(ruleId, member1.getId(), orgId);
+
+        verify(assignmentRepository).save(any(Assignment.class));
+    }
+
     @Test
     void applyAutoAssignRule_userMovedToDifferentOrg_isNoOp() {
         UUID ruleId = UUID.randomUUID();
@@ -595,7 +707,7 @@ class AssignmentServiceTest {
                 .thenReturn(Optional.empty());
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, List.of(member1.getId()), null, null, false, false, null);
+                pipelineId, List.of(member1.getId()), null, null, false, false, null, null);
 
         assertThatThrownBy(() -> assignmentService.createAssignment(orgId, request))
                 .isInstanceOf(BadRequestException.class)
@@ -632,7 +744,7 @@ class AssignmentServiceTest {
         });
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, List.of(member1.getId()), null, null, false, false, null);
+                pipelineId, List.of(member1.getId()), null, null, false, false, null, null);
         assignmentService.createAssignment(orgId, request);
 
         // One provision row (user == null) plus one member row (user == member1).
@@ -668,7 +780,7 @@ class AssignmentServiceTest {
         });
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, List.of(member1.getId()), null, null, false, false, null);
+                pipelineId, List.of(member1.getId()), null, null, false, false, null, null);
         assignmentService.createAssignment(orgId, request);
 
         verify(assignmentRepository).save(argThat(a ->
@@ -695,7 +807,7 @@ class AssignmentServiceTest {
         });
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, null, null, null, true, false, null);
+                pipelineId, null, null, null, true, false, null, null);
         List<AssignmentResponse> responses = assignmentService.createAssignment(orgId, request);
 
         assertThat(responses).hasSize(1);
@@ -723,6 +835,20 @@ class AssignmentServiceTest {
         assertThat(result).hasSize(1);
         assertThat(result.get(0).userId()).isNull();
         verify(assignmentRepository, never()).findByOrganizationIdOrderByCreatedAtDesc(any());
+    }
+
+    /** Give the save mocks ids, so `createAssignmentForMember` can read them back. */
+    private void stubAssignmentAndSubmissionSaves() {
+        when(assignmentRepository.save(any(Assignment.class))).thenAnswer(inv -> {
+            Assignment a = inv.getArgument(0);
+            a.setId(UUID.randomUUID());
+            return a;
+        });
+        when(submissionRepository.save(any(Submission.class))).thenAnswer(inv -> {
+            Submission s = inv.getArgument(0);
+            s.setId(UUID.randomUUID());
+            return s;
+        });
     }
 
     private static PipelineAutoAssignment ruleFor(Pipeline pipeline, Organization org, String userType) {

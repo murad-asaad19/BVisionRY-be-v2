@@ -91,7 +91,7 @@ class AssignmentControllerTest {
         UUID userId = UUID.randomUUID();
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, null, null, null, false, false, null);
+                pipelineId, null, null, null, false, false, null, null);
 
         AssignmentResponse response = new AssignmentResponse(
                 UUID.randomUUID(), pipelineId, "Test Pipeline",

@@ -13,6 +13,7 @@ import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.PipelineStatus;
 import com.bvisionry.common.enums.SubmissionStatus;
+import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.audit.AuditService;
 import com.bvisionry.auth.SecurityUtils;
@@ -184,7 +185,8 @@ public class AssignmentService {
 
         if (request.autoAssignFutureMembers()) {
             pipelineAutoAssignmentService.upsertRule(
-                    org, pipeline, request.userType(), deadline, assignerId, maxCheckIns);
+                    org, pipeline, request.userType(), deadline, assignerId, maxCheckIns,
+                    request.targetRolesOrDefault());
         }
 
         return responses;
@@ -353,6 +355,18 @@ public class AssignmentService {
                 || !member.getOrganization().getId().equals(rule.getOrganization().getId())) {
             return;
         }
+        // Role scope (V158). Checked HERE rather than in findApplicableForMember
+        // because this is the one point both entry paths (member-joined and
+        // member-moved) funnel through with the User entity already loaded —
+        // the events carry only userType, so filtering in the query would mean
+        // threading a role through four publishers and two event records.
+        //
+        // Without this, an "applies to all members" rule assigned founder
+        // assessments to every coach and org admin who joined, and they were
+        // then counted as measured subjects in the cohort's completion stats.
+        if (!rule.appliesToRole(member.getRole())) {
+            return;
+        }
 
         if (assignmentRepository.existsByOrganizationIdAndPipelineIdAndUserId(
                 rule.getOrganization().getId(), rule.getPipeline().getId(), userId)) {
@@ -390,12 +404,22 @@ public class AssignmentService {
         // of silently seeing "No eligible members" from a typo.
         memberTypeService.requireExists(userType);
         if (request.isAssignAll()) {
-            if (userType != null) {
-                return userRepository.findByOrganizationIdAndStatusAndUserType(
-                        orgId, UserStatus.ACTIVE, userType);
-            }
-            return userRepository.findByOrganizationIdAndStatus(orgId, UserStatus.ACTIVE);
+            List<User> all = userType != null
+                    ? userRepository.findByOrganizationIdAndStatusAndUserType(
+                            orgId, UserStatus.ACTIVE, userType)
+                    : userRepository.findByOrganizationIdAndStatus(orgId, UserStatus.ACTIVE);
+            // Role scope (V158). "All members" reads every ACTIVE user in the
+            // org, which includes its coaches and org admins — so this bulk mode
+            // handed founder assessments to staff exactly as the auto-assign
+            // listener did. Filtering here keeps the immediate batch and the
+            // rule that follows it targeting the same people; without it the
+            // first batch would include staff and only later joiners would be
+            // scoped, which is incoherent.
+            Set<UserRole> roles = request.targetRolesOrDefault();
+            return all.stream().filter(u -> roles.contains(u.getRole())).toList();
         }
+        // NOT role-filtered: hand-picking members is an explicit decision, and
+        // assigning an assessment to a specific coach on purpose stays possible.
         List<User> byIds = requireActiveOrgMembers(orgId, request.memberIds());
         if (userType != null) {
             return byIds.stream()

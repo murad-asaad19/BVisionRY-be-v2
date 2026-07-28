@@ -230,8 +230,15 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
                 .andExpect(jsonPath("$.kpis.totalOrgs", is(2)))
                 .andExpect(jsonPath("$.kpis.activeCount", is(1)))
                 .andExpect(jsonPath("$.kpis.suspendedCount", is(1)))
-                .andExpect(jsonPath("$.tierMix.premium", is(1)))
-                .andExpect(jsonPath("$.tierMix.free", is(1)))
+                // Per tier by NAME. This used to assert `tierMix.premium`, a bucket
+                // derived by subtraction — which is exactly why the console kept
+                // printing the tier name V156 deleted: with no `== PREMIUM`
+                // anywhere, removing the constant had nothing to flag.
+                .andExpect(jsonPath("$.tierMix.byTier.GROWTH", is(1)))
+                .andExpect(jsonPath("$.tierMix.byTier.FREE", is(1)))
+                .andExpect(jsonPath("$.tierMix.byTier.STARTER", is(0)))
+                .andExpect(jsonPath("$.tierMix.byTier.FOUNDER_SUCCESS", is(0)))
+                .andExpect(jsonPath("$.tierMix.onTrial", is(0)))
                 .andExpect(jsonPath("$.attention", isA(java.util.List.class)));
     }
 

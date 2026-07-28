@@ -20,6 +20,7 @@ import com.bvisionry.config.FrontendProperties;
 import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.evaluation.entity.OverallSummary;
+import com.bvisionry.evaluation.entity.PillarEvaluation;
 import com.bvisionry.notification.EmailService;
 import com.bvisionry.pipeline.service.PostCompletionLinkResolver;
 import com.bvisionry.publicassessment.entity.PublicAssessmentLink;
@@ -253,6 +254,70 @@ class EvaluationServiceTest {
         verify(pillarReeditService).archiveEvaluation(
                 eq(submissionId), any(), any(), isNull(),
                 eq(PillarReeditService.ARCHIVE_REASON_FULL_REEVAL));
+    }
+
+    /**
+     * A re-evaluation reuses the existing pillar_evaluation row in place. When the
+     * new run fails to produce a parsed result for that pillar (aiResult == null,
+     * failed=true), the PREVIOUS run's narrative must be cleared — otherwise the row
+     * renders stale commentary next to a zeroed score and ai_failed=true.
+     */
+    @Test
+    void reevaluation_pillarFailsThisRun_clearsStaleNarrativeFromReusedRow() {
+        when(submissionRepository.findByIdWithAllRelations(submissionId)).thenReturn(Optional.of(submission));
+        when(answerRepository.findBySubmissionIdWithQuestionAndPillar(submissionId))
+                .thenReturn(List.of(freeTextAnswer, likertAnswer));
+
+        // This run: the pillar exhausted its repair retries — no parsed result.
+        EvaluationEngine.PillarResult failedResult = new EvaluationEngine.PillarResult(
+                pillar.getId(), "Leadership", null,
+                BigDecimal.ZERO, "Emerging",
+                null, "unparseable raw output", null,
+                null, null, true);
+        EvaluationEngine.SummaryResult okSummary = new EvaluationEngine.SummaryResult(
+                new BigDecimal("40"), "Partial summary",
+                List.of("s"), List.of("d"), "p", "m", "raw json",
+                null, null, false);
+        when(evaluationEngine.evaluatePipeline(any(), any(), any(), any(), any(), anyBoolean()))
+                .thenReturn(new EvaluationEngine.PipelineEvaluationResult(
+                        List.of(failedResult), okSummary));
+
+        // Prior successful evaluation row for the same pillar, carrying narrative.
+        PillarEvaluation prior = new PillarEvaluation();
+        prior.setSubmission(submission);
+        prior.setPillar(pillar);
+        prior.setScorePercentage(new BigDecimal("70.00"));
+        prior.setAiScoreMeans("stale meaning");
+        prior.setAiWhatsWorking(List.of("stale working"));
+        prior.setAiWhatCanImprove(List.of("stale improve"));
+        prior.setAiBusinessRelevance("stale relevance");
+        prior.setAiEvidence(List.of());
+        when(pillarEvaluationRepository.findBySubmissionId(submissionId)).thenReturn(List.of(prior));
+
+        when(aiConfigService.getConfigEntity()).thenReturn(aiConfiguration);
+        when(pillarEvaluationRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(overallSummaryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(submissionRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        evaluationService.evaluateSubmission(submissionId);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<PillarEvaluation>> rowsCaptor =
+                (ArgumentCaptor<List<PillarEvaluation>>) (ArgumentCaptor<?>) ArgumentCaptor.forClass(List.class);
+        verify(pillarEvaluationRepository).saveAll(rowsCaptor.capture());
+        PillarEvaluation saved = rowsCaptor.getValue().get(0);
+        assertThat(saved).isSameAs(prior); // upsert reuses the row in place
+        assertThat(saved.isAiFailed()).isTrue();
+        assertThat(saved.getAiScoreMeans()).isNull();
+        assertThat(saved.getAiWhatsWorking()).isNull();
+        assertThat(saved.getAiWhatCanImprove()).isNull();
+        assertThat(saved.getAiBusinessRelevance()).isNull();
+        assertThat(saved.getAiEvidence()).isNull();
+
+        // A failed pillar makes the run degraded → NEEDS_REVIEW, never clean EVALUATED.
+        ArgumentCaptor<Submission> subCaptor = ArgumentCaptor.forClass(Submission.class);
+        verify(submissionRepository).save(subCaptor.capture());
+        assertThat(subCaptor.getValue().getStatus()).isEqualTo(SubmissionStatus.NEEDS_REVIEW);
     }
 
     @Test

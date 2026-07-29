@@ -15,7 +15,6 @@ import com.bvisionry.pipeline.SystemQuestion;
 import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.Pipeline;
 import com.bvisionry.pipeline.entity.Question;
-import com.bvisionry.aiengine.confidence.ConfidenceGate;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -52,36 +51,15 @@ public class EvaluationEngine {
      * once {@code maxPoolSize} submissions arrive concurrently.
      */
     private final Executor pillarExecutor;
-    /** Bounded pool for borderline re-samples — never the pillar pool (fork-join starvation). */
-    private final Executor escalationExecutor;
-    private final ConfidenceGate confidenceGate;
-
-    /** Confidence-gated self-consistency: borderline scores get extra samples. */
-    private final boolean escalationEnabled;
-    private final int borderlineMargin;
-    private final int escalationSamples;
-    private final String escalationModel;
 
     public EvaluationEngine(ScoringService scoringService,
                             OpenRouterChatService openRouterChatService,
                             AIConfigService aiConfigService,
-                            ConfidenceGate confidenceGate,
-                            @Qualifier("pillarExecutor") Executor pillarExecutor,
-                            @Qualifier("escalationExecutor") Executor escalationExecutor,
-                            @Value("${bvisionry.ai.escalation.enabled:true}") boolean escalationEnabled,
-                            @Value("${bvisionry.ai.escalation.borderline-margin:3}") int borderlineMargin,
-                            @Value("${bvisionry.ai.escalation.samples:2}") int escalationSamples,
-                            @Value("${bvisionry.ai.escalation.model:}") String escalationModel) {
+                            @Qualifier("pillarExecutor") Executor pillarExecutor) {
         this.scoringService = scoringService;
         this.openRouterChatService = openRouterChatService;
         this.aiConfigService = aiConfigService;
-        this.confidenceGate = confidenceGate;
         this.pillarExecutor = pillarExecutor;
-        this.escalationExecutor = escalationExecutor;
-        this.escalationEnabled = escalationEnabled;
-        this.borderlineMargin = borderlineMargin;
-        this.escalationSamples = escalationSamples;
-        this.escalationModel = escalationModel;
     }
 
     private static final int MAX_RAW_EXCERPT_CHARS = 500;
@@ -322,20 +300,6 @@ public class EvaluationEngine {
 
             pillarScore = aiResult != null
                     ? BigDecimal.valueOf(aiResult.scorePercentage()) : BigDecimal.ZERO;
-
-            // Confidence gating: a borderline score (near a maturity boundary) gets
-            // extra self-consistency samples; take the median to stabilize it. Gated
-            // so only borderline pillars pay the cost; model-agnostic (any model can
-            // be re-sampled, no model-specific confidence field required).
-            if (aiResult != null && escalationEnabled && escalationSamples > 0
-                    && confidenceGate.isBorderline(pillarScore, pillar.getMaturityThresholds(), borderlineMargin)) {
-                var chosen = escalateBorderline(aiResponse, rubric, assessmentXml, modelUsed,
-                        userContext, publicAssessment, metadata, pillar.getName());
-                aiResult = chosen.parsed();
-                rawResponse = chosen.rawResponse();
-                provenance = chosen.provenance();
-                pillarScore = BigDecimal.valueOf(aiResult.scorePercentage());
-            }
         }
         String maturityLabel = scoringService.deriveMaturityLabel(pillarScore, pillar.getMaturityThresholds());
 
@@ -366,69 +330,6 @@ public class EvaluationEngine {
                 pillarScore, maturityLabel, aiResult, rawResponse, selfAssessmentGap,
                 provenance, rubric, failed
         );
-    }
-
-    /**
-     * Borderline confidence escalation: re-sample the pillar evaluation
-     * {@code escalationSamples} more times (on {@code escalationModel} if configured,
-     * else the same model), then return the sample whose score is closest to the
-     * median across all attempts.
-     *
-     * <p>The extra samples run <b>in parallel</b> on a dedicated bounded
-     * {@code escalationExecutor} (never the pillar pool — that would fork-join-starve
-     * the very pillar tasks that spawned them) so the borderline pillar isn't blocked
-     * serially. Each sample is tagged in the audit log via
-     * {@link CallMetadata#forEscalationSample} so discarded samples are distinguishable
-     * from the chosen one and token accounting stays honest. Failed/unparseable samples
-     * are skipped; if no extra sample succeeds, the original response is returned.
-     */
-    private OpenRouterChatService.AIResponse<PillarEvaluationResult> escalateBorderline(
-            OpenRouterChatService.AIResponse<PillarEvaluationResult> first,
-            String rubric, String assessmentXml, String baseModel,
-            String userContext, boolean publicAssessment, CallMetadata metadata, String pillarName) {
-
-        String sampleModel = (escalationModel != null && !escalationModel.isBlank())
-                ? escalationModel : baseModel;
-
-        // Fan the extra samples out in parallel; each carries its own escalation-tagged
-        // metadata so its ai_call_logs row is attributable and not double-counted.
-        List<CompletableFuture<OpenRouterChatService.AIResponse<PillarEvaluationResult>>> futures =
-                new ArrayList<>();
-        for (int i = 0; i < escalationSamples; i++) {
-            final int sampleIndex = i + 1;
-            CallMetadata sampleMetadata = CallMetadata.forEscalationSample(metadata, sampleIndex);
-            futures.add(CompletableFuture.supplyAsync(() -> {
-                try {
-                    return openRouterChatService.evaluatePillar(
-                            rubric, assessmentXml, sampleModel, userContext, publicAssessment, sampleMetadata);
-                } catch (Exception e) {
-                    log.warn("Confidence escalation sample {} failed for pillar '{}': {}",
-                            sampleIndex, pillarName, e.getMessage());
-                    return null;
-                }
-            }, escalationExecutor));
-        }
-
-        List<OpenRouterChatService.AIResponse<PillarEvaluationResult>> samples = new ArrayList<>();
-        samples.add(first);
-        for (CompletableFuture<OpenRouterChatService.AIResponse<PillarEvaluationResult>> f : futures) {
-            OpenRouterChatService.AIResponse<PillarEvaluationResult> sample = f.join();
-            if (sample != null && sample.parsed() != null) {
-                samples.add(sample);
-            }
-        }
-
-        if (samples.size() == 1) {
-            return first; // no usable extra samples — keep the original
-        }
-        List<Integer> scores = samples.stream().map(s -> s.parsed().scorePercentage()).toList();
-        int median = confidenceGate.median(scores);
-        OpenRouterChatService.AIResponse<PillarEvaluationResult> chosen = samples.stream()
-                .min(java.util.Comparator.comparingInt(s -> Math.abs(s.parsed().scorePercentage() - median)))
-                .orElse(first);
-        log.info("Confidence escalation for pillar '{}': scores={} median={} (model={})",
-                pillarName, scores, median, sampleModel);
-        return chosen;
     }
 
     // ========== Parallel bulk evaluation ==========

@@ -24,8 +24,8 @@ import java.util.Optional;
  * unchanged answers are the common case). The cache is strictly best-effort: it owns its own
  * {@code enabled} flag and no-ops when disabled, and a write failure never affects the caller.
  *
- * <p>Only the primary pillar evaluation is cached (wired in {@code OpenRouterChatService}).
- * Escalation re-samples bypass it by construction — they exist to gather INDEPENDENT opinions.
+ * <p>Only pillar evaluations are cached (wired in {@code OpenRouterChatService}); the overall
+ * summary and team insights are not — their inputs embed per-run pillar results and rarely repeat.
  */
 @Service
 @Slf4j

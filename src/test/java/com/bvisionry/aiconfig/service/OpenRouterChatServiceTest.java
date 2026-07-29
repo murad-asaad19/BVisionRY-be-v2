@@ -86,7 +86,7 @@ class OpenRouterChatServiceTest {
         Result<PillarEvaluationResult> stub = resultOf(new PillarEvaluationResult(
                 75, "Good progress.", List.of("Clear vision", "Team alignment"),
                 List.of("Data-driven decisions"), "Drives advantage.", List.of()));
-        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt()))
+        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt(), any()))
                 .thenReturn(stub);
 
         var response = chatService.evaluatePillar(
@@ -102,13 +102,13 @@ class OpenRouterChatServiceTest {
         when(promptTemplateService.getActivePrompt(PromptType.SYSTEM_PROMPT))
                 .thenReturn(systemPromptResponse("You are an evaluator."));
         Result<PillarEvaluationResult> stub = resultOf(validPillar());
-        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt()))
+        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt(), any()))
                 .thenReturn(stub);
 
         chatService.evaluatePillar("rubric", "response", "openai/gpt-4o", null, false, CallMetadata.NONE);
 
         ArgumentCaptor<String> model = ArgumentCaptor.forClass(String.class);
-        verify(aiEngine).evaluatePillar(anyString(), anyString(), model.capture(), anyDouble(), anyInt());
+        verify(aiEngine).evaluatePillar(anyString(), anyString(), model.capture(), anyDouble(), anyInt(), any());
         assertThat(model.getValue()).isEqualTo("openai/gpt-4o");
     }
 
@@ -117,7 +117,7 @@ class OpenRouterChatServiceTest {
         when(configService.getConfigEntity()).thenReturn(testConfig);
         when(promptTemplateService.getActivePrompt(PromptType.SYSTEM_PROMPT))
                 .thenReturn(systemPromptResponse("You are an evaluator."));
-        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt()))
+        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt(), any()))
                 .thenThrow(new SchemaValidationException(
                         "schema validation failed after repair retries",
                         "{\"scorePercentage\": 72", null));
@@ -144,7 +144,7 @@ class OpenRouterChatServiceTest {
         when(configService.getConfigEntity()).thenReturn(testConfig);
         when(promptTemplateService.getActivePrompt(PromptType.SYSTEM_PROMPT))
                 .thenReturn(systemPromptResponse("You are an evaluator."));
-        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt()))
+        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt(), any()))
                 .thenThrow(new RuntimeException("Connection refused"));
 
         assertThatThrownBy(() ->
@@ -161,7 +161,7 @@ class OpenRouterChatServiceTest {
         Result<OverallSummaryResult> stub = resultOf(new OverallSummaryResult(
                 82, "Strong performance.", List.of("Leadership", "Innovation"),
                 List.of("Communication"), "Pattern", "Forward"));
-        when(aiEngine.generateOverallSummary(anyString(), anyString(), anyString(), anyDouble(), anyInt()))
+        when(aiEngine.generateOverallSummary(anyString(), anyString(), anyString(), anyDouble(), anyInt(), any()))
                 .thenReturn(stub);
 
         var response = chatService.generateOverallSummary(
@@ -179,7 +179,7 @@ class OpenRouterChatServiceTest {
                         PromptType.PUBLIC_ASSESSMENT_SYSTEM_PROMPT,
                         "You are a public-assessment analyst.", Instant.now()));
         Result<PillarEvaluationResult> stub = resultOf(validPillar());
-        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt()))
+        when(aiEngine.evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt(), any()))
                 .thenReturn(stub);
 
         chatService.evaluatePillar("rubric", "response", null, null, true, CallMetadata.NONE);
@@ -204,7 +204,7 @@ class OpenRouterChatServiceTest {
         // Served from cache: parsed from the stored JSON, no live engine call, no ai_call_log row,
         // and never re-stored.
         assertThat(response.parsed().scorePercentage()).isEqualTo(88);
-        verify(aiEngine, never()).evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt());
+        verify(aiEngine, never()).evaluatePillar(anyString(), anyString(), anyString(), anyDouble(), anyInt(), any());
         verify(callLogService, never()).record(any());
         verify(evalCacheService, never()).store(anyString(), anyString(), anyString(), anyString());
     }

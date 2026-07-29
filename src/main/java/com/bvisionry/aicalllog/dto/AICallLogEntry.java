@@ -28,5 +28,9 @@ public record AICallLogEntry(
         Integer outputTokens,
         Integer cacheCreationTokens,
         Integer cacheReadTokens,
-        AICallStatus status
+        AICallStatus status,
+        /** Model round-trips made (1 = clean first pass). */
+        int attempts,
+        /** Ordered per-attempt JSON from the guardrail's {@code AttemptLog}; null when unavailable. */
+        String attemptHistory
 ) {}

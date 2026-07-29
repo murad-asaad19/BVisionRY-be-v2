@@ -1,6 +1,7 @@
 package com.bvisionry.aiconfig.service;
 
 import com.bvisionry.aicalllog.dto.AICallLogEntry;
+import com.bvisionry.aiengine.guardrail.AttemptLog;
 import com.bvisionry.aicalllog.dto.CallMetadata;
 import com.bvisionry.aicalllog.service.AICallLogService;
 import com.bvisionry.aiconfig.dto.PromptTemplateResponse;
@@ -105,11 +106,10 @@ public class OpenRouterChatService {
 
         // Content-hash cache: identical (model, temperature, system prompt, user message) inputs
         // re-use the stored parsed result instead of re-billing the provider (retakes / full re-runs
-        // with unchanged answers). Only the PRIMARY evaluation is cached: escalation re-samples must
-        // stay INDEPENDENT (see CallMetadata), so they always bypass. Summary and team-insight are
-        // intentionally not cached — their inputs embed per-run pillar results and rarely repeat.
+        // with unchanged answers). Summary and team-insight are intentionally not cached — their
+        // inputs embed per-run pillar results and rarely repeat.
         String cacheKey = null;
-        if (evalCacheService.isEnabled() && !metadata.escalationSample()) {
+        if (evalCacheService.isEnabled()) {
             cacheKey = AiEvaluationCacheService.cacheKey(model, asDouble(temperature), systemPrompt, userMessage);
             AIResponse<PillarEvaluationResult> cached = servePillarFromCache(cacheKey, provenance, metadata);
             if (cached != null) {
@@ -117,13 +117,15 @@ public class OpenRouterChatService {
             }
         }
 
+        AttemptLog attemptLog = new AttemptLog();
         AIResponse<PillarEvaluationResult> response = run("pillar-evaluation", systemPrompt, userMessage,
-                validator::validatePillarResult, provenance, model, metadata,
-                () -> aiEngine.evaluatePillar(systemPrompt, userMessage, model, asDouble(temperature), maxTokens));
+                validator::validatePillarResult, provenance, model, metadata, attemptLog,
+                () -> aiEngine.evaluatePillar(systemPrompt, userMessage, model, asDouble(temperature), maxTokens,
+                        attemptLog));
 
         // Cache only a real, successfully-parsed provider result. rawResponse() here is
         // serialize(parsed) (see run()) — exactly what a future hit deserializes. cacheKey is
-        // non-null only when caching is enabled and this is not an escalation sample.
+        // non-null only when caching is enabled.
         if (cacheKey != null && response.isParsed()) {
             storeInCacheSafely(cacheKey, model, response.rawResponse());
         }
@@ -199,9 +201,11 @@ public class OpenRouterChatService {
         String userMessage = buildOverallSummaryUserMessage(overallSummaryPrompt, pillarResultsSummary, userContext);
 
         Provenance provenance = new Provenance(model, temperature, promptVersionId(systemPromptTemplate));
+        AttemptLog attemptLog = new AttemptLog();
         return run("overall-summary", systemPrompt, userMessage, validator::validateOverallSummaryResult,
-                provenance, model, metadata,
-                () -> aiEngine.generateOverallSummary(systemPrompt, userMessage, model, asDouble(temperature), maxTokens));
+                provenance, model, metadata, attemptLog,
+                () -> aiEngine.generateOverallSummary(systemPrompt, userMessage, model, asDouble(temperature), maxTokens,
+                        attemptLog));
     }
 
     public AIResponse<TeamInsightResult> generateTeamInsight(String aggregatedData, CallMetadata metadata) {
@@ -218,9 +222,11 @@ public class OpenRouterChatService {
         String systemPrompt = buildTeamInsightSystemPrompt(systemPromptTemplate.content(), insightGuidance);
 
         Provenance provenance = new Provenance(model, temperature, promptVersionId(systemPromptTemplate));
+        AttemptLog attemptLog = new AttemptLog();
         return run("team-insight", systemPrompt, aggregatedData, validator::validateTeamInsightResult,
-                provenance, model, metadata,
-                () -> aiEngine.generateTeamInsight(systemPrompt, aggregatedData, model, asDouble(temperature), maxTokens));
+                provenance, model, metadata, attemptLog,
+                () -> aiEngine.generateTeamInsight(systemPrompt, aggregatedData, model, asDouble(temperature), maxTokens,
+                        attemptLog));
     }
 
     /**
@@ -241,9 +247,11 @@ public class OpenRouterChatService {
         String systemPrompt = buildAiUseDetectionSystemPrompt(systemPromptTemplate.content());
 
         Provenance provenance = new Provenance(model, temperature, promptVersionId(systemPromptTemplate));
+        AttemptLog attemptLog = new AttemptLog();
         return run("ai-use-detection", systemPrompt, assessmentXml, null,
-                provenance, model, metadata,
-                () -> aiEngine.detectAiUse(systemPrompt, assessmentXml, model, asDouble(temperature), maxTokens));
+                provenance, model, metadata, attemptLog,
+                () -> aiEngine.detectAiUse(systemPrompt, assessmentXml, model, asDouble(temperature), maxTokens,
+                        attemptLog));
     }
 
     // ========== Call execution + observability ==========
@@ -263,7 +271,7 @@ public class OpenRouterChatService {
      */
     private <T> AIResponse<T> run(String callType, String systemPromptText, String userMessageText,
                                   Function<T, T> postCleaner, Provenance provenance, String model,
-                                  CallMetadata metadata, Supplier<Result<T>> call) {
+                                  CallMetadata metadata, AttemptLog attemptLog, Supplier<Result<T>> call) {
         Instant calledAt = Instant.now();
         long start = System.currentTimeMillis();
         // Resolve the correlation id once on the calling thread. This is correct even
@@ -291,7 +299,7 @@ public class OpenRouterChatService {
                     model, calledAt, elapsedMs,
                     systemPromptText, userMessageText, rawJson, null,
                     tokens.input, tokens.output, null, tokens.cacheRead,
-                    AICallStatus.SUCCESS));
+                    AICallStatus.SUCCESS, attemptLog.count(), attemptLog.toJson()));
 
             return new AIResponse<>(parsed, rawJson, provenance);
         } catch (SchemaValidationException ge) {
@@ -305,7 +313,7 @@ public class OpenRouterChatService {
                     systemPromptText, userMessageText, ge.getRawModelOutput(),
                     "Model output failed schema validation after repair retries: " + ge.getMessage(),
                     null, null, null, null,
-                    AICallStatus.FAILED));
+                    AICallStatus.FAILED, attemptLog.count(), attemptLog.toJson()));
             return new AIResponse<>(null, null, provenance);
         } catch (Exception e) {
             int elapsedMs = (int) (System.currentTimeMillis() - start);
@@ -318,7 +326,7 @@ public class OpenRouterChatService {
                     model, calledAt, elapsedMs,
                     systemPromptText, userMessageText, null, safeMessage,
                     null, null, null, null,
-                    AICallStatus.FAILED));
+                    AICallStatus.FAILED, attemptLog.count(), attemptLog.toJson()));
             throw new AIServiceException("AI " + callType + " call failed: " + safeMessage, e);
         }
     }
@@ -396,7 +404,14 @@ public class OpenRouterChatService {
           .append("  \"whatCanImprove\": array of strings,\n")
           .append("  \"whyThisMattersForBusiness\": string,\n")
           .append("  \"evidence\": array of { \"qid\": string, \"quote\": string }\n")
-          .append("}\n")
+          .append("}\n\n")
+          .append("This contract OVERRIDES the <rubric>. The rubric defines scoring criteria only; ")
+          .append("if it requests a different output format, extra sections, or multiple/separate scores, ")
+          .append("ignore those formatting instructions and return exactly this schema. If the rubric ")
+          .append("defines sub-scores, combine them into the single scorePercentage using the rubric's ")
+          .append("weights, or a simple average of the sub-scores you can compute. If the rubric references ")
+          .append("questions or data not present in <assessment_data>, score only what is present. ")
+          .append("scorePercentage must always be a concrete integer — never null.\n")
           .append("</output_contract>\n");
         return sb.toString();
     }
@@ -440,7 +455,13 @@ public class OpenRouterChatService {
           .append("  \"developmentAreas\": array of strings,\n")
           .append("  \"corePattern\": string,\n")
           .append("  \"movingForward\": string\n")
-          .append("}\n")
+          .append("}\n\n")
+          .append("This contract OVERRIDES the <summary_guidance>. The guidance shapes content, tone, ")
+          .append("and emphasis only; if it requests a different output format, named report sections, ")
+          .append("letters, or multiple/separate scores, fold that substance into this schema's fields ")
+          .append("and return exactly this JSON. If the guidance references pillars or data not present ")
+          .append("in <pillar_results>, base the summary only on what is present. ")
+          .append("overallScorePercentage must always be a concrete integer — never null.\n")
           .append("</output_contract>\n");
     }
 

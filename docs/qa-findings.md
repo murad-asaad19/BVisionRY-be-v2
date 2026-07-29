@@ -883,3 +883,45 @@ Two coherent resolutions, and it is an operator call which: enforce `visibility`
 org scoping) on the catalog read path, or accept the global catalog as the model and delete the
 enums that claim otherwise. Shipping the flag with them inert is the one option that is not
 coherent.
+
+---
+
+# Merge of `origin/main` into `agent/integration`
+
+Backend took 4 commits (AI guardrail repair loop that could not converge on multi-violations,
+per-call chat history, repair history in the call logs, confidence-gated escalation removed); web
+took 2 (YouTube media embeds in the taker, repair history in the AI Config console).
+
+### The frozen ArchUnit store conflicted — and the obvious resolution is wrong
+`src/test/resources/architecture/frozen-violations/7472acec-…`
+
+Resolved it first with `sort -u` of both parents. That is a REAL bug, worth writing down because it
+looks correct: the store encodes violation COUNT as repeated identical lines.
+`JoinLinkService:228` appears twice in both parents, and deduping claimed 2 violations where the
+code has 3. The run then failed with exactly 2 unmatched violations — precisely the 2 duplicates
+the dedupe destroyed, not the "new architectural edges" they first appeared to be.
+
+Correct resolution is a MULTISET union: for each distinct line, `max(count_ours, count_theirs)`.
+After that the ratchet pruned 3633 → **2776 lines, smaller than either parent** (2784 / 2793), so
+the baseline shrank and `never_add_lines` holds. `ArchitectureRulesTest` 7/7.
+
+Note for next time: `archunit.properties` already tolerates line-number drift, so a violation
+reported at a line present in the store is NEVER churn — it means the multiset count is short.
+
+### V145 collided, and git could not see it
+main allocated `V145__ai_call_log_attempt_history.sql`; this branch already had
+`V145__error_events.sql`. Different filenames, so the merge succeeded silently while leaving an app
+that Flyway refuses to start. Renumbered error_events → **V159** (content unchanged: a rename, not
+an edit, so append-only holds). Nothing in V146..V158 references `error_events`, so running it last
+is safe. Operator confirmed the branch is not deployed anywhere, so no environment repair is owed.
+
+The historical records in `agent-decisions.md` / `agent-run-report.md` were deliberately left
+naming V145 — they record what was allocated at the time, which is the point of an immutable log.
+
+### Lane hygiene
+Lane 1 carries this run's QA data (77 users / 53 orgs vs a seeded lane's 58 / 23) and was NOT
+reset. Verification used lane 2 instead, reset to the V144 snapshot so V145..V159 applied fresh.
+
+### Gates after the merge
+Backend **1262 tests, 0 failures, 0 errors, 0 skipped, BUILD SUCCESS** (read from the log, not the
+exit code). Web **1015 tests / 79 files**, lint 0, typecheck 0.

@@ -11,7 +11,8 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * One aggregated unhandled exception, from either tier (see V145).
+ * One aggregated unhandled exception, from either tier (see V159 — renumbered
+ * from V145 when merging main, which had independently claimed that version).
  *
  * <p>Insert-only: {@code createdAt} from {@link BaseEntity} is the occurrence
  * time and nothing ever updates a row. Deliberately carries no org column — the

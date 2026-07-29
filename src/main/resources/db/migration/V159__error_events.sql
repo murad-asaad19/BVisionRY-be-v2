@@ -1,5 +1,14 @@
 -- Error tracking — the run's regression signal.
 --
+-- RENUMBERED V145 -> V159 when merging origin/main, which had independently
+-- allocated V145 for `ai_call_log_attempt_history`. Flyway rejects two
+-- migrations at the same version, so one had to move; main's is the trunk's and
+-- keeps the slot. Renumbering rather than editing keeps the append-only rule
+-- intact — this file's CONTENT is unchanged. Safe to run last: nothing in
+-- V146..V158 references `error_events` (checked), and the table is standalone.
+-- Any database that already applied the old V145 needs `sandbox.sh reset <n>`
+-- (or a Flyway repair); no deployed environment had it.
+--
 -- ONE in-box table aggregating unhandled exceptions from BOTH tiers: the
 -- backend's GlobalExceptionHandler 500 catch-all and the Next.js web app
 -- (server errors via `onRequestError`, browser errors via `global-error.tsx`).

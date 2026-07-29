@@ -54,7 +54,7 @@ class ErrorEventRecorderTest {
         assertThat(saved.getDigest()).hasSize(64);
     }
 
-    /** digest must never leak into requestId — they are different namespaces (V145). */
+    /** digest must never leak into requestId — they are different namespaces (V159). */
     @Test
     void record_keepsDigestOutOfTheJoinKey() {
         recorder.record(ErrorSource.WEB, "Error", "m", null, "/app", null, null, "abc123digest");

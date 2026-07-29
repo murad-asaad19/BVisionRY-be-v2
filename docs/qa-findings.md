@@ -751,3 +751,135 @@ deliberate design sweep, not a mechanical find-and-replace, and doing twelve fil
 unasked at the end of a QA pass risks more than the polish is worth. They are also not defects:
 every one of them does confirm before destroying. Recommended as its own ticket, with the SSO
 delete dialog as the reference standard.
+
+---
+
+# Code re-review — the individual user flows (second pass, no browser)
+
+A reading pass over the member / coach flows end to end, after the driven-QA pass. Different
+method, so it found a different class of thing: the browser pass exercised the HAPPY path and the
+empty states, this one asks what each surface does when a request FAILS.
+
+### F16 · P1 · A failed answer-flush navigated anyway, and said nothing · **FIXED**
+`web/src/app/(app)/app/assessments/[submissionId]/_components/assessment-taker.tsx:126`
+`web/src/app/(marketing)/a/[token]/_components/public-assessment-taker.tsx:136`
+
+`useAssessmentDraft.flushDraft` REPORTS failure (`Promise<boolean>`) instead of throwing — its POST
+is a raw `fetch` in a try/catch, so neither `bffJson` nor the global MutationCache toast ever sees
+it. Both call sites awaited it and discarded the answer.
+
+The damage is not a lost answer (localStorage still holds them) — it is two screens contradicting
+each other with no error anywhere:
+
+1. member answers the last section, clicks **Review & Submit**;
+2. the flush fails silently; the taker refetches the submission from a server that never received
+   the answers, and navigates;
+3. `/review` lists the questions they just filled in under "Unanswered required questions" and
+   DISABLES Submit (`disabled={!review.complete}`);
+4. "Return to Assessment" re-merges the local draft, so the answers are visibly back — and the loop
+   repeats. Offline, this never terminates.
+
+Fixed by reading the boolean: stay on the page that still holds the answers, and say so via the
+same `toast.error` the exercise editor already uses. Pinned by
+`assessment-taker.test.tsx` (4 tests, incl. a success control). Mutation-checked — reverting the
+guard fails 3 of 4, control still green.
+
+The standard being applied is the one next door: `exercise-editor.tsx` gets this exactly right
+(single-flight guard, `onError` → toast + restore dirty, unmount flush). The assessment flow — the
+more important of the two — had none of it.
+
+### F17 · P2 · The assessment payoff dead-ends while `FEATURES.courses` is off · OPERATOR DECISION
+`web/src/lib/features.ts:36` · `web/src/app/(app)/app/courses/layout.tsx:23`
+
+`NEXT_PUBLIC_COURSES_ENABLED` is unset everywhere local, so `FEATURES.courses === false`. The
+member home still renders a full **"Recommended for you"** section with real titles and real
+reasons ("recommended for your Product & Market pillar"), because `/api/my/recommendations` is a
+backend read that knows nothing about a web build flag. Every one of those cards links to
+`/app/courses/{slug}/learn` → `CoursesLayout` → **"Courses are coming soon"**, a panel that never
+mentions the course clicked.
+
+So the founder's whole loop — take assessment → get scored → get recommended courses → start
+learning — terminates in a placeholder, and nothing on the promise warns them. The panel already
+knows how to caveat a card inline (it does it for `!coursePublished`: "No longer in the catalog.
+You keep your access."); the far more common case gets nothing. Not fixed: whether to caveat the
+cards or withhold the section pre-launch is a launch-state call, not a bug fix.
+
+### F18 · P3 · Nested interactive content on the assessment cards
+`web/src/app/(app)/app/assessments/_components/assessments-list.tsx:284`
+
+Each card is a `<Link>` wrapping a `<Card>` that contains `<Button>` ("Retry Evaluation", "Start New
+Check-In"). `<a>`'s content model forbids interactive descendants; the `swallow()`
+preventDefault/stopPropagation helper exists precisely to paper over it. Functionally it works;
+for a screen reader the link's accessible name absorbs the button's text. Fix is a restructure
+(Link wraps the content, buttons become siblings inside the Card), not a one-liner.
+
+### F19 · P3 · `EvaluatedPreview` is an N+1 that fails invisibly
+Same file, `:69`. One `useQuery` per EVALUATED card, each fetching a full results report to render
+a score and two pillar names; a founder with six evaluated check-ins fires six. On failure it
+returns `null` — a silently blank card body, in an app whose dashboard is otherwise fastidious
+about telling "fetch failed" apart from "nothing yet".
+
+### F20 · P3 · `MyCourses` fails whole when only the catalog read fails
+`web/src/app/(app)/app/courses/_components/my-courses.tsx:255`
+
+`isError = enrollmentsQuery.isError || coursesQuery.isError`. The join below it carefully falls back
+to `enrollment.courseSlug/courseTitle` so a course missing from the catalog still shows and stays
+playable — and that fallback is unreachable when the catalog request is the thing that failed,
+which is the likelier outage. Enrollments alone are enough to render a playable tile.
+
+### F21 · P3 · Raw `toLocaleDateString()` bypasses the pinned formatter
+`lib/format.ts` exists to pin `en-US` via a shared `Intl` instance. ~15 sites call
+`new Date(x).toLocaleDateString()` directly; the member/coach-facing ones are
+`exercises/_components/my-exercises-list.tsx:93`, `exercises/[submissionId]/_components/
+exercise-editor.tsx:314,344`, `coach/founders/[founderId]/_components/founder-detail.tsx:161`.
+These are client components that Next also server-renders, so server locale/TZ vs browser produces
+a hydration mismatch and, across midnight UTC, a visibly wrong date.
+
+### What this pass confirms is genuinely good
+Not everything needs a finding. `dashboard-model.ts` distinguishes "fetch failed" from "nothing
+assigned" and refuses to claim the latter unless BOTH reads succeeded; `onboarding.ts` derives
+completion from real state and lets a dismissal collapse but never retire the checklist;
+`coach-card.tsx` re-validates the Cal.com allowlist at render because V153 has no DB CHECK;
+`recommendations.tsx` holds the "one true reason among several" copy constraint centrally so no
+caller can overclaim. That is a high bar, and F16/F19/F20 are notable precisely because they fall
+below a standard the same codebase sets elsewhere.
+
+### F22 · P2 · The course catalog has no org scoping, and two access enums are inert
+`backend/.../catalog/repository/CourseRepository.java` · `catalog/web/CatalogService.java`
+
+Asked how courses reach an organization: assigned, or available to all? **All.** There is no
+org-scoped catalog.
+
+`Course.orgId` records who AUTHORED a course. It is read by exactly one query —
+`findByOrgIdOrderByUpdatedAtDesc`, the authoring list — so it decides who may EDIT a course, never
+who may SEE one. Every catalog read (`findCatalog`, `findCatalogSearch`, `findDetailBySlug`)
+filters on `state = PUBLISHED` and the optional facets only: no `org_id`, no `visibility`, no
+`access`. `CatalogService`'s javadoc states the intent outright — "the catalog is FULLY PUBLIC — no
+tenant/org scoping is applied". `GET /api/v1/courses` and `/{slug}` are `permitAll()`.
+
+The gap is that the entity carries two enums that read like tenant controls and are never
+enforced:
+- `CourseVisibility` — PUBLIC / UNLISTED / PRIVATE / **MEMBERS** ("visible only to members of the org")
+- `CourseAccess` — EVERYONE / SIGNED_IN / ENROLLED / LINK
+
+Both are written by `AuthoringService`, both are mapped into the response by `CourseMapper`, and
+neither appears in a single authorization branch anywhere in the codebase. Set a course PRIVATE or
+MEMBERS, publish it, and it lands in the global anonymous catalog exactly like a PUBLIC one. This
+is not a blind spot in general — `SurveyVisibility` IS enforced
+(`SurveyResponseService:405`); the course equivalent is simply inert.
+
+Not live-exploitable today: `FEATURES.courses` is off, so the public catalog is rewritten to
+`/coming-soon`. The backend endpoint remains `permitAll`, so reachability depends on whether the
+deployment exposes the API directly or only behind the BFF. It becomes real the day the flag flips.
+
+Consequence for the product model: "assigned to an org" does not exist. The three levers are the
+global catalog (unscoped, anyone), the auto-enrolment rules (per pipeline pillar+band — and
+Pipeline Builder is a SUPER_ADMIN surface, so those rules are platform-level and shared by every
+org using that pipeline), and `enrolment_overrides` (per user+course, removal only). If B2B tenants
+with private course libraries are intended — which `CourseAudience.B2B` and
+`CourseVisibility.MEMBERS` both imply — that is unbuilt, and the enums currently promise it.
+
+Two coherent resolutions, and it is an operator call which: enforce `visibility`/`access` (and add
+org scoping) on the catalog read path, or accept the global catalog as the model and delete the
+enums that claim otherwise. Shipping the flag with them inert is the one option that is not
+coherent.

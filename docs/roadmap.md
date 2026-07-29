@@ -368,8 +368,72 @@ and the program task player's exemplary next-step flow.
 - [ ] SOC 2 Type II observation window opened
 - [ ] VPAT / ACR ordered
 
-### SEO / PWA
-- [ ] Sitemap, robots, manifest
+### SEO / PWA / AI discoverability
+- [x] Sitemap, robots, manifest — `web/src/app/{sitemap,robots,manifest}.ts`, generated from
+      `ROUTES`/`FRI_VERTICALS` so they cannot rot. Token-bearing paths are excluded from both and
+      pinned by `sitemap.test.ts` (that is a security property, not an SEO one: `/invitations/{token}`
+      accepts a public POST that mints a session).
+- [x] JSON-LD identity graph — `lib/structured-data.ts`, Organization + WebSite emitted once on the
+      marketing layout so every public URL shares one `@id`.
+- [x] `llms.txt` — shipped with honest expectations; see the note below.
+- [ ] **Submit the sitemap to Bing Webmaster Tools.** Not optional and not a nice-to-have:
+      ChatGPT's live web search is Bing-backed, so Bing indexing is the prerequisite for appearing
+      in ChatGPT citations at all. Google Search Console too, but Bing is the one that is usually
+      forgotten and the one that gates the largest AI surface.
+- [ ] Per-page `alternates.canonical`. Deliberately NOT set globally — Next metadata is inherited,
+      so a root canonical would point the whole site at `/`.
+- [ ] OG images. `metadataBase` now resolves them correctly; there are none to resolve yet.
+- [ ] Verify the CDN does not block AI crawlers while `robots.txt` allows them. Measured research
+      found a meaningful share of sites doing exactly this — the two layers disagree silently and
+      robots.txt loses.
+
+#### AI search (GEO/AEO) — what the evidence actually supports
+
+Researched 2026-07-29. Ordered by measured impact, not by novelty. The uncomfortable finding is
+that most of this is content and distribution work, not engineering — so it is listed here as a
+plan, and the engineering half above is already done.
+
+**Tier 1 — technical, done or trivial.** `robots.txt` and `sitemap.xml` are the two universally
+respected signals and are now in place. JSON-LD is Google-recommended and the most reliably parsed
+structured format. GPTBot crawls roughly 8× more often than Googlebot, so technical changes here
+propagate far faster than content changes.
+
+**Tier 2 — content structure, the highest-leverage remaining work.**
+- **Q&A formatting raises AI citation rates ~25%; promotional tone lowers them ~26%.** Phrases like
+  "the best choice" and "absolutely essential" are actively counterproductive. This has a direct
+  implication for the marketing copy: the register that converts a human reader is measurably the
+  register that gets skipped by an answer engine.
+- **Statistics and cited sources raise citation rates 30–40%** (Princeton, KDD 2024). Concretely:
+  publish the FRI methodology with real numbers — pillar count, band thresholds, sample sizes,
+  outcome data — and cite them. This is the single biggest lever available and it is a
+  content decision, not a code one.
+- **BLUF structure.** Answer first, elaborate after. Engines lift scoped answers; they rarely
+  summarise a page that buries its claim.
+- Add an FAQ block to the high-intent pages and mark it up with `faqLd()` (already written). Only
+  where the questions are genuinely visible — `FAQPage` markup for invisible content is a
+  spam-policy violation, not a shortcut.
+
+**Tier 3 — authority, the slowest and most durable.**
+- AI search is systematically biased toward **earned media over brand-owned content**, and Wikipedia
+  alone accounts for ~48% of ChatGPT's top citations. Being written about beats writing about
+  yourself.
+- E-E-A-T signals: named authors with bios, visible dates, inline references.
+- Only ~11% of domains are cited by BOTH ChatGPT and Perplexity, so ranking on one does not transfer.
+  Treat them as separate surfaces.
+
+**On `llms.txt`, honestly.** ~10% adoption, and measurement across 500M+ AI bot visits found only
+408 requests for it — the answer crawlers ignore it and read HTML. Google stated publicly it does
+not support it. It is shipped here because it costs nothing and IDE/coding agents (Cursor, Claude
+Code, Copilot) genuinely do read it, and this product's buyers are technical. It is not why anyone
+will get cited, and it must not be counted as if it were.
+
+**Context.** AI search handles an estimated 12–18% of English informational queries as of Q1 2026,
+up from under 2% a year earlier, and the overlap between top Google results and AI-cited sources has
+fallen from ~70% to under 20% — which is the whole argument for treating this as separate work
+rather than assuming SEO covers it.
+
+Sources: Princeton KDD 2024 GEO study · 2025 Web Almanac (SEO chapter) · SE Ranking llms.txt
+adoption study (300k domains) · Cloudflare AI-crawler reports · llmstxt.org.
 
 ---
 

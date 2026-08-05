@@ -534,8 +534,9 @@ public class EvaluationEngine {
         Integer maxSelections = readInteger(cfg, "maxSelections");
 
         Set<String> selected = Set.of();
-        if (answer.getSelectedValue() != null) {
-            selected = Arrays.stream(answer.getSelectedValue().split("\\|\\|\\|"))
+        String rawSelection = multipleChoiceValue(answer);
+        if (rawSelection != null) {
+            selected = Arrays.stream(rawSelection.split("\\|\\|\\|"))
                     .map(String::trim)
                     .collect(Collectors.toSet());
         }
@@ -773,11 +774,26 @@ public class EvaluationEngine {
     private static boolean isUnanswered(Answer a, QuestionType type) {
         if (a == null) return true;
         return switch (type) {
-            case LIKERT, MULTIPLE_CHOICE, NUMBER, SELF_RATING ->
+            case LIKERT, NUMBER, SELF_RATING ->
                     a.getSelectedValue() == null || a.getSelectedValue().isBlank();
+            case MULTIPLE_CHOICE -> {
+                String v = multipleChoiceValue(a);
+                yield v == null || v.isBlank();
+            }
             case FREE_TEXT, MULTI_INPUT, DATE, PHONE, EMAIL ->
                     a.getResponseText() == null || a.getResponseText().isBlank();
         };
+    }
+
+    /**
+     * MULTIPLE_CHOICE storage is split by selection mode: single-select lands in
+     * {@code selectedValue}, multi-select in {@code responseText} joined by "|||"
+     * (see web {@code multiple-choice.tsx}). Read both or multi-select answers reach
+     * the AI as "not_answered".
+     */
+    private static String multipleChoiceValue(Answer a) {
+        if (a.getSelectedValue() != null && !a.getSelectedValue().isBlank()) return a.getSelectedValue();
+        return a.getResponseText();
     }
 
     private static List<String> readStringList(Map<String, Object> cfg, String key) {

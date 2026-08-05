@@ -10,6 +10,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
+import org.springframework.security.web.util.matcher.OrRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -17,6 +18,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 /**
  * Authenticates requests that carry a short-lived download JWT in the
@@ -44,23 +46,34 @@ import java.util.UUID;
  *       harness cannot; it would take a container test). Treat it as an
  *       invariant to preserve by hand when editing this method.
  *       <p><b>This bounds the token, not its consequences,</b> and the difference
- *       is not academic: a read can hand back another credential.
- *       <p>The worst instance of that has since been CLOSED, and this paragraph
- *       is kept rather than deleted because the shape of the risk has not
- *       changed. Until {@code invitation_token_disclosure}, {@code GET
- *       /api/organizations/{orgId}/invitations} returned raw invitation tokens,
- *       and {@code POST /api/invitations/{token}/accept} is {@code permitAll()}
- *       and CSRF-exempt — so a leaked download token bought a permanent account
- *       in the tenant, via a state change it never made itself. The listing now
- *       returns {@code token: null} ({@code InvitationResponse#withoutToken}),
- *       which severs that chain. Redemption is deliberately unchanged: a
- *       brand-new invitee has no session.
- *       <p>What remains open: {@code GET /api/gdpr/me/export} still returns the
- *       caller's full personal-data export to anyone holding a download token
- *       for them, and the token still carries its owner's FULL authorities on
- *       every other GET. Do not read "GET only" as "harmless" — read it as
- *       "cannot itself write".</li>
- *   <li>It does not authenticate {@code /api/auth/**}. That surface contains the
+ *       is not academic: a read can hand back another credential. Two instances
+ *       existed. {@code invitation_token_disclosure} closed the first at the
+ *       source — {@code GET /api/organizations/{orgId}/invitations} used to return
+ *       raw invitation tokens, and {@code POST /api/invitations/{token}/accept} is
+ *       {@code permitAll()} and CSRF-exempt, so a leaked download token bought a
+ *       permanent account in the tenant via a state change it never made itself.
+ *       The second, {@code GET /api/organizations/{orgId}/join-link}, has the same
+ *       shape and still returns its redeemable secret — deliberately, because the
+ *       org admin who owns it has to read it to share it. Both are now out of
+ *       reach here for the same reason everything else is: the path allowlist
+ *       below. Do not read "GET only" as "harmless" — read it as "cannot itself
+ *       write".</li>
+ *   <li>It authenticates <b>only the binary-export paths listed in
+ *       {@link #DOWNLOAD_SURFACE}</b> — audit finding H3's first recorded remedy,
+ *       "path-scope the filter". The token still carries its owner's full
+ *       authorities, which is now inert: the reachable surface is fourteen
+ *       exports the owner may already fetch through the BFF, and nothing else.
+ *       In particular {@code GET /api/gdpr/me/export} — a complete personal-data
+ *       export, and the one download-ish endpoint that is JSON rather than a
+ *       binary — is NOT reachable.
+ *       <p>An allowlist FAILS CLOSED: a new export not added here gets 401 when
+ *       fetched with a download token (and keeps working over the cookie session,
+ *       which is how every client fetches it today). That is the intended
+ *       direction, and the cost is currently zero because no client mints a
+ *       download token at all.</li>
+ *   <li>It does not authenticate {@code /api/auth/**}. Redundant given the
+ *       allowlist — no auth path is an export — and kept as the second lock on the
+ *       one endpoint where a bypass compounds: that surface contains the
  *       mint endpoint {@code GET /api/auth/download-token}, which is itself a GET:
  *       without this, a leaked token could be replayed against it to mint a fresh
  *       one, and then again, indefinitely — turning a 60-second credential into a
@@ -84,16 +97,17 @@ import java.util.UUID;
  *       authenticate here after being refused there.</li>
  * </ul>
  *
- * <p>What is deliberately NOT restricted: the set of download paths. Binary
- * responses are served from eight controllers across six feature packages
- * ({@code certificate}, {@code gdpr}, {@code insights}, {@code reporting},
- * {@code survey}, {@code workshops}) under no single prefix or suffix convention
- * — {@code /api/gdpr/me/export} breaks the {@code /pdf}|{@code /excel} pattern
- * the others nearly share — and no client mints a download token today, so any
- * path allowlist would be a guess that fails closed on a flow nobody can test.
- * GET/HEAD is the enforceable half. The token also still carries its owner's
- * FULL authorities: audit finding H3 named "path-scope the filter, or mint with
- * reduced authorities" and this closes NEITHER.
+ * <p>What is deliberately NOT done: minting with reduced authorities (H3's other
+ * recorded remedy). It is not additive — the exports below sit behind
+ * {@code hasAuthority('ORG_ADMIN')} and friends, so stripping authorities would
+ * 403 the very flow this filter exists for. Path-scoping achieves the same
+ * containment without that.
+ *
+ * <p>RECOMMENDED, but not an agent's call: <b>delete this filter, its mint
+ * endpoint and {@link TokenType#DOWNLOAD} outright.</b> No client mints a download
+ * token — the only reference in the web repo is the generated OpenAPI schema, and
+ * every export goes through the BFF proxy with cookies. Deleting removes a URL
+ * credential entirely rather than continuing to bound one nobody uses.
  */
 @Component
 @RequiredArgsConstructor
@@ -104,6 +118,38 @@ public class DownloadTokenAuthenticationFilter extends OncePerRequestFilter {
     /** See the class javadoc: the whole auth surface, mint endpoint included. */
     private static final RequestMatcher AUTH_SURFACE =
             PathPatternRequestMatcher.pathPattern("/api/auth/**");
+
+    /**
+     * Every binary-export endpoint in the application, and nothing else — the
+     * complete set of paths a download token may authenticate.
+     *
+     * <p>Derived by enumerating every handler that writes a PDF/XLSX body (grep
+     * {@code APPLICATION_PDF}, {@code spreadsheetml}, {@code attachment; filename}).
+     * {@code GET /api/gdpr/me/export} is excluded on purpose: it produces JSON, is
+     * not a browser binary fetch, and is a complete personal-data export.
+     *
+     * <p>Adding an export? Add it here too, or it 401s for download tokens (only —
+     * the cookie session is unaffected). If this list is ever hard to keep current,
+     * that is a signal to delete the capability rather than to widen the list.
+     */
+    private static final RequestMatcher DOWNLOAD_SURFACE = new OrRequestMatcher(
+            Stream.of(
+                            "/api/v1/courses/*/certificate/pdf",
+                            "/api/my/assessments/*/results/pdf",
+                            "/api/my/assessments/*/results/excel",
+                            "/api/surveys/*/results/export.xlsx",
+                            "/api/organizations/*/roi-report.pdf",
+                            "/api/organizations/*/roi-report.xlsx",
+                            "/api/organizations/*/org-insights/*/pdf",
+                            "/api/organizations/*/org-insights/*/excel",
+                            "/api/organizations/*/dashboard/insights/pdf",
+                            "/api/organizations/*/dashboard/insights/excel",
+                            "/api/organizations/*/dashboard/members/*/results/*/pdf",
+                            "/api/organizations/*/dashboard/members/*/results/*/excel",
+                            "/api/organizations/*/workshops/*/answers/pdf",
+                            "/api/organizations/*/workshops/*/answers/excel")
+                    .<RequestMatcher>map(PathPatternRequestMatcher::pathPattern)
+                    .toList());
 
     private final JwtProvider jwtProvider;
     private final UserRepository userRepository;
@@ -133,9 +179,11 @@ public class DownloadTokenAuthenticationFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    /** Requests a download token is allowed to authenticate: safe methods, outside /api/auth. */
+    /** Requests a download token may authenticate: safe methods, a known export, outside /api/auth. */
     private static boolean acceptsUrlToken(HttpServletRequest request) {
         String method = request.getMethod();
-        return ("GET".equals(method) || "HEAD".equals(method)) && !AUTH_SURFACE.matches(request);
+        return ("GET".equals(method) || "HEAD".equals(method))
+                && !AUTH_SURFACE.matches(request)
+                && DOWNLOAD_SURFACE.matches(request);
     }
 }

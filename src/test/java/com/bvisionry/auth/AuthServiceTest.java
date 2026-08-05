@@ -2,6 +2,7 @@ package com.bvisionry.auth;
 
 import com.bvisionry.audit.AuditService;
 import com.bvisionry.auth.dto.AuthResponse;
+import com.bvisionry.auth.dto.LoginRequest;
 import com.bvisionry.auth.dto.RefreshTokenRequest;
 import com.bvisionry.auth.entity.RefreshToken;
 import com.bvisionry.auth.entity.User;
@@ -11,6 +12,7 @@ import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.exception.AuthenticationException;
 import com.bvisionry.common.exception.SsoFlowException;
+import com.bvisionry.organization.entity.Organization;
 import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -256,7 +258,79 @@ class AuthServiceTest {
                         ex -> assertThat(ex.getErrorCode()).isEqualTo("sso_provider_mismatch"));
     }
 
+    // ---------- suspended organization: every mint path ----------
+
+    /**
+     * A suspended ORGANIZATION must be refused where tokens are MINTED, not only where
+     * they are used. {@link com.bvisionry.auth.jwt.JwtAuthenticationFilter} and
+     * {@link com.bvisionry.auth.jwt.DownloadTokenAuthenticationFilter} already refuse
+     * such a principal per-request (via {@code AuthenticationEligibility}), so the
+     * guards below were not exploitable — but mint and accept disagreeing is the
+     * asymmetry that becomes a hole the moment a filter is relaxed or a new consumer
+     * trusts a freshly minted token without re-checking. All three guards shipped
+     * untested; these pin them.
+     *
+     * <p>Each also asserts NOTHING was minted. Asserting only the throw would stay green
+     * if the guard moved below {@code issueTokens} — the token would already exist.
+     */
+    @Test
+    void login_suspendedOrganization_isRefusedAndMintsNothing() {
+        user.setOrganization(suspendedOrg());
+        when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("pw", "hash")).thenReturn(true);
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("ada@example.com", "pw")))
+                .isInstanceOf(AuthenticationException.class)
+                .hasMessageContaining("organization has been suspended");
+
+        assertNothingWasMinted();
+    }
+
+    @Test
+    void refresh_suspendedOrganization_isRefusedAndRotatesNothing() {
+        user.setOrganization(suspendedOrg());
+        UUID jti = UUID.randomUUID();
+        Claims claims = claimsWithJti(jti);
+        RefreshToken stored = activeStoredToken(jti, Instant.now().plusSeconds(3600));
+        when(jwtProvider.parseAndValidate("rt", TokenType.REFRESH)).thenReturn(Optional.of(claims));
+        when(refreshTokenRepository.findByJti(jti)).thenReturn(Optional.of(stored));
+
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest("rt")))
+                .isInstanceOf(AuthenticationException.class)
+                .hasMessageContaining("organization has been suspended");
+
+        assertNothingWasMinted();
+        // The presented token must also survive: refusing a suspended org is not theft,
+        // so it must not revoke or rotate the row.
+        verify(refreshTokenRepository, never()).save(any());
+        verify(refreshTokenRepository, never()).revokeAllForUser(any(), any());
+    }
+
+    /** The Google/OAuth2 path. Enterprise SSO has its own guard, covered in SsoLoginServiceTest. */
+    @Test
+    void resolveSsoUser_suspendedOrganization_isRefusedWithCode() {
+        user.setOrganization(suspendedOrg());
+        when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> authService.resolveSsoUser("ada@example.com", null, "GOOGLE"))
+                .isInstanceOfSatisfying(SsoFlowException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("sso_org_suspended"));
+
+        assertNothingWasMinted();
+    }
+
     // ---------- helpers ----------
+
+    private static Organization suspendedOrg() {
+        Organization org = new Organization();
+        org.setActive(false);
+        return org;
+    }
+
+    private void assertNothingWasMinted() {
+        verify(jwtProvider, never()).generateAccessToken(any());
+        verify(jwtProvider, never()).generateRefreshToken(any());
+    }
 
     private RefreshToken activeStoredToken(UUID jti, Instant expiresAt) {
         RefreshToken rt = new RefreshToken();

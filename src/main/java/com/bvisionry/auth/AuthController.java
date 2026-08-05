@@ -127,11 +127,12 @@ public class AuthController {
      * doesn't hardcode hostnames.
      */
     @AuthorizedInSecurityConfig("authenticated(): any signed-in user, minting a 60s token for themselves - "
-            + "a FULL-AUTHORITY, path-unscoped URL credential (audit finding H3, PARTIALLY closed): "
-            + "DownloadTokenAuthenticationFilter now accepts it on GET/HEAD only and never on /api/auth/**, "
-            + "so it drives no state change and cannot be replayed here to renew itself - but H3's recorded "
-            + "remedies (path-scope the filter, or mint with reduced authorities) are BOTH still open, so "
-            + "within the TTL it still reads anything its owner can read")
+            + "a URL credential, now CONTAINED (audit finding H3 closed via 'path-scope the filter'): "
+            + "DownloadTokenAuthenticationFilter accepts it on GET/HEAD only, never on /api/auth/**, and "
+            + "only on the enumerated binary exports - so it drives no state change, cannot be replayed "
+            + "here to renew itself, and cannot read the GDPR personal-data export, the org join-link "
+            + "secret, or anything else its owner can read. It still carries full authorities, which is "
+            + "inert at that surface. RECOMMENDED: delete this endpoint - no client mints one")
     @GetMapping("/download-token")
     public ResponseEntity<DownloadTokenResponse> downloadToken(@AuthenticationPrincipal User user) {
         if (user == null) {

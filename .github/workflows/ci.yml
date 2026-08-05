@@ -1,3 +1,42 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# OPERATOR CHECKLIST — three things in this file's remit are REPOSITORY SETTINGS
+# and no committed file can turn them on. Without them, part of the supply-chain
+# story below is missing and nothing here will tell you so.
+#
+#   1. Settings > Security > Advanced Security > Dependency graph  -> Enable
+#      Free on private repos, but OFF BY DEFAULT on private repos (it is forced
+#      on for public ones). Everything in 2. depends on it.
+#   2. Settings > Security > Advanced Security > Dependabot alerts -> Enable
+#      Free on private repos, also off by default. This is what watches the tree
+#      BETWEEN pull requests; the OSV scan below only runs when someone opens
+#      one, so a CVE published against an unchanged dependency is invisible to it
+#      until the next push. Turn on "Dependabot security updates" in the same
+#      place to get fix PRs rather than just alerts.
+#      Caveat worth knowing rather than discovering: GitHub resolves the Maven
+#      graph by parsing pom.xml, which cannot see versions this build gets from
+#      the Spring Boot parent BOM, and cannot fetch the OpenSAML poms at all
+#      because they are not on Central. Its alerts are therefore a subset of what
+#      the OSV step below finds. `advanced-security/maven-dependency-submission-
+#      action@v5` (needs `contents: write`, run on push to the default branch
+#      only) closes that by submitting the tree Maven actually resolved. It is
+#      not wired up here because the OSV step already blocks on that same tree,
+#      and one detector is enough — add it if you want alerts on transitives you
+#      would not be bumping by hand anyway.
+#   3. Secret scanning / push protection — NOT AVAILABLE HERE, and that is why
+#      the `secrets` job below exists. On private repositories both require
+#      GitHub Secret Protection, which is purchasable only on Team or Enterprise;
+#      these repos are private under a personal account, so the native feature
+#      cannot be enabled at any price on the current plan. If the account ever
+#      moves to Team and buys it, that is STRICTLY BETTER than the job below —
+#      push protection rejects the secret at `git push`, before it is ever in
+#      history — and the `secrets` job should be deleted rather than kept as a
+#      second opinion.
+#
+# Two more GitHub-native options were considered and are deliberately NOT used:
+# `actions/dependency-review-action` and CodeQL both require a paid Code Security
+# licence on private repositories, so neither is a free alternative to anything
+# below.
+# ─────────────────────────────────────────────────────────────────────────────
 name: CI
 
 on:
@@ -153,6 +192,70 @@ jobs:
             exit 1
           fi
 
+      # ── Dependency vulnerabilities ──────────────────────────────────────────
+      # WHY THE SCANNER IS NOT POINTED AT pom.xml, WHICH IS THE OBVIOUS THING.
+      # It was, first, and it does not work here — not marginally, but blindly.
+      # OSV-Scanner's own pom resolver fails on this file outright ("invalid empty
+      # constraint") because most dependencies take their version from the Spring
+      # Boot parent BOM and declare none, and it then falls back to static
+      # parsing and reports having "filtered 27 local/unscannable packages" — it
+      # scanned 20 of 47 coordinates and no transitives at all. Everything that
+      # matters was in the discarded set: tomcat-embed, spring-*, jackson, netty,
+      # thymeleaf. A scan that silently covers a minority of the tree and exits 0
+      # is worse than none, because it answers the question wrongly.
+      # Pointing any external resolver at this pom also fails a second time and
+      # more quietly: the OpenSAML artifacts are not on Central at all (that is
+      # the entire reason pom.xml declares the Shibboleth repository), so a
+      # scanner resolving against Central cannot see them, and one taught to
+      # resolve against Shibboleth would be re-opening by the back door the
+      # containment that .mvn/rrf exists to enforce.
+      #
+      # So Maven resolves, and the scanner only reads the answer. `makeAggregateBom`
+      # runs in this build, with this build's settings, so it honours the
+      # Shibboleth repository, the .mvn/rrf groupId containment AND the
+      # .mvn/checksums pinning — the SBOM lists what would actually be shipped,
+      # OpenSAML included. Nothing is added to pom.xml: the plugin is invoked by
+      # coordinate, so it is not a project dependency and does not exist outside
+      # this step.
+      #
+      # COST: it runs after `verify`, so every artifact is already in the local
+      # repository and the SBOM takes about 6 seconds; the scan itself takes 1.
+      - name: Produce a resolved dependency SBOM
+        run: |
+          ./mvnw -B -q org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom \
+            -DoutputFormat=json -DoutputName=bom -DincludeTestScope=false
+
+      # The threshold, and why it is a baseline rather than a severity, is
+      # explained at length in osv-scanner.toml — the short version is that no
+      # severity floor is green on this tree today, including `critical`, so a
+      # severity gate would have landed red. The file is a ratchet on the same
+      # terms as the ArchUnit frozen store above: it may shrink, never grow.
+      #
+      # The binary is pinned by version AND by sha256 rather than taken from a
+      # `latest` URL or a third-party action. A supply-chain workflow that begins
+      # by running an unverified download over the source tree is not one, and
+      # this repository already pins Shibboleth artifacts by checksum for exactly
+      # this reason (.mvn/maven.config). To move versions, re-record the hash:
+      #   curl -sSfL -o osv-scanner <the URL below with the new version> \
+      #     && sha256sum osv-scanner
+      # google/osv-scanner-action is not used: its action.yml is a stub, and the
+      # reusable workflows it ships upload SARIF to code scanning, which is a
+      # paid feature on private repositories.
+      - name: Scan the resolved tree for known vulnerabilities
+        env:
+          OSV_VERSION: "2.4.0"
+          OSV_SHA256: "15314940c10d26af9c6649f150b8a47c1262e8fc7e17b1d1029b0e479e8ed8a0"
+        run: |
+          curl -sSfL -o osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SHA256}  osv-scanner" | sha256sum -c -
+          chmod +x osv-scanner
+          # --config is required, not optional: OSV-Scanner looks for
+          # osv-scanner.toml beside the file it is scanning, which would be
+          # target/, so without this the baseline is silently ignored and the
+          # step fails on all 80 known findings.
+          ./osv-scanner scan source --lockfile target/bom.json --config osv-scanner.toml
+
       # Changed lines must be ~70% covered. This is separate from — and does not
       # touch — the deliberately low global JaCoCo floor in pom.xml. Runs on pull
       # requests only: without a base branch there is no "changed" to measure.
@@ -162,3 +265,70 @@ jobs:
         run: |
           git fetch --no-tags --quiet origin "${{ github.base_ref }}"
           java tools/DiffCoverage.java --base "origin/${{ github.base_ref }}"
+
+  # ── Secrets ────────────────────────────────────────────────────────────────
+  # A separate job, so it runs in parallel with the build and adds no wall-clock
+  # time: measured against the current history it takes about 4 seconds. It is
+  # NOT a step in the build job because it must not wait out a ten-minute
+  # Testcontainers run to tell you a live credential is in the diff.
+  #
+  # WHY A WORKFLOW AND NOT GITHUB SECRET SCANNING: see item 3 of the operator
+  # checklist at the top of this file. The native feature is unavailable on this
+  # plan, not merely unconfigured.
+  #
+  # WHY VERIFIED-ONLY, WHICH IS THE ENTIRE REASON THIS CAN STAY BLOCKING.
+  # This repository intentionally commits strings that every pattern-matching or
+  # entropy-based scanner reports as secrets: `Password123!` in CLAUDE.md and in
+  # the web repo's e2e workflow, the compose credentials in docker/, the seeded
+  # local accounts. They are documented local-development values and they are not
+  # going away. A scanner that reports them fires on every pull request forever,
+  # and the only possible response is to stop reading it.
+  #
+  # `--results=verified,unknown` reports a finding only when TruffleHog has
+  # actually authenticated to the provider with the credential (verified), or
+  # tried and could not reach the provider to find out (unknown). A fixed local
+  # password authenticates to nothing, so it never verifies. `unknown` is
+  # included on the tool's own advice: bare `--results=verified` silently drops
+  # any secret whose verification call errored, which turns a network blip into a
+  # missed leak. The residual false-positive rate is near zero — a full-history
+  # scan of this repository at the time of writing returned 0 verified and 0
+  # unverified findings across 190 commits, though four candidates did reach the
+  # verification step and fail it, which is this filter earning its place — so
+  # this gate blocks, and blocking is correct: a credential that a scanner just
+  # proved is live must not merge.
+  #
+  # AND IT CLEARS ITSELF. The fix for a leaked live credential is to ROTATE it,
+  # not to rewrite git history. Rotation makes the old value stop verifying, so
+  # this job goes green on the remediation that actually matters, and nobody is
+  # pushed into force-pushing a shared branch to get a merge through.
+  #
+  # SCOPE: on a pull request the action scans the PR's commits, and on a push it
+  # scans the pushed range — not the full history, which would be re-scanning
+  # unchanged commits on every run. History was scanned once, by hand, when this
+  # landed. To repeat that after any incident:
+  #   docker run --rm -v .:/pwd ghcr.io/trufflesecurity/trufflehog:latest \
+  #     git file:///pwd --results=verified,unknown
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The action diffs two commits; a shallow clone has nothing to diff and
+          # the action fails outright rather than silently scanning nothing.
+          fetch-depth: 0
+
+      # Pinned to a release tag, not @main as the vendor README suggests: this
+      # action runs third-party code over a checkout of the whole repository on
+      # every pull request, which is precisely the exposure the rest of this file
+      # is about. The dependabot.yml github-actions entry keeps the pin current.
+      # The detection ENGINE is intentionally left at its default `latest` image
+      # — pinning a secret scanner's detector set freezes it against credential
+      # formats invented after the pin, which is the one place staleness hurts.
+      - name: Scan for verified secrets
+        uses: trufflesecurity/trufflehog@v3.96.0
+        with:
+          # `--fail` is supplied by the action itself; passing it again here is a
+          # duplicate flag and errors.
+          extra_args: --results=verified,unknown

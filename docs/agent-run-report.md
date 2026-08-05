@@ -1,5 +1,26 @@
 # Agent run report — live state
 
+> ## ⚠ THIS FILE IS STALE. READ `agent-decisions.md` FOR STATE.
+>
+> It stops at **wave 8 / 44 tickets**. The log went on to close waves 9, 10 and 11
+> (**55 tickets**), declared the run closed, and several commits landed after
+> that. Anything below about "what has landed" or "what runs next" is history.
+>
+> **Current state, verified 2026-08-01 against a green tree:** backend
+> **1274/0/0** · web lint 0 / typecheck 0 / **1063 unit, 83 files** · e2e
+> **157 passed ×2 consecutive**. Roadmap §7 and §10 delivered; §11 at 17 of 26,
+> with the remainder split into external engagements and three named engineering
+> items (see `roadmap.md` §11 and the decision log's §11 sweep entry).
+>
+> Specifically superseded here: §10's "six open operator decisions" and §11's
+> item 5 (in-org founder anonymity) were **closed by the operator on 2026-07-27**
+> — reading this file instead of the log is how that gets re-litigated, which has
+> now happened once.
+>
+> **What this file is still good for: the doctrine.** §6 standing rules, §9 Gate 4
+> doctrine, the lane/port procedure and the stale-artifact traps in §8 are all
+> current and were all paid for. Read it for how to work, not for where things are.
+
 Companion to `agent-policy.yml` (the constitution — immutable, human-amended only)
 and `agent-execution-graph.md` (the design — how work is executed).
 

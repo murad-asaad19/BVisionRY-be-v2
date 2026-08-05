@@ -2838,3 +2838,330 @@ see it."*
    standing, not per-wave. Wave 11 landed three stale specs because I carried this to wave 10 only.
 6. **Sweep `git fsck --dangling` at wave close.** A feature was lost inside a ticket and survived
    only as an unreferenced commit; no branch comparison could have found it.
+
+## §11 CROSS-CUTTING SWEEP — the production-requirements backlog, worked to the end (2026-08-01)
+
+Operator asked for the roadmap's unimplemented items to be found and then handled. §7 and §10
+were already delivered; what was actually open was **§11**, plus a set of stale checkboxes that
+made the file lie in both directions. Gates on the combined result: backend **1274 / 0F / 0E**,
+frozen ArchUnit store diff **EMPTY**, web lint 0 / typecheck 0 / **1063 unit across 83 files**,
+**Gate 4 157 passed ×2 consecutive** on a freshly seeded lane 1.
+
+### Two operator rulings taken in-session
+1. **`never_touch` amended for `founder-content.ts`.** `FRI_PRICING_FAQS[0]` asserted *"All data
+   is encrypted and GDPR-compliant"* — a compliance STATUS no code establishes — plus a 24–48h
+   report promise for a flow that finishes in seconds, and "Up to 1 **cohorts**/month". All three
+   corrected. The general lesson: **shipping the feature did not retract the claim**, and the
+   claim is what a customer read. GDPR export/delete landed waves ago; this sentence outlived it.
+2. **Founder anonymity: never promised, closed.** Matches what already shipped —
+   `ExportNameGuard`'s javadoc had recorded the same ruling on 2026-07-27. *My critique had listed
+   this as an open partial fix; that was read off the STALE run report, not the decision log.*
+
+### What the checkboxes got wrong, in both directions
+Four items were done and unticked (access-token TTL — already 15 min in `application.properties`;
+per-page canonicals; retention surfaced on the privacy page; and `[x]` was owed on nothing else),
+and one was ticked in spirit while its own acceptance criterion said otherwise (§7 item 11, "then
+the flag flips" — the flag never flipped, now 🟡). A checklist nobody reconciles is not evidence
+in either direction, which the run report had already said about itself and then repeated.
+
+### The three findings worth outliving this sweep
+
+**(a) THE AUTONOMY GATE WAS RENAMED, NOT CLEARED.** Roadmap §15 lists "e2e in CI" as one of three
+gates that keep the delivery graph in propose-only mode. The run report's §4 records that
+prerequisite as *"e2e green locally (FE evidence)"*, satisfied by `e2e_local_green` — the suite
+passing on a hand-driven sandbox lane. That is a strictly weaker claim, and 55 tickets of
+autonomous delivery ran on it. The workflow now exists and is real; it cannot go per-PR because
+**there is no committed seed** — lanes are fed from a `pg_dump` of the operator's live dev
+database, `docker/db/bvisionry-baseline.sql` is zero bytes, and `auth.setup.ts` signs in five
+accounts of which one exists in source. With no seed the spec count is zero, not "most". Authoring
+that seed is the entire remaining cost, and it must be authored, never dumped — a dump puts real
+personal data in git, which is worse than the problem it solves.
+
+**(b) A MONITOR THAT CAN RESTART THE SERVER IS WORSE THAN NO MONITOR.** The first
+`ScheduledJobMonitor` returned `Health.down()` on a stale job. `/actuator/health` is the liveness
+probe: that turns "a retention job is late" into a killed container, and under a restart policy,
+into a loop. Caught by running it, not by reading it — the endpoint went 503 on a lane. It now
+reports a DEGRADED status ranked after UP, on its own `/actuator/health/scheduling` group.
+**The same run killed the class's own premise:** it had been correlating an `ObservationHandler`
+against the task registry by a synthetic key, and reported *every* job dead because enabling
+observations wraps the runnable and broke the `instanceof`. Spring already records
+`Task.getLastExecutionOutcome()`. The rewrite reads that, owns no state, and is half the size —
+the bug was the tell that the design was reinventing the framework.
+
+**(c) A NONCE CANNOT LOCK `style-src` IN THIS APP, AND THAT WAS MEASURED.** The obvious policy —
+nonce on both `script-src` and `style-src` — was written, shipped to a lane, and failed: ~21
+"Applying inline style violates…" errors on the member dashboard, in dev AND in a production
+build. Several offered `sha256-47DEQpj8…`, the hash of the empty string: component libraries
+create bare `<style>` elements from JavaScript after hydration, and an element created by script
+has nowhere to get a request nonce from. `style-src-attr 'unsafe-inline'` was tried as the
+narrower fix and does not help — these are elements, not attributes. Shipped: nonce +
+`strict-dynamic` on `script-src`, `'unsafe-inline'` on `style-src`, `/app/**` only so the
+marketing site keeps static generation. Threading the nonce into `BrandScope` was reverted rather
+than left as dead code; the measurement lives at the directive, where anyone about to "fix" it
+will read it.
+
+### Two orchestration errors, both mine
+- **I reset a lane while the backend was connected to it.** Its Hikari pool died, `auth.setup`
+  failed, and I briefly concluded the suite was red at HEAD. Baselining with my own changes stashed
+  is what corrected it — and the correction was to a claim I had already made out loud.
+- **I ran the suite against a production build** to test the CSP, and reported
+  `route-boundaries.spec.ts` as a failure. `/app/dev/error-trigger` calls `notFound()` outside dev.
+  The spec was right; the environment was mine.
+
+### Two structural facts this sweep surfaced, neither of them a ticket
+- **`docker/` is version-controlled by neither repo.** The sandbox lane system, the root compose
+  file and the seed placeholders all live above both git roots. Anything put there is lost on a
+  fresh clone, which is why CI cannot use any of it — and why the new backup and load-test tooling
+  went to `backend/tools/` instead. Worth an operator decision: that directory is load-bearing
+  infrastructure with no history.
+- **Nothing has shipped.** backend +82 / web +68 commits ahead of `main`, never pushed. Every ✅
+  in the roadmap means "code exists on a local branch".
+
+### Delivered
+`opengraph-image.tsx` (the root layout had promised `summary_large_image` with no image behind it)
+· anonymous-read audit, mechanised as `PublicCourseDetailShapeTest` + `CatalogRouteSecurityIntegrationTest`
+· `ScheduledJobMonitor` + the `scheduling` health group · CSP nonce pipeline · `web/.github/workflows/e2e.yml`
++ `web/e2e/ci-stack.yml` · `backend/tools/backup/{drill.sh,media-markers.sql}` + `docs/runbook-backup-restore.md`
+(drill run and passing) · `backend/tools/loadtest/public-assessment.js` · pricing-copy correction.
+
+### Left open, deliberately, with the reason
+Five external engagements (SOC 2, VPAT, pen-test, Bing submission, CDN AI-crawler check) and one
+legal review — no commit closes any of them. Component tests for the major app pages: measured at
+**15.3% lines / 1063 tests** against the roadmap's stale "~2%", with the gap named component by
+component rather than as a percentage. The load test has a harness but **no measurement** — k6 is
+not installed here, and a harness is not a result.
+
+## HARDENING SWEEP — three delegated tickets, and two backlog entries that were WRONG (2026-08-01)
+
+Operator asked for the hardening items to be handled by subagents. Combination re-gated by the
+orchestrator, not worker-claimed: backend **1295 / 0F / 0E**, frozen ArchUnit store diff **EMPTY**,
+web lint 0 / typecheck 0 / **1092 unit across 84 files**, **Gate 4 157 passed**.
+
+### THE HEADLINE: I DISPATCHED TWO ITEMS OFF A STALE BACKLOG WITHOUT RE-VERIFYING THEM
+Wave 7 recorded this exact lesson — *"a backlog entry is a claim about the past, and this codebase
+moves. Re-verify before dispatching, never after"* — and struck three of five audit items on
+contact with the code. I then briefed a worker from that same backlog and repeated the mistake, on
+two of three items. Both were caught because the worker re-verified rather than complying.
+
+**(a) "org-active is never checked at the mint path" — FALSE.** `AuthService.login:82`,
+`resolveSsoUser:145`, `refresh:234`, `SsoLoginService.requireActiveOrganization` (called twice),
+and both invitation + both join-link accept paths all check it, in committed code. There is no
+mint/accept asymmetry. My proposed "reuse `AuthenticationEligibility`" would have been a
+REGRESSION: it returns a bare boolean, so collapsing onto it destroys the distinct
+`sso_org_suspended` / `sso_account_inactive` codes the login page renders. The genuine gap was
+**test coverage** — `AuthServiceTest` had nothing touching organization state. Three tests added,
+each also asserting nothing was minted (a throw-only assertion stays green if the guard ever moves
+below `issueTokens`). Mutation-tested: each guard → `if (false)` → exactly 3 failures.
+
+**(b) "join-link should be nulled like the invitation listing" — the precedent does not transfer,
+and copying it would have broken the feature.** `InvitationResponse` splits because a LISTING would
+hand an ORG_ADMIN other principals' secrets. `JoinLinkResponse` has no listing: both emitters are
+`SUPER_ADMIN or (ORG_ADMIN and @orgAccess.isInOrg)` — the caller who just minted the secret or owns
+it — the web admin card renders it to be copied, and the public pre-redemption
+`GET /api/join/{token}` carries no token. **The real exposure was the download token reaching the
+reveal, which is a filter problem, not a DTO problem** — nulling one field would have left every
+sibling secret-returning GET exposed. Left as-is, with the reasoning in the DTO javadoc so the next
+audit does not re-raise it.
+
+### (c) Download token — audit H3 CLOSED properly, by path-scoping
+`DownloadTokenAuthenticationFilter` now ANDs a `DOWNLOAD_SURFACE` allowlist of the **14 real binary
+export paths** into `acceptsUrlToken`. Previously the token carried its owner's FULL authorities on
+every non-`/api/auth` GET, including `GET /api/gdpr/me/export` — a complete personal-data export
+reachable with a credential that lives in access logs, browser history and `Referer` headers.
+
+**The javadoc's stated reason for having no allowlist was wrong on the facts.** It claimed the
+download paths follow "no single prefix or suffix convention"; enumerated, all 14 end in `/pdf`,
+`/excel`, `.pdf` or `.xlsx`. `GET /api/gdpr/me/export` is not an exception to that convention — it
+is `produces = APPLICATION_JSON_VALUE`, i.e. not a binary download at all. The second stated reason
+("a guess that fails closed on a flow nobody can test") is self-defeating: nothing can break a flow
+no client uses. **Note this is an allowlist, not a deny-list — my own instruction had been to
+exclude the GDPR path, which would have left the same class of gap open for the next endpoint.**
+
+H3's other recorded remedy (mint with reduced authorities) is deliberately NOT done: the exports
+sit behind `hasAuthority('ORG_ADMIN')`, so stripping authorities would 403 the flow the filter
+exists for. Evidence: 33 tests incl. a 14-param pin of the allowlist (a typo would otherwise be
+silent) and a negative pin over gdpr-export / join-link / invitations / members. Mutation-tested:
+`&& DOWNLOAD_SURFACE.matches(request)` → `&& true` → 4 failures, restored.
+
+**⚠ OPERATOR DECISION — recommended: delete the download-token capability outright.** Verified zero
+client usage (the only `download-token` reference in `web/` is the generated schema type). The
+cross-site premise it was built for is not exercised because every export goes through the BFF with
+cookies. Not deleted by an agent: token semantics are `never_auto_decide`.
+
+### (d) CSP violation reporting — the policy stopped being enforce-and-forget
+The nonce CSP landed earlier the same day reported nothing; the only reason a real violation was
+ever seen is that one e2e spec asserted an empty console. Now `report-uri` **and** `report-to` plus
+a `Reporting-Endpoints` header, feeding the existing `error_events` ingest through a new
+`/api/csp-report` route. Both directives on purpose: Firefox and Safari implement only `report-uri`,
+and a browser supporting `report-to` ignores it — carrying both is coverage, not duplication. The
+route branches on body SHAPE, not `Content-Type`, because browsers are loose about it.
+
+Bounded three ways, because it is an unauthenticated forgeable POST: a 5-forward fan-out cap per
+inbound request (reusing the existing `createFloodGuard`, so duplicates collapse without consuming
+budget — a forged 40-report array costs the backend 5); the real client IP forwarded so
+`ErrorEventRateLimitFilter` buckets the browser rather than the web tier's egress IP (without it the
+limiter stays "on" while bounding nothing); and a 64KB length reject. **Capability tokens are
+redacted** — verified live end to end: `/join/SUPERSECRETTOKEN?invite=abc` was stored as
+`/join/[token]` with the query dropped.
+
+### Standing lesson, third time this run
+Two of the three tickets in this sweep were dispatched from a written backlog and two of those were
+wrong. The pattern is not that the backlog is careless — it is that **a recorded finding is a
+claim about a codebase that has since moved**, and the cost of re-verifying is minutes against a
+regression that would have shipped. Brief workers to verify the premise FIRST and to report back
+when it fails, rather than to implement what they were told.
+
+## SUPPLY-CHAIN SCANNING — and the Next bump the scanners immediately justified (2026-08-01)
+
+Third delegated hardening ticket. Neither repo's CI had dependency or secret scanning; both now do.
+
+### What the scanners found the moment they were switched on
+- **web, production tree only: 13 advisories (7 high, 6 moderate)** — every one of them `next`
+  16.2.7 or its own transitives, all fixed by a patch bump. Including an *unauthenticated
+  disclosure* advisory on the framework we serve every request through.
+- **backend, OSV over the Maven-RESOLVED tree (250 packages): 67 distinct advisories across 26
+  packages — 11 critical.** Worst: `tomcat-embed-core` 11.0.20 (9.8), `bcprov-jdk18on` 1.81 (9.3),
+  `thymeleaf` 3.1.3 (9.0). **~50 of the 67 clear with one bump of `spring-boot-starter-parent`
+  4.0.5 → 4.0.6+**; five need individual bumps (`minio`, `jose4j`, `bcprov`, `bcpkix`, `poi-ooxml`).
+- **secrets, TruffleHog over full history of both repos: 0 verified, 0 unverified.**
+
+### `next` 16.2.7 → 16.2.12 — DONE and gated, not just recorded
+The agent deliberately did not upgrade (it could not verify a build); the orchestrator can, so it
+did. **13 → 4 advisories.** Gates on the bumped tree: typecheck clean · lint 0 · **1092 unit across
+84 files** · **e2e 157 passed**.
+
+The surviving 4 (`postcss` ×3, `sharp` ×1) are **pinned transitives of `next` itself** — `pnpm why`
+shows both reaching us only through the framework. Closing them means a `pnpm.overrides` forcing a
+version the framework did not choose: `postcss` is build-time only (we author every stylesheet, so
+the file-read/path-traversal class needs attacker-controlled CSS we do not have), and `sharp` is a
+native image pipeline whose regressions the e2e suite would not reliably catch. **Deliberately left
+as upstream debt** rather than overridden on a guess. They clear when Next bumps its own pins.
+
+### The thresholds, and why neither is a severity floor by accident
+- **web: `pnpm audit --prod --audit-level critical`, blocking.** `--prod` because the loudest
+  findings (including the only critical) are storybook/vitest/eslint and never ship. The level is
+  `critical` rather than `high` because — measured — `high` exits 1 on the current tree, and **a
+  gate that is red on the day it lands teaches people to route around CI**, which costs more than
+  it buys. A non-blocking `high` run emits a warning per PR so the debt stays visible.
+- **backend: a BASELINE RATCHET, blocking at any severity.** No severity floor is green here (even
+  `critical` fails on 11), so the threshold is a DATE, not a severity: `osv-scanner.toml` records
+  the 67 present today and anything new fails. Same contract as the ArchUnit frozen store — may
+  shrink, never grow, and a PR that adds an id is adding accepted risk that needs a reviewer.
+  Chose id-based `[[IgnoredVulns]]` over the smaller `[[PackageOverrides]]` because silencing a
+  *package* also swallows advisories that do not exist yet.
+- **secrets: `--results=verified,unknown`.** This repo commits `Password123!` and `minio/minio123`
+  ON PURPOSE, so a pattern/entropy scanner is permanently red here; failing only on a credential
+  TruffleHog actually authenticated with is the only threshold that survives contact with the tree.
+
+### Scanning Maven needed Maven
+OSV-Scanner pointed at `pom.xml` is effectively blind on this project: its resolver dies on
+`invalid empty constraint` (BOM-managed versions), silently falls back to static parsing, and
+reports *"filtered 27 local/unscannable packages"* — scanning 20 of 47 coordinates and **zero
+transitives**, i.e. everything that matters was in the discarded set. That is a scanner reporting
+green over an unscanned tree, which is the exact vacuous-pass class this run keeps finding. Fix:
+**Maven resolves, the scanner only reads the answer** — `cyclonedx-maven-plugin` by coordinate (no
+`pom.xml` change), which inherits the `.mvn/rrf` Shibboleth containment and `.mvn/checksums`
+pinning, so OpenSAML is covered without re-opening that containment. 6s SBOM + 1s scan.
+
+### A defect the scanning ticket found in MY OWN work
+`web/.github/workflows/e2e.yml`, written earlier the same day, checks out
+`${{ github.repository_owner }}/bvisionry-backend`. **No such repository exists** — the remotes are
+`murad-asaad19/BVisionRY-be-v2` and `BVisionRY-fe-v2`; neither is named after the product. Every run
+would have 404'd at the checkout step. I inferred the coordinates from the product name instead of
+reading `git remote -v`, in a file whose entire subject is that CI cannot see what it cannot check
+out. Corrected, with the real names and a comment saying why they are hard-coded.
+
+### OPERATOR ACTIONS — repository settings no committed file can enable
+Per repo, **Settings → Security**: (1) **Dependency graph → Enable** — free on private but OFF by
+default; (2) **Dependabot alerts + security updates → Enable** (needs #1) — this is what watches the
+tree BETWEEN pull requests, which neither CI gate does; (3) add the new `Secret scan` job to
+required status checks, or it blocks nothing. **Secret push protection cannot be enabled** — it
+needs GitHub Secret Protection, sold only on Team/Enterprise, and these are private repos under a
+personal account. That is why the `secrets` CI job exists; if the account ever moves to Team, push
+protection is strictly better and the job should be DELETED rather than kept alongside.
+
+`dependency-review-action` and CodeQL were both ruled out: they require a paid Code Security licence
+on private repos.
+
+### Unverified, and it is not a small caveat
+**No GitHub Actions workflow in this change set has ever executed.** YAML validity, the scanners'
+local behaviour and the thresholds' exit codes were all verified on the real trees; the runner
+behaviour was not. Specifically open: TruffleHog's base/head detection on this repo's events, the
+OSV binary URL/hash on a Linux runner, whether GitHub's dependency graph handles pnpm
+`lockfileVersion 9.x`, and Dependabot against the Shibboleth repository (which is why Dependabot is
+configured to ignore `org.opensaml`/`net.shibboleth` — it does not read `.mvn/maven.config`, so a
+bump PR would resolve jars missing from the checksum file and be permanently red; detection is
+unaffected because OSV reads the resolved tree).
+
+### THE BACKEND BUMP IS NOT DONE — and it is the bigger number
+50 of 67 advisories, including all 11 criticals, sit behind `spring-boot-starter-parent` 4.0.5 →
+4.0.6+ plus five individual bumps. Not attempted here: a Spring Boot parent bump on a tree already
+carrying a session's worth of uncommitted work is a change that deserves its own ticket and its own
+gate run, not a tack-on. **It is the single highest-value piece of hardening left in this repo.**
+
+## CSP BROKE WHITE-LABEL BRANDING — found by driving Chrome, not by the gates (2026-08-01)
+
+The operator asked for a second manual browser pass after the day's changes. It cost about a
+minute and found a defect three green full-suite runs had not.
+
+### The defect
+`img-src 'self' blob: data: https:` **blocked a paying org's white-label logo.** Object storage is a
+separate origin served over plain **http** on every lane and in local dev
+(`http://localhost:9004/...`), and the presigned URL therefore matched no source expression. The
+paid feature simply stopped rendering — a console error and a broken `<img>`, which is not a failed
+request anyone watches. Exactly the silent class the policy's own comments warn about, introduced by
+the policy.
+
+It reached further than the logo. Three surfaces load from that origin DIRECTLY:
+- `img-src` — branding logos, avatars, course covers
+- `media-src` — lesson video and audio
+- `connect-src` — `media-upload-dropzone.tsx` PUTs file bytes **straight to the presigned URL**;
+  they never pass through the BFF, so uploads break on a directive nobody would think to check
+
+### Why every gate missed it, and the sequencing error underneath
+The white-label e2e spec sets branding and clears it again, so for most of a run no branded logo
+exists to block. The one spec that did catch it (`console-surfaces`, via its console assertion)
+only failed on the run where a branded org happened to be live.
+
+**And it was masked by a wrong-binary run of my own.** The backend agent had run `mvnw clean test`,
+wiping `target/`, while the backend process from before its changes kept serving — so the e2e pass I
+reported after the hardening agents landed was against the OLD backend. Restarting it is what
+produced the failing run. The repo documents this exact trap ("a web-only ticket's BACKEND worktree
+must be reset before Gate 4"); I hit it from the other direction, by not restarting a server after
+someone else rebuilt it. **Restart every server whose code changed, then gate.**
+
+### The fix, and why it is keyed on the page's protocol rather than NODE_ENV
+The web tier never learns the storage hostname — presigned URLs are minted by the backend from
+`MINIO_PUBLIC_ENDPOINT` and arrive inside DTOs — so a host expression is not expressible and a
+scheme is the only option. Which scheme is decided by `request.nextUrl.protocol`:
+
+- **https page → no `http:`.** Redundant: the browser already refuses http subresources as mixed
+  content, so listing it would grant exactly nothing.
+- **http page → `http:` added.** No mixed-content rule applies, so https-only silently blocks
+  storage. This covers every sandbox lane, local dev, and any self-hosted http deployment.
+
+`NODE_ENV` would have been wrong in both directions — dev can be https, production can be http.
+`nextUrl.protocol` honours `x-forwarded-proto`, so behind a TLS-terminating proxy it reads the
+scheme the BROWSER used, which is the one the mixed-content rule keys on. Added to `img-src`,
+`media-src` and `connect-src` only; **`script-src` is untouched and was verified not to have
+inherited it.**
+
+### A falsification that failed, and what it taught
+Probing from the browser showed the storage image now loads with zero violations. That is only
+evidence if the probe COULD fail, so I tried to falsify by injecting a cross-origin `<script>` and
+asserting `script-src` refused it. **It did not fire** — `page.evaluate` executes through CDP, which
+is outside CSP, and `strict-dynamic` then treats a script created by that code as already trusted.
+The harness could not observe the directive it was asserting on: the same class as the wave-6
+`locator("style").filter({hasText})` defect, in a new costume. Re-falsified with an `<iframe>`
+(`frame-src` is not laundered by `strict-dynamic`) — violation fired, listener proven, so the
+`img-src` silence is real.
+
+**Standing:** when a probe comes back clean, prove the probe can fail — and prove it with a
+mechanism the tool cannot bypass.
+
+### Evidence after the fix
+Backend restarted onto the agent's code · **e2e 157 passed** · typecheck 0 · lint 0 · proxy unit
+tests **35** (3 new, pinning http-page/https-page/script-src-unaffected) · manual Chrome across
+sign-in, sub-organizations, the failing exercises page, branding settings and `/app`: **0 console
+errors**, all images loaded, `img-src … https: http:` and `connect-src 'self' http: ws: wss:` served
+while `script-src` carries no `http:`.

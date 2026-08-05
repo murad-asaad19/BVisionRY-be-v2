@@ -34,13 +34,12 @@ class DownloadTokenAuthenticationFilterTest {
 
     private static final String SECRET = "test-secret-key-must-be-32-bytes-minimum-for-hmac-sha-256!!";
 
-    /**
-     * An ARBITRARY path outside {@code /api/auth} — deliberately not a real route,
-     * because the filter has no path allowlist and these tests must not imply one.
-     * (The real insights export is {@code /api/organizations/{orgId}/org-insights/{reportId}/pdf};
-     * nothing is served from {@code /api/insights}.)
-     */
-    private static final String DOWNLOAD_PATH = "/api/insights/pdf";
+    /** Stand-in path variable. Compile-time constant so it can build @ValueSource strings. */
+    private static final String ID = "11111111-1111-1111-1111-111111111111";
+
+    /** A real allowlisted export, used by the tests that are not about paths. */
+    private static final String DOWNLOAD_PATH =
+            "/api/organizations/" + ID + "/org-insights/" + ID + "/pdf";
 
     @Mock
     private UserRepository userRepository;
@@ -230,6 +229,80 @@ class DownloadTokenAuthenticationFilterTest {
         lenient().when(userRepository.findByIdWithOrganization(user.getId())).thenReturn(Optional.of(user));
 
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/api/auth/download-token");
+        req.setParameter("token", token);
+        MockHttpServletResponse res = new MockHttpServletResponse();
+        FilterChain chain = mock(FilterChain.class);
+
+        filter.doFilter(req, res, chain);
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        verify(chain, times(1)).doFilter(req, res);
+    }
+
+    /**
+     * The allowlist, positive half — every binary export the filter is FOR. A typo in
+     * {@code DOWNLOAD_SURFACE} breaks the flow silently otherwise (401 on a real download),
+     * because no client mints a download token and nothing else would notice.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "/api/v1/courses/founder-readiness/certificate/pdf",
+            "/api/my/assessments/" + ID + "/results/pdf",
+            "/api/my/assessments/" + ID + "/results/excel",
+            "/api/surveys/" + ID + "/results/export.xlsx",
+            "/api/organizations/" + ID + "/roi-report.pdf",
+            "/api/organizations/" + ID + "/roi-report.xlsx",
+            "/api/organizations/" + ID + "/org-insights/" + ID + "/pdf",
+            "/api/organizations/" + ID + "/org-insights/" + ID + "/excel",
+            "/api/organizations/" + ID + "/dashboard/insights/pdf",
+            "/api/organizations/" + ID + "/dashboard/insights/excel",
+            "/api/organizations/" + ID + "/dashboard/members/" + ID + "/results/" + ID + "/pdf",
+            "/api/organizations/" + ID + "/dashboard/members/" + ID + "/results/" + ID + "/excel",
+            "/api/organizations/" + ID + "/workshops/" + ID + "/answers/pdf",
+            "/api/organizations/" + ID + "/workshops/" + ID + "/answers/excel",
+    })
+    void everyRealExportPath_authenticates(String path) throws Exception {
+        String token = jwtProvider.generateDownloadToken(user);
+        when(userRepository.findByIdWithOrganization(user.getId())).thenReturn(Optional.of(user));
+
+        MockHttpServletRequest req = new MockHttpServletRequest("GET", path);
+        req.setParameter("token", token);
+
+        filter.doFilter(req, new MockHttpServletResponse(), mock(FilterChain.class));
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
+    }
+
+    /**
+     * The allowlist, negative half — audit finding H3. A download token is a URL
+     * credential (access logs, browser history, {@code Referer}) and must not read
+     * anything but a binary export, however harmless "GET only" sounds:
+     *
+     * <ul>
+     *   <li>{@code /api/gdpr/me/export} is a COMPLETE personal-data export. It is the one
+     *       export-shaped endpoint that is JSON rather than a binary and it is excluded.</li>
+     *   <li>{@code /api/organizations/{orgId}/join-link} returns a redeemable secret, and
+     *       {@code POST /api/join/{token}} is {@code permitAll()} + CSRF-exempt — so
+     *       reading it converts a 60-second read credential into a permanent tenant
+     *       account. Same shape as the invitation listing that
+     *       {@code invitation_token_disclosure} closed; closed here at the filter, which
+     *       covers every sibling secret-returning GET rather than one endpoint.</li>
+     *   <li>An ordinary org-scoped listing stands in for "everything else".</li>
+     * </ul>
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "/api/gdpr/me/export",
+            "/api/organizations/" + ID + "/join-link",
+            "/api/organizations/" + ID + "/invitations",
+            "/api/organizations/" + ID + "/members",
+    })
+    void nonExportPath_doesNotAuthenticate(String path) throws Exception {
+        String token = jwtProvider.generateDownloadToken(user);
+        lenient().when(userRepository.findByIdWithOrganization(user.getId()))
+                .thenReturn(Optional.of(user));
+
+        MockHttpServletRequest req = new MockHttpServletRequest("GET", path);
         req.setParameter("token", token);
         MockHttpServletResponse res = new MockHttpServletResponse();
         FilterChain chain = mock(FilterChain.class);

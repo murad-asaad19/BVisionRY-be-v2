@@ -17,11 +17,30 @@ Scope: `backend` (Spring Boot 4 / Java 21) + `web` (Next.js 16 / React 19)
 >
 > **For current state, read §7's status column and §11's checkboxes, which ARE
 > reconciled against the tree**, then `agent-decisions.md` (per-ticket detail,
-> newest last) and `agent-run-report.md`. As of 2026-07-27 the §7 backlog is
-> delivered except item 13 (multi-language, deliberately deferred) and item 8
-> (superseded by #16); §10's UI/UX requirements are partly delivered and the
-> remainder is in flight; §11 has 15 of 21 items genuinely open, most of them
-> compliance and operations work that no amount of engineering closes.
+> newest last). `agent-run-report.md` is STALE — it stops at wave 8 / 44 tickets
+> while the log closed at wave 11 / 55 and then declared the run closed; read it
+> for doctrine, not for state.
+>
+> **Reconciled 2026-08-01 against a green tree** (backend 1274/0/0 · web lint 0 /
+> typecheck 0 / 1063 unit · e2e **157 passed ×2 consecutive**):
+>
+> - **§7** is delivered except item 13 (multi-language, deliberately suspended —
+>   `next-intl` is installed nowhere) and item 8 (superseded by #16). Item 11 was
+>   downgraded to 🟡: the courses flag never flipped, so the capability is built
+>   and dark.
+> - **§10** UI/UX P0/P1/P2 is delivered (waves 10–11). The bottom tab bar was
+>   declined with reasoning — §10 says "consider", and `MobileSheetNav` already
+>   reaches every member destination in two taps.
+> - **§11** now stands at **17 of 26 done**. What remains splits cleanly: five
+>   items are external engagements no commit can close (SOC 2, VPAT, pen-test,
+>   Bing submission, the CDN AI-crawler check), one needs human legal sign-off,
+>   and three are real engineering — component tests for the big admin consoles,
+>   e2e in CI (blocked on an authored seed, see the item), and actually RUNNING
+>   the load test whose harness now exists.
+>
+> **The largest single fact this file cannot express: none of it has shipped.**
+> Both repos sit on `agent/integration`, 82 commits (backend) and 68 (web) ahead
+> of `main`, never pushed. Every ✅ here means "code exists on a local branch".
 
 **Companions:** `agent-policy.yml` (closed decisions + hard constraints — what
 agents load) · `agent-execution-graph.md` (how the work is executed)
@@ -30,7 +49,7 @@ agents load) · `agent-execution-graph.md` (how the work is executed)
 
 - [Part I — Strategy](#part-i--strategy) · what we sell, what's missing
 - [Part II — The work](#part-ii--the-work) · outcomes and acceptance criteria
-- [Part III — Delivery](#part-iii--delivery) · order, risks, decisions
+- [Part III — Delivery](#part-iii--delivery) · order, risks, decisions · §16 candidates for later
 
 ---
 
@@ -228,7 +247,7 @@ needs, not how long it takes:
 | 8 | Cohort completion analytics | 🟡 | Superseded by #16 — same data, materially more value. | — |
 | 9 | Pillar → module mapping | ✅ | An admin declares which modules address which pillar at which score band. A founder viewing results sees recommended modules. | M |
 | 10 | **Automated course selection** ⏰ *contractual* | ✅ | On evaluation completion a founder is automatically enrolled in modules matched to their weak pillars, told **why**, and an admin can override. **Re-running an evaluation must not duplicate enrolments.** | L |
-| 11 | Self-paced library | ✅ | Full QA across every lesson type on desktop and mobile, then the flag flips. Assigned vs self-selected content is visually distinguishable. | S |
+| 11 | Self-paced library | 🟡 | Full QA across every lesson type on desktop and mobile, then the flag flips. Assigned vs self-selected content is visually distinguishable. **QA landed; the flag did NOT flip** — `NEXT_PUBLIC_COURSES_ENABLED` is a per-deployment env var and is off in staging and production, so the capability is built and dark. Was scored ✅ on the grounds that the ticket was done; the acceptance criterion above says "then the flag flips", and by its own words this is partial. The flip condition is mechanical (decision log → "Flag NOT flipped") and the call is the operator's. | S |
 | 12 | Mobile / PWA | ✅ | Installable, and the player works on a phone. | S |
 | 13 | Multi-language | ❌ | **Deferred.** New surfaces adopt the i18n library now so the retrofit bill stops growing. | L |
 | 14 | White-label | ✅ | An org admin sets a logo and palette; the app renders in their brand. **No custom domains, no branded email sender.** | L |
@@ -341,32 +360,38 @@ and the program task player's exemplary next-step flow.
 ## 11. Cross-cutting production requirements
 
 ### Security
-- [ ] Shorten access-token TTL from 24h to 15–30 min — refresh rotation already works, and access tokens are not revocable today
-- [ ] Audit anonymous read endpoints — confirm no non-preview lesson body is ever returned to an anonymous caller
-- [ ] Complete the CSP nonce pipeline (deliberately deferred)
+- [x] Shorten access-token TTL from 24h to 15–30 min — **15 min** (`0bbd5be`); survivable because `proxy.ts` refreshes before the render
+- [x] Audit anonymous read endpoints — done and MECHANISED rather than written down. No lesson body reaches an anonymous caller at all (stronger than the "non-preview" bar this item set): the whole `LessonContentController` is `isAuthenticated()` and gated by enrolment, and the public catalog's lesson projection carries metadata only. Both halves are pinned — `PublicCourseDetailShapeTest` fails if a field is added to the public DTO, `CatalogRouteSecurityIntegrationTest` fails if the `permitAll` matcher is widened from `{slug}` to `**`. Also confirmed: springdoc is disabled in prod, so the `permitAll` on `/v3/api-docs/**` reaches nothing there
+- [x] Complete the CSP nonce pipeline — nonce + `strict-dynamic` on `/app/**` (`proxy.ts`). **`style-src` is deliberately NOT nonce-locked**, measured not assumed: component libraries create `<style>` elements from JavaScript at runtime, which can never carry a request nonce, and the nonce-locked version failed the e2e suite in both dev and a production build. Scripts are where a CSP earns its keep; the reasoning is at the directive
 - [x] Every new secret gets the same fail-closed startup validation as existing ones
-- [ ] Pen-test the public token flows before scale marketing
+- [ ] Pen-test the public token flows before scale marketing *(external engagement — no code closes this)*
+- [ ] **No second factor, and no account lockout.** Failed logins are rate-limited per IP (10/min) and nothing else — an account is never locked, and MFA does not exist anywhere. Enterprise procurement asks for MFA in the same conversation as the SAML that just shipped, so the context is warm. Lockout is the subtler of the two: done naively it hands an attacker a denial-of-service against any account whose email they know, so the design (per-account throttle with backoff, not a hard lock) is the decision, not the feature
+- [ ] **Bump `spring-boot-starter-parent` 4.0.5 → 4.0.6+ (plus five individual bumps).** Supply-chain scanning now runs in CI and immediately found **67 distinct advisories across 26 packages in the resolved backend tree, 11 of them critical** — worst `tomcat-embed-core` 11.0.20 (9.8), `bcprov-jdk18on` 1.81 (9.3), `thymeleaf` 3.1.3 (9.0). About 50 clear with the parent bump alone; `minio`, `jose4j`, `bcprov`, `bcpkix` and `poi-ooxml` need their own. The 67 are baselined in `osv-scanner.toml` as a ratchet so nothing NEW can land, but a baseline is a record of debt, not payment of it. **This is the single highest-value hardening item left**, and it deserves its own ticket and its own full gate run rather than being tacked onto other work
+- [ ] **GitHub repository settings the operator must enable by hand** — no committed file can do these: Dependency graph (free on private, OFF by default), Dependabot alerts + security updates, and adding the new `Secret scan` job to required status checks. Secret *push protection* is not available — it needs GitHub Secret Protection, sold only on Team/Enterprise, and these are private repos on a personal account; the `secrets` CI job exists precisely to cover that gap
+- [ ] **Object storage has no per-org quota.** Uploads are capped at 10MB/file and are **unbounded in count** — a cost and availability vector reachable by any ORG_ADMIN. Recorded during `white_label_theming` and never built. The limit itself is a commercial number and belongs to the operator; the mechanism does not
 
 ### Quality & CI
 - [x] Fix the pre-existing lint errors and make lint **blocking** in frontend CI
 - [x] **Diff coverage ~70% on changed lines.** Do *not* chase a global coverage percentage — it produces tests over code nobody is changing. The frontend at ~2% is the real risk.
-- [ ] Component/integration tests for the major app pages
-- [ ] **e2e in CI** against a compose stack — the specs exist and have never run. *Autonomy prerequisite.*
+- [ ] Component/integration tests for the major app pages — **measured, and the "~2%" above is long out of date: 15.3% lines, 1063 tests across 83 files.** Genuinely advanced, genuinely not done. The gap is concentrated and nameable: the largest client components still have no colocated test at all — `ai-config-console` (1335 lines), `live-board` (1209), `member-actions-dialogs` (1177), `insights-body` (1139), `platform-settings` (1034), `assignments-panel` (904), then a dozen more in the 680–880 range. Start there rather than at a percentage
+- [ ] **e2e in CI** against a compose stack. **The workflow now exists** (`web/.github/workflows/e2e.yml` + `web/e2e/ci-stack.yml`) and stands up Postgres/Redis/MinIO/Mailpit, both repos, both servers. It runs on `workflow_dispatch` and CANNOT yet run per-PR, because of one hard blocker: **there is no committed, reproducible seed.** Lanes are seeded from a `pg_dump` of the operator's live dev database — host-local, unversioned, and full of real personal data, so committing it is not an option either. `auth.setup.ts` signs in five fixed accounts and only `admin@bvisionry.com` is created by anything in the tree, so with no seed the number of specs that can run is zero, not "most". The seed must be AUTHORED (five identities, org + sub-org, cohort, pipeline with pillars, the exercise assignments `exercise.tester@example.com` is named for) — that ticket is the whole remaining cost of this item. *Autonomy prerequisite — and note it has been recorded as satisfied by `e2e_local_green`, which is the suite passing on a hand-driven lane. That is a weaker claim than this line makes.*
 - [x] Full QA across every lesson type before the courses flag flips
 
 ### Observability & operations
 - [x] **Error tracking on both ends** — metrics exist, exception aggregation does not. *Autonomy prerequisite: it is the rollback trigger.*
-- [ ] Alerting on scheduled jobs — a silently dead reaper or reminder job is invisible today
-- [ ] Uptime + synthetic checks on the public token flows
-- [ ] Backup/restore drill for Postgres and object storage; documented RPO/RTO
-- [ ] Load-test the anonymous public-assessment path — it is the marketing funnel
+- [x] Alerting on scheduled jobs — `ScheduledJobMonitor` reports every `@Scheduled` job on `/actuator/health/scheduling`, DEGRADED when one has not completed within its own interval ×2 + 1 min. Reads Spring's own `Task.getLastExecutionOutcome()`, so it owns no state and cannot drift. A failed run does not refresh the timestamp — otherwise a job throwing on every tick would report healthy for ever. **Deliberately never DOWN**: `/actuator/health` is a liveness probe, and a late reaper must not get a serving container restarted. Verified live: all 11 jobs discovered, with real intervals and timestamps
+- [ ] Uptime + synthetic checks on the public token flows *(external monitoring — no code closes this)*
+- [x] Backup/restore drill for Postgres and object storage; documented RPO/RTO — `backend/docs/runbook-backup-restore.md`, and it is **rehearsed, not just written**: `backend/tools/backup/drill.sh` fingerprints a lane, backs up, destroys, restores and verifies, and passes. It also cross-checks every `minio://` marker in the database against the bucket — the one check that catches a database and an object store restored to different points in time. **RPO/RTO are stated as targets with a named gap:** the procedure is proven, the provider retention behind it has never been confirmed by anyone, and §6 of the runbook lists exactly what the operator must verify
+- [ ] Load-test the anonymous public-assessment path — **harness delivered, not yet executed.** `backend/tools/loadtest/public-assessment.js` (k6) models a cohort launch alongside an abuse scenario, and encodes the trap that makes naive load tests worthless here: session-create is capped at 5/min per client IP, so without the BFF's `X-Bvisionry-Client-Ip` + proxy-secret pair every virtual user shares one bucket and the run measures the rate limiter. Unchecked because k6 is not installed on this machine and no measurement exists — a harness is not a result
 
 ### Compliance & data
-- [x] **GDPR account export + deletion** — the pricing FAQ already claims compliance
-- [ ] Retention policy surfaced to users
-- [ ] Terms/privacy review for AI evaluation of user content
-- [ ] SOC 2 Type II observation window opened
-- [ ] VPAT / ACR ordered
+- [x] **GDPR account export + deletion**
+- [x] Retention policy surfaced to users — the privacy page's "How long we keep things" section, including the 90-day AI call-log window and the 30-day evaluation cache
+- [ ] Terms/privacy review for AI evaluation of user content *(needs human legal sign-off — the product copy is accurate, the review is not an engineering artefact)*
+- [ ] SOC 2 Type II observation window opened *(external — the longest pole on this roadmap and still not started)*
+- [ ] VPAT / ACR ordered *(external)*
+
+**Correction, and it was load-bearing enough to name.** This item's justification used to be *"the pricing FAQ already claims compliance"*. Export and deletion shipped; **the claim did not change until now**. `FRI_PRICING_FAQS[0]` asserted *"All data is encrypted and GDPR-compliant"* — a compliance STATUS no code can establish, and it was emitted as `FAQPage` structured data that a search engine can surface standalone, detached from any page that qualifies it. It also promised reports "within 24–48 hours" for a flow that finishes in seconds, and mis-spelled a tier's own capacity ("Up to 1 **cohorts**/month"). All three are corrected under an operator-directed amendment to `hard_constraints.never_touch`. The lesson generalises: shipping the feature does not retract the claim, and the claim is what a customer read.
 
 ### SEO / PWA / AI discoverability
 - [x] Sitemap, robots, manifest — `web/src/app/{sitemap,robots,manifest}.ts`, generated from
@@ -380,9 +405,12 @@ and the program task player's exemplary next-step flow.
       ChatGPT's live web search is Bing-backed, so Bing indexing is the prerequisite for appearing
       in ChatGPT citations at all. Google Search Console too, but Bing is the one that is usually
       forgotten and the one that gates the largest AI surface.
-- [ ] Per-page `alternates.canonical`. Deliberately NOT set globally — Next metadata is inherited,
-      so a root canonical would point the whole site at `/`.
-- [ ] OG images. `metadataBase` now resolves them correctly; there are none to resolve yet.
+- [x] Per-page `alternates.canonical` — on all eleven public pages. Still deliberately NOT set globally:
+      Next metadata is inherited, so a root canonical would point the whole site at `/`.
+- [x] OG images — `src/app/opengraph-image.tsx`, one brand card generated with `next/og` and inherited by
+      every route that does not override it. This closed a real defect rather than adding a nicety: the root
+      layout has been declaring `twitter.card = "summary_large_image"` with no image behind it, and a large
+      card with no image renders worse than declaring no card at all.
 - [ ] Verify the CDN does not block AI crawlers while `robots.txt` allows them. Measured research
       found a meaningful share of sites doing exactly this — the two layers disagree silently and
       robots.txt loses.
@@ -607,6 +635,36 @@ them before any code, because they are the only things that cannot be caught up.
 5. Ship GDPR export and deletion; the pricing FAQ already claims it.
 6. **Then Phase 1: the coach console** — the Growth-tier portal we already charge
    $599/mo for.
+
+---
+
+## 16. Next horizon — candidates, NOT commitments
+
+Recorded 2026-08-01 so they stop living in a conversation. **Nothing here is scoped,
+priced or promised.** §14's closed decisions still bind: none of this reopens native
+booking (integrate, don't build), DMs or threads (announcements only), or i18n
+(suspended). An item moving from here into §7 is an operator decision.
+
+Ordered by leverage, and every one of them compounds the asset the §5 market analysis
+identified as the real moat: **a persistent founder identity connecting intake →
+activity → outcome in one queryable record.** Competitors cannot close that by adding
+a feature. Most of what follows is exposing a record we already hold.
+
+| # | Candidate | Outcome & why it matters | Radius |
+|---|---|---|---|
+| A | **FRI validity evidence** | §5 says it plainly and it is still true: *"Instruments are bought on validity. Nothing captures whether a pillar score predicts funding, survival or revenue."* Capture outcomes per founder over time — raised / survived / revenue / exit — then publish the predictive validity. This is the difference between selling a questionnaire and selling an instrument. It is also the single biggest AI-search lever available, because §11's own research found statistics and cited sources raise citation rates 30–40% — and unlike the rest of that list, we would be citing our own data. **Nothing else on this page changes the sales conversation as much.** | L |
+| B | **Embeddable cohort benchmark badge** | "Our 2026 cohort scores 14 points above the platform median", rendered as a badge an accelerator publishes on their own site. Customers *want* to publish this, it links back, and §11's research is explicit that AI search is biased toward earned media over brand-owned content. Compounds with every customer added — the same flywheel as the benchmarking corpus, pointed outward. Builds on the landed `quantitative_benchmarking`; the anonymity rule (`benchmark_anonymity: AGGREGATE_ONLY`) already constrains the shape. | M |
+| C | **Re-assessment cadence + delta report** | Step 6 of §4's loop is the remaining 🟡. Schedule the re-assessment, generate the movement report, and that artifact *is* the renewal conversation — it is what ROI reporting proves, on a timer. Mostly wiring: nudges, ROI reporting and the competency matrix are all built. | M |
+| D | **Free 3-pillar mini-FRI as the lead magnet** | Public-assessment infrastructure, lead-magnet infrastructure and the pillar model all exist. Score three pillars, gate the other eight. It is the highest-converting shape for this funnel and it feeds the benchmark corpus for free — every teaser is a data point in the distribution that makes B more valuable. Note the funnel it sits on has never been load-tested (§11); do that first. | M |
+| E | **Slack / Teams delivery for nudges** | Founders do not live in our inbox, and a nudge nobody sees is a nudge that did not happen. Notification preferences and the proactive-nudge engine are built; this is an adapter plus an opt-in channel, and it must respect the existing opt-out the same way announcements do. | M |
+| F | **Customer-facing read API** | Enterprise and university procurement asks for it, and it is a differentiator against program-operations incumbents. It also, counter-intuitively, reduces churn anxiety: a customer who can get their data out is a customer who stops worrying about being locked in. | M |
+
+**The honest caveat on A.** It is the most valuable item here and the only one that
+cannot be built quickly, because the data does not exist yet — outcome capture has to
+run for a cohort cycle before there is anything to analyse. That is an argument for
+starting the capture NOW and analysing later, not for deferring the whole item: every
+month it is not capturing is a month of evidence that can never be backfilled. It is
+the same shape as the SOC 2 window in §6 — calendar-bound, not effort-bound.
 
 ---
 

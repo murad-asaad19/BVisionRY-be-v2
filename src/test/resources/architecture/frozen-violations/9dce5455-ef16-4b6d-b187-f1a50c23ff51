@@ -1,5 +1,4 @@
 Field <com.bvisionry.aicalllog.service.AICallLogService.maxPayloadChars> is annotated with @Value in (AICallLogService.java:0)
-Field <com.bvisionry.aicalllog.service.AICallLogService.storeSuccessPayloads> is annotated with @Value in (AICallLogService.java:0)
 Field <com.bvisionry.aiconfig.service.AIConfigService.stringRedisTemplate> is annotated with @Autowired in (AIConfigService.java:0)
 Field <com.bvisionry.aiconfig.service.RateLimitService.redisTemplate> is annotated with @Autowired in (RateLimitService.java:0)
 Field <com.bvisionry.aiengine.transport.Lc4jChatModelProvider.maxRetries> is annotated with @Value in (Lc4jChatModelProvider.java:0)

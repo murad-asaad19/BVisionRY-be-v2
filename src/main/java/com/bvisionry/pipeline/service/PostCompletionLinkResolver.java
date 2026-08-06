@@ -57,7 +57,7 @@ public class PostCompletionLinkResolver {
         return Optional.of(new PostCompletionLinkDto.Survey(
                 survey.getId(),
                 survey.getName(),
-                "/my/assessments/" + submissionId + "/post-completion-survey",
+                "/app/assessments/" + submissionId + "/post-completion-survey",
                 label));
     }
 

@@ -156,12 +156,12 @@ public final class EmailTemplateMetadata {
                     "memberName",    "Alex Johnson",
                     "pipelineName",  "Leadership Self-Assessment",
                     "deadline",      Instant.parse("2026-05-15T00:00:00Z").toString(),
-                    "assessmentUrl", urls.path("/my/assessments/sample")
+                    "assessmentUrl", urls.path("/app/assessments/sample")
             );
             case RESULTS_READY -> Map.of(
                     "memberName",          "Alex Johnson",
                     "pipelineName",        "Leadership Self-Assessment",
-                    "resultsUrl",          urls.path("/my/assessments/sample/results"),
+                    "resultsUrl",          urls.path("/app/assessments/sample/results"),
                     "postCompletionUrl",   "https://typeform.com/sample-feedback",
                     "postCompletionLabel", "Continue"
             );
@@ -169,13 +169,13 @@ public final class EmailTemplateMetadata {
                     "memberName",   "Alex Johnson",
                     "pipelineName", "Leadership Self-Assessment",
                     "surveyName",   "Post-Assessment Feedback",
-                    "surveyUrl",    urls.path("/my/assessments/sample/post-completion-survey"),
-                    "resultsUrl",   urls.path("/my/assessments/sample/results")
+                    "surveyUrl",    urls.path("/app/assessments/sample/post-completion-survey"),
+                    "resultsUrl",   urls.path("/app/assessments/sample/results")
             );
             case INVITATION -> Map.of(
                     "inviterName",      "Jordan Lee",
                     "organizationName", "Acme Ventures",
-                    "acceptUrl",        urls.path("/invite/sample-token"),
+                    "acceptUrl",        urls.path("/invitations/sample-token"),
                     "expiresAt",        Instant.parse("2026-05-01T00:00:00Z").toString()
             );
             case PASSWORD_RESET -> Map.of(
@@ -186,12 +186,12 @@ public final class EmailTemplateMetadata {
                     "organizationName", "Acme Ventures",
                     "daysLeft",         3,
                     "trialEndsAt",      Instant.parse("2026-05-01T00:00:00Z").toString(),
-                    "dashboardUrl",     urls.path("/admin/organizations/sample")
+                    "dashboardUrl",     urls.path("/app/admin/organizations/sample")
             );
             case TRIAL_EXPIRED -> Map.of(
                     "organizationName", "Acme Ventures",
                     "expiredAt",        Instant.parse("2026-04-25T00:00:00Z").toString(),
-                    "dashboardUrl",     urls.path("/admin/organizations/sample")
+                    "dashboardUrl",     urls.path("/app/admin/organizations/sample")
             );
             case UPGRADE_REQUESTED -> Map.of(
                     "organizationName", "Acme Ventures",
@@ -199,7 +199,7 @@ public final class EmailTemplateMetadata {
                     "memberEmail",      "alex@acmeventures.com",
                     "featureContext",   "Org Insights",
                     "note",             "Our leadership team would really benefit from cohort comparisons before the next QBR.",
-                    "dashboardUrl",     urls.path("/admin/organizations/sample")
+                    "dashboardUrl",     urls.path("/app/admin/organizations/sample")
             );
             case CONTACT_US -> Map.of(
                     "senderName",  "Jordan Rivera",

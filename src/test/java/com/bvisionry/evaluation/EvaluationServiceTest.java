@@ -84,12 +84,21 @@ class EvaluationServiceTest {
     private Answer likertAnswer;
     private AIConfiguration aiConfiguration;
 
+    /** Origin the injected {@link FrontendUrls} builds links against. */
+    private static final String FRONTEND_BASE_URL = "http://localhost:3000";
+
     @BeforeEach
     void setUp() {
         // EvaluationService builds the results-ready link via FrontendUrls; inject a
-        // real one so the email-send path doesn't NPE (URL value isn't asserted).
+        // real one so the email-send path doesn't NPE. The origin is set explicitly
+        // rather than inherited from the FrontendProperties default: the link
+        // assertion below pins a full URL, and that default has drifted before (it
+        // once pointed at the stale Vite :5173 port), which would fail this test
+        // with a results-link message that sends the reader to the wrong file.
+        FrontendProperties frontendProperties = new FrontendProperties();
+        frontendProperties.setBaseUrl(FRONTEND_BASE_URL);
         ReflectionTestUtils.setField(evaluationService, "frontendUrls",
-                new FrontendUrls(new FrontendProperties()));
+                new FrontendUrls(frontendProperties));
         // The result-persist step runs through the self proxy so its @Transactional
         // applies on the async worker thread; point it back at this same instance so
         // the unit test exercises the real persist method.
@@ -532,7 +541,7 @@ class EvaluationServiceTest {
         // /my/... path 404s, and an any() matcher here let exactly that ship.
         verify(emailService).sendResultsReady(
                 eq("user@test.com"), eq("Test User"), eq("Test Pipeline"),
-                eq("http://localhost:3000/app/assessments/" + submissionId + "/results"),
+                eq(FRONTEND_BASE_URL + "/app/assessments/" + submissionId + "/results"),
                 any(), any());
     }
 

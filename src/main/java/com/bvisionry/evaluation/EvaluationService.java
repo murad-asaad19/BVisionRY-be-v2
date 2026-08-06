@@ -505,7 +505,7 @@ public class EvaluationService {
             // link points at the authenticated submission-scoped survey page.
             String memberEmail = submission.getUser().getEmail();
             String memberName = resolveMemberDisplayName(submission, answers);
-            String resultsUrl = frontendUrls.path("/my/assessments/" + submissionId + "/results");
+            String resultsUrl = frontendUrls.path("/app/assessments/" + submissionId + "/results");
 
             PostCompletionLinkDto postCompletion = postCompletionLinkResolver
                     .resolveForCompletionEmail(pipeline, submissionId)
@@ -514,7 +514,7 @@ public class EvaluationService {
             pushNotificationService.notifyUser(submission.getUser().getId(), NotificationType.RESULTS_READY,
                     "Your results are ready",
                     "Your \"" + pipeline.getName() + "\" results are available.",
-                    "/my/assessments/" + submissionId + "/results");
+                    "/app/assessments/" + submissionId + "/results");
         }
     }
 

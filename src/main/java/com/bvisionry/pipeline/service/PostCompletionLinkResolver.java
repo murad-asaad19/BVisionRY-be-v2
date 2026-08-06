@@ -6,6 +6,7 @@ import com.bvisionry.survey.entity.Survey;
 import com.bvisionry.survey.entity.SurveyStatus;
 import com.bvisionry.survey.repository.SurveyRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
@@ -20,6 +21,7 @@ import java.util.UUID;
  */
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class PostCompletionLinkResolver {
 
     static final String DEFAULT_SURVEY_LABEL = "Take our survey";
@@ -47,8 +49,27 @@ public class PostCompletionLinkResolver {
         if (pipeline.getPostCompletionSurveyId() == null) {
             return Optional.empty();
         }
-        Survey survey = surveyRepository.findById(pipeline.getPostCompletionSurveyId()).orElse(null);
-        if (survey == null || survey.getStatus() != SurveyStatus.PUBLISHED) {
+        UUID pairedSurveyId = pipeline.getPostCompletionSurveyId();
+        Survey survey = surveyRepository.findById(pairedSurveyId).orElse(null);
+        // An admin deliberately paired a survey here, so dropping the CTA is a
+        // misconfiguration, not a normal empty result — and it is invisible from
+        // the outside: the member silently gets no invite email and no CTA on the
+        // results page, while the pipeline editor still shows the pairing. The
+        // usual cause is the edit workflow: a PUBLISHED survey cannot be modified
+        // (requireEditable), so admins unpublish to DRAFT/CLOSED, edit, and never
+        // republish. Log loudly enough to be findable when someone asks why the
+        // survey email stopped arriving.
+        if (survey == null) {
+            log.warn("Pipeline {} is paired to survey {}, which no longer exists — members get no "
+                            + "post-completion survey invite and no CTA on their results. Re-pair the pipeline.",
+                    pipeline.getId(), pairedSurveyId);
+            return Optional.empty();
+        }
+        SurveyStatus status = survey.getStatus();
+        if (status != SurveyStatus.PUBLISHED) {
+            log.warn("Pipeline {} is paired to survey {}, which is {} rather than PUBLISHED — members get no "
+                            + "post-completion survey invite and no CTA on their results. Republish the survey.",
+                    pipeline.getId(), pairedSurveyId, status);
             return Optional.empty();
         }
         String label = pipeline.getPostCompletionLabel() != null

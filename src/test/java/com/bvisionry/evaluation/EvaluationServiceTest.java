@@ -526,8 +526,14 @@ class EvaluationServiceTest {
 
         evaluationService.evaluateSubmission(submissionId);
 
+        // Pin the results link, don't any() it. The web app serves the member
+        // console from the (app) route group under the /app prefix, so the only
+        // URL that resolves is /app/assessments/<id>/results — the legacy v1
+        // /my/... path 404s, and an any() matcher here let exactly that ship.
         verify(emailService).sendResultsReady(
-                eq("user@test.com"), eq("Test User"), eq("Test Pipeline"), any(), any(), any());
+                eq("user@test.com"), eq("Test User"), eq("Test Pipeline"),
+                eq("http://localhost:3000/app/assessments/" + submissionId + "/results"),
+                any(), any());
     }
 
     @Test

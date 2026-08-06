@@ -70,7 +70,7 @@ class AssignmentServiceTest {
 
     @BeforeEach
     void setUp() {
-        // AssignmentService builds /my/assessments links via FrontendUrls; inject a
+        // AssignmentService builds /app/assessments links via FrontendUrls; inject a
         // real one so the email-send paths don't NPE (URL value isn't asserted).
         ReflectionTestUtils.setField(assignmentService, "frontendUrls",
                 new FrontendUrls(new FrontendProperties()));

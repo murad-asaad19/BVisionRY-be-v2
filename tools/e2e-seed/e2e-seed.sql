@@ -141,15 +141,25 @@ INSERT INTO program_surface_orgs (org_id, surface) VALUES
 --    asserted NOT to look like email addresses (the console must never leak a
 --    founder's address), so no name here contains an '@'.
 --
---    ORG PLACEMENT. The ORG_ADMIN sits on the ROOT so it lands on
---    /app/admin/sub-organizations, which is what auth.setup.ts's LANDING map
---    requires; V136 records the same shape (admins on the root, members on the
---    sub-org).
+--    ORG PLACEMENT. The ORG_ADMIN sits on the SUB-ORG '2a93054a…', the same org
+--    web/e2e/_helpers.ts SUB_ORG_ID pins as "the org-admin fixture's own
+--    console" and the same org every fixture this admin owns (cohorts,
+--    assignments, exercise provisions, program modules) is scoped to.
+--    IT MUST BE ITS OWN ORG, not the parent: the surfaces this account drives
+--    read the ADMIN'S OWN organization_id, not the org family. The announcement
+--    feed is the one that broke — `AnnouncementReadRepository` scopes the feed
+--    to the author's own org, so a root-org author's own broadcast to a sub-org
+--    cohort persisted but was invisible to them on reload
+--    (announcements.spec.ts). The roi-report outcomes panel reads the same way,
+--    which is why the twice-measured founder is parked in the OTHER sub-org.
+--    auth.setup.ts's LANDING map already allows this: ORG_ADMIN is the regex
+--    /\/app\/admin\/(sub-organizations|organizations\/[0-9a-f-]+)$/ precisely so
+--    a sub-org-scoped admin, forwarded into their own org console, still passes.
 -- -----------------------------------------------------------------------------
 INSERT INTO users (id, email, name, password_hash, role, organization_id, status, user_type, activated_at) VALUES
   ('e2e5eed0-0001-4000-8000-000000000001', 'orgadmin@bvisionry.com',      'Test Org Admin',
    '$2a$10$WCoWNvqyUxJqcfrfr.rzZue79yaOw5nOQTmufnn1hPdi4XAW3xzGC', 'ORG_ADMIN',
-   'e2e5eed0-0000-4000-8000-000000000001', 'ACTIVE', 'LEADER', now()),
+   '2a93054a-f352-4220-a321-a84063924096', 'ACTIVE', 'LEADER', now()),
 
   -- ROLES.DEMO_MEMBER — the auth-flow subject and the populated dashboard:
   -- an evaluated assessment, an in-progress one, and a cohort with live tasks.

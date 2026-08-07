@@ -6,7 +6,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.0.5</version>
+        <version>4.0.7</version>
         <relativePath/>
     </parent>
 
@@ -243,7 +243,7 @@
         <dependency>
             <groupId>org.apache.poi</groupId>
             <artifactId>poi-ooxml</artifactId>
-            <version>5.3.0</version>
+            <version>5.4.0</version>
             <exclusions>
                 <exclusion>
                     <groupId>org.apache.logging.log4j</groupId>
@@ -256,7 +256,20 @@
         <dependency>
             <groupId>io.minio</groupId>
             <artifactId>minio</artifactId>
-            <version>8.5.14</version>
+            <version>8.6.0</version>
+        </dependency>
+        <!-- minio 8.6.0 moved to okhttp 5.x, which Maven (unlike Gradle) resolves to
+             the "okhttp" root artifact's Kotlin-Multiplatform capability POM — it ships
+             no class files at all (verified: okhttp-5.1.0.jar is 767 bytes). The real
+             JVM implementation is the separately published okhttp-jvm artifact, which
+             okhttp's own pom does not declare as a dependency (unlike okio, which does
+             declare its -jvm split correctly). Pinned to the exact version minio's pom
+             resolves so there is one okhttp version in the tree, just backed by the jar
+             that actually has classes in it. -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp-jvm</artifactId>
+            <version>5.1.0</version>
         </dependency>
 
         <!-- AI: LangChain4j — model-agnostic engine. Core carries AiServices +
@@ -342,7 +355,14 @@
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.81</version>
+            <version>1.84</version>
+        </dependency>
+        <!-- Transitive of opensaml-security-api (pinned there at a vulnerable 1.77);
+             declared explicitly to bring it in line with bcprov above. -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>1.84</version>
         </dependency>
         <!-- web-push declares these runtime-scoped, but PushService's API
              surface leaks them (send returns org.apache.http.HttpResponse and
@@ -356,7 +376,7 @@
         <dependency>
             <groupId>org.bitbucket.b_c</groupId>
             <artifactId>jose4j</artifactId>
-            <version>0.7.9</version>
+            <version>0.9.6</version>
         </dependency>
 
         <!-- Test -->

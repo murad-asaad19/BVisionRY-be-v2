@@ -10,6 +10,7 @@ import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -86,6 +87,24 @@ public class RateLimitService implements LoginBackoffPort {
      */
     @Autowired(required = false)
     private StringRedisTemplate redisTemplate;
+
+    /**
+     * The service's only source of "now". Swapped by tests, never in production — and
+     * NOT a constructor parameter, so every existing construction site (and the frozen
+     * ArchUnit descriptors) stay as they are.
+     *
+     * <p>It exists because the thing worth proving about this backoff is that a refusal
+     * LIFTS. Without a movable clock the only way to observe that is to sleep for the
+     * armed delay — 5 seconds at the first rung, 15 minutes at the cap — so in practice
+     * nobody asserts it, and "the backoff is deliberately not a lock" becomes a comment
+     * no test can contradict.
+     */
+    private Clock clock = Clock.systemUTC();
+
+    /** Test seam — see {@link #clock}. */
+    void setClock(Clock clock) {
+        this.clock = clock;
+    }
 
     private final int tryItOutRequestsPerMinute;
     private final int evaluationRequestsPerMinute;
@@ -343,7 +362,7 @@ public class RateLimitService implements LoginBackoffPort {
             }
         }
         LoginBackoff state = loginBackoffs.get(emailKey);
-        if (state != null && state.blockedUntil().isAfter(Instant.now())) {
+        if (state != null && state.blockedUntil().isAfter(Instant.now(clock))) {
             throw new RateLimitExceededException(LOGIN_THROTTLED_MESSAGE);
         }
     }
@@ -379,7 +398,7 @@ public class RateLimitService implements LoginBackoffPort {
                         e.getMessage());
             }
         }
-        Instant now = Instant.now();
+        Instant now = Instant.now(clock);
         int[] armed = {0};
         loginBackoffs.compute(emailKey, (k, prev) -> {
             if (prev != null && prev.blockedUntil().isAfter(now)) {
@@ -492,7 +511,7 @@ public class RateLimitService implements LoginBackoffPort {
     /** Per-instance sliding window — fallback only (used when Redis is down or in tests). */
     private void checkLimitInMemory(ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> windows,
                                     String key, int maxRequests, int windowSeconds, String limitType) {
-        Instant now = Instant.now();
+        Instant now = Instant.now(clock);
         Instant windowStart = now.minusSeconds(windowSeconds);
 
         ConcurrentLinkedDeque<Instant> timestamps = windows.computeIfAbsent(key,
@@ -527,21 +546,21 @@ public class RateLimitService implements LoginBackoffPort {
     @Scheduled(fixedDelay = 60_000)
     void evictStaleWindows() {
         // Per-minute windows: drop entries older than 60s.
-        Instant minuteCutoff = Instant.now().minusSeconds(60);
+        Instant minuteCutoff = Instant.now(clock).minusSeconds(60);
         evictOlderThan(List.of(tryItOutWindows, evaluationWindows, authWindows,
                 surveySubmitWindows, publicAssessmentWindows, publicAssessmentSaveWindows,
                 businessCardWindows, refreshWindows, contactWindows, leadMagnetWindows,
                 errorReportWindows), minuteCutoff);
 
         // Per-hour windows: drop entries older than 3600s.
-        Instant hourCutoff = Instant.now().minusSeconds(3600);
+        Instant hourCutoff = Instant.now(clock).minusSeconds(3600);
         evictOlderThan(List.of(acceptWindows, passwordResetWindows), hourCutoff);
 
         // Login backoff: an entry is dead only once BOTH its counter and its active
         // refusal have expired — a short configured TTL can leave a live block behind
         // a dead counter, and evicting that would hand back a free attempt. Same
         // reasoning as above: this is this JVM's own memory, so every replica runs it.
-        Instant now = Instant.now();
+        Instant now = Instant.now(clock);
         loginBackoffs.entrySet().removeIf(e -> !e.getValue().countExpiresAt().isAfter(now)
                 && !e.getValue().blockedUntil().isAfter(now));
     }

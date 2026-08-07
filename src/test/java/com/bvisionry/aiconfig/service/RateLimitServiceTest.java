@@ -4,6 +4,9 @@ import com.bvisionry.common.exception.RateLimitExceededException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -237,6 +240,13 @@ class RateLimitServiceTest {
         assertThat(rateLimitService.loginBackoffSeconds(14)).isEqualTo(900);
         assertThat(rateLimitService.loginBackoffSeconds(100)).isEqualTo(900);
         assertThat(rateLimitService.loginBackoffSeconds(Integer.MAX_VALUE)).isEqualTo(900);
+
+        // THE ARGUMENT THAT ACTUALLY WRAPS. `5 << shift` overflows int at shift 29,
+        // i.e. step 30, i.e. 35 failures — the first value where dropping the
+        // LOGIN_BACKOFF_MAX_STEPS clamp yields a NEGATIVE delay, which min() would
+        // happily prefer to the cap and hand back as a free pass. The huge arguments
+        // above never reach it: they saturate at the clamp long before.
+        assertThat(rateLimitService.loginBackoffSeconds(35)).isEqualTo(900);
     }
 
     /**
@@ -392,6 +402,50 @@ class RateLimitServiceTest {
             shortMemory.recordLoginFailure("victim@example.com");
         }
         shortMemory.checkLoginBackoff("victim@example.com");
+    }
+
+    /**
+     * THE "NEVER A LOCK" CLAIM, MADE FALSIFIABLE. Every other backoff test here drives
+     * the counter and observes that a refusal APPEARS; the design's actual promise is
+     * that it DISAPPEARS on its own, with no admin unlock, because a hard lockout would
+     * hand an attacker a denial-of-service against any address they can guess.
+     *
+     * <p>The decay test above never reaches that: 3+3 failures against a 5-attempt
+     * budget arms no block at all, so it exercises counter expiry and nothing else.
+     * Here 6 failures arm a real 5-second refusal, the clock is pushed past it, and the
+     * refusal must LIFT. Make the block permanent — e.g. gate {@code checkLoginBackoff}
+     * on {@code failures() > loginFreeAttempts} instead of on {@code blockedUntil} — and
+     * this is the assertion that goes red.
+     *
+     * <p>The last two lines separate "the block expired" from "the account forgot": the
+     * counter must survive, so the next failure buys the SECOND rung (10s), not the
+     * first one over again. A backoff that resets its ladder every time a refusal
+     * elapses is a 5-second-per-6-guesses free-for-all.
+     */
+    @Test
+    void loginBackoff_armedRefusal_liftsOnceItsDelayElapses() {
+        Instant armedAt = Instant.parse("2026-01-01T00:00:00Z");
+        rateLimitService.setClock(Clock.fixed(armedAt, ZoneOffset.UTC));
+
+        for (int i = 0; i < 5; i++) {
+            assertThat(rateLimitService.recordLoginFailure("victim@example.com")).isZero();
+        }
+        assertThat(rateLimitService.recordLoginFailure("victim@example.com")).isEqualTo(5);
+        assertThatThrownBy(() -> rateLimitService.checkLoginBackoff("victim@example.com"))
+                .isInstanceOf(RateLimitExceededException.class);
+
+        // One second short of the armed delay: still refused.
+        rateLimitService.setClock(Clock.fixed(armedAt.plusSeconds(4), ZoneOffset.UTC));
+        assertThatThrownBy(() -> rateLimitService.checkLoginBackoff("victim@example.com"))
+                .isInstanceOf(RateLimitExceededException.class);
+
+        // Past it: the account is usable again, with nobody having unlocked anything.
+        rateLimitService.setClock(Clock.fixed(armedAt.plusSeconds(6), ZoneOffset.UTC));
+        rateLimitService.checkLoginBackoff("victim@example.com");
+
+        assertThat(rateLimitService.recordLoginFailure("victim@example.com"))
+                .as("the refusal expired; the failure count behind it must not have")
+                .isEqualTo(10);
     }
 
     /** The login buckets are their own: exhausting them must not disturb the per-IP ceiling. */

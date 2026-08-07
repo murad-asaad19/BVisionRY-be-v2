@@ -159,6 +159,32 @@ class RateLimitServiceRedisIntegrationTest {
         assertThat(redis.getExpire("rl:login-block:" + VICTIM)).isBetween(1L, 900L);
     }
 
+    /**
+     * "NEVER A LOCK", distributed. On this path the refusal's lifetime IS the block
+     * key's TTL, so expiry is provable in two cheap halves instead of a 5-second sleep:
+     * the key must carry a FINITE, bounded TTL (drop the {@code 'EX', delay} from the
+     * script and this is -1, a key that never goes away), and once it is gone the
+     * account must be signable again with its failure COUNT intact — so the next
+     * failure buys the second rung, not the first one over again.
+     */
+    @Test
+    void anArmedRefusalIsATtlAndItsExpiryDoesNotForgetTheCounter() {
+        for (int i = 0; i < 6; i++) {
+            rateLimitService.recordLoginFailure(VICTIM);
+        }
+        assertThatThrownBy(() -> rateLimitService.checkLoginBackoff(VICTIM))
+                .isInstanceOf(RateLimitExceededException.class);
+        assertThat(redis.getExpire("rl:login-block:" + VICTIM))
+                .as("a refusal with no TTL is the permanent lock this design refuses to be")
+                .isBetween(1L, 5L);
+
+        // What Redis itself does when that TTL runs out, without waiting for it.
+        redis.delete("rl:login-block:" + VICTIM);
+
+        rateLimitService.checkLoginBackoff(VICTIM);
+        assertThat(rateLimitService.recordLoginFailure(VICTIM)).isEqualTo(10);
+    }
+
     /** Both keys go, or a "cleared" account is still refused by a surviving block. */
     @Test
     void clearingWipesBothTheCounterAndTheLiveRefusal() {

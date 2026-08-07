@@ -270,21 +270,30 @@ INSERT INTO cohort_members (cohort_id, user_id) VALUES
 --    unique indexes enforce.
 --    max_check_ins > 1 wherever a founder holds more than one submission, so the
 --    "Check-in N of M" caption stays truthful.
+--
+--    created_at IS EXPLICIT AND STAGGERED. Every row below would otherwise take the
+--    column default now(), which inside this one BEGIN/COMMIT is transaction_timestamp()
+--    — the SAME instant for all five. `AssignmentRepository` serves all three scopes
+--    `ORDER BY a.createdAt DESC` with no tiebreak, so tied keys leave the order to the
+--    heap and every consumer that reads "the first row" becomes a coin flip. The days
+--    predate the oldest submission (181d) so the fixture stays chronologically honest.
 -- -----------------------------------------------------------------------------
-INSERT INTO assignments (id, pipeline_id, organization_id, assigned_by, user_id, deadline, max_check_ins) VALUES
+INSERT INTO assignments (id, pipeline_id, organization_id, assigned_by, user_id, deadline, max_check_ins, created_at) VALUES
   ('e2e5eed0-0005-4000-8000-000000000001', '072f0c27-cad3-41a8-a055-0dc360da7dee',
-   '2a93054a-f352-4220-a321-a84063924096', 'e2e5eed0-0001-4000-8000-000000000001', NULL, NULL, 3),
+   '2a93054a-f352-4220-a321-a84063924096', 'e2e5eed0-0001-4000-8000-000000000001', NULL, NULL, 3,
+   now() - interval '200 days'),
   ('e2e5eed0-0005-4000-8000-000000000002', '072f0c27-cad3-41a8-a055-0dc360da7dee',
    '2a93054a-f352-4220-a321-a84063924096', 'e2e5eed0-0001-4000-8000-000000000001',
-   'e2e5eed0-0001-4000-8000-000000000002', NULL, 3),
+   'e2e5eed0-0001-4000-8000-000000000002', NULL, 3, now() - interval '199 days'),
   ('e2e5eed0-0005-4000-8000-000000000003', '072f0c27-cad3-41a8-a055-0dc360da7dee',
    '2a93054a-f352-4220-a321-a84063924096', 'e2e5eed0-0001-4000-8000-000000000001',
-   'e2e5eed0-0001-4000-8000-000000000005', NULL, 3),
+   'e2e5eed0-0001-4000-8000-000000000005', NULL, 3, now() - interval '198 days'),
   ('e2e5eed0-0005-4000-8000-000000000004', '072f0c27-cad3-41a8-a055-0dc360da7dee',
-   'e0077f30-1008-4362-9969-a759e8dfd5e8', 'e2e5eed0-0001-4000-8000-000000000001', NULL, NULL, 3),
+   'e0077f30-1008-4362-9969-a759e8dfd5e8', 'e2e5eed0-0001-4000-8000-000000000001', NULL, NULL, 3,
+   now() - interval '197 days'),
   ('e2e5eed0-0005-4000-8000-000000000005', '072f0c27-cad3-41a8-a055-0dc360da7dee',
    'e0077f30-1008-4362-9969-a759e8dfd5e8', 'e2e5eed0-0001-4000-8000-000000000001',
-   'e2e5eed0-0001-4000-8000-000000000008', NULL, 3);
+   'e2e5eed0-0001-4000-8000-000000000008', NULL, 3, now() - interval '196 days');
 
 -- -----------------------------------------------------------------------------
 -- 6. Submissions
@@ -456,13 +465,16 @@ INSERT INTO program_submissions (id, task_id, user_id, status, answers, saved_at
 --    included — is what flips `structureLocked` and renders the
 --    "columns can no longer be added or removed" banner in the builder.
 -- -----------------------------------------------------------------------------
-INSERT INTO exercise_templates (id, name, description, status, created_by, allow_add_rows, starter_rows) VALUES
+--    created_at is explicit here and on exercise_assignments below — see the note on
+--    `assignments`. Same rule throughout this section: "Competitor Analysis Test" is
+--    the NEWER row everywhere, so it leads every `created_at DESC` list it appears in.
+INSERT INTO exercise_templates (id, name, description, status, created_by, allow_add_rows, starter_rows, created_at) VALUES
   ('e2e5eed0-000e-4000-8000-000000000001', 'Session Log',
    'One row per coaching session: what was discussed and what was agreed.',
-   'PUBLISHED', 'e2e5eed0-0001-4000-8000-000000000001', true, NULL),
+   'PUBLISHED', 'e2e5eed0-0001-4000-8000-000000000001', true, NULL, now() - interval '30 days'),
   ('e2e5eed0-000e-4000-8000-000000000002', 'Competitor Analysis Test',
    'Name the three competitors you lose to, and what you would have to change to stop losing.',
-   'PUBLISHED', 'e2e5eed0-0001-4000-8000-000000000001', true, NULL);
+   'PUBLISHED', 'e2e5eed0-0001-4000-8000-000000000001', true, NULL, now() - interval '29 days');
 
 INSERT INTO exercise_columns (id, template_id, name, type, config_json, display_order, is_required, is_locked) VALUES
   ('e2e5eed0-000f-4000-8000-000000000001', 'e2e5eed0-000e-4000-8000-000000000001',
@@ -476,20 +488,32 @@ INSERT INTO exercise_columns (id, template_id, name, type, config_json, display_
   ('e2e5eed0-000f-4000-8000-000000000005', 'e2e5eed0-000e-4000-8000-000000000002',
    'Our answer',      'LONG_TEXT', NULL, 2, false, false);
 
-INSERT INTO exercise_assignments (id, template_id, organization_id, user_id, assigned_by, deadline) VALUES
+-- created_at CARRIES A SPEC ASSERTION and must stay staggered, newest last.
+-- `ExerciseAssignmentService` serves scope=ALL with
+-- `findByOrganizationIdOrderByCreatedAtDesc`, and assign-exercise-dialog.tsx builds an
+-- ORG_ADMIN's exercise radio list from that list's provision rows IN ORDER.
+-- release-flows.spec.ts clicks `dialog.getByRole("radio").first()`, i.e. the newest
+-- provision, and then asserts the "already assigned" badge — which only renders when
+-- the SELECTED template has member rows. So the newest provision must be
+-- "Competitor Analysis Test", the only template that has any. Left to the column
+-- default all four rows would share one transaction_timestamp(), the sort key would
+-- tie, and the winner would be whichever row the heap happened to return.
+INSERT INTO exercise_assignments (id, template_id, organization_id, user_id, assigned_by, deadline, created_at) VALUES
   -- provisions
   ('e2e5eed0-0010-4000-8000-000000000001', 'e2e5eed0-000e-4000-8000-000000000001',
-   '2a93054a-f352-4220-a321-a84063924096', NULL, 'e2e5eed0-0001-4000-8000-000000000001', NULL),
+   '2a93054a-f352-4220-a321-a84063924096', NULL, 'e2e5eed0-0001-4000-8000-000000000001', NULL,
+   now() - interval '28 days'),
   ('e2e5eed0-0010-4000-8000-000000000002', 'e2e5eed0-000e-4000-8000-000000000002',
-   '2a93054a-f352-4220-a321-a84063924096', NULL, 'e2e5eed0-0001-4000-8000-000000000001', NULL),
+   '2a93054a-f352-4220-a321-a84063924096', NULL, 'e2e5eed0-0001-4000-8000-000000000001', NULL,
+   now() - interval '27 days'),
   -- member rows. The pair is what makes the admin assign dialog show its
   -- "already assigned" badge, which release-flows.spec.ts asserts.
   ('e2e5eed0-0010-4000-8000-000000000003', 'e2e5eed0-000e-4000-8000-000000000002',
    '2a93054a-f352-4220-a321-a84063924096', 'e2e5eed0-0001-4000-8000-000000000003',
-   'e2e5eed0-0001-4000-8000-000000000001', NULL),
+   'e2e5eed0-0001-4000-8000-000000000001', NULL, now() - interval '26 days'),
   ('e2e5eed0-0010-4000-8000-000000000004', 'e2e5eed0-000e-4000-8000-000000000002',
    '2a93054a-f352-4220-a321-a84063924096', 'e2e5eed0-0001-4000-8000-000000000006',
-   'e2e5eed0-0001-4000-8000-000000000001', NULL);
+   'e2e5eed0-0001-4000-8000-000000000001', NULL, now() - interval '25 days');
 
 INSERT INTO exercise_submissions (id, assignment_id, user_id, status, last_saved_at, submitted_at, reviewed_at, version) VALUES
   -- REVIEWED is where release-flows.spec.ts's exercise lifecycle starts and ends

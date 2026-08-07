@@ -29,6 +29,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -315,6 +316,36 @@ class AuthServiceTest {
         ArgumentCaptor<String> hash = ArgumentCaptor.forClass(String.class);
         verify(passwordEncoder).matches(eq("pw"), hash.capture());
         assertThat(hash.getValue()).isNotNull().startsWith("$2a$10$");
+    }
+
+    /**
+     * ENUMERATION UNIFORMITY, ON THE REAL SERVICE. The two ways a password sign-in can
+     * be rejected — no such address, and a wrong password for a real one — must be
+     * indistinguishable, or the response itself answers "does this address have an
+     * account here?" and the whole backoff/always-204 apparatus around it is decoration.
+     *
+     * <p>The two refusals are compared to EACH OTHER, not to a literal, so the test
+     * fails whichever side of the pair someone changes — including a later refactor
+     * that splits the single {@code user == null || !matched} guard into two throws and
+     * gives the not-found branch its own wording. The controller-level backoff test
+     * asserts a similar property against a mocked AuthService, which can only ever
+     * restate its own stub; this drives the production method.
+     */
+    @Test
+    void login_unknownEmailAndWrongPassword_areRefusedIdentically() {
+        when(userRepository.findByEmail("ghost@example.com")).thenReturn(Optional.empty());
+        when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches(eq("pw"), any())).thenReturn(false);
+
+        Throwable unknownEmail = catchThrowable(
+                () -> authService.login(new LoginRequest("ghost@example.com", "pw")));
+        Throwable wrongPassword = catchThrowable(
+                () -> authService.login(new LoginRequest("ada@example.com", "pw")));
+
+        assertThat(unknownEmail).isInstanceOf(AuthenticationException.class);
+        assertThat(wrongPassword)
+                .hasSameClassAs(unknownEmail)
+                .hasMessage(unknownEmail.getMessage());
     }
 
     @Test

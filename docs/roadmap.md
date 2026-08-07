@@ -38,9 +38,12 @@ Scope: `backend` (Spring Boot 4 / Java 21) + `web` (Next.js 16 / React 19)
 >   e2e in CI (blocked on an authored seed, see the item), and actually RUNNING
 >   the load test whose harness now exists.
 >
-> **The largest single fact this file cannot express: none of it has shipped.**
-> Both repos sit on `agent/integration`, 82 commits (backend) and 68 (web) ahead
-> of `main`, never pushed. Every ✅ here means "code exists on a local branch".
+> **Update 2026-08-07: `agent/integration` IS pushed** — backend `773f512` and
+> web `be88924` verified equal to `origin/agent/integration` on the server
+> (`git ls-remote`). The earlier "never pushed" claim was true on 2026-08-01 and
+> went stale. **What has still not happened is the merge:** both branches remain
+> ~82/~68 commits ahead of `main`, so every ✅ here means "code exists on a
+> pushed integration branch", not "in production".
 
 **Companions:** `agent-policy.yml` (closed decisions + hard constraints — what
 agents load) · `agent-execution-graph.md` (how the work is executed)

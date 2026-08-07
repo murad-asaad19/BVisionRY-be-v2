@@ -3165,3 +3165,15 @@ tests **35** (3 new, pinning http-page/https-page/script-src-unaffected) · manu
 sign-in, sub-organizations, the failing exercises page, branding settings and `/app`: **0 console
 errors**, all images loaded, `img-src … https: http:` and `connect-src 'self' http: ws: wss:` served
 while `script-src` carries no `http:`.
+
+## PUSH RECONCILED — `agent/integration` is on origin; a new orchestration run opens (2026-08-07)
+
+Verified against the server (`git ls-remote`), not tracking refs: backend `773f512` and web
+`be88924` both equal `origin/agent/integration`. The "nothing has shipped / never pushed" claims
+in the 2026-08-01 entries and the roadmap banner were true when written and are now stale; the
+roadmap banner is corrected. **The merge to `main` remains the open operator action.**
+
+Operator instruction opening this run: orchestrator drives the remaining roadmap items with
+Sonnet-5 implementer agents in small chunks; per-chunk gating is limited to cheap gates (unit /
+lint / typecheck / targeted tests); the FULL validation — backend suite, web suite, e2e ×2 —
+runs ONCE on the combined result at the end. Entries for this run follow below, newest last.

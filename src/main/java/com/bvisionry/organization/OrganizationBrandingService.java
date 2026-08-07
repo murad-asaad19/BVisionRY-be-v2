@@ -3,6 +3,7 @@ package com.bvisionry.organization;
 import com.bvisionry.common.audit.AuditLogger;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.media.MediaQuotaPort;
 import com.bvisionry.common.media.MediaUrlPort;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.organization.dto.BrandingResponse;
@@ -28,8 +29,8 @@ import java.util.regex.Pattern;
  * constructor carries five frozen cross-feature parameters. Adding a sixth
  * parameter changes that signature, which re-flags all five as NEW violations —
  * and the frozen store is never written. This class's constructor takes only a
- * same-package repository and a shared-kernel port, so it introduces no edge at
- * all.
+ * same-package repository and shared-kernel ports ({@code common.media}), so it
+ * introduces no feature→feature edge at all.
  */
 @Service
 public class OrganizationBrandingService {
@@ -78,6 +79,7 @@ public class OrganizationBrandingService {
 
     private final OrganizationRepository organizationRepository;
     private final MediaUrlPort mediaUrls;
+    private final MediaQuotaPort mediaQuota;
     private final AuditLogger auditLogger;
     /**
      * Who is calling, without importing {@code auth}: the ratchet freezes
@@ -88,10 +90,12 @@ public class OrganizationBrandingService {
 
     public OrganizationBrandingService(OrganizationRepository organizationRepository,
                                        MediaUrlPort mediaUrls,
+                                       MediaQuotaPort mediaQuota,
                                        AuditLogger auditLogger,
                                        CurrentUserAccessor currentUser) {
         this.organizationRepository = organizationRepository;
         this.mediaUrls = mediaUrls;
+        this.mediaQuota = mediaQuota;
         this.auditLogger = auditLogger;
         this.currentUser = currentUser;
     }
@@ -122,11 +126,22 @@ public class OrganizationBrandingService {
         String color = normalizeColor(request.brandColor());
         String marker = validateMarker(request.logoMarker(), orgId);
 
+        boolean logoChanged = !java.util.Objects.equals(org.getBrandLogoMarker(), marker);
+        if (logoChanged && marker != null) {
+            // CONSUME-TIME quota reconciliation: this write is the first (and, in
+            // this flow, only) point after the org-scoped upload where the server
+            // acts on the object again. A presigned PUT never bound Content-Length,
+            // so this re-checks the org's REAL, MinIO-recorded usage — including
+            // the object just uploaded — rather than trusting whatever size was
+            // declared at presign time. See OrgStorageQuotaService.reconcileAfterUpload.
+            mediaQuota.reconcileAfterUpload(orgId, marker);
+        }
+
         Map<String, Object> changes = new HashMap<>();
         if (!java.util.Objects.equals(org.getBrandColor(), color)) {
             changes.put("brandColor", color == null ? "default" : color);
         }
-        if (!java.util.Objects.equals(org.getBrandLogoMarker(), marker)) {
+        if (logoChanged) {
             changes.put("logo", marker == null ? "removed" : "set");
         }
 

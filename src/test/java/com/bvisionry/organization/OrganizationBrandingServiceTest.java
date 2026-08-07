@@ -2,6 +2,8 @@ package com.bvisionry.organization;
 
 import com.bvisionry.common.audit.AuditLogger;
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.exception.IllegalOperationException;
+import com.bvisionry.common.media.MediaQuotaPort;
 import com.bvisionry.common.media.MediaUrlPort;
 import com.bvisionry.common.security.CurrentUser;
 import com.bvisionry.common.security.CurrentUserAccessor;
@@ -22,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -48,6 +51,7 @@ class OrganizationBrandingServiceTest {
 
     private OrganizationRepository repository;
     private MediaUrlPort mediaUrls;
+    private MediaQuotaPort mediaQuota;
     private AuditLogger auditLogger;
     private CurrentUserAccessor currentUser;
     private OrganizationBrandingService service;
@@ -61,11 +65,15 @@ class OrganizationBrandingServiceTest {
     void setUp() {
         repository = mock(OrganizationRepository.class);
         mediaUrls = mock(MediaUrlPort.class);
+        // Unstubbed void reconcileAfterUpload(...) is a no-op — tests that don't
+        // care about quota (the great majority here) are unaffected by its
+        // presence; the quota-specific tests below stub/verify it explicitly.
+        mediaQuota = mock(MediaQuotaPort.class);
         auditLogger = mock(AuditLogger.class);
         currentUser = mock(CurrentUserAccessor.class);
         lenient().when(currentUser.require())
                 .thenReturn(new CurrentUser(ACTOR, ORG, "Test Admin", "ORG_ADMIN"));
-        service = new OrganizationBrandingService(repository, mediaUrls, auditLogger, currentUser);
+        service = new OrganizationBrandingService(repository, mediaUrls, mediaQuota, auditLogger, currentUser);
 
         org = new Organization();
         org.setName("Acme Accelerator");
@@ -259,5 +267,58 @@ class OrganizationBrandingServiceTest {
     void anOrgWithNoBrandingReadsAsAllNulls() {
         assertThat(service.get(ORG)).isEqualTo(new BrandingResponse(null, null, null));
         verify(mediaUrls, never()).resolveUrl(any());
+    }
+
+    // ------------------------------------------------- quota reconciliation
+    //
+    // This write is the ONLY point the branding flow offers to act on an
+    // org-scoped upload again after it lands (no dedicated finalize endpoint —
+    // see OrgStorageQuotaService's javadoc), so it is where CONSUME-time quota
+    // reconciliation has to hang. These prove the wiring: reconciled exactly
+    // when a NEW, non-null marker is being persisted, and a refusal there
+    // blocks the write the same way every other refusal in this class does.
+
+    @Test
+    void settingANewMarkerReconcilesQuotaBeforePersisting() {
+        String marker = ownMarker();
+
+        service.update(ORG, new UpdateBrandingRequest("#0A5CFF", marker));
+
+        verify(mediaQuota).reconcileAfterUpload(ORG, marker);
+    }
+
+    @Test
+    void clearingTheLogoNeverConsultsQuota() {
+        org.setBrandLogoMarker(ownMarker());
+
+        service.update(ORG, new UpdateBrandingRequest(null, null));
+
+        verify(mediaQuota, never()).reconcileAfterUpload(any(), any());
+    }
+
+    /** Re-saving the branding form untouched must not re-charge the same object against quota. */
+    @Test
+    void resavingTheSameMarkerNeverReconciles() {
+        String marker = ownMarker();
+        org.setBrandLogoMarker(marker);
+
+        service.update(ORG, new UpdateBrandingRequest("#0a5cff", marker));
+
+        verify(mediaQuota, never()).reconcileAfterUpload(any(), any());
+    }
+
+    @Test
+    void aQuotaRefusalBlocksTheWriteBeforeItIsPersistedOrAudited() {
+        String marker = ownMarker();
+        doThrow(new IllegalOperationException("over quota"))
+                .when(mediaQuota).reconcileAfterUpload(eq(ORG), eq(marker));
+
+        assertThatThrownBy(() -> service.update(ORG, new UpdateBrandingRequest("#0A5CFF", marker)))
+                .isInstanceOf(IllegalOperationException.class)
+                .hasMessageContaining("over quota");
+
+        verify(repository, never()).save(any());
+        verify(auditLogger, never()).log(any(), any(), any(), any(), any(), any());
+        assertThat(org.getBrandLogoMarker()).isNull();
     }
 }

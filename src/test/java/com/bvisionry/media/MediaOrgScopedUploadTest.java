@@ -13,6 +13,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.exception.IllegalOperationException;
 
 import io.minio.BucketExistsArgs;
 import io.minio.GetPresignedObjectUrlArgs;
@@ -23,11 +24,15 @@ import io.minio.PutObjectArgs;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -57,6 +62,7 @@ class MediaOrgScopedUploadTest {
     private MinioClient internalClient;
     private MinioClient publicClient;
     private MediaProperties props;
+    private OrgStorageQuotaService orgStorageQuota;
     private MediaService service;
 
     @BeforeEach
@@ -64,10 +70,17 @@ class MediaOrgScopedUploadTest {
         internalClient = mock(MinioClient.class);
         publicClient = mock(MinioClient.class);
         props = new MediaProperties();
+        // A mocked collaborator, not the real quota engine — its own listing /
+        // override-precedence / reconcile behaviour is covered by
+        // OrgStorageQuotaServiceTest. Here we only care that MediaService WIRES
+        // to it correctly (see the "quota wiring" tests below); an unstubbed
+        // void requireCapacity(...) is a no-op, so every other test in this file
+        // is unaffected.
+        orgStorageQuota = mock(OrgStorageQuotaService.class);
         lenient().when(internalClient.bucketExists(any(BucketExistsArgs.class))).thenReturn(true);
         lenient().when(publicClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
                 .thenReturn("http://minio.test/presigned");
-        service = new MediaService(internalClient, publicClient, props);
+        service = new MediaService(internalClient, publicClient, props, orgStorageQuota);
     }
 
     // ---------------------------------------------------------------- kind
@@ -131,7 +144,7 @@ class MediaOrgScopedUploadTest {
     @Test
     void presignLandsUnderTheOrgBrandingPrefix() throws Exception {
         MediaService.PresignedUpload result =
-                service.presignUpload("image", "logo.png", "image/png", ORG);
+                service.presignUpload("image", "logo.png", "image/png", 2048L, ORG);
 
         assertThat(result.marker())
                 .startsWith("minio://" + props.getBucket() + "/org/" + ORG + "/branding/");
@@ -158,7 +171,7 @@ class MediaOrgScopedUploadTest {
     @Test
     void orgScopedPresignBindsTheNormalizedContentTypeIntoTheSignature() throws Exception {
         MediaService.PresignedUpload result =
-                service.presignUpload("image", "logo.PNG", "IMAGE/PNG; charset=binary", ORG);
+                service.presignUpload("image", "logo.PNG", "IMAGE/PNG; charset=binary", 2048L, ORG);
 
         assertThat(result.contentType()).isEqualTo("image/png");
 
@@ -195,6 +208,82 @@ class MediaOrgScopedUploadTest {
     void orgScopedUploadStillRefusesMarkupContentTypes(String contentType) throws Exception {
         assertThatThrownBy(() -> service.presignUpload("image", "x.svg", contentType, ORG))
                 .isInstanceOf(BadRequestException.class);
+        verify(publicClient, never()).getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class));
+    }
+
+    // ------------------------------------------------------------- quota wiring
+    //
+    // The org-scoped quota check itself (usage listing, override precedence,
+    // reconcile-and-delete) is OrgStorageQuotaService's own concern, covered by
+    // OrgStorageQuotaServiceTest. These tests only prove MediaService WIRES to
+    // it correctly: consulted (with the right args) on org-scoped paths only,
+    // never on the platform path, and a refusal stops the upload before
+    // anything reaches MinIO.
+
+    @Test
+    void multipartUploadChecksQuotaWithTheRealFileSizeForOrgScopedUploads() throws Exception {
+        service.upload(multipart("logo.png", "image/png", 2048), "image", ORG);
+
+        verify(orgStorageQuota).requireCapacity(ORG, 2048L);
+    }
+
+    @Test
+    void multipartUploadNeverConsultsQuotaOnThePlatformPath() throws Exception {
+        service.upload(multipart("guide.pdf", "application/pdf", 2048), "pdf", null);
+
+        verifyNoInteractions(orgStorageQuota);
+    }
+
+    @Test
+    void multipartUploadStopsBeforeMinioWhenQuotaRefuses() throws Exception {
+        doThrow(new IllegalOperationException("over quota"))
+                .when(orgStorageQuota).requireCapacity(eq(ORG), anyLong());
+
+        assertThatThrownBy(() -> service.upload(multipart("logo.png", "image/png", 2048), "image", ORG))
+                .isInstanceOf(IllegalOperationException.class)
+                .hasMessageContaining("over quota");
+        verify(internalClient, never()).putObject(any(PutObjectArgs.class));
+    }
+
+    @Test
+    void presignChecksQuotaWithTheDeclaredSizeForOrgScopedUploads() throws Exception {
+        service.presignUpload("image", "logo.png", "image/png", 4096L, ORG);
+
+        verify(orgStorageQuota).requireCapacity(ORG, 4096L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {0L, -1L})
+    void presignRequiresAPositiveDeclaredSizeForOrgScopedUploads(long badSize) throws Exception {
+        assertThatThrownBy(() -> service.presignUpload("image", "logo.png", "image/png", badSize, ORG))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("sizeBytes");
+        verifyNoInteractions(orgStorageQuota);
+        verify(publicClient, never()).getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class));
+    }
+
+    @Test
+    void presignWithNoDeclaredSizeIsRefusedForOrgScopedUploads() throws Exception {
+        assertThatThrownBy(() -> service.presignUpload("image", "logo.png", "image/png", ORG))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("sizeBytes");
+    }
+
+    @Test
+    void presignNeverConsultsQuotaOnThePlatformPath() throws Exception {
+        service.presignUpload("video", "clip.mp4", "video/mp4", null);
+
+        verifyNoInteractions(orgStorageQuota);
+    }
+
+    @Test
+    void presignStopsBeforeIssuingAUrlWhenQuotaRefuses() throws Exception {
+        doThrow(new IllegalOperationException("over quota"))
+                .when(orgStorageQuota).requireCapacity(eq(ORG), anyLong());
+
+        assertThatThrownBy(() ->
+                service.presignUpload("image", "logo.png", "image/png", 4096L, ORG))
+                .isInstanceOf(IllegalOperationException.class);
         verify(publicClient, never()).getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class));
     }
 

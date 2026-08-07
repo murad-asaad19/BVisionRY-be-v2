@@ -109,7 +109,8 @@ public class MediaController {
                            + "presigned GET preview URL. Use this instead of POST /media for large files. "
                            + "Pass orgId for a white-label branding image (kind must be 'image'); that "
                            + "variant binds Content-Type into the signature, so the PUT must send the "
-                           + "returned contentType verbatim.")
+                           + "returned contentType verbatim, and REQUIRES sizeBytes (the org's storage "
+                           + "quota is checked against it before the URL is issued).")
     @PostMapping(value = "/media/presign", consumes = MediaType.APPLICATION_JSON_VALUE)
     @PreAuthorize(UPLOAD_AUTHORIZATION)
     public MediaService.PresignedUpload presignUpload(
@@ -120,7 +121,7 @@ public class MediaController {
         // to reach a record component, and an authorization rule that silently
         // evaluates `null` for a mistyped property reference fails OPEN.
         return mediaService.presignUpload(
-                request.kind(), request.filename(), request.contentType(), orgId);
+                request.kind(), request.filename(), request.contentType(), request.sizeBytes(), orgId);
     }
 
     // -------------------------------------------------------------------------
@@ -133,8 +134,13 @@ public class MediaController {
      * @param filename    original filename (used only to build a readable object key)
      * @param contentType the file's MIME type (the browser applies it to the object on PUT)
      * @param kind        folder prefix (e.g. {@code "pdf"}); defaults to {@code "asset"} when blank
+     * @param sizeBytes   declared upload size; REQUIRED when {@code orgId} is passed (org-scoped
+     *                    storage quota is checked against it before the URL is issued), unused
+     *                    otherwise. A presigned PUT never binds Content-Length, so this is a claim
+     *                    the org-scoped path re-verifies once the object exists — see
+     *                    {@code MediaService#presignUpload} and {@code OrgStorageQuotaService}.
      */
-    public record PresignUploadRequest(String filename, String contentType, String kind) {}
+    public record PresignUploadRequest(String filename, String contentType, String kind, Long sizeBytes) {}
 
     /**
      * Returned by {@code POST /api/v1/media}.

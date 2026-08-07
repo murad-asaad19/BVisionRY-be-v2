@@ -1,6 +1,7 @@
 package com.bvisionry.organization;
 
 import com.bvisionry.auth.UserRepository;
+import com.bvisionry.media.OrgStorageQuotaService;
 import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
 import com.bvisionry.testsupport.EnabledIfDockerAvailable;
@@ -14,6 +15,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.UUID;
@@ -43,6 +45,29 @@ class OrganizationBrandingIntegrationTest extends AbstractPostgresIntegrationTes
     @Autowired private MockMvc mockMvc;
     @Autowired private OrganizationRepository organizationRepository;
     @Autowired private UserRepository userRepository;
+
+    /**
+     * Replaces the real {@code OrgStorageQuotaService} bean, whose quota check
+     * does a genuine MinIO {@code listObjects} network call — this class tests
+     * the HTTP layer (authz, the IDOR guard, the CHECK constraint), not
+     * object-store connectivity, and the default {@code bvisionry.minio.*}
+     * endpoint is {@code localhost:9000}, a developer's DEV stack, not
+     * something this suite may depend on being up. Same isolation
+     * {@code MediaControllerAuthorizationIntegrationTest} documents for the
+     * same reason.
+     *
+     * <p>Mocked by the CONCRETE class, not {@code MediaQuotaPort}: this one
+     * bean is also injected by its concrete type into {@code MediaService}
+     * (same-package collaborator, no interface needed there), and a
+     * {@code @MockitoBean} of the narrower interface type replaces the bean
+     * with something {@code MediaService}'s constructor can no longer resolve.
+     * A mock of the concrete class still satisfies {@code OrganizationBrandingService}'s
+     * {@code MediaQuotaPort}-typed dependency, since the mock implements every
+     * interface the real class does. Unstubbed: {@code reconcileAfterUpload}
+     * is a void no-op, so every write here behaves exactly as it did before
+     * quota existed.
+     */
+    @MockitoBean private OrgStorageQuotaService orgStorageQuotaService;
 
     private Organization own;
     private Organization other;

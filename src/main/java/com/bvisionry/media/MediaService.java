@@ -19,6 +19,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.bvisionry.common.exception.BadRequestException;
+
 import io.minio.BucketExistsArgs;
 import io.minio.GetObjectArgs;
 import io.minio.GetObjectResponse;
@@ -70,15 +72,18 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
     private final MinioClient internalClient;
     private final MinioClient publicClient;
     private final MediaProperties props;
+    private final OrgStorageQuotaService orgStorageQuota;
     private final AtomicBoolean bucketEnsured = new AtomicBoolean(false);
 
     public MediaService(
             @Qualifier("minioInternal") MinioClient internalClient,
             @Qualifier("minioPublic")   MinioClient publicClient,
-            MediaProperties props) {
-        this.internalClient = internalClient;
-        this.publicClient   = publicClient;
-        this.props          = props;
+            MediaProperties props,
+            OrgStorageQuotaService orgStorageQuota) {
+        this.internalClient  = internalClient;
+        this.publicClient    = publicClient;
+        this.props           = props;
+        this.orgStorageQuota = orgStorageQuota;
     }
 
     // -------------------------------------------------------------------------
@@ -114,6 +119,12 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
         MediaUploadPolicy.requireOrgScopedKindIsImage(kind, orgId);
         String contentType = MediaUploadPolicy.validate(
                 kind, file.getContentType(), file.getOriginalFilename(), file.getSize());
+        if (orgId != null) {
+            // The server received the real bytes on this path, so the declared
+            // size IS the real size — no reconciliation is needed afterwards,
+            // unlike the presigned path (see presignUpload/reconcileAfterUpload).
+            orgStorageQuota.requireCapacity(orgId, file.getSize());
+        }
         lazyEnsureBucket();
 
         String objectKey = buildObjectKey(kind, file.getOriginalFilename(), orgId);
@@ -174,11 +185,39 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
      *         preview URL, and the content type the signature was computed with
      */
     public PresignedUpload presignUpload(String kind, String filename, String contentType, UUID orgId) {
+        return presignUpload(kind, filename, contentType, null, orgId);
+    }
+
+    /**
+     * Same as {@link #presignUpload(String, String, String, UUID)}, plus a
+     * CLIENT-DECLARED {@code sizeBytes} used only for the org-scoped quota
+     * check ({@code orgId != null}) — required there (a presign with no
+     * declared size gives the quota nothing to budget against), ignored
+     * otherwise. It is never bound into the signature and never enforces the
+     * per-kind 10MB cap: a presigned PUT does not bind Content-Length, so the
+     * declared value is a claim, not a guarantee — see
+     * {@link OrgStorageQuotaService#reconcileAfterUpload} for where the REAL
+     * size is reconciled once the object exists.
+     *
+     * @param sizeBytes declared upload size; required and must be positive
+     *                  when {@code orgId != null}, otherwise unused
+     */
+    public PresignedUpload presignUpload(
+            String kind, String filename, String contentType, Long sizeBytes, UUID orgId) {
         String resolvedKind = (kind == null || kind.isBlank()) ? "asset" : kind;
         MediaUploadPolicy.requireOrgScopedKindIsImage(resolvedKind, orgId);
-        // ponytail: size is unenforceable here — a presigned PUT doesn't bind
-        // Content-Length, so only kind + content type are validated on this path.
+        // ponytail: the per-kind 10MB cap is unenforceable here — a presigned PUT
+        // doesn't bind Content-Length — so only kind + content type are validated
+        // against MediaUploadPolicy on this path; -1 keeps that cap skipped exactly
+        // as before quota was added.
         String normalizedType = MediaUploadPolicy.validate(resolvedKind, contentType, filename, -1);
+        if (orgId != null) {
+            if (sizeBytes == null || sizeBytes <= 0) {
+                throw new BadRequestException(
+                        "A positive declared size (sizeBytes) is required to presign an org-scoped upload");
+            }
+            orgStorageQuota.requireCapacity(orgId, sizeBytes);
+        }
         lazyEnsureBucket();
 
         String objectKey    = buildObjectKey(resolvedKind, filename, orgId);

@@ -59,7 +59,9 @@ class MediaServiceValidationTest {
         publicClient = mock(MinioClient.class);
         props = new MediaProperties();
         lenient().when(internalClient.bucketExists(any(BucketExistsArgs.class))).thenReturn(true);
-        service = new MediaService(internalClient, publicClient, props);
+        // Every case in this file uploads with orgId == null (platform path), which
+        // never consults quota — an unstubbed mock is fine, it's simply never invoked.
+        service = new MediaService(internalClient, publicClient, props, mock(OrgStorageQuotaService.class));
     }
 
     @AfterEach

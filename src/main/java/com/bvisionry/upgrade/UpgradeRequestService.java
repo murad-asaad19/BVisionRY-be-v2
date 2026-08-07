@@ -134,7 +134,7 @@ public class UpgradeRequestService {
                     user.getId(), org.getId());
             return;
         }
-        String dashboardUrl = frontendUrls.path("/admin/organizations/" + org.getId());
+        String dashboardUrl = frontendUrls.path("/app/admin/organizations/" + org.getId());
         for (String to : recipients) {
             emailService.sendUpgradeRequestedAsync(
                     to, org.getName(), user.getName(), user.getEmail(),

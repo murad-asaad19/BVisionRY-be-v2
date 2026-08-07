@@ -24,8 +24,11 @@ import java.util.stream.Collectors;
  * sit next to, they never throw into the calling business flow.
  *
  * <p>{@code url} arguments are frontend-relative paths (e.g.
- * {@code /my/assessments/<id>}) — the service worker resolves them against
+ * {@code /app/assessments/<id>}) — the service worker resolves them against
  * the web app's own origin, so no {@code FrontendUrls} dependency is needed.
+ * They must match a real route in the web app's {@code (app)} route group,
+ * which is served under the {@code /app} prefix — a bare {@code /my/...} or
+ * {@code /admin/...} path is a legacy v1 route and 404s in the current app.
  */
 @Service
 @RequiredArgsConstructor

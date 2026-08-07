@@ -23,7 +23,7 @@ class PostCompletionLinkDtoJsonTest {
         PostCompletionLinkDto dto = new PostCompletionLinkDto.Survey(
                 UUID.fromString("00000000-0000-0000-0000-000000000001"),
                 "Post-survey",
-                "/my/assessments/abc/post-completion-survey",
+                "/app/assessments/abc/post-completion-survey",
                 "Take it");
 
         String json = mapper.writeValueAsString(dto);
@@ -31,7 +31,7 @@ class PostCompletionLinkDtoJsonTest {
         assertThat(json).contains("\"kind\":\"SURVEY\"");
         assertThat(json).contains("\"surveyName\":\"Post-survey\"");
         assertThat(json).contains("\"surveyId\":\"00000000-0000-0000-0000-000000000001\"");
-        assertThat(json).contains("\"url\":\"/my/assessments/abc/post-completion-survey\"");
+        assertThat(json).contains("\"url\":\"/app/assessments/abc/post-completion-survey\"");
         assertThat(json).contains("\"label\":\"Take it\"");
     }
 

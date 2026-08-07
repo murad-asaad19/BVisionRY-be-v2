@@ -4,7 +4,6 @@ import com.bvisionry.aicalllog.dto.AICallLogEntry;
 import com.bvisionry.aicalllog.dto.AICallLogResponse;
 import com.bvisionry.aicalllog.entity.AICallLog;
 import com.bvisionry.aicalllog.repository.AICallLogRepository;
-import com.bvisionry.common.enums.AICallStatus;
 import com.bvisionry.common.util.TextTruncator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,16 +26,12 @@ public class AICallLogService {
     private final AICallLogRepository repository;
 
     /**
-     * At launch scale the audit table is the dominant growth risk (F41): ~6 AI calls
-     * per submission, each persisting full system_prompt + user_message + raw_response
-     * as TEXT, on the same Postgres serving the hot path. By default we drop those
-     * bulky payloads for SUCCESS rows (keeping model/timing/token metadata) and retain
-     * them only for FAILED rows — which is exactly when the prompt/response is needed
-     * to debug. Flip {@code store-success-payloads=true} to keep the full reproducible
-     * trail at the cost of storage. Whatever IS stored is truncated to a hard cap.
+     * The audit table is a growth risk (F41): ~6 AI calls per submission, each
+     * persisting system_prompt + user_message + raw_response as TEXT on the same
+     * Postgres serving the hot path. We accept that cost — a call log without the
+     * prompt and response can't answer the question it exists to answer. Growth is
+     * bounded by the per-field truncation cap plus {@link AICallLogRetentionJob}.
      */
-    @Value("${bvisionry.ai-call-log.store-success-payloads:false}")
-    private boolean storeSuccessPayloads;
     @Value("${bvisionry.ai-call-log.max-payload-chars:10000}")
     private int maxPayloadChars;
 
@@ -58,12 +53,9 @@ public class AICallLogService {
             e.setModel(entry.model());
             e.setCalledAt(entry.calledAt());
             e.setElapsedMs(entry.elapsedMs());
-            // Bound storage growth: keep heavy payloads only for failures (or when
-            // explicitly enabled), always truncated to the configured cap.
-            boolean keepPayload = storeSuccessPayloads || entry.status() != AICallStatus.SUCCESS;
-            e.setSystemPrompt(keepPayload ? truncate(entry.systemPrompt()) : null);
-            e.setUserMessage(keepPayload ? truncate(entry.userMessage()) : null);
-            e.setRawResponse(keepPayload ? truncate(entry.rawResponse()) : null);
+            e.setSystemPrompt(truncate(entry.systemPrompt()));
+            e.setUserMessage(truncate(entry.userMessage()));
+            e.setRawResponse(truncate(entry.rawResponse()));
             e.setErrorMessage(truncate(entry.errorMessage()));
             e.setInputTokens(entry.inputTokens());
             e.setOutputTokens(entry.outputTokens());

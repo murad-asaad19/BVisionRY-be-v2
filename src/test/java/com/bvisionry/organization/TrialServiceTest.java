@@ -265,9 +265,9 @@ class TrialServiceTest {
 
         // ORG_ADMINs get emailed; member does not.
         verify(emailService).sendTrialExpiredAsync(eq("admin-a@acme.com"), eq("A"),
-                eq(a.getTrialEndsAt()), eq("http://localhost:5173/admin/organizations/" + a.getId()));
+                eq(a.getTrialEndsAt()), eq("http://localhost:5173/app/admin/organizations/" + a.getId()));
         verify(emailService).sendTrialExpiredAsync(eq("admin-b@acme.com"), eq("B"),
-                eq(b.getTrialEndsAt()), eq("http://localhost:5173/admin/organizations/" + b.getId()));
+                eq(b.getTrialEndsAt()), eq("http://localhost:5173/app/admin/organizations/" + b.getId()));
         verify(emailService, never()).sendTrialExpiredAsync(eq("member-a@acme.com"),
                 anyString(), any(), anyString());
 
@@ -287,7 +287,7 @@ class TrialServiceTest {
         trialService.expireLapsed();
 
         verify(emailService).sendTrialExpiredAsync(eq("member-c@acme.com"), eq("C"),
-                eq(c.getTrialEndsAt()), eq("http://localhost:5173/admin/organizations/" + c.getId()));
+                eq(c.getTrialEndsAt()), eq("http://localhost:5173/app/admin/organizations/" + c.getId()));
     }
 
     @Test
@@ -378,9 +378,9 @@ class TrialServiceTest {
         assertThat(notified).containsExactly(org.getId());
         // Both ORG_ADMINs receive the heads-up.
         verify(emailService).sendTrialEndingSoonAsync(eq("admin1@end.com"), eq("EndingSoon Co"),
-                anyInt(), eq(endsAt), eq("http://localhost:5173/admin/organizations/" + org.getId()));
+                anyInt(), eq(endsAt), eq("http://localhost:5173/app/admin/organizations/" + org.getId()));
         verify(emailService).sendTrialEndingSoonAsync(eq("admin2@end.com"), eq("EndingSoon Co"),
-                anyInt(), eq(endsAt), eq("http://localhost:5173/admin/organizations/" + org.getId()));
+                anyInt(), eq(endsAt), eq("http://localhost:5173/app/admin/organizations/" + org.getId()));
         verify(emailService, never()).sendTrialEndingSoonAsync(eq("member@end.com"),
                 anyString(), anyInt(), any(), anyString());
 

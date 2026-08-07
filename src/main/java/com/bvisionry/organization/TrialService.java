@@ -220,7 +220,7 @@ public class TrialService {
                 continue;
             }
 
-            String dashboardUrl = frontendUrls.path("/admin/organizations/" + org.getId());
+            String dashboardUrl = frontendUrls.path("/app/admin/organizations/" + org.getId());
             for (User u : recipients) {
                 emailService.sendTrialEndingSoonAsync(
                         u.getEmail(), org.getName(), daysLeft, org.getTrialEndsAt(), dashboardUrl);
@@ -259,7 +259,7 @@ public class TrialService {
                     org.getId(), org.getName());
             return;
         }
-        String dashboardUrl = frontendUrls.path("/admin/organizations/" + org.getId());
+        String dashboardUrl = frontendUrls.path("/app/admin/organizations/" + org.getId());
         Instant expiredAt = org.getTrialEndsAt();
         for (User u : recipients) {
             emailService.sendTrialExpiredAsync(u.getEmail(), org.getName(), expiredAt, dashboardUrl);

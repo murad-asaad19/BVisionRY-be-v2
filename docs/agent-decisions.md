@@ -3177,3 +3177,84 @@ Operator instruction opening this run: orchestrator drives the remaining roadmap
 Sonnet-5 implementer agents in small chunks; per-chunk gating is limited to cheap gates (unit /
 lint / typecheck / targeted tests); the FULL validation — backend suite, web suite, e2e ×2 —
 runs ONCE on the combined result at the end. Entries for this run follow below, newest last.
+
+---
+
+## ORCHESTRATED RUN 2026-08-07/08 — validation block complete, roadmap §11 engineering closed
+
+**Trees at close: backend `bdc21b1` (1331/0/0, frozen store 2781 lines untouched) ·
+web `eee9d8a` (lint 0, typecheck 0, 1387 unit tests / 134 files). Both on
+`agent/integration`, local — push/merge remain the operator's.**
+
+### The single full validation (operator-mandated batching) ran on lane 1, in the exact CI shape
+
+Empty database → Flyway V1..V160 (159 migrations, 2.3s) → authored seed
+(`tools/e2e-seed/e2e-seed.sql`) applied cleanly under ON_ERROR_STOP — its first
+live apply ever → `dev,mock,sandbox` profiles asserted from the boot log BEFORE
+any AI-adjacent traffic → BFF (:3011) → API (:8181) chain proven end to end.
+The seed's one UPDATE demonstrably restores `admin@bvisionry.com` (V113 revokes
+the V16 credential; `SuperAdminBootstrap` skips) — the login only works because
+of it.
+
+### The first e2e run against the seed found FOUR real defects (120P/5F), all fixed in `bdc21b1`
+
+1. **Quota NPE on the default path (our own new code).** `organizations.
+   storage_quota_bytes` NULL (= platform default, the COMMON case) hit
+   `Stream.findFirst()` over a null head element in `OrgStorageQuotaRepository`
+   — every upload by a default-quota org 500'd. Unit tests had mocked the seam
+   and missed it. Fixed with a null filter + a regression test against the real
+   SQL, mutation-verified (revert → NPE).
+2. **Quiz-taking 500 on launched courses (latent, first live execution).**
+   `MultipleBagFetchException` — the quiz query fetch-joined `Quiz.questions`
+   and `QuizQuestion.options` (two bags) at once. Fixed as a two-query split in
+   the same persistence context behind the unchanged repository signature (all
+   four callers covered; sweep confirmed no other double-bag fetch in the
+   feature). Regression test mutation-verified against the old query.
+3. **Fresh-install AI console 503.** `AIModelCatalogService.getAvailableModels`
+   threw when no API key is configured — but "no key yet" is every new
+   install's normal first-run state, and the throw put console errors on the
+   admin AI-config page and the pillar editor. Now returns an empty list
+   (precedent: `ModelCapabilityRegistry` degrades the same way); real upstream
+   failures still throw. Sole caller verified to need no distinction.
+4. **Seed placed orgadmin in the root org.** Everything that account owns is
+   scoped to sub-org `2a93054a` ("the org-admin fixture's own console" per
+   `_helpers.ts`), and the announcements feed reads the AUTHOR's org — the
+   broadcast persisted but vanished from the reloaded feed. Moved to the
+   sub-org; the displaced comment's claim that auth.setup's LANDING map needed
+   the root placement was checked and found stale (the regex admits both).
+
+Two further failures were hidden data-shape dependencies in SPECS, not the app
+(web `eee9d8a`): the announcements panel resets its cohort picker to the org's
+first cohort on reload and the seed pins "Alpha Founders" there for
+roi-report's `cohorts[0]`, so the spec now re-picks its cohort; and the
+sub-org-scoped admin's sidebar (post main-merge nav) duplicates the org
+console's "Exercises" link, so the locator is now scoped to the "Organisation
+sections" nav.
+
+### Gates after fixes
+
+- **e2e: 161 passed / 1 skipped / 0 failed — TWICE consecutively** (1.4m, 1.2m),
+  courses ON, first proof the authored seed carries the entire suite.
+- **k6 load test executed for the first time** (v2.1.0, mock transport asserted,
+  BFF-shaped client-IP + proxy secret): funnel **580 completions @ 20 VUs in
+  85s, 0 failed requests, submit p95 10.02ms** (threshold 3000ms); limiter
+  scenario **98% held, 429s only, never a 5xx**. Exit 0, all thresholds green.
+  A public link was minted via the admin API for the run (the seed deliberately
+  ships none). Numbers are a dev-machine floor under mock AI — rerun on
+  production-shaped infra before scale marketing.
+- Full suites re-run on final trees: backend 1331/0/0 (Docker verified up, no
+  silent IT skip); web 1387/1387, lint 0, typecheck 0 (after clearing the known
+  stale `.next/dev` artifact with no dev server running).
+
+### Operational notes for whoever comes next
+
+- `rtk pnpm e2e` produced a spurious "36 did not run" cutoff; the plain
+  `pnpm exec playwright test` runs everything. Use the plain runner for suite
+  verdicts until rtk's playwright wrapper is understood.
+- Roadmap reconciled (banner update 2026-08-08): §11's three engineering items
+  closed (component tests, e2e-in-CI, load test) plus deps bump, quota,
+  backoff; §7 item 11 ✅ (courses flipped). §11's remainder is the
+  external/operator set plus MFA as its own ticket.
+- Standing caveats, still true: no GitHub runner has ever executed any of this
+  run's workflows; the e2e workflow's backend checkout ref pins
+  `agent/integration` and must be repointed at merge time.

@@ -2,6 +2,7 @@ package com.bvisionry.media;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -174,6 +175,40 @@ class OrgStorageQuotaServiceTest {
                 .isInstanceOf(IllegalOperationException.class);
     }
 
+    // ------------------------------------------------------------- scan short-circuit
+
+    /**
+     * The usage scan is a full RECURSIVE listing of the org's whole prefix and it runs
+     * on every presign, every upload and every branding save. Every caller only asks
+     * "is the org over?", and object sizes are non-negative — so once the running
+     * total has passed the ceiling the answer cannot change and the rest of the
+     * listing is pure cost. Without the short-circuit this walks all 500 objects.
+     */
+    @Test
+    void theUsageScanStopsAsSoonAsTheAnswerIsSettled() throws Exception {
+        AtomicInteger visited = new AtomicInteger();
+        stubUsage(ORG, 500, ONE_MIB, visited);
+        when(quotaRepository.quotaOverrideBytes(ORG)).thenReturn(null); // 10 MiB default
+
+        assertThatThrownBy(() -> service.requireCapacity(ORG, 1L))
+                .isInstanceOf(IllegalOperationException.class);
+
+        // Limit is 10 MiB - 1, so the 11th object of 1 MiB settles it.
+        assertThat(visited).hasValueLessThanOrEqualTo(11);
+    }
+
+    /** …and it still reads everything when the org really is under the ceiling. */
+    @Test
+    void theUsageScanReadsEveryObjectWhenTheOrgIsUnderQuota() throws Exception {
+        AtomicInteger visited = new AtomicInteger();
+        stubUsage(ORG, 4, ONE_MIB, visited);
+        when(quotaRepository.quotaOverrideBytes(ORG)).thenReturn(null);
+
+        service.requireCapacity(ORG, 4 * ONE_MIB); // 4 + 4 = 8 <= 10
+
+        assertThat(visited).hasValue(4);
+    }
+
     // ------------------------------------------------------------------- helpers
 
     /** Makes listing {@code org/<orgId>/} in the configured bucket report {@code totalBytes}. */
@@ -185,6 +220,32 @@ class OrgStorageQuotaServiceTest {
 
         doReturn(List.of(result)).when(internalClient).listObjects(
                 argThatPrefixIs("org/" + orgId + "/"));
+    }
+
+    /**
+     * Makes listing {@code org/<orgId>/} report {@code count} objects of
+     * {@code eachBytes}, counting how many the service actually pulls. The iterable is
+     * lazy on purpose — a pre-built list would be indistinguishable from a full scan.
+     */
+    @SuppressWarnings("unchecked")
+    private void stubUsage(UUID orgId, int count, long eachBytes, AtomicInteger visited)
+            throws Exception {
+        Iterable<Result<Item>> lazy = () -> new java.util.Iterator<>() {
+            private int emitted = 0;
+
+            @Override public boolean hasNext() {
+                return emitted < count;
+            }
+
+            @Override public Result<Item> next() {
+                emitted++;
+                visited.incrementAndGet();
+                Item item = mock(Item.class);
+                doReturn(eachBytes).when(item).size();
+                return new Result<>(item);
+            }
+        };
+        doReturn(lazy).when(internalClient).listObjects(argThatPrefixIs("org/" + orgId + "/"));
     }
 
     private static ListObjectsArgs argThatPrefixIs(String prefix) {

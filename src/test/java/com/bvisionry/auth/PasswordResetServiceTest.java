@@ -5,6 +5,7 @@ import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.security.LoginBackoffPort;
 import com.bvisionry.common.web.RequestContextUtils;
 import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.EmailService;
@@ -44,6 +45,7 @@ class PasswordResetServiceTest {
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private EmailService emailService;
     @Mock private FrontendUrls frontendUrls;
+    @Mock private LoginBackoffPort loginBackoff;
 
     @InjectMocks
     private PasswordResetService passwordResetService;
@@ -143,6 +145,38 @@ class PasswordResetServiceTest {
         verify(userRepository).save(user);
         verify(tokenRepository).markAllUsedForUser(eq(userId), any(Instant.class));
         verify(refreshTokenRepository).revokeAllForUser(eq(userId), any(Instant.class));
+    }
+
+    /**
+     * The backoff is keyed on the ADDRESS, not on the password, so a victim someone
+     * else is guessing at would otherwise choose a new password and still be refused
+     * for up to fifteen minutes — the lock-free throttle turned into the lockout it
+     * was explicitly designed not to be. The emailed single-use token is the
+     * out-of-band proof of control that makes clearing it safe.
+     */
+    @Test
+    void resetPassword_clearsTheAccountsLoginBackoff() {
+        user.setEmail("Ada@Example.com ");
+        PasswordResetToken token = usableToken();
+        when(tokenRepository.findByToken(token.getToken())).thenReturn(Optional.of(token));
+        when(passwordEncoder.encode("new-password-123")).thenReturn("new-hash");
+
+        passwordResetService.resetPassword(RAW_TOKEN, "new-password-123");
+
+        // Normalised exactly as the login path keys the counter, or the clear misses.
+        verify(loginBackoff).clearLoginFailures("ada@example.com");
+    }
+
+    @Test
+    void resetPassword_rejectedToken_leavesTheBackoffArmed() {
+        PasswordResetToken token = usableToken();
+        token.setExpiresAt(Instant.now().minusSeconds(60));
+        when(tokenRepository.findByToken(token.getToken())).thenReturn(Optional.of(token));
+
+        assertThatThrownBy(() -> passwordResetService.resetPassword(RAW_TOKEN, "new-password-123"))
+                .isInstanceOf(BadRequestException.class);
+
+        verifyNoInteractions(loginBackoff);
     }
 
     @Test

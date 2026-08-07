@@ -190,6 +190,53 @@ class AuthControllerLoginBackoffTest {
                 .isEqualTo(200);
     }
 
+    /**
+     * The backoff keys on the SUBMITTED address, so the address is attacker-controlled
+     * storage: each distinct one mints two Redis keys held for the failure TTL plus a
+     * heap entry in the in-memory fallback. {@code @Email} alone accepts an
+     * arbitrarily long local part, so a megabyte address was a megabyte of state per
+     * request. The bound must reject BEFORE any of that is allocated — i.e. before the
+     * credential check runs at all.
+     */
+    @Test
+    void anOversizedEmailIsRefusedBeforeAnyRateLimitStateIsMinted() throws Exception {
+        String oversized = "a".repeat(300) + "@example.com";
+
+        assertThat(login(oversized, "whatever").getResponse().getStatus()).isEqualTo(400);
+        org.mockito.Mockito.verifyNoInteractions(authService);
+    }
+
+    /**
+     * …and an address AT the RFC 5321 ceiling still reaches the credential check — the
+     * bound must not be quietly narrower than the standard it claims. Shaped to the
+     * per-part limits {@code @Email} also enforces (64-char local part, 63-char
+     * domain labels), so a failure here means the SIZE bound, not the format one.
+     */
+    @Test
+    void anEmailAtTheLengthCeilingIsStillAccepted() throws Exception {
+        String atCeiling = "a".repeat(64) + "@" + "b".repeat(63) + "." + "c".repeat(63)
+                + "." + "d".repeat(61);
+        assertThat(atCeiling).hasSize(254);
+
+        assertThat(login(atCeiling, "whatever").getResponse().getStatus()).isEqualTo(401);
+    }
+
+    /**
+     * Same class of exposure, second door: {@code forgot-password} keys its per-target
+     * limiter on {@code "email:" + address} too.
+     */
+    @Test
+    void anOversizedForgotPasswordEmailIsRefusedBeforeItReachesTheResetFlow() throws Exception {
+        String oversized = "a".repeat(300) + "@example.com";
+
+        int status = mvc.perform(post("/api/auth/forgot-password")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"" + oversized + "\"}"))
+                .andReturn().getResponse().getStatus();
+
+        assertThat(status).isEqualTo(400);
+    }
+
     private static String withoutTimestamp(MvcResult result) throws Exception {
         return result.getResponse().getContentAsString()
                 .replaceAll("\"timestamp\":\"[^\"]*\"", "\"timestamp\":\"<any>\"");

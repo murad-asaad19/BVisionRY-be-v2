@@ -180,12 +180,33 @@ class MediaOrgScopedUploadTest {
                 .containsExactly("image/png");
     }
 
+    /**
+     * QUOTA BYPASS. The quota budgets against a CLIENT-DECLARED sizeBytes, and
+     * reconciliation only fires if the caller later persists the marker. Without the
+     * declared size in the signature, an ORG_ADMIN calling the API directly could
+     * presign N times declaring one byte each, PUT arbitrary bytes to every URL, and
+     * simply never consume them — the quota never even gets asked.
+     *
+     * <p>Signing Content-Length is what turns the declaration into an obligation: the
+     * object store refuses any PUT whose body is a different length.
+     */
+    @Test
+    void orgScopedPresignBindsTheDeclaredSizeIntoTheSignature() throws Exception {
+        service.presignUpload("image", "logo.png", "image/png", 4096L, ORG);
+
+        assertThat(capturedPutArgs().extraHeaders().get("Content-Length"))
+                .as("Content-Length must be a SIGNED header, or the declared size the "
+                        + "quota was budgeted against is unenforceable")
+                .containsExactly("4096");
+    }
+
     /** Platform presigns keep the historical unbound behaviour (see MediaService). */
     @Test
-    void platformPresignDoesNotBindContentType() throws Exception {
+    void platformPresignDoesNotBindContentTypeOrLength() throws Exception {
         service.presignUpload("pdf", "guide.pdf", "application/pdf", null);
 
-        assertThat(capturedPutArgs().extraHeaders().keySet()).doesNotContain("Content-Type");
+        assertThat(capturedPutArgs().extraHeaders().keySet())
+                .doesNotContain("Content-Type", "Content-Length");
     }
 
     /**

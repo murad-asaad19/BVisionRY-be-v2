@@ -1,6 +1,7 @@
 package com.bvisionry.aiconfig.service;
 
 import com.bvisionry.common.exception.RateLimitExceededException;
+import com.bvisionry.common.security.LoginBackoffPort;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -9,7 +10,6 @@ import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,7 +32,7 @@ import java.util.concurrent.ConcurrentLinkedDeque;
  */
 @Service
 @Slf4j
-public class RateLimitService {
+public class RateLimitService implements LoginBackoffPort {
 
     /** Atomic INCR + first-write EXPIRE; returns the new counter value for the window. */
     private static final RedisScript<Long> INCREMENT_WINDOW = RedisScript.of(
@@ -42,14 +42,41 @@ public class RateLimitService {
             Long.class);
 
     /**
-     * Atomic INCR + EXPIRE-on-EVERY-write: the TTL is pushed forward by each hit, so
-     * the counter decays only after a full idle period rather than at a fixed window
-     * boundary. Used by the login backoff, where "quiet for 15 minutes" must forget.
+     * Login backoff: count one failure and derive its refusal in ONE atomic step.
+     *
+     * <p>KEYS: {@code 1} = decaying failure counter, {@code 2} = the refusal ("block")
+     * key {@link #checkLoginBackoff} reads. ARGV: {@code 1} = counter TTL,
+     * {@code 2} = free attempts, {@code 3} = base delay, {@code 4} = max delay,
+     * {@code 5} = max steps. Returns the seconds this failure armed, {@code 0} if it
+     * armed nothing.
+     *
+     * <p><b>Why one script and not INCR-then-SET.</b> The controller checks the block
+     * key, authenticates, and only then records — so N concurrent bad logins all pass
+     * the check before any block exists. If each then merely INCR'd, one burst would
+     * walk the counter to N and arm {@code backoff(N)}: a single round trip could pin
+     * a victim at the 900s cap instead of serving the 5s/10s/20s… ladder one rung at a
+     * time. Deriving the block FROM the counter here, and refusing to count while a
+     * refusal is already live, bounds any burst to exactly one rung — the losers of
+     * the race read the block the winner just created.
+     *
+     * <p>The counter's TTL is pushed forward on every hit, counted or not, so "quiet
+     * for 15 minutes" forgets while "hammered for an hour" does not.
      */
-    private static final RedisScript<Long> INCREMENT_DECAYING = RedisScript.of(
-            "local c = redis.call('INCR', KEYS[1]) "
+    private static final RedisScript<Long> RECORD_LOGIN_FAILURE = RedisScript.of(
+            "if redis.call('EXISTS', KEYS[2]) == 1 then "
+                    + "redis.call('EXPIRE', KEYS[1], ARGV[1]) return 0 end "
+                    + "local free = tonumber(ARGV[2]) "
+                    + "local steps = tonumber(ARGV[5]) "
+                    + "local c = redis.call('INCR', KEYS[1]) "
+                    + "if c > free + steps + 1 then "
+                    + "c = free + steps + 1 redis.call('SET', KEYS[1], c) end "
                     + "redis.call('EXPIRE', KEYS[1], ARGV[1]) "
-                    + "return c",
+                    + "local step = c - free "
+                    + "if step <= 0 then return 0 end "
+                    + "local delay = math.min(tonumber(ARGV[3]) * 2 ^ math.min(step - 1, steps), "
+                    + "tonumber(ARGV[4])) "
+                    + "redis.call('SET', KEYS[2], '1', 'EX', delay) "
+                    + "return delay",
             Long.class);
 
     /**
@@ -321,19 +348,31 @@ public class RateLimitService {
         }
     }
 
-    /** Count one rejected password login and (re)arm the backoff for that email. */
-    public void recordLoginFailure(String emailKey) {
+    /**
+     * Count one rejected password login and (re)arm the backoff for that email.
+     *
+     * <p>Counting and arming are ONE atomic step per key — see
+     * {@link #RECORD_LOGIN_FAILURE} for why, and for the identical bound the
+     * in-memory fallback below reproduces with {@link ConcurrentHashMap#compute}.
+     *
+     * @return the seconds this failure armed a refusal for, or {@code 0} when it armed
+     *         nothing — either still inside the free budget, or a refusal was already
+     *         live and this attempt (which raced past {@link #checkLoginBackoff}) must
+     *         not advance the ladder a second time
+     */
+    public int recordLoginFailure(String emailKey) {
         StringRedisTemplate redis = this.redisTemplate;
         if (redis != null) {
             try {
-                Long count = redis.execute(INCREMENT_DECAYING, List.of(loginFailKey(emailKey)),
-                        String.valueOf(loginFailureTtlSeconds));
-                if (count != null) {
-                    int delay = loginBackoffSeconds(clampFailures(count));
-                    if (delay > 0) {
-                        redis.opsForValue().set(loginBlockKey(emailKey), "1", Duration.ofSeconds(delay));
-                    }
-                    return;
+                Long delay = redis.execute(RECORD_LOGIN_FAILURE,
+                        List.of(loginFailKey(emailKey), loginBlockKey(emailKey)),
+                        String.valueOf(loginFailureTtlSeconds),
+                        String.valueOf(loginFreeAttempts),
+                        String.valueOf(LOGIN_BACKOFF_BASE_SECONDS),
+                        String.valueOf(LOGIN_BACKOFF_MAX_SECONDS),
+                        String.valueOf(LOGIN_BACKOFF_MAX_STEPS));
+                if (delay != null) {
+                    return delay.intValue();
                 }
             } catch (RuntimeException e) {
                 log.warn("Redis rate-limit backend unavailable ({}) — falling back to per-instance login backoff",
@@ -341,20 +380,34 @@ public class RateLimitService {
             }
         }
         Instant now = Instant.now();
+        int[] armed = {0};
         loginBackoffs.compute(emailKey, (k, prev) -> {
+            if (prev != null && prev.blockedUntil().isAfter(now)) {
+                // Same bound as the script: a refusal is already live, so this attempt
+                // is not counted. Only the TTL moves, keeping the memory alive under a
+                // sustained attack without handing the attacker another rung.
+                return new LoginBackoff(prev.failures(),
+                        now.plusSeconds(loginFailureTtlSeconds), prev.blockedUntil());
+            }
             int failures = prev == null || !prev.countExpiresAt().isAfter(now)
                     ? 1
                     : clampFailures(prev.failures() + 1L);
-            int delay = loginBackoffSeconds(failures);
+            armed[0] = loginBackoffSeconds(failures);
             return new LoginBackoff(failures, now.plusSeconds(loginFailureTtlSeconds),
-                    delay > 0 ? now.plusSeconds(delay) : Instant.EPOCH);
+                    armed[0] > 0 ? now.plusSeconds(armed[0]) : Instant.EPOCH);
         });
+        return armed[0];
     }
 
     /**
-     * Wipe an email's failure history after a successful sign-in. Only ever reachable
-     * when the account was not throttled, so it cannot be used to clear a live backoff.
+     * Wipe an email's failure history once control of the account has been proven
+     * some other way — a successful sign-in (only reachable when the account was NOT
+     * throttled) or a completed password reset, whose emailed single-use token proves
+     * mailbox ownership. The reset case is the escape hatch that keeps the backoff
+     * from becoming the lockout it exists to avoid: without it a guessed-at victim
+     * would still be refused after choosing a new password.
      */
+    @Override
     public void clearLoginFailures(String emailKey) {
         loginBackoffs.remove(emailKey);
         StringRedisTemplate redis = this.redisTemplate;

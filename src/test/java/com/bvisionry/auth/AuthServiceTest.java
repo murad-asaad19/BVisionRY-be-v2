@@ -272,6 +272,51 @@ class AuthServiceTest {
      * <p>Each also asserts NOTHING was minted. Asserting only the throw would stay green
      * if the guard moved below {@code issueTokens} — the token would already exist.
      */
+    /**
+     * ENUMERATION TIMING ORACLE. A known address pays a bcrypt compare (~60-80ms by
+     * design); an unknown one used to return the instant the lookup missed. That
+     * latency gap answers "does this address have an account here?" — the very
+     * question the single "Invalid email or password" message and the always-204
+     * forgot-password endpoint exist to refuse.
+     *
+     * <p>Asserts the compare HAPPENS, not that it succeeds: delete the dummy compare
+     * and this fails, which is the only thing a mock can honestly pin about timing.
+     */
+    @Test
+    void login_unknownEmail_stillPaysAPasswordCompare() {
+        when(userRepository.findByEmail("ghost@example.com")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("ghost@example.com", "pw")))
+                .isInstanceOf(AuthenticationException.class)
+                .hasMessage("Invalid email or password");
+
+        ArgumentCaptor<String> hash = ArgumentCaptor.forClass(String.class);
+        verify(passwordEncoder).matches(eq("pw"), hash.capture());
+        assertThat(hash.getValue())
+                .as("must be a real bcrypt hash, or the compare is free and the oracle survives")
+                .startsWith("$2a$10$")
+                .hasSize(60);
+    }
+
+    /**
+     * Same hole, second door: an SSO-only account has no password hash, and
+     * {@code matches(raw, null)} short-circuits for free. It must cost the same as a
+     * password account, or latency separates those two populations instead.
+     */
+    @Test
+    void login_ssoOnlyAccountWithNoPasswordHash_stillPaysAPasswordCompare() {
+        user.setPasswordHash(null);
+        when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("ada@example.com", "pw")))
+                .isInstanceOf(AuthenticationException.class)
+                .hasMessage("Invalid email or password");
+
+        ArgumentCaptor<String> hash = ArgumentCaptor.forClass(String.class);
+        verify(passwordEncoder).matches(eq("pw"), hash.capture());
+        assertThat(hash.getValue()).isNotNull().startsWith("$2a$10$");
+    }
+
     @Test
     void login_suspendedOrganization_isRefusedAndMintsNothing() {
         user.setOrganization(suspendedOrg());

@@ -19,10 +19,11 @@ import java.util.UUID;
 public interface MediaQuotaPort {
 
     /**
-     * Reconciliation point for a browser-direct (presigned) upload: a
-     * presigned PUT never binds Content-Length, so the size an org declared at
-     * PRESIGN time (checked against quota before the URL was even issued) is
-     * unverifiable until the object has actually landed in the store. This is
+     * Reconciliation point for a browser-direct (presigned) upload. The
+     * org-scoped presign now signs the declared size in as Content-Length, so
+     * the declaration is binding at PUT time; this remains the second line of
+     * defence — it covers objects written before that bound existed, and any
+     * usage drift from deletes or out-of-band writes. It is
      * called at the point the flow next touches the marker after that — when
      * the caller asks to PERSIST it into a business record — and re-checks the
      * org's total usage against ITS REAL, MinIO-recorded sizes (including the

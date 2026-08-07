@@ -155,7 +155,11 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
      *                    signature, so the browser's PUT must send exactly it or
      *                    the upload is refused by the object store; returning it
      *                    is what lets a client comply (its own {@code File.type}
-     *                    can be blank or differently-cased).
+     *                    can be blank or differently-cased). The declared
+     *                    {@code sizeBytes} is bound the same way on that path —
+     *                    nothing is returned for it because the client already
+     *                    knows the number it sent, and every HTTP client sets
+     *                    {@code Content-Length} from the body automatically.
      */
     public record PresignedUpload(String uploadUrl, String marker, String previewUrl, String contentType) {}
 
@@ -190,14 +194,18 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
 
     /**
      * Same as {@link #presignUpload(String, String, String, UUID)}, plus a
-     * CLIENT-DECLARED {@code sizeBytes} used only for the org-scoped quota
-     * check ({@code orgId != null}) — required there (a presign with no
-     * declared size gives the quota nothing to budget against), ignored
-     * otherwise. It is never bound into the signature and never enforces the
-     * per-kind 10MB cap: a presigned PUT does not bind Content-Length, so the
-     * declared value is a claim, not a guarantee — see
-     * {@link OrgStorageQuotaService#reconcileAfterUpload} for where the REAL
-     * size is reconciled once the object exists.
+     * CLIENT-DECLARED {@code sizeBytes} the org-scoped path ({@code orgId != null})
+     * budgets against the org's storage quota — required there, since a presign with
+     * no declared size gives the quota nothing to check; ignored otherwise.
+     *
+     * <p>On the org-scoped path that declaration is also BOUND INTO THE SIGNATURE as
+     * {@code Content-Length}, exactly the way {@code Content-Type} is, so it stops
+     * being a claim: the object store refuses any PUT whose body length differs.
+     * Without that binding the quota was decorative — an ORG_ADMIN calling the API
+     * directly could presign N times declaring one byte each, PUT arbitrary bytes
+     * against every URL, and never consume the markers that would trigger
+     * {@link OrgStorageQuotaService#reconcileAfterUpload}. Reconciliation stays as
+     * the second line of defence (it also catches objects written before this bound).
      *
      * @param sizeBytes declared upload size; required and must be positive
      *                  when {@code orgId != null}, otherwise unused
@@ -206,10 +214,12 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
             String kind, String filename, String contentType, Long sizeBytes, UUID orgId) {
         String resolvedKind = (kind == null || kind.isBlank()) ? "asset" : kind;
         MediaUploadPolicy.requireOrgScopedKindIsImage(resolvedKind, orgId);
-        // ponytail: the per-kind 10MB cap is unenforceable here — a presigned PUT
-        // doesn't bind Content-Length — so only kind + content type are validated
-        // against MediaUploadPolicy on this path; -1 keeps that cap skipped exactly
-        // as before quota was added.
+        // ponytail: only kind + content type are validated against MediaUploadPolicy
+        // here; -1 skips the per-kind 10MB cap. On the PLATFORM path that cap is
+        // genuinely unenforceable (nothing binds the body length). On the org-scoped
+        // path it now would be — the declared size is signed below — but turning it on
+        // would start refusing uploads that succeed today, which is a product call, not
+        // a quota fix. Pass sizeBytes here when that call is made.
         String normalizedType = MediaUploadPolicy.validate(resolvedKind, contentType, filename, -1);
         if (orgId != null) {
             if (sizeBytes == null || sizeBytes <= 0) {
@@ -231,25 +241,32 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
                     .object(objectKey)
                     .expiry(props.getPresignedExpiryMinutes() * 60, TimeUnit.SECONDS);
             if (orgId != null) {
-                // CONTENT-TYPE PINNING, org-scoped paths only. Content-Type in
-                // extraHeaders becomes a SIGNED header, so the PUT is refused
-                // unless it carries exactly this value. Without it the validated
-                // "image/png" is only ever a claim in the presign REQUEST: the
-                // browser could PUT the same object with text/html, and the
-                // object store would then serve stored markup from the
-                // object-store origin off a presigned GET — the same stored-XSS
-                // channel image/svg+xml is excluded to avoid.
+                // CONTENT-TYPE AND CONTENT-LENGTH PINNING, org-scoped paths only.
+                // Both go into extraHeaders, which makes them SIGNED headers, so the
+                // PUT is refused unless it carries exactly these values.
                 //
-                // Scoped to org-scoped presigns rather than applied globally
-                // because the existing lesson-media client PUTs its own raw
-                // File.type (and omits the header entirely when that is blank),
-                // so pinning the normalized type for every caller would break
-                // uploads whose declared type the server repaired. That gap is
-                // real but pre-existing and SUPER_ADMIN/INSTRUCTOR-only; closing
-                // it means changing the shared dropzone to PUT the returned
-                // contentType, which is outside this ticket.
+                // Content-Type: without it the validated "image/png" is only ever a
+                // claim in the presign REQUEST — the browser could PUT the same object
+                // as text/html and the object store would serve stored markup from the
+                // object-store origin off a presigned GET, the same stored-XSS channel
+                // image/svg+xml is excluded to avoid.
+                //
+                // Content-Length: without it the declared sizeBytes the quota was
+                // budgeted against is likewise only a claim. Signing it makes the
+                // quota decision binding on the bytes actually written, instead of
+                // resting entirely on a reconciliation that only fires if the caller
+                // later chooses to persist the marker.
+                //
+                // Scoped to org-scoped presigns rather than applied globally because
+                // the existing lesson-media client PUTs its own raw File.type (and
+                // omits the header entirely when that is blank) and sends no declared
+                // size on that path, so pinning either for every caller would break
+                // uploads that work today. That gap is real but pre-existing and
+                // SUPER_ADMIN/INSTRUCTOR-only; closing it means changing the shared
+                // dropzone, which is outside this ticket.
                 args.extraHeaders(com.google.common.collect.ImmutableMultimap.of(
-                        "Content-Type", normalizedType));
+                        "Content-Type", normalizedType,
+                        "Content-Length", String.valueOf(sizeBytes)));
             }
             uploadUrl = publicClient.getPresignedObjectUrl(args.build());
         } catch (Exception ex) {

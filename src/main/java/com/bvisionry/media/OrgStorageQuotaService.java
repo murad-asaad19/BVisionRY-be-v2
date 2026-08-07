@@ -33,8 +33,9 @@ import io.minio.messages.Item;
  * endpoints), and a counter would drift the moment an object is added or
  * removed outside a path that remembers to adjust it. The object store
  * already tracks the real size of everything it holds, so
- * {@link #totalUsageBytes(UUID)} reads that directly by listing
- * {@code org/<orgId>/} — no separate bookkeeping to keep in sync.
+ * {@link #usageBytesUpTo(UUID, long)} reads that directly by listing
+ * {@code org/<orgId>/} — no separate bookkeeping to keep in sync, and the scan
+ * stops the moment the answer is settled.
  *
  * <p><strong>Two enforcement points, because the upload flow offers exactly
  * two moments to check:</strong>
@@ -42,8 +43,9 @@ import io.minio.messages.Item;
  *   <li>{@link #requireCapacity(UUID, long)} — at INITIATION (multipart
  *       upload, or presign before the URL is issued). The size is either the
  *       real bytes Spring already received (multipart) or a CLIENT-DECLARED
- *       value (presign — a presigned PUT never binds Content-Length, so this
- *       is the earliest and only pre-upload signal available).</li>
+ *       value (presign) — which the org-scoped presign then signs into the URL
+ *       as Content-Length, so the declaration binds the bytes actually written
+ *       (see {@code MediaService#presignUpload}).</li>
  *   <li>{@link #reconcileAfterUpload(UUID, String)} — at CONSUME time, i.e.
  *       when a feature (today: only {@code OrganizationBrandingService})
  *       persists the marker into a business record. This flow has no
@@ -94,8 +96,8 @@ public class OrgStorageQuotaService implements MediaQuotaPort {
      *         the org has no room for this upload.
      */
     public void requireCapacity(UUID orgId, long incomingBytes) {
-        long usage = totalUsageBytes(orgId);
         long quota = effectiveQuotaBytes(orgId);
+        long usage = usageBytesUpTo(orgId, quota - incomingBytes);
         if (usage + incomingBytes > quota) {
             throw new IllegalOperationException(
                     "Organization storage quota exceeded: " + humanReadable(usage) + " used of "
@@ -112,8 +114,8 @@ public class OrgStorageQuotaService implements MediaQuotaPort {
      */
     @Override
     public void reconcileAfterUpload(UUID orgId, String marker) {
-        long usage = totalUsageBytes(orgId);
         long quota = effectiveQuotaBytes(orgId);
+        long usage = usageBytesUpTo(orgId, quota);
         if (usage > quota) {
             deleteObject(marker);
             throw new IllegalOperationException(
@@ -124,11 +126,23 @@ public class OrgStorageQuotaService implements MediaQuotaPort {
     }
 
     /**
-     * Sum of every object's real, MinIO-recorded size under {@code org/<orgId>/}
-     * in the configured bucket. The live source of truth for "how much has
-     * this org stored" — see the class javadoc for why there is no counter.
+     * Sum of every object's real, MinIO-recorded size under {@code org/<orgId>/} in
+     * the configured bucket — the live source of truth for "how much has this org
+     * stored", see the class javadoc for why there is no counter.
+     *
+     * <p><b>Stops as soon as the running total exceeds {@code limit}.</b> Both callers
+     * only ever ask a yes/no question ("is the org over?"), and this listing is a full
+     * RECURSIVE walk of the org's prefix that runs on every presign, every upload and
+     * every branding save. Object sizes are non-negative, so a total that has already
+     * passed the ceiling can only grow: the answer is settled and the remaining pages
+     * cost nothing but latency. The returned value is therefore exact when it is
+     * within the limit and a lower bound when it is not — which is all a refusal
+     * message needs (it is already over by at least that much).
+     *
+     * @param limit the ceiling to answer against; may be negative (an incoming upload
+     *              larger than the whole quota), which simply settles on the first object
      */
-    long totalUsageBytes(UUID orgId) {
+    long usageBytesUpTo(UUID orgId, long limit) {
         String prefix = "org/" + orgId + "/";
         long total = 0;
         try {
@@ -139,6 +153,9 @@ public class OrgStorageQuotaService implements MediaQuotaPort {
                             .recursive(true)
                             .build())) {
                 total += result.get().size();
+                if (total > limit) {
+                    return total;
+                }
             }
         } catch (Exception ex) {
             throw new MediaUploadException(

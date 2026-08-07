@@ -4,6 +4,14 @@ import com.bvisionry.common.exception.RateLimitExceededException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -286,6 +294,82 @@ class RateLimitServiceTest {
             rateLimitService.recordLoginFailure("victim@example.com");
         }
         rateLimitService.checkLoginBackoff("victim@example.com");
+    }
+
+    /**
+     * THE BURST BOUND. The controller checks the backoff, authenticates, and only then
+     * records the failure — so N simultaneous bad logins all pass the check before any
+     * refusal exists. If each of them then counted, one round trip would walk the
+     * counter to N and arm {@code backoff(N)}: 64 parallel guesses would pin a victim
+     * at the 900-second cap instantly, skipping the entire served-delay ladder the
+     * design rests on.
+     *
+     * <p>So: exactly ONE of a concurrent burst may arm a refusal, and it must be the
+     * NEXT rung (5s), never a rung the burst size bought.
+     */
+    @Test
+    void recordLoginFailure_concurrentBurst_advancesTheLadderByAtMostOneRung()
+            throws Exception {
+        // Free budget spent serially — the burst below starts from the rung boundary,
+        // which is the only moment the race is worth anything to an attacker.
+        for (int i = 0; i < 5; i++) {
+            rateLimitService.recordLoginFailure("victim@example.com");
+        }
+
+        int burst = 64;
+        ExecutorService pool = Executors.newFixedThreadPool(burst);
+        CountDownLatch ready = new CountDownLatch(burst);
+        CountDownLatch go = new CountDownLatch(1);
+        List<Future<Integer>> results = new ArrayList<>();
+        try {
+            for (int i = 0; i < burst; i++) {
+                results.add(pool.submit(() -> {
+                    ready.countDown();
+                    go.await();
+                    // Every thread has already "passed" checkLoginBackoff: nothing is
+                    // armed yet at this instant, which is the whole point.
+                    return rateLimitService.recordLoginFailure("victim@example.com");
+                }));
+            }
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            go.countDown();
+
+            List<Integer> armed = new ArrayList<>();
+            for (Future<Integer> result : results) {
+                int delay = result.get(10, TimeUnit.SECONDS);
+                if (delay > 0) {
+                    armed.add(delay);
+                }
+            }
+            assertThat(armed)
+                    .as("a burst of %d must buy exactly one rung of the ladder, not %d of them",
+                            burst, burst)
+                    .containsExactly(5);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThatThrownBy(() -> rateLimitService.checkLoginBackoff("victim@example.com"))
+                .isInstanceOf(RateLimitExceededException.class);
+    }
+
+    /**
+     * The same bound stated serially, and the schedule it must not disturb: the free
+     * budget arms nothing, the failure that ends it arms the first rung, and every
+     * further failure landing while that refusal is still live arms nothing at all.
+     */
+    @Test
+    void recordLoginFailure_whileARefusalIsLive_armsNothingFurther() {
+        for (int i = 0; i < 5; i++) {
+            assertThat(rateLimitService.recordLoginFailure("victim@example.com")).isZero();
+        }
+        assertThat(rateLimitService.recordLoginFailure("victim@example.com")).isEqualTo(5);
+
+        for (int i = 0; i < 50; i++) {
+            assertThat(rateLimitService.recordLoginFailure("victim@example.com"))
+                    .as("a failure racing past a live refusal must not buy another rung")
+                    .isZero();
+        }
     }
 
     /**

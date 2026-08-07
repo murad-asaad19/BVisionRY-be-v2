@@ -34,6 +34,21 @@ public class AuthService {
 
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
 
+    /**
+     * A real bcrypt hash, at the same cost factor the application encodes with, of a
+     * 32-byte random string that was generated once, hashed, and never written down.
+     * It is NOT any account's credential and no submitted password can ever match it.
+     *
+     * <p>It exists solely so {@link #login} pays the SAME ~60-80ms bcrypt cost whether
+     * or not the address resolves to a user. Returning early on "no such user" — or on
+     * an SSO-only account with no password hash, where {@code matches(raw, null)} is
+     * free — makes response latency answer "does this address have an account here?",
+     * which is precisely the question the always-204 forgot-password endpoint and the
+     * single "Invalid email or password" message are built to refuse.
+     */
+    private static final String DUMMY_PASSWORD_HASH =
+            "$2a$10$oo9M8tMQ1ekJvDHwyUq4fuY/rdrMuwrC/iHiHwJwPIbua3ULOXJeW";
+
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final JwtProvider jwtProvider;
@@ -68,10 +83,18 @@ public class AuthService {
     public AuthResponse login(LoginRequest request, ClientContext context) {
         String email = request.email().toLowerCase();
 
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new AuthenticationException("Invalid email or password"));
+        User user = userRepository.findByEmail(email).orElse(null);
 
-        if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
+        // One bcrypt compare on EVERY path, against the real hash when there is one and
+        // against DUMMY_PASSWORD_HASH otherwise, so an unknown address costs the same
+        // as a known one. Deliberately NOT short-circuited — `matched` is computed
+        // before it is combined with the lookup result.
+        boolean matched = passwordEncoder.matches(
+                request.password(),
+                user != null && user.getPasswordHash() != null
+                        ? user.getPasswordHash()
+                        : DUMMY_PASSWORD_HASH);
+        if (user == null || !matched) {
             throw new AuthenticationException("Invalid email or password");
         }
 

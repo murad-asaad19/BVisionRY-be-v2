@@ -108,9 +108,11 @@ public class MediaController {
                            + "Vercel Functions' 4.5MB cap) — plus the persistent minio:// marker and a "
                            + "presigned GET preview URL. Use this instead of POST /media for large files. "
                            + "Pass orgId for a white-label branding image (kind must be 'image'); that "
-                           + "variant binds Content-Type into the signature, so the PUT must send the "
-                           + "returned contentType verbatim, and REQUIRES sizeBytes (the org's storage "
-                           + "quota is checked against it before the URL is issued).")
+                           + "variant REQUIRES sizeBytes and binds BOTH Content-Type and Content-Length "
+                           + "into the signature, so the PUT must send the returned contentType verbatim "
+                           + "and a body of exactly sizeBytes bytes — the org's storage quota is checked "
+                           + "against that declaration before the URL is issued, and the signature is what "
+                           + "makes the declaration binding.")
     @PostMapping(value = "/media/presign", consumes = MediaType.APPLICATION_JSON_VALUE)
     @PreAuthorize(UPLOAD_AUTHORIZATION)
     public MediaService.PresignedUpload presignUpload(
@@ -136,9 +138,9 @@ public class MediaController {
      * @param kind        folder prefix (e.g. {@code "pdf"}); defaults to {@code "asset"} when blank
      * @param sizeBytes   declared upload size; REQUIRED when {@code orgId} is passed (org-scoped
      *                    storage quota is checked against it before the URL is issued), unused
-     *                    otherwise. A presigned PUT never binds Content-Length, so this is a claim
-     *                    the org-scoped path re-verifies once the object exists — see
-     *                    {@code MediaService#presignUpload} and {@code OrgStorageQuotaService}.
+     *                    otherwise. On the org-scoped path it is signed into the URL as
+     *                    {@code Content-Length}, so the PUT body must be exactly this long —
+     *                    see {@code MediaService#presignUpload} and {@code OrgStorageQuotaService}.
      */
     public record PresignUploadRequest(String filename, String contentType, String kind, Long sizeBytes) {}
 

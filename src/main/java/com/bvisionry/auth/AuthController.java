@@ -10,6 +10,7 @@ import com.bvisionry.auth.dto.RegisterRequest;
 import com.bvisionry.auth.dto.ResetPasswordRequest;
 import com.bvisionry.auth.dto.UserResponse;
 import com.bvisionry.auth.entity.User;
+import com.bvisionry.common.exception.AuthenticationException;
 import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import com.bvisionry.common.web.ClientIpResolver;
 import jakarta.servlet.http.HttpServletRequest;
@@ -63,13 +64,35 @@ public class AuthController {
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
+    /**
+     * Two layers, both 429: the per-IP {@code authentication} bucket caps how fast any
+     * one host may try at all, and the per-account backoff caps how fast one ADDRESS may
+     * be guessed — from anywhere, since a botnet defeats the per-IP layer alone.
+     *
+     * <p>The account layer is keyed on the submitted email whether or not it resolves to
+     * a user, and refuses with one constant message, so a throttled nonexistent address
+     * is indistinguishable from a throttled real one. It is a decaying counter, never a
+     * lock: see {@code RateLimitService}'s login-backoff section for why an admin-unlock
+     * design would be a denial-of-service handed to the attacker.
+     */
     @AuthorizedInSecurityConfig("permitAll: pre-auth entry point - the credentials in the body are the authentication")
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request,
                                                HttpServletRequest httpRequest,
                                                HttpServletResponse httpResponse) {
         rateLimitService.checkAuthLimit(clientIpResolver.resolve(httpRequest));
-        AuthResponse response = authService.login(request, contextOf(httpRequest));
+
+        String emailKey = request.email().toLowerCase().trim();
+        rateLimitService.checkLoginBackoff(emailKey);
+        AuthResponse response;
+        try {
+            response = authService.login(request, contextOf(httpRequest));
+        } catch (AuthenticationException e) {
+            rateLimitService.recordLoginFailure(emailKey);
+            throw e;
+        }
+        rateLimitService.clearLoginFailures(emailKey);
+
         writeAuthCookies(httpResponse, response);
         return ResponseEntity.ok(response);
     }

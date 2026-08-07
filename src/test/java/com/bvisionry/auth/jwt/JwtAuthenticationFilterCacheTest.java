@@ -43,10 +43,9 @@ import static org.mockito.Mockito.when;
  *   <li>TTL 0 disables caching entirely; an expired entry reloads.</li>
  * </ul>
  *
- * <p>Also pins this filter's half of {@link AuthenticationEligibility}: the
+ * <p>Also pins this filter's use of {@link AuthenticationEligibility}: the
  * organization-active read lives at each call site (see that class for why), so the
- * only thing stopping a filter from passing the wrong value is a test per filter.
- * {@link DownloadTokenAuthenticationFilterTest} holds the matching pair.
+ * only thing stopping this filter from passing the wrong value is this test.
  */
 @ExtendWith(MockitoExtension.class)
 class JwtAuthenticationFilterCacheTest {

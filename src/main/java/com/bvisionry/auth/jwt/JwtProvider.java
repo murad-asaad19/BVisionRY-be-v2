@@ -29,7 +29,6 @@ public class JwtProvider {
     private final byte[] secretBytes;
     private final long accessTokenExpirationMs;
     private final long refreshTokenExpirationMs;
-    private final long downloadTokenExpirationMs;
     private final String issuer;
     private final String audience;
 
@@ -37,14 +36,12 @@ public class JwtProvider {
             @Value("${bvisionry.jwt.secret}") String secret,
             @Value("${bvisionry.jwt.access-token-expiration-ms}") long accessTokenExpirationMs,
             @Value("${bvisionry.jwt.refresh-token-expiration-ms}") long refreshTokenExpirationMs,
-            @Value("${bvisionry.jwt.download-token-expiration-ms:60000}") long downloadTokenExpirationMs,
             @Value("${bvisionry.jwt.issuer:bvisionry-api}") String issuer,
             @Value("${bvisionry.jwt.audience:bvisionry-app}") String audience) {
         this.secretBytes = secret.getBytes(StandardCharsets.UTF_8);
         this.signingKey = Keys.hmacShaKeyFor(secretBytes);
         this.accessTokenExpirationMs = accessTokenExpirationMs;
         this.refreshTokenExpirationMs = refreshTokenExpirationMs;
-        this.downloadTokenExpirationMs = downloadTokenExpirationMs;
         this.issuer = issuer;
         this.audience = audience;
     }
@@ -99,33 +96,6 @@ public class JwtProvider {
                 .compact();
 
         return new IssuedRefreshToken(token, jti, now.toInstant(), expiry.toInstant());
-    }
-
-    /**
-     * Mints a short-lived (~60 s) token used to authenticate direct browser →
-     * Railway calls for binary endpoints (PDF, XLSX). The {@code typ} claim is
-     * {@link TokenType#DOWNLOAD} so it cannot be replayed as an access or
-     * refresh token.
-     */
-    public String generateDownloadToken(User user) {
-        Date now = new Date();
-        Date expiry = new Date(now.getTime() + downloadTokenExpirationMs);
-        UUID jti = UUID.randomUUID();
-
-        return Jwts.builder()
-                .subject(user.getId().toString())
-                .id(jti.toString())
-                .issuer(issuer)
-                .audience().add(audience).and()
-                .claim(CLAIM_TYP, TokenType.DOWNLOAD.name())
-                .issuedAt(now)
-                .expiration(expiry)
-                .signWith(signingKey)
-                .compact();
-    }
-
-    public long getDownloadTokenExpirationMs() {
-        return downloadTokenExpirationMs;
     }
 
     /**

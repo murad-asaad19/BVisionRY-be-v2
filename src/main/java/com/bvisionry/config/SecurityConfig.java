@@ -1,6 +1,5 @@
 package com.bvisionry.config;
 
-import com.bvisionry.auth.jwt.DownloadTokenAuthenticationFilter;
 import com.bvisionry.auth.jwt.JwtAuthenticationFilter;
 import com.bvisionry.businesscard.ratelimit.BusinessCardRateLimitFilter;
 import com.bvisionry.common.web.ProblemDetailResponseWriter;
@@ -41,7 +40,6 @@ public class SecurityConfig {
     private final PublicAssessmentRateLimitFilter publicAssessmentRateLimitFilter;
     private final BusinessCardRateLimitFilter businessCardRateLimitFilter;
     private final ErrorEventRateLimitFilter errorEventRateLimitFilter;
-    private final DownloadTokenAuthenticationFilter downloadTokenAuthenticationFilter;
 
     @Value("${bvisionry.cors.allowed-origins:http://localhost:5173,http://localhost:4173,http://localhost:3000,http://localhost:5174}")
     private String allowedOrigins;
@@ -228,11 +226,7 @@ public class SecurityConfig {
                                 ProblemDetailResponseWriter.write(response, HttpStatus.UNAUTHORIZED,
                                         "Authentication is required to access this resource."))
                 )
-                // Order: download-token (?token= URL auth) → cookie/Bearer JWT → rate-limit.
-                // The download filter is a no-op when there's no ?token, so cookie auth
-                // continues to work for everything else.
-                .addFilterBefore(downloadTokenAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterAfter(jwtAuthenticationFilter, DownloadTokenAuthenticationFilter.class)
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(surveySubmitRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(publicAssessmentRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(businessCardRateLimitFilter, UsernamePasswordAuthenticationFilter.class)

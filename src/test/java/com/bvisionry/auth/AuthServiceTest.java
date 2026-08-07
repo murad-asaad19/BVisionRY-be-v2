@@ -262,11 +262,10 @@ class AuthServiceTest {
 
     /**
      * A suspended ORGANIZATION must be refused where tokens are MINTED, not only where
-     * they are used. {@link com.bvisionry.auth.jwt.JwtAuthenticationFilter} and
-     * {@link com.bvisionry.auth.jwt.DownloadTokenAuthenticationFilter} already refuse
-     * such a principal per-request (via {@code AuthenticationEligibility}), so the
-     * guards below were not exploitable — but mint and accept disagreeing is the
-     * asymmetry that becomes a hole the moment a filter is relaxed or a new consumer
+     * they are used. {@link com.bvisionry.auth.jwt.JwtAuthenticationFilter} already
+     * refuses such a principal per-request (via {@code AuthenticationEligibility}), so
+     * the guards below were not exploitable — but mint and accept disagreeing is the
+     * asymmetry that becomes a hole the moment the filter is relaxed or a new consumer
      * trusts a freshly minted token without re-checking. All three guards shipped
      * untested; these pin them.
      *

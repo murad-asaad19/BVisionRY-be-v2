@@ -3,7 +3,6 @@ package com.bvisionry.auth;
 import com.bvisionry.aiconfig.service.RateLimitService;
 import com.bvisionry.auth.dto.AuthResponse;
 import com.bvisionry.auth.dto.ChangePasswordRequest;
-import com.bvisionry.auth.dto.DownloadTokenResponse;
 import com.bvisionry.auth.dto.ForgotPasswordRequest;
 import com.bvisionry.auth.dto.LoginRequest;
 import com.bvisionry.auth.dto.RefreshTokenRequest;
@@ -11,13 +10,11 @@ import com.bvisionry.auth.dto.RegisterRequest;
 import com.bvisionry.auth.dto.ResetPasswordRequest;
 import com.bvisionry.auth.dto.UserResponse;
 import com.bvisionry.auth.entity.User;
-import com.bvisionry.auth.jwt.JwtProvider;
 import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import com.bvisionry.common.web.ClientIpResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -36,23 +33,17 @@ public class AuthController {
     private final RateLimitService rateLimitService;
     private final ClientIpResolver clientIpResolver;
     private final CookieService cookieService;
-    private final JwtProvider jwtProvider;
-    private final String publicBaseUrl;
 
     public AuthController(AuthService authService,
                           PasswordResetService passwordResetService,
                           RateLimitService rateLimitService,
                           ClientIpResolver clientIpResolver,
-                          CookieService cookieService,
-                          JwtProvider jwtProvider,
-                          @Value("${bvisionry.public.base-url}") String publicBaseUrl) {
+                          CookieService cookieService) {
         this.authService = authService;
         this.passwordResetService = passwordResetService;
         this.rateLimitService = rateLimitService;
         this.clientIpResolver = clientIpResolver;
         this.cookieService = cookieService;
-        this.jwtProvider = jwtProvider;
-        this.publicBaseUrl = publicBaseUrl;
     }
 
     // Reason states only what is true. Signup must be anonymous-reachable; it is
@@ -118,29 +109,6 @@ public class AuthController {
             return ResponseEntity.status(401).build();
         }
         return ResponseEntity.ok(UserResponse.from(user));
-    }
-
-    /**
-     * Issues a short-lived ({@code bvisionry.jwt.download-token-expiration-ms},
-     * default 60 s) JWT used by the SPA to authenticate direct browser → Railway
-     * binary fetches. Returned alongside this backend's public origin so the FE
-     * doesn't hardcode hostnames.
-     */
-    @AuthorizedInSecurityConfig("authenticated(): any signed-in user, minting a 60s token for themselves - "
-            + "a URL credential, now CONTAINED (audit finding H3 closed via 'path-scope the filter'): "
-            + "DownloadTokenAuthenticationFilter accepts it on GET/HEAD only, never on /api/auth/**, and "
-            + "only on the enumerated binary exports - so it drives no state change, cannot be replayed "
-            + "here to renew itself, and cannot read the GDPR personal-data export, the org join-link "
-            + "secret, or anything else its owner can read. It still carries full authorities, which is "
-            + "inert at that surface. RECOMMENDED: delete this endpoint - no client mints one")
-    @GetMapping("/download-token")
-    public ResponseEntity<DownloadTokenResponse> downloadToken(@AuthenticationPrincipal User user) {
-        if (user == null) {
-            return ResponseEntity.status(401).build();
-        }
-        String token = jwtProvider.generateDownloadToken(user);
-        long expiresInSeconds = jwtProvider.getDownloadTokenExpirationMs() / 1000L;
-        return ResponseEntity.ok(new DownloadTokenResponse(token, publicBaseUrl, expiresInSeconds));
     }
 
     @AuthorizedInSecurityConfig("authenticated(): self-service only, and the current password is re-verified")

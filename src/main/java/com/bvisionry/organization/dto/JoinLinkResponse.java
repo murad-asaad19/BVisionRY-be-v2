@@ -22,11 +22,12 @@ import java.util.UUID;
  * of the org it already administers. Withholding it would break the feature outright —
  * the admin reads the link in order to share it ({@code #join-link-url} in the web app).
  *
- * <p>The real exposure was a weaker credential reaching the reveal:
- * {@code DownloadTokenAuthenticationFilter} used to authenticate any GET, so a 60-second
- * URL credential could read this and be traded for a permanent account. That is closed at
- * the filter — which covers every sibling secret-returning GET, not just this one — and
- * pinned by {@code DownloadTokenAuthenticationFilterTest#nonExportPath_doesNotAuthenticate}.
+ * <p>The real exposure was a weaker credential reaching the reveal: a now-deleted
+ * download-token filter used to authenticate any GET with a 60-second URL credential,
+ * which could read this and be traded for a permanent account. That capability (mint
+ * endpoint, filter, and its allowlist) has been deleted outright — see
+ * agent-decisions.md "HARDENING SWEEP" — so this reveal is reachable only via the
+ * cookie session, same as everything else.
  *
  * <p>The public pre-redemption fetch ({@code GET /api/join/{token}}, {@code permitAll})
  * returns {@link JoinLinkInfoResponse}, which carries no token. Keep it that way.

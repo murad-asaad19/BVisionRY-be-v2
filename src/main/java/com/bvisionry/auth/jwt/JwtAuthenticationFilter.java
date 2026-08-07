@@ -53,8 +53,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 if (user == null) {
                     return;
                 }
-                // One shared predicate with DownloadTokenAuthenticationFilter — see
-                // AuthenticationEligibility for why the organization read stays here.
+                // Shared predicate — see AuthenticationEligibility for why the
+                // organization read stays here rather than inside it.
                 boolean organizationActive = user.getOrganization() == null
                         || user.getOrganization().isActive();
                 if (!AuthenticationEligibility.mayAuthenticate(user, organizationActive)) {

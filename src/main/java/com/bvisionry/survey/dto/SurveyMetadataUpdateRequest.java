@@ -37,5 +37,17 @@ public record SurveyMetadataUpdateRequest(
 
         UUID giftPublicAssessmentLinkId,
 
-        boolean clearGiftPublicAssessmentLink
-) {}
+        /*
+         * Boxed (not primitive) so an OMITTED flag deserializes cleanly: Jackson
+         * cannot map an absent JSON property onto a record's primitive component
+         * (it would pass null and trip FAIL_ON_NULL_FOR_PRIMITIVES) — as a
+         * primitive, EVERY partial metadata PATCH that left this flag out was
+         * rejected 400, which broke the published-survey visibility toggle.
+         * The compact constructor coalesces null → false.
+         */
+        Boolean clearGiftPublicAssessmentLink
+) {
+    public SurveyMetadataUpdateRequest {
+        clearGiftPublicAssessmentLink = clearGiftPublicAssessmentLink != null && clearGiftPublicAssessmentLink;
+    }
+}

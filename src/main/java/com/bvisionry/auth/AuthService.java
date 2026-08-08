@@ -319,6 +319,29 @@ public class AuthService {
     }
 
     /**
+     * Self-service display-name change. Name is the only field a user may edit
+     * on their own account — everything else on the {@code users} row is an
+     * admin concern. The row save triggers the principal-cache eviction
+     * listener, so the new name is visible on the next request.
+     */
+    @Transactional
+    public UserResponse updateProfile(UUID userId, String name) {
+        User user = requireOwnAccount(userId);
+        user.setName(name.trim());
+        return UserResponse.from(userRepository.save(user));
+    }
+
+    /**
+     * Guard for self-service account loads: the id has already been proven to be
+     * the caller's own (it comes from the authenticated principal), so ownership
+     * IS the tenant scope here — no org check applies to a user editing themself.
+     */
+    private User requireOwnAccount(UUID userId) {
+        return userRepository.findById(userId)
+                .orElseThrow(() -> new AuthenticationException("User not found"));
+    }
+
+    /**
      * Used by callers (e.g. role-change flows) that need to drop every active
      * refresh token for a user without going through password change.
      */

@@ -8,6 +8,7 @@ import com.bvisionry.auth.dto.LoginRequest;
 import com.bvisionry.auth.dto.RefreshTokenRequest;
 import com.bvisionry.auth.dto.RegisterRequest;
 import com.bvisionry.auth.dto.ResetPasswordRequest;
+import com.bvisionry.auth.dto.UpdateProfileRequest;
 import com.bvisionry.auth.dto.UserResponse;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.exception.AuthenticationException;
@@ -20,6 +21,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -132,6 +134,12 @@ public class AuthController {
             return ResponseEntity.status(401).build();
         }
         return ResponseEntity.ok(UserResponse.from(user));
+    }
+
+    @AuthorizedInSecurityConfig("authenticated(): any signed-in user, and only ever their own row — the DTO is name-only")
+    @PatchMapping("/me")
+    public ResponseEntity<UserResponse> updateMe(@Valid @RequestBody UpdateProfileRequest request) {
+        return ResponseEntity.ok(authService.updateProfile(SecurityUtils.getCurrentUserId(), request.name()));
     }
 
     @AuthorizedInSecurityConfig("authenticated(): self-service only, and the current password is re-verified")

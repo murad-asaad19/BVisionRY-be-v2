@@ -209,6 +209,30 @@ class AuthServiceTest {
         verify(userRepository, never()).save(any());
     }
 
+    // ---------- updateProfile ----------
+
+    @Test
+    void updateProfile_trimsAndSavesName_returningUpdatedResponse() {
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(userRepository.save(user)).thenReturn(user);
+
+        var response = authService.updateProfile(userId, "  Grace Hopper  ");
+
+        assertThat(user.getName()).isEqualTo("Grace Hopper");
+        assertThat(response.name()).isEqualTo("Grace Hopper");
+        verify(userRepository).save(user);
+    }
+
+    @Test
+    void updateProfile_unknownUser_throws() {
+        when(userRepository.findById(userId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.updateProfile(userId, "Anyone"))
+                .isInstanceOf(AuthenticationException.class);
+
+        verify(userRepository, never()).save(any());
+    }
+
     // ---------- logout ----------
 
     @Test

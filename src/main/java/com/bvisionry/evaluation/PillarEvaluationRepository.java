@@ -12,7 +12,20 @@ import java.util.UUID;
 
 public interface PillarEvaluationRepository extends JpaRepository<PillarEvaluation, UUID> {
 
-    List<PillarEvaluation> findBySubmissionId(UUID submissionId);
+    /**
+     * All pillar evaluations for a submission, ordered by the pipeline's pillar
+     * display order. The ORDER BY is load-bearing: results pages render rows in
+     * the sequence this query returns, and without it a partial re-evaluation's
+     * in-place UPDATE physically relocates the row, making re-evaluated pillars
+     * jump position in the UI.
+     */
+    @Query("""
+            SELECT pe FROM PillarEvaluation pe
+            LEFT JOIN FETCH pe.pillar p
+            WHERE pe.submission.id = :submissionId
+            ORDER BY p.displayOrder, p.name
+            """)
+    List<PillarEvaluation> findBySubmissionId(@Param("submissionId") UUID submissionId);
 
     List<PillarEvaluation> findBySubmissionIdAndPillarId(UUID submissionId, UUID pillarId);
 

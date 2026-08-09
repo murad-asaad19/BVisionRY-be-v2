@@ -262,6 +262,12 @@ public class PersonalDataRepository {
         EXPORT_SECTIONS.put("coach_notes",
                 "SELECT * FROM coach_notes WHERE coach_id = :userId OR member_id = :userId");
 
+        // Session attendance (V163): presence marks ABOUT the member. Erasure
+        // needs no statement: member_id CASCADEs with the users row and
+        // marked_by is SET NULL like every other admin attribution.
+        EXPORT_SECTIONS.put("session_attendance",
+                "SELECT * FROM session_attendance WHERE member_id = :userId");
+
         // The subject's own coach profile (V153) — a link they published about
         // themselves. Erasure needs no statement: coach_id is the PK and
         // CASCADEs with the users row.

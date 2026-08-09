@@ -3,6 +3,7 @@ package com.bvisionry.platform;
 import com.bvisionry.common.audit.AuditLogger;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.FieldValidationException;
+import com.bvisionry.common.scoringconfig.ParticipationFormula;
 import com.bvisionry.common.scoringconfig.ScoringBands;
 import com.bvisionry.platform.dto.ScoringConfigResponse;
 import com.bvisionry.platform.dto.ScoringConfigResponse.BandsSection;
@@ -46,13 +47,13 @@ import java.util.function.Function;
 @Slf4j
 public class ScoringConfigService {
 
-    static final String FORMULA_KEY = "scoring.participation_formula";
-    static final String PARTICIPATION_BANDS_KEY = "scoring.participation_bands";
+    static final String FORMULA_KEY = ParticipationFormula.FORMULA_KEY;
+    static final String PARTICIPATION_BANDS_KEY = ParticipationFormula.PARTICIPATION_BANDS_KEY;
     static final String QUALITY_TAGS_KEY = "scoring.quality_tags";
     static final String NARRATIVE_KEY = "scoring.narrative_wording";
 
     /** The protected, always-computed category (spec §4/§7 amended). */
-    static final String ASSIGNMENTS_KEY = "assignments";
+    static final String ASSIGNMENTS_KEY = ParticipationFormula.ASSIGNMENTS_KEY;
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -62,19 +63,15 @@ public class ScoringConfigService {
 
     /* ------------------------------------------------------------- defaults */
 
+    /** Delegates to the common defaults so the engagement compute can never drift. */
     static List<ParticipationCategory> defaultCategories() {
-        return List.of(
-                new ParticipationCategory(ASSIGNMENTS_KEY, "Assignments", 50, true),
-                new ParticipationCategory("workshops", "Workshops", 25, false),
-                new ParticipationCategory("coaching_1on1", "Coaching 1:1", 15, false),
-                new ParticipationCategory("coaching_group", "Group coaching", 10, false));
+        return ParticipationFormula.defaultCategories().stream()
+                .map(c -> new ParticipationCategory(c.key(), c.label(), c.weight(), c.computed()))
+                .toList();
     }
 
     static List<ScoringBands.Band> defaultParticipationBands() {
-        return List.of(
-                new ScoringBands.Band("band_1", "High", 80, 100),
-                new ScoringBands.Band("band_2", "Partial", 50, 79),
-                new ScoringBands.Band("band_3", "Low", 0, 49));
+        return ParticipationFormula.defaultParticipationBands();
     }
 
     static List<QualityTag> defaultQualityTags() {

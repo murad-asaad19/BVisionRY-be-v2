@@ -126,19 +126,38 @@ public class ComparisonComputeService {
      * self-invocation.
      */
     boolean computeIfReady(PairCohortRow pair, UUID userId) {
-        // Baseline = EARLIEST evaluated (intake, retakes never shift it);
-        // distance = latest evaluated.
-        Optional<SubmissionRow> baseline =
-                reads.earliestEvaluatedSubmission(userId, pair.baselinePipelineId());
-        Optional<SubmissionRow> distance =
-                reads.latestEvaluatedSubmission(userId, pair.distancePipelineId());
+        // Typed task spine (spec §5): milestone-task submission tags beat the
+        // by-pipeline heuristics — they are what make same-pipeline pairs
+        // resolvable. Baseline = the submission tagged to the cohort's
+        // BASELINE milestone, else EARLIEST evaluated of the baseline pipeline
+        // (intake semantics; retakes never shift it). Distance = the
+        // submission tagged to the DISTANCE milestone (any publish status —
+        // the tag is authoritative); when the cohort has no distance milestone
+        // at all, fall back to latest-evaluated ONLY for different-pipeline
+        // pairs (the pre-spine behavior) — for an equal pair "latest" cannot
+        // distinguish a check-in from the distance.
+        Optional<SubmissionRow> baseline = reads.milestoneTask(pair.cohortId(), "BASELINE")
+                .flatMap(t -> reads.latestEvaluatedTaggedSubmission(
+                        userId, t.taskId(), pair.baselinePipelineId()))
+                .or(() -> reads.earliestEvaluatedSubmission(userId, pair.baselinePipelineId()));
+
+        Optional<ComparisonReadRepository.MilestoneTaskRow> distanceTask =
+                reads.milestoneTask(pair.cohortId(), "DISTANCE");
+        Optional<SubmissionRow> distance;
+        if (distanceTask.isPresent()) {
+            distance = reads.latestEvaluatedTaggedSubmission(
+                    userId, distanceTask.get().taskId(), pair.distancePipelineId());
+        } else if (!pair.baselinePipelineId().equals(pair.distancePipelineId())) {
+            distance = reads.latestEvaluatedSubmission(userId, pair.distancePipelineId());
+        } else {
+            distance = Optional.empty();
+        }
         if (baseline.isEmpty() || distance.isEmpty()) {
             return false;
         }
         if (baseline.get().id().equals(distance.get().id())) {
-            // Defense in depth against a self-comparison — equal designation is
-            // already rejected at the settings write; same-instrument (retake)
-            // pairs are deferred to the task-spine phase (D).
+            // Defense in depth against a self-comparison (e.g. an equal pair
+            // where the member's only evaluated submission is the distance).
             return false;
         }
 

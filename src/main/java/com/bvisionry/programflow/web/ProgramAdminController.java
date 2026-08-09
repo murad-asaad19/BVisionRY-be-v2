@@ -110,13 +110,16 @@ public class ProgramAdminController {
         service.deleteModule(orgId, cohortId, moduleId);
     }
 
+    /** Creates a task; {@code taskType} defaults to LESSON (the form-based flow). */
     @PostMapping("/modules/{moduleId}/tasks")
     @ResponseStatus(HttpStatus.CREATED)
     public TaskDto createTask(
             @PathVariable UUID orgId,
             @PathVariable UUID cohortId,
-            @PathVariable UUID moduleId) {
-        return service.createTask(orgId, cohortId, moduleId);
+            @PathVariable UUID moduleId,
+            @org.springframework.web.bind.annotation.RequestParam(required = false)
+            com.bvisionry.programflow.domain.ProgramTaskType taskType) {
+        return service.createTask(orgId, cohortId, moduleId, taskType);
     }
 
     @PutMapping("/tasks/{taskId}")

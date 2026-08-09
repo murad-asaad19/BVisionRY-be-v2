@@ -47,6 +47,18 @@ public class SurveyController {
         return ResponseEntity.ok(surveyService.list(status));
     }
 
+    /**
+     * Reference picker for SURVEY journey tasks (typed task spine): the
+     * published surveys an org admin may schedule. Surveys are platform-global
+     * (no org column), so this is the full published set — same stance as the
+     * public course catalog picker.
+     */
+    @GetMapping("/published")
+    @PreAuthorize("hasAnyAuthority('SUPER_ADMIN', 'ORG_ADMIN')")
+    public ResponseEntity<List<SurveySummaryDto>> published() {
+        return ResponseEntity.ok(surveyService.list(SurveyStatus.PUBLISHED));
+    }
+
     @GetMapping("/{id}")
     public ResponseEntity<SurveyDto> getById(@PathVariable UUID id) {
         return ResponseEntity.ok(surveyService.getById(id));

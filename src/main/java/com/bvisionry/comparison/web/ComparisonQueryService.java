@@ -59,8 +59,17 @@ public class ComparisonQueryService {
         return comparisons.findByCohortIdAndUserId(pair.cohortId(), userId)
                 .map(c -> new MyComparisonResponse("done", pair.cohortId(), pair.cohortName(),
                         toDto(c, null), trajectory))
-                .orElseGet(() -> new MyComparisonResponse("pending", pair.cohortId(),
-                        pair.cohortName(), null, trajectory));
+                .orElseGet(() -> {
+                    // §5 guard, same-pipeline flavor: an equal pair can only
+                    // ever compute through a DISTANCE milestone task's tag —
+                    // without one the report is not coming, so never tease it.
+                    if (pair.baselinePipelineId().equals(pair.distancePipelineId())
+                            && reads.milestoneTask(pair.cohortId(), "DISTANCE").isEmpty()) {
+                        return new MyComparisonResponse("none", null, null, null, trajectory);
+                    }
+                    return new MyComparisonResponse("pending", pair.cohortId(),
+                            pair.cohortName(), null, trajectory);
+                });
     }
 
     /* ------------------------------------------------------- org admin view */

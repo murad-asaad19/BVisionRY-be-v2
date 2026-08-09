@@ -257,9 +257,13 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
     @Nested
     class PairDesignation {
 
-        /** Equal designation would self-compare — rejected at the settings write. */
+        /**
+         * Same-instrument pairs are allowed since the typed task spine (D1):
+         * the DISTANCE milestone tag — not "latest evaluated" — resolves the
+         * distance submission, so an equal pair can no longer self-compare.
+         */
         @Test
-        void equalBaselineAndDistancePipelines_areRejectedAsAFieldError() throws Exception {
+        void equalBaselineAndDistancePipelines_areAccepted() throws Exception {
             TestAuthentication.authenticate(
                     saveUser("orgadmin.pair@test.invalid", UserRole.ORG_ADMIN, orgA));
             mockMvc.perform(put("/api/organizations/" + orgA.getId()
@@ -269,8 +273,157 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                                     {"stageLabel":"Week","dripEnabled":true,"dueSoonDays":3,
                                      "baselinePipelineId":"%s","distancePipelineId":"%s"}
                                     """.formatted(baselinePipelineId, baselinePipelineId)))
-                    .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.fieldErrors.distancePipelineId").exists());
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.baselinePipelineId", is(baselinePipelineId.toString())))
+                    .andExpect(jsonPath("$.distancePipelineId", is(baselinePipelineId.toString())));
+        }
+    }
+
+    /* -------------------------------------------- same-pipeline pairs (D1) */
+
+    @Nested
+    class SamePipelinePair {
+
+        private User founder;
+        private UUID samePairCohortId;
+        private UUID distanceTaskId;
+
+        @BeforeEach
+        void seedSamePipelineCohort() {
+            founder = saveUser("founder.same@test.invalid", UserRole.MEMBER, orgA);
+            samePairCohortId = insertCohort(orgA.getId(), "Same-instrument cohort", founder.getId());
+            jdbc.update("""
+                    INSERT INTO program_settings (cohort_id, baseline_pipeline_id, distance_pipeline_id)
+                    VALUES (?, ?, ?)
+                    """, samePairCohortId, baselinePipelineId, baselinePipelineId);
+            UUID moduleId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO program_modules (id, org_id, cohort_id, name)
+                    VALUES (?, ?, ?, 'Distance module')
+                    """, moduleId, orgA.getId(), samePairCohortId);
+            distanceTaskId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO program_tasks (id, module_id, name, status, task_type, ref_id, milestone_role)
+                    VALUES (?, ?, 'Distance assessment', 'LIVE', 'ASSESSMENT', ?, 'DISTANCE')
+                    """, distanceTaskId, moduleId, baselinePipelineId);
+        }
+
+        /**
+         * The FRI 58 → 64 → 71 story on ONE pipeline: baseline = earliest
+         * evaluated, the middle check-in is ignored for the distance, and the
+         * distance = the submission TAGGED to the DISTANCE milestone task —
+         * even though a newer untagged submission exists (tag beats latest).
+         */
+        @Test
+        void baselineEarliest_checkinIgnored_distanceIsTheTaggedSubmission() {
+            insertEvaluatedSubmissionFor(founder, baselinePipelineId, 90,
+                    new BigDecimal("58.00"), null);                                  // intake
+            insertEvaluatedSubmissionFor(founder, baselinePipelineId, 45,
+                    new BigDecimal("64.00"), null);                                  // check-in
+            UUID distanceSubmission = insertEvaluatedSubmissionFor(founder, baselinePipelineId, 10,
+                    new BigDecimal("71.00"), distanceTaskId);                        // tagged distance
+            insertEvaluatedSubmissionFor(founder, baselinePipelineId, 1,
+                    new BigDecimal("99.00"), null);                                  // newer, untagged
+
+            computeService.onSubmissionEvaluated(new EvaluationEvents.SubmissionEvaluated(
+                    distanceSubmission, founder.getId(), Map.of()));
+
+            FounderComparison c = comparisons
+                    .findByCohortIdAndUserId(samePairCohortId, founder.getId()).orElseThrow();
+            assertThat(c.getDistanceSubmissionId()).isEqualTo(distanceSubmission);
+            assertThat(c.getOverallBefore()).isEqualByComparingTo("58.00");
+            assertThat(c.getOverallAfter()).isEqualByComparingTo("71.00");
+            assertThat(c.getOverallDelta()).isEqualByComparingTo("13.00");
+        }
+
+        /**
+         * Review #5: the tag on the submission is authoritative — a distance
+         * task un-published AFTER members answered it must still compute.
+         */
+        @Test
+        void distanceTaskRevertedToDraft_stillComputesFromTheTag() {
+            insertEvaluatedSubmissionFor(founder, baselinePipelineId, 90,
+                    new BigDecimal("58.00"), null);
+            UUID distanceSubmission = insertEvaluatedSubmissionFor(founder, baselinePipelineId, 10,
+                    new BigDecimal("71.00"), distanceTaskId);
+            jdbc.update("UPDATE program_tasks SET status = 'DRAFT' WHERE id = ?", distanceTaskId);
+
+            computeService.onSubmissionEvaluated(new EvaluationEvents.SubmissionEvaluated(
+                    distanceSubmission, founder.getId(), Map.of()));
+
+            FounderComparison c = comparisons
+                    .findByCohortIdAndUserId(samePairCohortId, founder.getId()).orElseThrow();
+            assertThat(c.getDistanceSubmissionId()).isEqualTo(distanceSubmission);
+        }
+
+        /**
+         * Review #9, the §5 guard's same-pipeline flavor: an equal pair only
+         * ever computes through a DISTANCE milestone — with one scheduled the
+         * member sees "pending"; without one, "none" (never a teased report).
+         */
+        @Test
+        void equalPair_pendingOnlyWhenADistanceMilestoneExists() {
+            assertThat(queryService.myComparison(founder.getId()).state()).isEqualTo("pending");
+
+            User pairless = saveUser("founder.pairless@test.invalid", UserRole.MEMBER, orgA);
+            UUID cohortWithoutMilestone = insertCohort(orgA.getId(), "Equal pair, no milestone",
+                    pairless.getId());
+            jdbc.update("""
+                    INSERT INTO program_settings (cohort_id, baseline_pipeline_id, distance_pipeline_id)
+                    VALUES (?, ?, ?)
+                    """, cohortWithoutMilestone, baselinePipelineId, baselinePipelineId);
+
+            MyComparisonResponse my = queryService.myComparison(pairless.getId());
+            assertThat(my.state()).isEqualTo("none");
+            assertThat(my.cohortId()).isNull();
+        }
+
+        /**
+         * Without a tagged distance submission an equal pair NEVER falls back
+         * to "latest evaluated" — that heuristic cannot tell a check-in from
+         * the distance.
+         */
+        @Test
+        void equalPairWithoutATaggedDistance_neverComputes() {
+            insertEvaluatedSubmissionFor(founder, baselinePipelineId, 90,
+                    new BigDecimal("58.00"), null);
+            UUID checkin = insertEvaluatedSubmissionFor(founder, baselinePipelineId, 5,
+                    new BigDecimal("64.00"), null);
+
+            computeService.onSubmissionEvaluated(new EvaluationEvents.SubmissionEvaluated(
+                    checkin, founder.getId(), Map.of()));
+
+            assertThat(comparisons.findByCohortIdAndUserId(samePairCohortId, founder.getId()))
+                    .isEmpty();
+        }
+
+        private UUID insertEvaluatedSubmissionFor(User user, UUID pipelineId, int daysAgo,
+                                                  BigDecimal overallScore, UUID programTaskId) {
+            UUID assignmentId = jdbc
+                    .queryForList("SELECT id FROM assignments WHERE user_id = ? AND pipeline_id = ?",
+                            UUID.class, user.getId(), pipelineId)
+                    .stream().findFirst().orElseGet(() -> {
+                        UUID id = UUID.randomUUID();
+                        jdbc.update("""
+                                INSERT INTO assignments (id, pipeline_id, organization_id, user_id, assigned_by)
+                                VALUES (?, ?, ?, ?, ?)
+                                """, id, pipelineId, orgA.getId(), user.getId(), user.getId());
+                        return id;
+                    });
+            UUID submissionId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO submissions (id, assignment_id, user_id, status, program_task_id,
+                                             submitted_at, evaluated_at, created_at)
+                    VALUES (?, ?, ?, 'EVALUATED', ?,
+                            now() - make_interval(days => ?), now() - make_interval(days => ?),
+                            now() - make_interval(days => ?))
+                    """, submissionId, assignmentId, user.getId(), programTaskId,
+                    daysAgo, daysAgo, daysAgo);
+            jdbc.update("""
+                    INSERT INTO overall_summaries (submission_id, overall_score_percentage)
+                    VALUES (?, ?)
+                    """, submissionId, overallScore);
+            return submissionId;
         }
     }
 

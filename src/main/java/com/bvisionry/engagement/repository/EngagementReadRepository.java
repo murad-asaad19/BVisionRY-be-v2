@@ -105,33 +105,79 @@ public class EngagementReadRepository {
     public record Counts(int total, int done) {}
 
     /**
-     * Assignments denominator/numerator for one founder × cohort, from what
-     * exists today: LIVE program tasks of THIS cohort whose module audience
-     * includes the member, plus exercise assignments targeting them.
-     * (The full typed task spine lands in a later phase and replaces this.)
-     * Exercise assignments are org-level — they have no cohort home yet, so
-     * they count in each cohort's assignments row.
+     * Assignments denominator/numerator for one founder × cohort: LIVE
+     * program tasks of THIS cohort whose module audience includes the member
+     * — done-state per TASK TYPE from the owning slice (typed task spine) —
+     * plus direct exercise assignments targeting them. A direct exercise
+     * assignment whose template a cohort EXERCISE task already covers is
+     * excluded (it IS the cohort task's state, not extra direct work).
+     * Direct assignments are org-level, so they still count in each cohort's
+     * assignments row for a multi-cohort member.
+     *
+     * <p>Done-semantics source of truth: {@code programflow.web.ProgramRules}
+     * ({@code done()} + the per-type state mappings). Exercises count when
+     * SUBMITTED or REVIEWED — a CHANGES_REQUESTED copy is back with the member
+     * and does NOT count, matching the journey.
      */
     public Counts assignmentCounts(UUID orgId, UUID cohortId, UUID memberId) {
         Counts program = jdbc.queryForObject("""
-                SELECT count(*) AS total,
-                       count(*) FILTER (WHERE ps.status = 'SUBMITTED') AS done
-                FROM program_tasks t
-                JOIN program_modules m ON m.id = t.module_id AND m.cohort_id = :cohortId
-                LEFT JOIN program_submissions ps ON ps.task_id = t.id AND ps.user_id = :memberId
-                WHERE t.status = 'LIVE'
-                  AND %s
+                SELECT count(*) AS total, count(*) FILTER (WHERE x.done) AS done
+                FROM (
+                    SELECT CASE t.task_type
+                        WHEN 'LESSON' THEN EXISTS (
+                            SELECT 1 FROM program_submissions ps
+                            WHERE ps.task_id = t.id AND ps.user_id = :memberId
+                              AND ps.status = 'SUBMITTED')
+                        WHEN 'COURSE' THEN EXISTS (
+                            SELECT 1 FROM enrollment e
+                            WHERE e.user_id = :memberId AND e.course_id = t.ref_id
+                              AND e.status = 'COMPLETED')
+                        WHEN 'EXERCISE' THEN EXISTS (
+                            SELECT 1 FROM exercise_assignments ea
+                            JOIN exercise_submissions es ON es.assignment_id = ea.id
+                            WHERE ea.user_id = :memberId AND ea.template_id = t.ref_id
+                              AND es.status IN ('SUBMITTED', 'REVIEWED'))
+                        WHEN 'ASSESSMENT' THEN EXISTS (
+                            SELECT 1 FROM submissions s
+                            WHERE s.program_task_id = t.id AND s.user_id = :memberId
+                              AND s.submitted_at IS NOT NULL)
+                        WHEN 'WORKSHOP' THEN EXISTS (
+                            SELECT 1 FROM workshop_task_submissions wts
+                            JOIN workshop_exercise_tasks wet ON wet.id = wts.task_id
+                            JOIN workshop_exercises we ON we.id = wet.exercise_id
+                            WHERE we.workshop_id = t.ref_id AND wts.user_id = :memberId
+                              AND wts.completed_at IS NOT NULL)
+                        WHEN 'SURVEY' THEN EXISTS (
+                            SELECT 1 FROM survey_responses sr
+                            WHERE sr.survey_id = t.ref_id
+                              AND sr.respondent_user_id = :memberId)
+                    END AS done
+                    FROM program_tasks t
+                    JOIN program_modules m ON m.id = t.module_id AND m.cohort_id = :cohortId
+                    WHERE t.status = 'LIVE'
+                      -- Mirrors ProgramTaskType.completableInApp(): a survey has
+                      -- no member route yet, so it counts against no one.
+                      AND t.task_type <> 'SURVEY'
+                      AND %s
+                ) x
                 """.formatted(ProgramAudience.INCLUDES_USER.formatted(":memberId")),
                 new MapSqlParameterSource("cohortId", cohortId).addValue("memberId", memberId),
                 (rs, i) -> new Counts(rs.getInt("total"), rs.getInt("done")));
         Counts exercises = jdbc.queryForObject("""
                 SELECT count(*) AS total,
-                       count(*) FILTER (WHERE es.submitted_at IS NOT NULL) AS done
+                       count(*) FILTER (WHERE es.status IN ('SUBMITTED', 'REVIEWED')) AS done
                 FROM exercise_assignments ea
                 LEFT JOIN exercise_submissions es ON es.assignment_id = ea.id
                                                  AND es.user_id = :memberId
                 WHERE ea.organization_id = :orgId AND ea.user_id = :memberId
-                """,
+                  AND NOT EXISTS (
+                      SELECT 1 FROM cohort_members cm
+                      JOIN program_modules m ON m.cohort_id = cm.cohort_id
+                      JOIN program_tasks t ON t.module_id = m.id
+                      WHERE cm.user_id = :memberId AND t.status = 'LIVE'
+                        AND t.task_type = 'EXERCISE' AND t.ref_id = ea.template_id
+                        AND %s)
+                """.formatted(ProgramAudience.INCLUDES_USER.formatted(":memberId")),
                 params(orgId, memberId),
                 (rs, i) -> new Counts(rs.getInt("total"), rs.getInt("done")));
         return new Counts(program.total() + exercises.total(), program.done() + exercises.done());

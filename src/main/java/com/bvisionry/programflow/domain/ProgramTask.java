@@ -52,6 +52,24 @@ public class ProgramTask {
     @Column(name = "name", nullable = false, length = 200)
     private String name;
 
+    /** What kind of work this task is; LESSON keeps the form-fields flow. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "task_type", nullable = false, length = 20)
+    private ProgramTaskType taskType = ProgramTaskType.LESSON;
+
+    /**
+     * The referenced course / exercise template / pipeline / workshop / survey
+     * — a bare uuid (no FK across slices). Null for LESSON; required before a
+     * non-LESSON task may go LIVE.
+     */
+    @Column(name = "ref_id")
+    private UUID refId;
+
+    /** Spec §5 milestone role; set iff {@link #taskType} is ASSESSMENT. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "milestone_role", length = 20)
+    private MilestoneRole milestoneRole;
+
     @Column(name = "due_date")
     private LocalDate dueDate;
 

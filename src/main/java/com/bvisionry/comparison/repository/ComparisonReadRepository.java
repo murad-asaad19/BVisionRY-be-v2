@@ -188,6 +188,56 @@ public class ComparisonReadRepository {
         return evaluatedSubmission(userId, pipelineId, "DESC");
     }
 
+    public record MilestoneTaskRow(UUID taskId, UUID refId) {}
+
+    /**
+     * The cohort's milestone task of the given role (typed task spine, spec
+     * §5), ANY publish status: for the compute (and the pending-tease guard)
+     * the tag on the submission is authoritative — a task un-published after
+     * members already answered it must still resolve. The journey/open side
+     * keeps its own LIVE filter. Uniqueness is enforced at the task write;
+     * LIMIT 1 is belt and braces.
+     */
+    public Optional<MilestoneTaskRow> milestoneTask(UUID cohortId, String role) {
+        return jdbc.query("""
+                SELECT t.id, t.ref_id
+                FROM program_tasks t
+                JOIN program_modules m ON m.id = t.module_id
+                WHERE m.cohort_id = :cohortId AND t.task_type = 'ASSESSMENT'
+                  AND t.milestone_role = :role
+                LIMIT 1
+                """,
+                new MapSqlParameterSource("cohortId", cohortId).addValue("role", role),
+                (rs, i) -> new MilestoneTaskRow(rs.getObject("id", UUID.class),
+                        rs.getObject("ref_id", UUID.class)))
+                .stream().findFirst();
+    }
+
+    /**
+     * The user's latest cleanly-evaluated submission TAGGED to the given
+     * milestone task — the same-pipeline-safe resolution. The pipeline
+     * predicate guards against a tag that drifted from the designated pair
+     * (also validated at the task write).
+     */
+    public Optional<SubmissionRow> latestEvaluatedTaggedSubmission(UUID userId, UUID taskId,
+                                                                   UUID pipelineId) {
+        return jdbc.query("""
+                SELECT s.id, s.user_id, a.pipeline_id, s.evaluated_at
+                FROM submissions s
+                JOIN assignments a ON a.id = s.assignment_id
+                WHERE s.user_id = :userId
+                  AND s.program_task_id = :taskId
+                  AND a.pipeline_id = :pipelineId
+                  AND s.status = 'EVALUATED'
+                ORDER BY s.evaluated_at DESC NULLS LAST, s.created_at DESC
+                LIMIT 1
+                """,
+                new MapSqlParameterSource("userId", userId).addValue("taskId", taskId)
+                        .addValue("pipelineId", pipelineId),
+                this::submissionRow)
+                .stream().findFirst();
+    }
+
     /**
      * The user's EARLIEST cleanly-evaluated submission for a pipeline — the
      * baseline side. Baseline means intake: a member re-taking the baseline

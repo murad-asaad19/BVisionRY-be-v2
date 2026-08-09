@@ -19,12 +19,15 @@ import com.bvisionry.common.exception.FieldValidationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.programflow.domain.AudienceMode;
 import com.bvisionry.programflow.domain.FieldType;
+import com.bvisionry.programflow.domain.MilestoneRole;
 import com.bvisionry.programflow.domain.ProgramModule;
 import com.bvisionry.programflow.domain.ProgramSettings;
 import com.bvisionry.programflow.domain.ProgramSubmission;
 import com.bvisionry.programflow.domain.ProgramTask;
 import com.bvisionry.programflow.domain.ProgramTaskField;
+import com.bvisionry.programflow.domain.ProgramTaskType;
 import com.bvisionry.programflow.domain.SubmissionStatus;
+import com.bvisionry.programflow.dto.JourneyTaskState;
 import com.bvisionry.programflow.dto.AudienceDto;
 import com.bvisionry.programflow.dto.BoardResponse;
 import com.bvisionry.programflow.dto.CreateModuleRequest;
@@ -61,6 +64,8 @@ public class ProgramAdminService {
     private final ProgramSettingsRepository settings;
     private final TeamRepository teams;
     private final CohortService cohortService;
+    private final MyProgramService myProgramService;
+    private final com.bvisionry.programflow.repository.TaskSpineRepository spine;
     private final ApplicationEventPublisher events;
 
     // ------------------------------------------------------------------ board
@@ -92,16 +97,40 @@ public class ProgramAdminService {
         s.setDueSoonDays(req.dueSoonDays());
         s.setEndLabel(req.endLabel());
         s.setEndAt(req.endAt());
-        if (req.baselinePipelineId() != null
-                && req.baselinePipelineId().equals(req.distancePipelineId())) {
-            // Same-instrument (retake) pairs are deliberately deferred to the
-            // task-spine phase (D) — today an equal pair would self-compare.
-            throw new FieldValidationException(Map.of("distancePipelineId",
-                    "Baseline and distance assessments must be different pipelines."));
+        // Same-instrument (retake) pairs are allowed since the typed task
+        // spine: the DISTANCE milestone task's submission tag — not "latest
+        // evaluated" — identifies the distance submission, so an equal pair
+        // can no longer self-compare.
+        Map<String, String> errors = new LinkedHashMap<>();
+        milestonePipelineSyncError(cohortId, MilestoneRole.BASELINE, req.baselinePipelineId())
+                .ifPresent(msg -> errors.put("baselinePipelineId", msg));
+        milestonePipelineSyncError(cohortId, MilestoneRole.DISTANCE, req.distancePipelineId())
+                .ifPresent(msg -> errors.put("distancePipelineId", msg));
+        if (!errors.isEmpty()) {
+            throw new FieldValidationException(errors);
         }
         s.setBaselinePipelineId(req.baselinePipelineId());
         s.setDistancePipelineId(req.distancePipelineId());
         return ProgramMapper.toDto(settings.save(s));
+    }
+
+    /**
+     * The designated pipeline and the cohort's milestone task must agree
+     * (spec §5): a BASELINE/DISTANCE milestone task referencing pipeline X
+     * while the designation says Y would tag submissions the comparison
+     * could never resolve.
+     */
+    private java.util.Optional<String> milestonePipelineSyncError(UUID cohortId,
+            MilestoneRole role, UUID designatedPipelineId) {
+        if (designatedPipelineId == null) {
+            return java.util.Optional.empty();
+        }
+        boolean mismatch = tasks.findByCohortAndMilestoneRole(cohortId, role).stream()
+                .anyMatch(t -> t.getRefId() != null && !t.getRefId().equals(designatedPipelineId));
+        return mismatch
+                ? java.util.Optional.of("The cohort's " + role.name().toLowerCase()
+                        + " milestone task references a different pipeline.")
+                : java.util.Optional.empty();
     }
 
     // ---------------------------------------------------------------- modules
@@ -186,31 +215,99 @@ public class ProgramAdminService {
 
     // ------------------------------------------------------------------ tasks
 
-    public TaskDto createTask(UUID orgId, UUID cohortId, UUID moduleId) {
+    public TaskDto createTask(UUID orgId, UUID cohortId, UUID moduleId, ProgramTaskType taskType) {
         ProgramModule m = requireModule(orgId, cohortId, moduleId);
+        ProgramTaskType type = taskType == null ? ProgramTaskType.LESSON : taskType;
         ProgramTask t = new ProgramTask();
         t.setModule(m);
-        t.setName("Untitled task");
+        t.setTaskType(type);
+        t.setName("Untitled " + type.name().toLowerCase() + " task");
         t.setPosition(m.getTasks().size());
-        ProgramTaskField intro = new ProgramTaskField();
-        intro.setTask(t);
-        intro.setFieldType(FieldType.INSTRUCTIONS);
-        intro.setRequired(false);
-        intro.setPosition(0);
-        intro.setConfig(new LinkedHashMap<>(Map.of("text", "Describe what the founder needs to do.")));
-        t.getFields().add(intro);
+        if (type == ProgramTaskType.LESSON) {
+            ProgramTaskField intro = new ProgramTaskField();
+            intro.setTask(t);
+            intro.setFieldType(FieldType.INSTRUCTIONS);
+            intro.setRequired(false);
+            intro.setPosition(0);
+            intro.setConfig(new LinkedHashMap<>(Map.of("text", "Describe what the founder needs to do.")));
+            t.getFields().add(intro);
+        } else if (type == ProgramTaskType.ASSESSMENT) {
+            // A valid default (check-ins are the common case); the builder can
+            // switch to BASELINE/DISTANCE, which uniqueness-validates on save.
+            t.setMilestoneRole(MilestoneRole.CHECKIN);
+        }
         m.getTasks().add(t);
         return ProgramMapper.toDto(tasks.save(t));
     }
 
     public TaskDto updateTask(UUID orgId, UUID cohortId, UUID taskId, UpdateTaskRequest req) {
         ProgramTask t = requireTask(orgId, cohortId, taskId);
+        // Additive contract: a request without taskType (pre-spine builder)
+        // leaves the whole type/ref/milestone trio untouched.
+        ProgramTaskType type = req.taskType() == null ? t.getTaskType() : req.taskType();
+        UUID refId = req.taskType() == null ? t.getRefId() : req.refId();
+        MilestoneRole role = req.taskType() == null ? t.getMilestoneRole() : req.milestoneRole();
+        validateSpine(orgId, cohortId, t, type, refId, role, req.status(), req.fields().size());
+        t.setTaskType(type);
+        t.setRefId(refId);
+        t.setMilestoneRole(role);
         t.setName(req.name());
         t.setDueDate(req.dueDate());
         t.setStatus(req.status());
         t.setAiDraft(req.aiDraft());
         reconcileFields(t, req.fields());
         return ProgramMapper.toDto(t);
+    }
+
+    /**
+     * Typed-spine rules (spec §1/§5): the per-task structural rules from
+     * {@link ProgramRules#taskTypeFieldErrors}, plus the cohort-level ones —
+     * at most ONE BASELINE and ONE DISTANCE milestone per cohort, and a
+     * BASELINE/DISTANCE task's pipeline must match the designated pair when
+     * one is designated. (Task moves stay within the cohort by construction,
+     * so create/update cover every mutation that could break these.)
+     */
+    private void validateSpine(UUID orgId, UUID cohortId, ProgramTask t, ProgramTaskType type,
+            UUID refId, MilestoneRole role,
+            com.bvisionry.programflow.domain.ProgramTaskStatus status, int fieldCount) {
+        Map<String, String> errors = new LinkedHashMap<>(
+                ProgramRules.taskTypeFieldErrors(type, refId, role, status, fieldCount));
+        // The reference must actually exist in its owning slice (review #7a);
+        // a LIVE course task also requires the course to be published.
+        if (errors.isEmpty() && refId != null
+                && !spine.refExists(type, refId, orgId,
+                        status == com.bvisionry.programflow.domain.ProgramTaskStatus.LIVE)) {
+            errors.put("refId", "The referenced " + type.name().toLowerCase()
+                    + (type == ProgramTaskType.COURSE
+                            ? " was not found or is not published." : " was not found."));
+        }
+        // Once members have answered a milestone, its instrument is frozen —
+        // re-pointing the ref would orphan their tagged submissions (review #7b).
+        if (errors.isEmpty() && t.getTaskType() == ProgramTaskType.ASSESSMENT
+                && t.getRefId() != null && !t.getRefId().equals(refId)
+                && spine.hasTaggedSubmissions(t.getId())) {
+            errors.put("refId", "Members have already answered this milestone — "
+                    + "its assessment pipeline can no longer change.");
+        }
+        if (errors.isEmpty() && (role == MilestoneRole.BASELINE || role == MilestoneRole.DISTANCE)) {
+            boolean taken = tasks.findByCohortAndMilestoneRole(cohortId, role).stream()
+                    .anyMatch(other -> !other.getId().equals(t.getId()));
+            if (taken) {
+                errors.put("milestoneRole", "This cohort already has a "
+                        + role.name().toLowerCase() + " milestone task.");
+            }
+            UUID designated = settings.findById(cohortId)
+                    .map(s -> role == MilestoneRole.BASELINE
+                            ? s.getBaselinePipelineId() : s.getDistancePipelineId())
+                    .orElse(null);
+            if (designated != null && refId != null && !designated.equals(refId)) {
+                errors.put("refId", "The cohort's designated " + role.name().toLowerCase()
+                        + " assessment is a different pipeline.");
+            }
+        }
+        if (!errors.isEmpty()) {
+            throw new FieldValidationException(errors);
+        }
     }
 
     /** Deletes the task with its fields/submissions (orphan removal + DB cascades). */
@@ -346,8 +443,21 @@ public class ProgramAdminService {
         Map<UUID, String> teamNames = teams.findByOrgIdOrderByCreatedAtAsc(orgId).stream()
                 .collect(Collectors.toMap(t -> t.getId(), t -> t.getName()));
 
-        List<PulseRow> rows = teams.findOrgMembers(orgId).stream().map(member -> {
+        List<OrgMemberRow> orgMembers = teams.findOrgMembers(orgId);
+        // Non-LESSON columns read their owning slice, batched for every member.
+        List<ProgramTask> typedTasks = mods.stream()
+                .flatMap(m -> ProgramRules.liveTasks(m).stream())
+                .filter(t -> t.getTaskType() != ProgramTaskType.LESSON)
+                .toList();
+        Map<UUID, Map<UUID, JourneyTaskState>> typedByUser = myProgramService.typedStatesForPulse(
+                orgMembers.stream().map(OrgMemberRow::getId).toList(), typedTasks);
+        Map<UUID, ProgramTaskType> taskTypes = mods.stream()
+                .flatMap(m -> m.getTasks().stream())
+                .collect(Collectors.toMap(ProgramTask::getId, ProgramTask::getTaskType));
+
+        List<PulseRow> rows = orgMembers.stream().map(member -> {
             Map<UUID, ProgramSubmission> mine = byUserThenTask.getOrDefault(member.getId(), Map.of());
+            Map<UUID, JourneyTaskState> myTyped = typedByUser.getOrDefault(member.getId(), Map.of());
             List<CellState> cells = new ArrayList<>(taskIds.size());
             int assigned = 0;
             long done = 0;
@@ -359,13 +469,24 @@ public class ProgramAdminService {
                     cells.add(CellState.NOT_ASSIGNED);
                     continue;
                 }
-                assigned++;
-                ProgramSubmission s = mine.get(taskIds.get(i));
-                CellState state = s == null
-                        ? CellState.NOT_STARTED
-                        : s.getStatus() == SubmissionStatus.SUBMITTED ? CellState.SUBMITTED : CellState.IN_DRAFT;
-                if (state == CellState.SUBMITTED) {
-                    done++;
+                UUID taskId = taskIds.get(i);
+                ProgramTaskType type = taskTypes.get(taskId);
+                CellState state;
+                if (type == ProgramTaskType.LESSON) {
+                    ProgramSubmission s = mine.get(taskId);
+                    state = s == null
+                            ? CellState.NOT_STARTED
+                            : s.getStatus() == SubmissionStatus.SUBMITTED ? CellState.SUBMITTED : CellState.IN_DRAFT;
+                } else {
+                    state = cellOf(myTyped.get(taskId));
+                }
+                // Uncompletable types (SURVEY, for now) render a cell but count
+                // in neither side of the completion percentage.
+                if (type.completableInApp()) {
+                    assigned++;
+                    if (state == CellState.SUBMITTED) {
+                        done++;
+                    }
                 }
                 cells.add(state);
             }
@@ -379,6 +500,14 @@ public class ProgramAdminService {
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /** Typed-task state → pulse cell: done-states read as SUBMITTED, activity as IN_DRAFT. */
+    private static CellState cellOf(JourneyTaskState state) {
+        if (state == null || state == JourneyTaskState.NOT_STARTED) {
+            return CellState.NOT_STARTED;
+        }
+        return ProgramRules.done(state) ? CellState.SUBMITTED : CellState.IN_DRAFT;
+    }
 
     private int reached(ProgramModule m, List<OrgMemberRow> members) {
         return (int) members.stream()

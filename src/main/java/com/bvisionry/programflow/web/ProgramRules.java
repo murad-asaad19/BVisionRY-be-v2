@@ -11,10 +11,14 @@ import java.util.Set;
 import java.util.UUID;
 
 import com.bvisionry.programflow.domain.FieldType;
+import com.bvisionry.programflow.domain.MilestoneRole;
 import com.bvisionry.programflow.domain.ModuleLockMode;
 import com.bvisionry.programflow.domain.ProgramModule;
 import com.bvisionry.programflow.domain.ProgramTaskField;
+import com.bvisionry.programflow.domain.ProgramTaskStatus;
+import com.bvisionry.programflow.domain.ProgramTaskType;
 import com.bvisionry.programflow.dto.JourneyResponse.LockState;
+import com.bvisionry.programflow.dto.JourneyTaskState;
 
 /** Pure domain rules shared by the admin and learner services. */
 final class ProgramRules {
@@ -54,7 +58,10 @@ final class ProgramRules {
         if (index == 0) {
             return LockState.UNLOCKED;
         }
+        // Tasks a member cannot complete in-app (SURVEY, for now) never gate
+        // the next module — otherwise the journey deadlocks on them.
         boolean previousDone = liveTasks(modules.get(index - 1)).stream()
+                .filter(t -> t.getTaskType().completableInApp())
                 .allMatch(t -> submittedTaskIds.contains(t.getId()));
         return previousDone ? LockState.UNLOCKED : LockState.LOCKED_SEQUENTIAL;
     }
@@ -95,6 +102,101 @@ final class ProgramRules {
                 .filter(f -> !isAnswered(f, answers.get(f.getId().toString())))
                 .map(ProgramTaskField::getId)
                 .toList();
+    }
+
+    /* ------------------------------------------- typed task spine (spec §1) */
+
+    /** LESSON: my program-submission status → unified vocabulary. */
+    static JourneyTaskState lessonState(com.bvisionry.programflow.domain.SubmissionStatus status) {
+        if (status == null) {
+            return JourneyTaskState.NOT_STARTED;
+        }
+        return status == com.bvisionry.programflow.domain.SubmissionStatus.SUBMITTED
+                ? JourneyTaskState.DONE
+                : JourneyTaskState.IN_PROGRESS;
+    }
+
+    /** COURSE: enrollment status → unified vocabulary (null row = not started). */
+    static JourneyTaskState courseState(String enrollmentStatus) {
+        if (enrollmentStatus == null) {
+            return JourneyTaskState.NOT_STARTED;
+        }
+        return "COMPLETED".equals(enrollmentStatus)
+                ? JourneyTaskState.DONE
+                : JourneyTaskState.IN_PROGRESS;
+    }
+
+    /** EXERCISE: exercise-submission status (+reviewedAt implied by REVIEWED) → unified vocabulary. */
+    static JourneyTaskState exerciseState(String submissionStatus) {
+        if (submissionStatus == null) {
+            return JourneyTaskState.NOT_STARTED;
+        }
+        return switch (submissionStatus) {
+            case "SUBMITTED" -> JourneyTaskState.SUBMITTED;
+            case "CHANGES_REQUESTED" -> JourneyTaskState.CHANGES_REQUESTED;
+            case "REVIEWED" -> JourneyTaskState.REVIEWED;
+            default -> JourneyTaskState.IN_PROGRESS;
+        };
+    }
+
+    /**
+     * ASSESSMENT: the tagged submission's status → unified vocabulary.
+     * FAILED / NEEDS_REVIEW / PENDING_REEDIT collapse to SUBMITTED — the
+     * member has done their part; evaluation state is an admin concern.
+     */
+    static JourneyTaskState assessmentState(String submissionStatus) {
+        if (submissionStatus == null) {
+            return JourneyTaskState.NOT_STARTED;
+        }
+        return switch (submissionStatus) {
+            case "IN_PROGRESS" -> JourneyTaskState.IN_PROGRESS;
+            case "EVALUATED" -> JourneyTaskState.EVALUATED;
+            default -> JourneyTaskState.SUBMITTED;
+        };
+    }
+
+    /**
+     * Does this state count toward completion/progress/drip? The member's
+     * side of the work is done (a returned CHANGES_REQUESTED exercise is
+     * back with the member, so it does NOT count).
+     */
+    static boolean done(JourneyTaskState state) {
+        return state == JourneyTaskState.SUBMITTED
+                || state == JourneyTaskState.REVIEWED
+                || state == JourneyTaskState.EVALUATED
+                || state == JourneyTaskState.DONE;
+    }
+
+    /**
+     * Structural rules of the typed spine a single task must satisfy,
+     * expressed as per-field errors (empty map = valid). Cohort-level rules
+     * (milestone uniqueness, designated-pipeline sync) need data and live in
+     * {@code ProgramAdminService}.
+     */
+    static Map<String, String> taskTypeFieldErrors(ProgramTaskType type, UUID refId,
+            MilestoneRole milestoneRole, ProgramTaskStatus status, int fieldCount) {
+        Map<String, String> errors = new java.util.LinkedHashMap<>();
+        if (type == ProgramTaskType.LESSON) {
+            if (refId != null) {
+                errors.put("refId", "Lesson tasks do not reference another object.");
+            }
+        } else {
+            if (fieldCount > 0) {
+                errors.put("fields", "Only lesson tasks have form fields.");
+            }
+            if (status == ProgramTaskStatus.LIVE && refId == null) {
+                errors.put("refId", "Pick what this task references before publishing it.");
+            }
+        }
+        if (type == ProgramTaskType.ASSESSMENT) {
+            if (milestoneRole == null) {
+                errors.put("milestoneRole",
+                        "Assessment tasks need a milestone role (baseline, check-in or distance).");
+            }
+        } else if (milestoneRole != null) {
+            errors.put("milestoneRole", "Only assessment tasks carry a milestone role.");
+        }
+        return errors;
     }
 
     /**

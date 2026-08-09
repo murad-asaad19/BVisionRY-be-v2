@@ -30,6 +30,9 @@ final class ProgramMapper {
                 t.getStatus(),
                 t.isAiDraft(),
                 t.getPosition(),
+                t.getTaskType(),
+                t.getRefId(),
+                t.getMilestoneRole(),
                 t.getFields().stream().map(ProgramMapper::toDto).toList());
     }
 

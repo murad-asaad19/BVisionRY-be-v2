@@ -58,6 +58,12 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // an admin attribution on the org's record, like assignments.assigned_by.
             "coach_assignments.assigned_by", "coach_assignments.coach_id",
             "coach_assignments.member_id",
+            // coach_notes (V162): coach_id / member_id CASCADE with the user row
+            // — the note is the coach's judgement ABOUT the member, so it dies
+            // with either party. Exported for both sides as coach_notes (for
+            // the member it is data about them; for the coach, content they
+            // authored).
+            "coach_notes.coach_id", "coach_notes.member_id",
             // coach_profiles (V153): coach_id IS the PK and CASCADEs with the
             // user row — the booking link is about that coach and nobody else,
             // so it dies with them. Exported as coach_profile: it is content

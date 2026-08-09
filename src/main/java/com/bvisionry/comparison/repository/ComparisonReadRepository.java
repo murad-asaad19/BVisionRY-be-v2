@@ -122,6 +122,16 @@ public class ComparisonReadRepository {
                 (rs, i) -> rs.getObject("user_id", UUID.class));
     }
 
+    /** Whether the user belongs to the org — the admin-side member gate (404 when false). */
+    public boolean userInOrg(UUID orgId, UUID userId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (SELECT 1 FROM users
+                               WHERE id = :userId AND organization_id = :orgId)
+                """,
+                new MapSqlParameterSource("orgId", orgId).addValue("userId", userId),
+                Boolean.class));
+    }
+
     public Map<UUID, String> userNames(Collection<UUID> userIds) {
         if (userIds.isEmpty()) {
             return Map.of();

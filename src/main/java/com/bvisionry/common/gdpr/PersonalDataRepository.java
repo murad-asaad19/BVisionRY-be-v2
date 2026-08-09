@@ -256,6 +256,12 @@ public class PersonalDataRepository {
         EXPORT_SECTIONS.put("coach_assignments",
                 "SELECT * FROM coach_assignments WHERE coach_id = :userId OR member_id = :userId");
 
+        // Coach notes (V162): the coach's judgement ABOUT the member — exported
+        // for both sides (data about the member; content the coach authored).
+        // Erasure needs no statement: both FKs CASCADE with the user row.
+        EXPORT_SECTIONS.put("coach_notes",
+                "SELECT * FROM coach_notes WHERE coach_id = :userId OR member_id = :userId");
+
         // The subject's own coach profile (V153) — a link they published about
         // themselves. Erasure needs no statement: coach_id is the PK and
         // CASCADEs with the users row.

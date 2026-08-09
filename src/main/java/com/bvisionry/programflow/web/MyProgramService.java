@@ -77,7 +77,38 @@ public class MyProgramService {
     @Transactional(readOnly = true)
     public JourneyResponse journey(UUID cohortId) {
         UUID userId = currentUser.require().userId();
-        Cohort cohort = resolveCohort(userId, cohortId);
+        return buildJourney(userId, resolveCohort(userId, cohortId));
+    }
+
+    /**
+     * Read-only journey of ANOTHER member for the shared founder profile
+     * (redesign spec §2.4 — "read-only reuse of the member's Journey").
+     * CALLERS AUTHORIZE FIRST (org guard stack or {@code CoachAccess}); this
+     * method's own tenancy contribution is the org filter on the enrolled
+     * cohorts, so a foreign org id can only ever produce the empty journey.
+     * Cohort choice mirrors {@link #resolveCohort}: an explicit request must
+     * be one of the member's org-scoped cohorts (else 404); null defaults to
+     * the first enrolled (ACTIVE first).
+     */
+    @Transactional(readOnly = true)
+    public JourneyResponse journeyOfMember(UUID orgId, UUID memberId, UUID requestedCohortId) {
+        List<Cohort> enrolled = cohorts.findEnrolled(memberId).stream()
+                .filter(c -> orgId.equals(c.getOrgId()))
+                .toList();
+        Cohort cohort;
+        if (requestedCohortId != null) {
+            cohort = enrolled.stream()
+                    .filter(c -> c.getId().equals(requestedCohortId))
+                    .findFirst()
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "Cohort", requestedCohortId.toString()));
+        } else {
+            cohort = enrolled.isEmpty() ? null : enrolled.get(0);
+        }
+        return buildJourney(memberId, cohort);
+    }
+
+    private JourneyResponse buildJourney(UUID userId, Cohort cohort) {
         if (cohort == null) {
             return new JourneyResponse(ProgramSettingsDto.defaults(), new JourneyResponse.Progress(0, 0),
                     gamification(List.of()), List.of(), null, false);

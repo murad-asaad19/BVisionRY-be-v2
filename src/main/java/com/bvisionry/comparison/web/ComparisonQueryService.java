@@ -87,6 +87,20 @@ public class ComparisonQueryService {
         return toDto(c, name);
     }
 
+    /**
+     * The org admin's door to the SAME lifecycle-aware payload the member and
+     * coach get (state + trajectory + comparison) — the founder-profile Growth
+     * tab needs the pending/none states and the trajectory, which the
+     * per-cohort {@link #cohortComparisonForUser} detail deliberately lacks.
+     * Extends the Phase A DTO rather than forking a parallel shape.
+     */
+    public MyComparisonResponse memberComparisonForAdmin(UUID orgId, UUID userId) {
+        if (!reads.userInOrg(orgId, userId)) {
+            throw new ResourceNotFoundException("Member", userId.toString());
+        }
+        return myComparison(userId);
+    }
+
     /* ----------------------------------------------------------- coach view */
 
     /**

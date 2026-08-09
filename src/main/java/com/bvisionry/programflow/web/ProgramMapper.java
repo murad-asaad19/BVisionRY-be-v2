@@ -49,6 +49,7 @@ final class ProgramMapper {
         return s == null
                 ? ProgramSettingsDto.defaults()
                 : new ProgramSettingsDto(s.getStageLabel(), s.isDripEnabled(), s.getDueSoonDays(),
-                        s.getEndLabel(), s.getEndAt());
+                        s.getEndLabel(), s.getEndAt(),
+                        s.getBaselinePipelineId(), s.getDistancePipelineId());
     }
 }

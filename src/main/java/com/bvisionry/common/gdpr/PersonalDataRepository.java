@@ -262,6 +262,18 @@ public class PersonalDataRepository {
         EXPORT_SECTIONS.put("coach_profile",
                 "SELECT * FROM coach_profiles WHERE coach_id = :userId");
 
+        // Distance comparisons (V161): scores computed ABOUT the subject and
+        // nobody else — user_id CASCADEs with the users row (pillar rows cascade
+        // off the comparison), so erasure needs no statement. Exported with the
+        // per-pillar snapshot rows: it is a stored evaluation outcome about them
+        // that the raw pillar_evaluations sections above do not aggregate.
+        EXPORT_SECTIONS.put("distance_comparisons",
+                "SELECT * FROM founder_comparisons WHERE user_id = :userId");
+        EXPORT_SECTIONS.put("distance_comparison_pillars", """
+                SELECT * FROM founder_comparison_pillars
+                 WHERE comparison_id IN (SELECT id FROM founder_comparisons WHERE user_id = :userId)
+                """);
+
         EXPORT_SECTIONS.put("notifications", "SELECT * FROM notifications WHERE user_id = :userId");
         EXPORT_SECTIONS.put("notification_optouts", "SELECT * FROM notification_optouts WHERE user_id = :userId");
         EXPORT_SECTIONS.put("upgrade_requests", "SELECT * FROM upgrade_requests WHERE requested_by = :userId");

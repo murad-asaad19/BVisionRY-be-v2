@@ -73,6 +73,11 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // erase the fact that the removal happened.
             "enrolment_overrides.removed_by", "enrolment_overrides.user_id",
             "exercise_assignments.user_id", "exercise_comments.author_id",
+            // founder_comparisons (V161): user_id CASCADEs with the user row —
+            // the comparison is scores about that founder and nobody else, so it
+            // dies with them (pillar rows cascade off the comparison). Exported
+            // as distance_comparisons + distance_comparison_pillars.
+            "founder_comparisons.user_id",
             "exercise_submissions.user_id", "insight_report_member_ids.member_id",
             "invitations.invited_by", "join_links.created_by", "notification_optouts.user_id",
             "notifications.user_id", "overall_summary_history.archived_by_admin_id",

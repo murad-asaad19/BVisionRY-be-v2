@@ -82,6 +82,14 @@ public class GlobalExceptionHandler {
         return problem(HttpStatus.CONFLICT, "This change conflicts with a concurrent update. Please retry.");
     }
 
+    /** Service-layer structural validation — same wire shape as bean validation below. */
+    @ExceptionHandler(FieldValidationException.class)
+    public ProblemDetail handleFieldValidation(FieldValidationException ex) {
+        ProblemDetail problem = problem(HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setProperty("fieldErrors", ex.getFieldErrors());
+        return problem;
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ProblemDetail handleValidation(MethodArgumentNotValidException ex) {
         // First-wins: if a field has multiple violations, keep the first reported message.

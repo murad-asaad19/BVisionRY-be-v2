@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.exception.FieldValidationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.programflow.domain.AudienceMode;
 import com.bvisionry.programflow.domain.FieldType;
@@ -91,6 +92,15 @@ public class ProgramAdminService {
         s.setDueSoonDays(req.dueSoonDays());
         s.setEndLabel(req.endLabel());
         s.setEndAt(req.endAt());
+        if (req.baselinePipelineId() != null
+                && req.baselinePipelineId().equals(req.distancePipelineId())) {
+            // Same-instrument (retake) pairs are deliberately deferred to the
+            // task-spine phase (D) — today an equal pair would self-compare.
+            throw new FieldValidationException(Map.of("distancePipelineId",
+                    "Baseline and distance assessments must be different pipelines."));
+        }
+        s.setBaselinePipelineId(req.baselinePipelineId());
+        s.setDistancePipelineId(req.distancePipelineId());
         return ProgramMapper.toDto(settings.save(s));
     }
 

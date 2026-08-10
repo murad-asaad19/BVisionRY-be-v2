@@ -30,6 +30,18 @@ public interface PillarCourseMappingRepository extends JpaRepository<PillarCours
     void deleteByPillarId(UUID pillarId);
 
     /**
+     * Every rule on the platform, pillar and pipeline fetched — the Course
+     * visibility screen's AI-rules table. Fetch-joined because the alternative
+     * is one lazy load per row on a page that lists them all.
+     */
+    @org.springframework.data.jpa.repository.Query("""
+            SELECT m FROM PillarCourseMapping m
+            JOIN FETCH m.pillar p JOIN FETCH p.pipeline
+            ORDER BY p.displayOrder, p.name, m.bandPosition
+            """)
+    List<PillarCourseMapping> findAllWithPillar();
+
+    /**
      * Copies one pillar's rules onto a freshly cloned pillar — otherwise a clone
      * carries the thresholds but silently drops the rules hanging off them.
      * Called AFTER the clone is saved, because {@code target} needs an id.

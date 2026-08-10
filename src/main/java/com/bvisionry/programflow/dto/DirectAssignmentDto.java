@@ -30,5 +30,13 @@ public record DirectAssignmentDto(
         Instant deadline,
         Instant assignedAt,
         Instant submittedAt,
-        Instant completedAt) {
+        Instant completedAt,
+        /**
+         * COURSE only (spec §3): ORG_RULE | DIRECT | AI_SUGGESTED | SELF, the
+         * STRONGEST source that put this course on the member's shelf. Null for
+         * exercises and assessments, which have one path each.
+         */
+        String source,
+        /** Spec §3: required work gates journey progress; optional is shown and never gates. */
+        boolean required) {
 }

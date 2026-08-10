@@ -57,6 +57,7 @@ class MyProgramServiceTest {
     private TeamRepository teams;
     @Mock
     private com.bvisionry.programflow.repository.TaskSpineRepository spine;
+    @Mock private com.bvisionry.common.coursevisibility.CourseVisibilityAccess courseVisibility;
     @Mock
     private CurrentUserAccessor currentUser;
     @Mock
@@ -75,7 +76,7 @@ class MyProgramServiceTest {
     @BeforeEach
     void setUp() {
         service = new MyProgramService(cohorts, modules, tasks, submissions, settings, teams,
-                spine, currentUser, eventPublisher);
+                spine, courseVisibility, currentUser, eventPublisher);
 
         cohort = new Cohort();
         cohort.setId(cohortId);

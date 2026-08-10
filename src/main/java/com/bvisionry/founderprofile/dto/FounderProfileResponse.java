@@ -66,9 +66,9 @@ public record FounderProfileResponse(
             /** Raw per-type status; null = not started. */
             String status,
             /**
-             * Course enrolment source chip: AI (auto-enrolment pillar rule) or
-             * SELF. DIRECT/ORG_RULE arrive with the spec §3 enrollment model
-             * in a later phase — today's schema cannot distinguish them.
+             * Course enrolment source chip (spec §3, V168): ORG_RULE | DIRECT |
+             * AI_SUGGESTED | SELF — the STRONGEST source that put this course on
+             * the member's shelf. Null for non-course rows.
              */
             String courseSource,
             Integer progressPct,
@@ -82,7 +82,9 @@ public record FounderProfileResponse(
             Instant evaluatedAt,
             Instant completedAt,
             /** Course removed via enrolment override (kept visible, flagged — never silently dropped). */
-            boolean removed) {}
+            boolean removed,
+            /** COURSE only (spec §3): required work gates journey progress. */
+            boolean required) {}
 
     /** Latest evaluated assessment, one row per pillar — feeds the Growth tab's plain/pending states. */
     public record FounderPillarScore(

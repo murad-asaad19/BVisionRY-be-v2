@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
 import com.bvisionry.common.programaccess.ProgramAudience;
 import com.bvisionry.common.programaccess.TaskCompletion;
 
@@ -309,25 +310,74 @@ public class TaskSpineRepository {
     }
 
     public record DirectCourseRow(UUID enrollmentId, UUID courseId, String title, String status,
-                                  int progressPct, Instant enrolledAt, Instant completedAt) {}
+                                  int progressPct, Instant enrolledAt, Instant completedAt,
+                                  String source, boolean required, Instant deadline) {}
 
-    /** The member's enrollments in courses no cohort task covers (self/auto/direct). */
+    /**
+     * The member's courses that no cohort task covers - spec section 3's four
+     * sources as the journey's "Direct assignments" section sees them.
+     *
+     * <p>Two halves, and the second is the point: real {@code enrollment} rows,
+     * UNION the org rules covering this member that have no row YET. Without the
+     * union a required org-wide course would be invisible in the journey until
+     * the member happened to open the Library, which is precisely backwards. The
+     * row is written on first open ({@link #ensureEnrollment}).
+     *
+     * <p><strong>Semantics owner:</strong>
+     * {@code courseaccess.domain.EffectiveCourses}. This is a deliberate SQL
+     * subset of that merge - no AI suggestions (a suggestion is an offer, not
+     * work), and the same three rules: an org rule outranks a SELF/AI source but
+     * never a DIRECT one, {@code required} is a union, and the earliest deadline
+     * binds. Change one, change the other.
+     *
+     * <p>The UN-materialized half is filtered by visibility + PUBLISHED, matching
+     * {@code CourseAccessService#accept}: a claim the member would be refused is
+     * a dead row. Materialized rows are not — spec §3's downgrade policy keeps
+     * progress visible.
+     */
     public List<DirectCourseRow> directCourses(UUID memberId) {
+        String notCovered = "NOT " + COVERED_BY_COHORT_TASK.formatted("'COURSE'", "%s");
         return jdbc.query("""
                 SELECT e.id, e.course_id, c.title, e.status, e.progress_pct,
-                       e.enrolled_at, e.completed_at
+                       e.enrolled_at, e.completed_at,
+                       CASE WHEN r.course_id IS NOT NULL AND e.source <> 'DIRECT'
+                            THEN 'ORG_RULE' ELSE e.source END AS source,
+                       (e.required OR COALESCE(r.required, FALSE)) AS required,
+                       LEAST(e.deadline, r.deadline) AS deadline
                 FROM enrollment e
                 JOIN course c ON c.id = e.course_id
+                LEFT JOIN org_course_rules r
+                       ON r.course_id = e.course_id
+                      AND r.org_id = (SELECT organization_id FROM users WHERE id = :memberId)
+                      AND NOT EXISTS (SELECT 1 FROM enrolment_overrides o
+                                       WHERE o.user_id = :memberId AND o.course_id = e.course_id)
                 WHERE e.user_id = :memberId
                   AND e.status <> 'CANCELLED'
-                  AND NOT %s
-                ORDER BY e.enrolled_at DESC
-                """.formatted(COVERED_BY_COHORT_TASK.formatted("'COURSE'", "e.course_id")),
+                  AND %1$s
+                UNION ALL
+                SELECT NULL, r.course_id, c.title, NULL, 0,
+                       r.created_at, NULL, 'ORG_RULE', r.required, r.deadline
+                FROM org_course_rules r
+                JOIN course c ON c.id = r.course_id
+                WHERE r.org_id = (SELECT organization_id FROM users WHERE id = :memberId)
+                  AND NOT EXISTS (SELECT 1 FROM enrollment e2
+                                   WHERE e2.user_id = :memberId AND e2.course_id = r.course_id
+                                     AND e2.status <> 'CANCELLED')
+                  AND NOT EXISTS (SELECT 1 FROM enrolment_overrides o
+                                   WHERE o.user_id = :memberId AND o.course_id = r.course_id)
+                  AND c.state = 'PUBLISHED' AND %3$s
+                  AND %2$s
+                ORDER BY 6 DESC
+                """.formatted(notCovered.formatted("e.course_id"), notCovered.formatted("r.course_id"),
+                        CourseVisibilityAccess.VISIBLE_TO_ORG.formatted(
+                                "(SELECT organization_id FROM users WHERE id = :memberId)")),
                 new MapSqlParameterSource("memberId", memberId),
                 (rs, i) -> new DirectCourseRow(rs.getObject("id", UUID.class),
                         rs.getObject("course_id", UUID.class), rs.getString("title"),
                         rs.getString("status"), rs.getInt("progress_pct"),
-                        instant(rs, "enrolled_at"), instant(rs, "completed_at")));
+                        instant(rs, "enrolled_at"), instant(rs, "completed_at"),
+                        rs.getString("source"), rs.getBoolean("required"),
+                        instant(rs, "deadline")));
     }
 
     /**
@@ -349,6 +399,40 @@ public class TaskSpineRepository {
                 (rs, i) -> rs.getObject("user_id", UUID.class));
     }
 
+    /**
+     * Cohort members with a course past its deadline and unfinished (spec §3:
+     * "overdue shows in the journey and the needs-attention strip").
+     *
+     * <p>Both halves of the enrollment model: real rows (served by
+     * {@code ix_enrollment_deadline}) and org rules nobody has opened yet, minus
+     * exclusions. Required AND optional — §3 says overdue shows, and does not
+     * qualify that by the flag.
+     */
+    public java.util.Set<UUID> membersWithOverdueCourses(UUID cohortId) {
+        return new java.util.HashSet<>(jdbc.query("""
+                SELECT cm.user_id
+                FROM cohort_members cm
+                WHERE cm.cohort_id = :cohortId
+                  AND (EXISTS (SELECT 1 FROM enrollment e
+                                WHERE e.user_id = cm.user_id
+                                  AND e.status NOT IN ('CANCELLED', 'COMPLETED')
+                                  AND e.deadline IS NOT NULL AND e.deadline < NOW())
+                    OR EXISTS (SELECT 1
+                                 FROM org_course_rules r
+                                 JOIN users u ON u.id = cm.user_id AND u.organization_id = r.org_id
+                                WHERE r.deadline IS NOT NULL AND r.deadline < NOW()
+                                  AND NOT EXISTS (SELECT 1 FROM enrolment_overrides o
+                                                   WHERE o.user_id = cm.user_id
+                                                     AND o.course_id = r.course_id)
+                                  AND NOT EXISTS (SELECT 1 FROM enrollment e2
+                                                   WHERE e2.user_id = cm.user_id
+                                                     AND e2.course_id = r.course_id
+                                                     AND e2.status IN ('CANCELLED', 'COMPLETED'))))
+                """,
+                new MapSqlParameterSource("cohortId", cohortId),
+                (rs, i) -> rs.getObject("user_id", UUID.class)));
+    }
+
     /* ------------------------------------------------- validation probes */
 
     /**
@@ -360,9 +444,14 @@ public class TaskSpineRepository {
                              UUID orgId, boolean live) {
         String sql = switch (type) {
             case LESSON -> null;
+            // Spec section 3: an org admin may only point a task at a course the
+            // platform has made visible to their org. The ref picker filters, but
+            // the filter is cosmetic - this is the control.
             case COURSE -> live
-                    ? "SELECT EXISTS (SELECT 1 FROM course WHERE id = :id AND state = 'PUBLISHED')"
-                    : "SELECT EXISTS (SELECT 1 FROM course WHERE id = :id)";
+                    ? "SELECT EXISTS (SELECT 1 FROM course c WHERE c.id = :id AND c.state = 'PUBLISHED' AND "
+                            + CourseVisibilityAccess.VISIBLE_TO_ORG.formatted(":orgId") + ")"
+                    : "SELECT EXISTS (SELECT 1 FROM course c WHERE c.id = :id AND "
+                            + CourseVisibilityAccess.VISIBLE_TO_ORG.formatted(":orgId") + ")";
             case EXERCISE -> "SELECT EXISTS (SELECT 1 FROM exercise_templates WHERE id = :id)";
             case ASSESSMENT -> "SELECT EXISTS (SELECT 1 FROM pipelines WHERE id = :id)";
             case WORKSHOP -> "SELECT EXISTS (SELECT 1 FROM workshops WHERE id = :id AND org_id = :orgId)";
@@ -402,13 +491,27 @@ public class TaskSpineRepository {
      * progress intact — status derived exactly like
      * {@code EnrollmentService.reactivateIfRemoved} (COMPLETED when they had
      * finished, else ACTIVE).
+     *
+     * <p><strong>Claim-aware source</strong> (spec §3): the row records the
+     * STRONGEST claim that already covers this member, so a rule-derived course
+     * materializes as ORG_RULE and its rule can still unassign it —
+     * "unassignment is one delete" has to hold for the members who opened it
+     * too. Only a course NO rule covers is DIRECT: a cohort task is an admin
+     * putting it in front of this member by name. DO NOTHING on conflict, so a
+     * member who already had the course keeps whatever story it carried.
      */
     public void ensureEnrollment(UUID userId, UUID courseId) {
         MapSqlParameterSource params =
                 new MapSqlParameterSource("userId", userId).addValue("courseId", courseId);
         jdbc.update("""
-                INSERT INTO enrollment (user_id, course_id, status)
-                VALUES (:userId, :courseId, 'ACTIVE')
+                INSERT INTO enrollment (user_id, course_id, status, source)
+                VALUES (:userId, :courseId, 'ACTIVE',
+                        CASE WHEN EXISTS (SELECT 1
+                                            FROM org_course_rules r
+                                            JOIN users u ON u.id = :userId
+                                                        AND u.organization_id = r.org_id
+                                           WHERE r.course_id = :courseId)
+                             THEN 'ORG_RULE' ELSE 'DIRECT' END)
                 ON CONFLICT ON CONSTRAINT uq_enrollment_user_course DO NOTHING
                 """, params);
         jdbc.update("""

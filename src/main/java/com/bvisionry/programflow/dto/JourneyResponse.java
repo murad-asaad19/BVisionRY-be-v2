@@ -71,7 +71,14 @@ public record JourneyResponse(
             BigDecimal scoreBefore,
             /** §7b: when the member submitted/completed their side, where applicable. */
             Instant submittedAt,
-            Instant completedAt) {
+            Instant completedAt,
+            /**
+             * COURSE only (spec §3 downgrade policy): the course is no longer
+             * visible to this member's organization. The row renders with a
+             * "no longer available" state, opening it is refused, and it gates
+             * nothing — progress and any certificate are untouched.
+             */
+            boolean unavailable) {
     }
 
     public enum LockState {

@@ -56,4 +56,12 @@ public interface AutoEnrolmentRepository extends JpaRepository<AutoEnrolment, UU
      */
     List<AutoEnrolment> findByUserIdAndOutcomeOrderByCreatedAtDescIdAsc(
             UUID userId, AutoEnrolmentOutcome outcome);
+
+    /**
+     * The founder's OPEN suggestions (spec §3 Suggest mode): decided, not yet
+     * taken up. {@code accepted_at IS NULL} is the whole predicate — accepting
+     * stamps it (§7b) and the row leaves this list without losing its history.
+     */
+    List<AutoEnrolment> findByUserIdAndOutcomeAndAcceptedAtIsNullOrderByCreatedAtDescIdAsc(
+            UUID userId, AutoEnrolmentOutcome outcome);
 }

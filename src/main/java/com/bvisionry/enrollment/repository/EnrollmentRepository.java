@@ -63,4 +63,16 @@ public interface EnrollmentRepository extends JpaRepository<Enrollment, UUID> {
               AND e.status <> com.bvisionry.enrollment.domain.EnrollmentStatus.CANCELLED
             """)
     boolean existsByUserIdAndCourseId(UUID userId, UUID courseId);
+
+    /**
+     * An admin has taken this member off this course ({@code enrolment_overrides},
+     * V157). Native and un-mapped on purpose: the table belongs to no slice and
+     * the ArchUnit ratchet forbids importing the {@code pipeline} repository that
+     * also reads it, so this depends on the SCHEMA like every other cross-slice
+     * read in the codebase.
+     */
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM enrolment_overrides"
+            + " WHERE user_id = :userId AND course_id = :courseId)", nativeQuery = true)
+    boolean isRemovedByAdmin(UUID userId, UUID courseId);
+
 }

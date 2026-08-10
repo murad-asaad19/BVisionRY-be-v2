@@ -44,7 +44,7 @@ final class ProgramRules {
      * @param submittedTaskIds live task ids the learner has submitted
      */
     static LockState lockState(List<ProgramModule> modules, int index, boolean dripEnabled,
-            Set<UUID> submittedTaskIds, OffsetDateTime now) {
+            Set<UUID> submittedTaskIds, Set<UUID> blockedCourseIds, OffsetDateTime now) {
         ProgramModule m = modules.get(index);
         if (!dripEnabled || m.getLockMode() == ModuleLockMode.UNLOCKED) {
             return LockState.UNLOCKED;
@@ -58,12 +58,37 @@ final class ProgramRules {
         if (index == 0) {
             return LockState.UNLOCKED;
         }
-        // Tasks a member cannot complete in-app (none today) never gate
-        // the next module — otherwise the journey deadlocks on them.
         boolean previousDone = liveTasks(modules.get(index - 1)).stream()
-                .filter(t -> t.getTaskType().completableInApp())
+                .filter(t -> gates(t, blockedCourseIds))
                 .allMatch(t -> submittedTaskIds.contains(t.getId()));
         return previousDone ? LockState.UNLOCKED : LockState.LOCKED_SEQUENTIAL;
+    }
+
+    /**
+     * Does this task hold the chain — i.e. count in every completion denominator
+     * (journey progress, pulse, drip, the continue cursor, the matrix's overdue
+     * flag)?
+     *
+     * <p>THE one source of truth for that question, so a member can never be
+     * stuck behind work they are not able to do:
+     * <ul>
+     *   <li>a type they cannot complete in-app (none today) never gated;</li>
+     *   <li>a COURSE whose course the member's org can no longer SEE cannot be
+     *       opened at all (spec §3 downgrade policy blocks new content), so it
+     *       must not gate either — otherwise narrowing a course's visibility
+     *       mid-cohort deadlocks every founder behind that module.</li>
+     * </ul>
+     * The row still RENDERS, flagged unavailable; it just stops being a gate.
+     *
+     * @param blockedCourseIds course ids invisible to the cohort's org, from
+     *        {@code CourseVisibilityAccess#invisibleCourseIds}. Empty = nothing blocked.
+     */
+    static boolean gates(com.bvisionry.programflow.domain.ProgramTask t, Set<UUID> blockedCourseIds) {
+        if (!t.getTaskType().completableInApp()) {
+            return false;
+        }
+        return !(t.getTaskType() == ProgramTaskType.COURSE
+                && t.getRefId() != null && blockedCourseIds.contains(t.getRefId()));
     }
 
     static List<com.bvisionry.programflow.domain.ProgramTask> liveTasks(ProgramModule m) {

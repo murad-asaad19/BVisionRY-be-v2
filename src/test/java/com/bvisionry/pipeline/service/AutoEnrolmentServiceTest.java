@@ -37,6 +37,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 /**
@@ -53,6 +54,7 @@ class AutoEnrolmentServiceTest {
     @Mock private AutoEnrolmentRepository ledger;
     @Mock private FounderEnrolmentWriteRepository founderEnrolments;
     @Mock private EnrolmentOverrideReadRepository overrides;
+    @Mock private com.bvisionry.common.coursevisibility.CourseVisibilityAccess courseVisibility;
 
     private AutoEnrolmentService service;
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
@@ -68,7 +70,13 @@ class AutoEnrolmentServiceTest {
     void setUp() {
         service = new AutoEnrolmentService(
                 pillarRepository, mappingRepository, courseCatalog, ledger, founderEnrolments,
-                overrides, meterRegistry);
+                overrides, courseVisibility, meterRegistry);
+
+        // Spec §3 visibility is a new pre-filter in front of every decision;
+        // these tests are about the BAND rules, so nothing is hidden here. The
+        // "invisible course is skipped" behaviour has its own test below.
+        lenient().when(courseVisibility.filterVisibleForUser(eq(founderId), anyCollection()))
+                .thenAnswer(inv -> new java.util.HashSet<>(inv.getArgument(1, java.util.Collection.class)));
 
         pillar = pillar("Vision Clarity", 1);
     }
@@ -327,6 +335,55 @@ class AutoEnrolmentServiceTest {
     }
 
     // ------------------------------------------------------------------
+    // Spec §3: Suggest mode, and the visibility pre-filter
+    // ------------------------------------------------------------------
+
+    @Test
+    void suggestModeRecordsASuggestionAndEnrolsNobody() {
+        stubPillars(pillar);
+        stubRules(pillarId, 0, courseId, com.bvisionry.pipeline.entity.PillarCourseMode.SUGGEST);
+        when(ledger.findBySubmissionIdAndUserId(submissionId, founderId)).thenReturn(List.of());
+
+        service.enrol(event(Map.of(pillarId, "Emerging")));
+
+        // The offer is the ledger row; there is no seat until the founder accepts.
+        verifyNoInteractions(founderEnrolments);
+        AutoEnrolment row = captureLedgerRow();
+        assertThat(row.getOutcome()).isEqualTo(AutoEnrolmentOutcome.SUGGESTED);
+        assertThat(row.getAcceptedAt()).isNull();
+        assertThat(row.getPillarId()).isEqualTo(pillarId);
+    }
+
+    @Test
+    void suggestModeDoesNotEvenAskWhetherTheCourseIsPublished() {
+        // Deliberate: refusing to suggest a course that publishes tomorrow would
+        // lose the reason for good, because nothing re-drives an evaluation.
+        stubPillars(pillar);
+        stubRules(pillarId, 0, courseId, com.bvisionry.pipeline.entity.PillarCourseMode.SUGGEST);
+        when(ledger.findBySubmissionIdAndUserId(submissionId, founderId)).thenReturn(List.of());
+        when(courseCatalog.findPublishedIds(anyCollection())).thenReturn(Set.of());
+
+        service.enrol(event(Map.of(pillarId, "Emerging")));
+
+        assertThat(captureLedgerRow().getOutcome()).isEqualTo(AutoEnrolmentOutcome.SUGGESTED);
+    }
+
+    @Test
+    void aCourseTheFoundersOrgCannotSeeIsSkippedSilently_noEnrolmentAndNoLedgerRow() {
+        stubPillars(pillar);
+        stubRules(pillarId, 0, courseId);
+        when(ledger.findBySubmissionIdAndUserId(submissionId, founderId)).thenReturn(List.of());
+        when(courseVisibility.filterVisibleForUser(eq(founderId), anyCollection())).thenReturn(Set.of());
+
+        service.enrol(event(Map.of(pillarId, "Emerging")));
+
+        // Spec §3: "AI rules silently skip courses the org can't see" — silently
+        // means no row either, so nothing can leak the course's existence.
+        verifyNoInteractions(founderEnrolments);
+        verify(ledger, never()).saveAndFlush(any());
+    }
+
+    // ------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------
 
@@ -348,9 +405,15 @@ class AutoEnrolmentServiceTest {
     }
 
     private void stubRules(UUID pillar, int bandPosition, UUID course) {
+        stubRules(pillar, bandPosition, course, com.bvisionry.pipeline.entity.PillarCourseMode.AUTO_ASSIGN);
+    }
+
+    private void stubRules(UUID pillar, int bandPosition, UUID course,
+                           com.bvisionry.pipeline.entity.PillarCourseMode mode) {
         PillarCourseMapping rule = new PillarCourseMapping();
         rule.setBandPosition(bandPosition);
         rule.setCourseId(course);
+        rule.setMode(mode);
         when(mappingRepository.findByPillarIdAndBandPositionOrderByCourseIdAsc(eq(pillar), anyInt()))
                 .thenAnswer(invocation -> invocation.getArgument(1, Integer.class) == bandPosition
                         ? List.of(rule)

@@ -158,4 +158,25 @@ public class CourseCatalogReadRepository {
                 });
         return byId;
     }
+
+    /**
+     * Courses by id with no enrolment join — the SUGGEST-mode read, where by
+     * definition there is no enrollment yet. PUBLISHED only: a suggestion is an
+     * invitation to start something, and inviting a founder into a draft course
+     * is the one case {@link #findEnrolledByFounder}'s "any state" argument does
+     * NOT cover (they do not already have it, so nothing is lost by waiting).
+     */
+    public Map<UUID, EnrolledCourse> findPublishedByIds(Collection<UUID> ids) {
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, EnrolledCourse> byId = new LinkedHashMap<>();
+        jdbc.query("SELECT id, title, slug FROM course WHERE id IN (:ids) AND state = 'PUBLISHED'",
+                new MapSqlParameterSource("ids", ids),
+                rs -> {
+                    UUID id = rs.getObject("id", UUID.class);
+                    byId.put(id, new EnrolledCourse(id, rs.getString("title"), rs.getString("slug"), true));
+                });
+        return byId;
+    }
 }

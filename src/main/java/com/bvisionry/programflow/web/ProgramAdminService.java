@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -497,8 +498,8 @@ public class ProgramAdminService {
                 } else {
                     state = cellOf(myTyped.get(taskId));
                 }
-                // An uncompletable type (none today) renders a cell but counts
-                // in neither side of the completion percentage.
+                // A task that does not GATE renders a cell but counts in neither
+                // side of the completion percentage (ProgramRules.gates).
                 if (type.completableInApp()) {
                     assigned++;
                     if (state == CellState.SUBMITTED) {
@@ -580,6 +581,11 @@ public class ProgramAdminService {
 
         java.time.LocalDate today = java.time.LocalDate.now();
         java.time.OffsetDateTime idleCutoff = java.time.OffsetDateTime.now().minusDays(IDLE_DAYS);
+        // Spec §3: COURSE tasks whose course the org can no longer see, and the
+        // members with a course deadline already past. Two batched reads for the
+        // whole matrix, not two per founder.
+        Set<UUID> blockedCourses = myProgramService.blockedCourseIds(orgId, mods);
+        Set<UUID> overdueCourseMembers = spine.membersWithOverdueCourses(cohortId);
 
         List<FounderRow> rows = founders.stream().map(member -> {
             Map<UUID, MyProgramService.TypedState> myTyped =
@@ -587,7 +593,8 @@ public class ProgramAdminService {
             Map<UUID, ProgramSubmission> myLessons =
                     lessonByUser.getOrDefault(member.getId(), Map.of());
 
-            boolean anyOverdue = false;
+            boolean anyOverdue = overdueCourseMembers.contains(member.getId());
+            boolean courseUnavailable = false;
             int maxDoneModulePosition = -1;
 
             List<ModuleCell> moduleCells = new ArrayList<>(mods.size());
@@ -599,7 +606,11 @@ public class ProgramAdminService {
                 int done = 0;
                 int total = 0;
                 for (ProgramTask t : ProgramRules.liveTasks(m)) {
-                    if (!t.getTaskType().completableInApp()) {
+                    if (!ProgramRules.gates(t, blockedCourses)) {
+                        // A course the org can no longer open holds nothing and
+                        // counts nowhere — but it is worth an admin's attention.
+                        courseUnavailable = courseUnavailable
+                                || t.getTaskType() == ProgramTaskType.COURSE;
                         continue;
                     }
                     boolean taskDone = isDone(t, myLessons, myTyped);
@@ -646,6 +657,9 @@ public class ProgramAdminService {
             }
             if (skippedCheckin) {
                 flags.add(AttentionFlag.CHECKIN_UNSTARTED);
+            }
+            if (courseUnavailable) {
+                flags.add(AttentionFlag.COURSE_UNAVAILABLE);
             }
             if (tri != null && tri.minPillarScore() != null
                     && tri.minPillarScore().intValue() < pillarThreshold) {

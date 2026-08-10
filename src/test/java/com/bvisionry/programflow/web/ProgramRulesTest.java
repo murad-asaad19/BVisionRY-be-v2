@@ -90,7 +90,7 @@ class ProgramRulesTest {
         @Test
         void firstModuleIsNeverSequentialLocked() {
             List<ProgramModule> mods = List.of(module(ModuleLockMode.SEQUENTIAL));
-            assertThat(ProgramRules.lockState(mods, 0, true, Set.of(), OffsetDateTime.now()))
+            assertThat(ProgramRules.lockState(mods, 0, true, Set.of(), Set.of(), OffsetDateTime.now()))
                     .isEqualTo(LockState.UNLOCKED);
         }
 
@@ -100,9 +100,9 @@ class ProgramRulesTest {
             List<ProgramModule> mods = List.of(
                     module(ModuleLockMode.UNLOCKED, t1),
                     module(ModuleLockMode.SEQUENTIAL));
-            assertThat(ProgramRules.lockState(mods, 1, true, Set.of(), OffsetDateTime.now()))
+            assertThat(ProgramRules.lockState(mods, 1, true, Set.of(), Set.of(), OffsetDateTime.now()))
                     .isEqualTo(LockState.LOCKED_SEQUENTIAL);
-            assertThat(ProgramRules.lockState(mods, 1, true, Set.of(t1.getId()), OffsetDateTime.now()))
+            assertThat(ProgramRules.lockState(mods, 1, true, Set.of(t1.getId()), Set.of(), OffsetDateTime.now()))
                     .isEqualTo(LockState.UNLOCKED);
         }
 
@@ -113,7 +113,7 @@ class ProgramRulesTest {
             List<ProgramModule> mods = List.of(
                     module(ModuleLockMode.UNLOCKED, draft),
                     module(ModuleLockMode.SEQUENTIAL));
-            assertThat(ProgramRules.lockState(mods, 1, true, Set.of(), OffsetDateTime.now()))
+            assertThat(ProgramRules.lockState(mods, 1, true, Set.of(), Set.of(), OffsetDateTime.now()))
                     .isEqualTo(LockState.UNLOCKED);
         }
 
@@ -122,9 +122,9 @@ class ProgramRulesTest {
             ProgramModule scheduled = module(ModuleLockMode.SCHEDULED);
             scheduled.setUnlockAt(OffsetDateTime.now().plusDays(2));
             List<ProgramModule> mods = List.of(module(ModuleLockMode.UNLOCKED), scheduled);
-            assertThat(ProgramRules.lockState(mods, 1, true, Set.of(), OffsetDateTime.now()))
+            assertThat(ProgramRules.lockState(mods, 1, true, Set.of(), Set.of(), OffsetDateTime.now()))
                     .isEqualTo(LockState.LOCKED_SCHEDULED);
-            assertThat(ProgramRules.lockState(mods, 1, true, Set.of(), OffsetDateTime.now().plusDays(3)))
+            assertThat(ProgramRules.lockState(mods, 1, true, Set.of(), Set.of(), OffsetDateTime.now().plusDays(3)))
                     .isEqualTo(LockState.UNLOCKED);
         }
 
@@ -132,7 +132,7 @@ class ProgramRulesTest {
         void dripDisabledUnlocksEverything() {
             ProgramModule scheduled = module(ModuleLockMode.SCHEDULED);
             scheduled.setUnlockAt(OffsetDateTime.now().plusDays(2));
-            assertThat(ProgramRules.lockState(List.of(scheduled), 0, false, Set.of(), OffsetDateTime.now()))
+            assertThat(ProgramRules.lockState(List.of(scheduled), 0, false, Set.of(), Set.of(), OffsetDateTime.now()))
                     .isEqualTo(LockState.UNLOCKED);
         }
     }
@@ -287,6 +287,55 @@ class ProgramRulesTest {
             // nothing today: yesterday's streak survives
             assertThat(ProgramRules.streak(List.of(base.minusDays(1), base.minusDays(2)), today)).isEqualTo(2);
             assertThat(ProgramRules.streak(List.of(), today)).isZero();
+        }
+    }
+
+    @Nested
+    class VisibilityBlockedCourses {
+
+        private static ProgramTask courseTask(UUID ref) {
+            ProgramTask t = liveTask();
+            t.setTaskType(ProgramTaskType.COURSE);
+            t.setRefId(ref);
+            return t;
+        }
+
+        /**
+         * Spec §3 downgrade policy: a course the org can no longer SEE cannot be
+         * opened, so it must not hold the chain — narrowing a course's visibility
+         * mid-cohort would otherwise deadlock every founder behind that module.
+         */
+        @Test
+        void anInvisibleCourseTaskNeitherGatesNorLocksTheNextModule() {
+            UUID ref = UUID.randomUUID();
+            ProgramTask course = courseTask(ref);
+            List<ProgramModule> mods = List.of(
+                    module(ModuleLockMode.UNLOCKED, course),
+                    module(ModuleLockMode.SEQUENTIAL));
+
+            // Visible and unfinished: it gates, and the next module stays locked.
+            assertThat(ProgramRules.gates(course, Set.of())).isTrue();
+            assertThat(ProgramRules.lockState(mods, 1, true, Set.of(), Set.of(), OffsetDateTime.now()))
+                    .isEqualTo(LockState.LOCKED_SEQUENTIAL);
+
+            // Blocked: it gates nothing and the chain moves on.
+            assertThat(ProgramRules.gates(course, Set.of(ref))).isFalse();
+            assertThat(ProgramRules.lockState(mods, 1, true, Set.of(), Set.of(ref),
+                    OffsetDateTime.now()))
+                    .isEqualTo(LockState.UNLOCKED);
+        }
+
+        @Test
+        void blockingOneCourseDoesNotUnblockAnother() {
+            assertThat(ProgramRules.gates(courseTask(UUID.randomUUID()), Set.of(UUID.randomUUID())))
+                    .isTrue();
+        }
+
+        @Test
+        void aNonCourseTaskIsNeverBlockedByCourseVisibility() {
+            ProgramTask lesson = liveTask();
+            lesson.setTaskType(ProgramTaskType.LESSON);
+            assertThat(ProgramRules.gates(lesson, Set.of(UUID.randomUUID()))).isTrue();
         }
     }
 }

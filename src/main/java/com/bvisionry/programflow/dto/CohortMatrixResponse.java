@@ -68,8 +68,20 @@ public record CohortMatrixResponse(
     public enum AttentionFlag {
         /** No member activity for over 7 days (or never). */
         IDLE,
-        /** At least one LIVE, in-audience, completable task past its due date and not done. */
+        /**
+         * At least one LIVE, in-audience, gating task past its due date and not
+         * done — or a course (org rule / direct / self) past ITS deadline and
+         * unfinished (spec §3). Folded into one flag rather than split: the strip
+         * is a triage signal and "overdue" is the same call to action either way.
+         */
         OVERDUE_TASKS,
+        /**
+         * A COURSE task on this founder's curriculum points at a course the org
+         * can no longer SEE (spec §3 downgrade policy). Their progress is intact
+         * and the module chain is NOT held by it — but somebody has to know the
+         * curriculum has a hole in it.
+         */
+        COURSE_UNAVAILABLE,
         /**
          * The cohort's BASELINE milestone isn't done although the founder has
          * already done work in a LATER module — they moved past the check-in.

@@ -145,37 +145,70 @@ public class FounderProfileReadRepository {
     }
 
     public record CourseRow(UUID courseId, String title, String status, int progressPct,
-                            Instant enrolledAt, Instant completedAt, String pillarName, boolean removed) {}
+                            Instant enrolledAt, Instant completedAt, String pillarName, boolean removed,
+                            String source, boolean required, Instant deadline) {}
 
     /**
-     * The member's course enrolments with the WHY: the newest ENROLLED
-     * auto-enrolment ledger row names the pillar whose weak band asked for it
-     * (→ AI source); NULL means self/manual. Same derivation as
-     * {@code organization.MemberCourseRepository}. Keyed on a member id the
-     * caller already proved is in-org.
+     * The member's courses with the WHY (spec section 3): the stored
+     * {@code enrollment.source}, upgraded to ORG_RULE when a rule covers them
+     * and no exclusion applies, UNION the rules with no enrollment row yet.
+     * The pillar sub-select still names the reason for AI rows.
+     *
+     * <p>Semantics owner: {@code courseaccess.domain.EffectiveCourses} - this
+     * is the same subset {@code TaskSpineRepository#directCourses} uses (no AI
+     * suggestions; DIRECT outranks a rule; required and deadline are unions).
+     * Keyed on a member id the caller already proved is in-org.
+     *
+     * <p><strong>CANCELLED rows survive only when an override explains them.</strong>
+     * Both halves are status-aware, so the profile agrees with the Library and
+     * the journey after any cancel: an admin's per-member removal keeps its row
+     * (flagged Removed — that IS the audit trail, spec §2.4), while a
+     * remove-for-everyone leaves nothing behind on either surface. Without the
+     * status predicate on the UNION half a cancelled row would also suppress the
+     * rule that still covers the member.
      */
-    public List<CourseRow> courses(UUID memberId) {
+    public List<CourseRow> courses(UUID orgId, UUID memberId) {
         return jdbc.query("""
                 SELECT c.id, c.title, e.status, e.progress_pct, e.enrolled_at, e.completed_at,
                        (SELECT p.name
                           FROM auto_enrolments a
                           JOIN pillars p ON p.id = a.pillar_id
                          WHERE a.user_id = e.user_id AND a.course_id = e.course_id
-                           AND a.outcome = 'ENROLLED'
+                           AND a.outcome IN ('ENROLLED', 'SUGGESTED')
                          ORDER BY a.created_at DESC, a.id ASC
                          LIMIT 1) AS pillar_name,
-                       (o.user_id IS NOT NULL) AS removed
+                       (o.user_id IS NOT NULL) AS removed,
+                       CASE WHEN r.course_id IS NOT NULL AND e.source <> 'DIRECT'
+                            THEN 'ORG_RULE' ELSE e.source END AS source,
+                       (e.required OR COALESCE(r.required, FALSE)) AS required,
+                       LEAST(e.deadline, r.deadline) AS deadline
                 FROM enrollment e
                 JOIN course c ON c.id = e.course_id
                 LEFT JOIN enrolment_overrides o ON o.user_id = e.user_id AND o.course_id = e.course_id
+                LEFT JOIN org_course_rules r ON r.course_id = e.course_id AND r.org_id = :orgId
+                                           AND o.user_id IS NULL
                 WHERE e.user_id = :memberId
-                ORDER BY e.enrolled_at DESC, c.title ASC
+                  AND (e.status <> 'CANCELLED' OR o.user_id IS NOT NULL)
+                UNION ALL
+                SELECT c.id, c.title, NULL, 0, r.created_at, NULL, NULL, FALSE,
+                       'ORG_RULE', r.required, r.deadline
+                FROM org_course_rules r
+                JOIN course c ON c.id = r.course_id
+                WHERE r.org_id = :orgId
+                  AND NOT EXISTS (SELECT 1 FROM enrollment e2
+                                   WHERE e2.user_id = :memberId AND e2.course_id = r.course_id
+                                     AND e2.status <> 'CANCELLED')
+                  AND NOT EXISTS (SELECT 1 FROM enrolment_overrides o2
+                                   WHERE o2.user_id = :memberId AND o2.course_id = r.course_id)
+                ORDER BY 5 DESC, 2 ASC
                 """,
-                new MapSqlParameterSource("memberId", memberId),
+                new MapSqlParameterSource("memberId", memberId).addValue("orgId", orgId),
                 (rs, i) -> new CourseRow(rs.getObject("id", UUID.class), rs.getString("title"),
                         rs.getString("status"), rs.getInt("progress_pct"),
                         instant(rs, "enrolled_at"), instant(rs, "completed_at"),
-                        rs.getString("pillar_name"), rs.getBoolean("removed")));
+                        rs.getString("pillar_name"), rs.getBoolean("removed"),
+                        rs.getString("source"), rs.getBoolean("required"),
+                        instant(rs, "deadline")));
     }
 
     public record AssessmentRow(UUID assignmentId, UUID submissionId, String pipelineName,

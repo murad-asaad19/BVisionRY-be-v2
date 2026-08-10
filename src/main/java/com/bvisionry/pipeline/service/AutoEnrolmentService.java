@@ -1,10 +1,12 @@
 package com.bvisionry.pipeline.service;
 
+import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
 import com.bvisionry.common.event.EvaluationEvents.SubmissionEvaluated;
 import com.bvisionry.pipeline.entity.AutoEnrolment;
 import com.bvisionry.pipeline.entity.AutoEnrolmentOutcome;
 import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.PillarCourseMapping;
+import com.bvisionry.pipeline.entity.PillarCourseMode;
 import com.bvisionry.pipeline.repository.AutoEnrolmentRepository;
 import com.bvisionry.pipeline.repository.CourseCatalogReadRepository;
 import com.bvisionry.pipeline.repository.EnrolmentOverrideReadRepository;
@@ -124,6 +126,7 @@ public class AutoEnrolmentService {
     private final AutoEnrolmentRepository ledger;
     private final FounderEnrolmentWriteRepository founderEnrolments;
     private final EnrolmentOverrideReadRepository overrides;
+    private final CourseVisibilityAccess courseVisibility;
     private final MeterRegistry meterRegistry;
 
     /**
@@ -136,8 +139,9 @@ public class AutoEnrolmentService {
     /** A founder's WHOLE journey was lost for one evaluation. Never benign. */
     private static final String JOURNEY_FAILED = "bvisionry.auto_enrolment.journey_failed";
 
-    /** One course a pillar's band asks for, with the reason attached. */
-    private record Candidate(UUID pillarId, String pillarName, int bandPosition, UUID courseId) {
+    /** One course a pillar's band asks for, with the reason and the mode attached. */
+    private record Candidate(UUID pillarId, String pillarName, int bandPosition, UUID courseId,
+                             PillarCourseMode mode) {
     }
 
     /**
@@ -194,10 +198,23 @@ public class AutoEnrolmentService {
             handled.add(decided.getCourseId());
         }
 
-        Set<UUID> published = courseCatalog.findPublishedIds(
-                candidates.stream().map(Candidate::courseId).collect(Collectors.toSet()));
+        Set<UUID> candidateIds = candidates.stream()
+                .map(Candidate::courseId).collect(Collectors.toSet());
+        Set<UUID> published = courseCatalog.findPublishedIds(candidateIds);
+
+        // Spec §3: "AI rules silently skip courses the org can't see." SILENTLY is
+        // the operative word — an invisible course writes no ledger row and no
+        // log line the founder could ever see, because the alternative is telling
+        // an org about a course it may not have. Batched: one query, not one per
+        // candidate.
+        Set<UUID> visible = courseVisibility.filterVisibleForUser(event.founderId(), candidateIds);
 
         for (Candidate candidate : candidates) {
+            if (!visible.contains(candidate.courseId())) {
+                log.debug("Auto-enrolment skipped course {}: not visible to founder {}'s organization",
+                        candidate.courseId(), event.founderId());
+                continue;
+            }
             // An admin removed this founder from this course. Nothing happens for
             // it — no enrolment, and no ledger row, because a row would have to
             // carry an outcome the V151 CHECK does not admit. The
@@ -279,7 +296,8 @@ public class AutoEnrolmentService {
             }
             for (PillarCourseMapping rule :
                     mappingRepository.findByPillarIdAndBandPositionOrderByCourseIdAsc(pillar.getId(), bandPosition)) {
-                candidates.add(new Candidate(pillar.getId(), pillar.getName(), bandPosition, rule.getCourseId()));
+                candidates.add(new Candidate(pillar.getId(), pillar.getName(), bandPosition,
+                        rule.getCourseId(), rule.getMode()));
             }
         }
         // Duplicates across pillars are left in and dropped by the caller's `handled`
@@ -316,7 +334,19 @@ public class AutoEnrolmentService {
      */
     private void record(SubmissionEvaluated event, Candidate candidate, boolean published) {
         AutoEnrolmentOutcome outcome;
-        if (!published) {
+        if (candidate.mode() == PillarCourseMode.SUGGEST) {
+            // Suggest mode (spec §3): the founder is OFFERED the course. The
+            // ledger row IS the suggestion — no enrollment, no seat, no progress
+            // — and one tap on the recommendation card turns it into one. The
+            // published check is deliberately skipped here: the Accept path
+            // re-checks state and visibility at the moment it matters, and
+            // refusing to suggest a course that publishes tomorrow would lose the
+            // reason for good (nothing re-drives an evaluation).
+            outcome = AutoEnrolmentOutcome.SUGGESTED;
+            log.info("Auto-enrolment SUGGESTED course {} to founder {} (pillar '{}', band {}, submission {})",
+                    candidate.courseId(), event.founderId(), candidate.pillarName(),
+                    candidate.bandPosition(), event.submissionId());
+        } else if (!published) {
             // The mapping surface deliberately does not filter by state; the refusal
             // is ours. A skip, never an error: an admin mid-authoring one course must
             // not cost the founder the rest of their journey.

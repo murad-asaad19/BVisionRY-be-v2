@@ -28,5 +28,20 @@ public enum AutoEnrolmentOutcome {
      * it is a recorded skip rather than an error: one unpublished course must not
      * cost the founder the rest of their journey.
      */
-    COURSE_NOT_PUBLISHED
+    COURSE_NOT_PUBLISHED,
+
+    /**
+     * The rule is in {@link PillarCourseMode#SUGGEST} mode: the founder is being
+     * OFFERED this course, not put on it. No {@code enrollment} row exists — the
+     * ledger row IS the suggestion, and it carries the pillar that asked for it
+     * so the card can say why. One tap turns it into an enrollment and stamps
+     * {@code accepted_at} (spec §7b).
+     *
+     * <p>The fourth value V151's CHECK reserved to a human. It is here rather
+     * than as an {@code EnrollmentStatus} because eight raw-SQL reads across six
+     * slices spell "is this person on this course" as
+     * {@code status <> 'CANCELLED'}; a SUGGESTED enrollment would have silently
+     * counted as one in every single one of them.
+     */
+    SUGGESTED
 }

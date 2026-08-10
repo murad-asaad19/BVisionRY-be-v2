@@ -15,5 +15,11 @@ import java.util.UUID;
  */
 public record PillarCourseMappingItem(
         @NotNull @Min(0) Integer bandPosition,
-        @NotNull UUID courseId
+        @NotNull UUID courseId,
+        /**
+         * Spec §3: {@code SUGGEST} or {@code AUTO_ASSIGN}. Null means
+         * AUTO_ASSIGN — the pre-V168 behaviour, so an older client that does not
+         * know the field keeps writing the rules it thinks it is writing.
+         */
+        String mode
 ) {}

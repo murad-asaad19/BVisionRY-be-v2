@@ -66,6 +66,7 @@ public class MyProgramService {
     private final ProgramSettingsRepository settings;
     private final TeamRepository teams;
     private final TaskSpineRepository spine;
+    private final com.bvisionry.common.coursevisibility.CourseVisibilityAccess courseVisibility;
     private final CurrentUserAccessor currentUser;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -123,6 +124,7 @@ public class MyProgramService {
         }
         Context ctx = context(userId, cohort);
         ProgramSettingsDto s = settingsOf(cohort.getId());
+        Set<UUID> blockedCourses = blockedCourseIds(orgId, ctx.visibleModules());
 
         List<JourneyModule> journeyModules = new ArrayList<>();
         int done = 0;
@@ -133,16 +135,16 @@ public class MyProgramService {
         for (int i = 0; i < ctx.visibleModules().size(); i++) {
             ProgramModule m = ctx.visibleModules().get(i);
             LockState lock = ProgramRules.lockState(ctx.visibleModules(), i, s.dripEnabled(),
-                    ctx.doneTaskIds(), OffsetDateTime.now());
+                    ctx.doneTaskIds(), blockedCourses, OffsetDateTime.now());
             List<JourneyTask> journeyTasks = new ArrayList<>();
             for (ProgramTask t : ProgramRules.liveTasks(m)) {
-                JourneyTask row = journeyTask(t, ctx, previousMilestoneScore);
+                JourneyTask row = journeyTask(t, ctx, previousMilestoneScore, blockedCourses);
                 if (t.getTaskType() == ProgramTaskType.ASSESSMENT && row.score() != null) {
                     previousMilestoneScore = row.score();
                 }
-                // An uncompletable type (none today) renders but counts in
-                // neither side of the progress fraction.
-                if (t.getTaskType().completableInApp()) {
+                // A task that does not GATE renders but counts in neither side of
+                // the progress fraction (ProgramRules.gates — the one predicate).
+                if (ProgramRules.gates(t, blockedCourses)) {
                     if (ProgramRules.done(row.state())) {
                         done++;
                     }
@@ -154,6 +156,19 @@ public class MyProgramService {
                     i > 0 ? ctx.visibleModules().get(i - 1).getName() : null, journeyTasks));
         }
 
+        // Spec §3/§10: a REQUIRED course assigned outside the cohort (org rule or
+        // direct) gates journey progress too — that is what "required" buys the
+        // admin. Optional ones display and never gate. Cohort COURSE tasks are
+        // already counted above; the task is the gate there.
+        for (DirectAssignmentDto d : direct) {
+            if (d.taskType() == ProgramTaskType.COURSE && d.required()) {
+                total++;
+                if (ProgramRules.done(d.state())) {
+                    done++;
+                }
+            }
+        }
+
         return new JourneyResponse(s, new JourneyResponse.Progress(done, total),
                 gamification(ctx.mySubmissions()), journeyModules,
                 cohort.getId(), cohort.getStatus() == CohortStatus.COMPLETED,
@@ -162,7 +177,7 @@ public class MyProgramService {
 
     /** One typed journey row: LESSON keeps the legacy fields; other types read their slice. */
     private JourneyTask journeyTask(ProgramTask t, Context ctx,
-            java.math.BigDecimal previousMilestoneScore) {
+            java.math.BigDecimal previousMilestoneScore, Set<UUID> blockedCourses) {
         if (t.getTaskType() == ProgramTaskType.LESSON) {
             ProgramSubmission sub = ctx.myByTask().get(t.getId());
             int steps = t.getFields().size();
@@ -174,14 +189,29 @@ public class MyProgramService {
                     ProgramRules.lessonState(sub == null ? null : sub.getStatus()),
                     null, null, null,
                     sub == null || sub.getSubmittedAt() == null ? null : sub.getSubmittedAt().toInstant(),
-                    null);
+                    null, false);
         }
         TypedState ts = ctx.typedStates().getOrDefault(t.getId(), TypedState.NOT_STARTED);
         return new JourneyTask(t.getId(), t.getName(), t.getDueDate(), 0, 0, null,
                 t.getTaskType(), t.getRefId(), t.getMilestoneRole(), ts.state(),
                 ts.progressPct(), ts.score(),
                 t.getTaskType() == ProgramTaskType.ASSESSMENT ? previousMilestoneScore : null,
-                ts.submittedAt(), ts.completedAt());
+                ts.submittedAt(), ts.completedAt(),
+                t.getTaskType() == ProgramTaskType.COURSE && t.getRefId() != null
+                        && blockedCourses.contains(t.getRefId()));
+    }
+
+    /**
+     * COURSE task refs the cohort's org may no longer SEE (spec §3). One batched
+     * query per journey/board render; empty when the org has none.
+     */
+    Set<UUID> blockedCourseIds(UUID orgId, List<ProgramModule> modules) {
+        Set<UUID> refs = modules.stream()
+                .flatMap(m -> ProgramRules.liveTasks(m).stream())
+                .filter(t -> t.getTaskType() == ProgramTaskType.COURSE && t.getRefId() != null)
+                .map(ProgramTask::getRefId)
+                .collect(java.util.stream.Collectors.toSet());
+        return courseVisibility.invisibleCourseIds(orgId, refs);
     }
 
     /* ------------------------------------------------- direct assignments */
@@ -196,19 +226,24 @@ public class MyProgramService {
             rows.add(new DirectAssignmentDto(e.assignmentId(), ProgramTaskType.EXERCISE,
                     e.templateId(), e.submissionId(), e.title(),
                     ProgramRules.exerciseState(e.status()), null, null,
-                    e.deadline(), e.assignedAt(), e.submittedAt(), e.reviewedAt()));
+                    e.deadline(), e.assignedAt(), e.submittedAt(), e.reviewedAt(), null, false));
         }
         for (var a : spine.directAssessments(orgId, userId)) {
             rows.add(new DirectAssignmentDto(a.assignmentId(), ProgramTaskType.ASSESSMENT,
                     a.pipelineId(), a.submissionId(), a.title(),
                     ProgramRules.assessmentState(a.status()), null, a.score(),
-                    a.deadline(), a.assignedAt(), a.submittedAt(), a.evaluatedAt()));
+                    a.deadline(), a.assignedAt(), a.submittedAt(), a.evaluatedAt(), null, false));
         }
         for (var c : spine.directCourses(userId)) {
+            // A rule-derived row has no enrollment yet, so status is null and
+            // ProgramRules.courseState maps it to NOT_STARTED — exactly right:
+            // the member has the course and has not started it. The row appears
+            // when they open it (TaskSpineRepository#ensureEnrollment).
             rows.add(new DirectAssignmentDto(c.enrollmentId(), ProgramTaskType.COURSE,
                     c.courseId(), c.courseId(), c.title(),
                     ProgramRules.courseState(c.status()), c.progressPct(), null,
-                    null, c.enrolledAt(), null, c.completedAt()));
+                    c.deadline(), c.enrolledAt(), null, c.completedAt(),
+                    c.source(), c.required()));
         }
         return rows;
     }
@@ -606,7 +641,9 @@ public class MyProgramService {
         if (!ctx.finished()) {
             boolean dripEnabled = settingsOf(cohort.getId()).dripEnabled();
             LockState lock = ProgramRules.lockState(ctx.visibleModules(), index, dripEnabled,
-                    ctx.doneTaskIds(), OffsetDateTime.now());
+                    ctx.doneTaskIds(),
+                    blockedCourseIds(cohort.getOrgId(), ctx.visibleModules()),
+                    OffsetDateTime.now());
             if (lock != LockState.UNLOCKED) {
                 throw new BadRequestException("This module hasn't unlocked yet");
             }
@@ -638,6 +675,13 @@ public class MyProgramService {
             case LESSON -> t.getId();
             case WORKSHOP, SURVEY -> requireRef(t);
             case COURSE -> {
+                // Spec §3 downgrade policy: no NEW content opens for a course the
+                // org can no longer see. The journey row already says so; this is
+                // the control behind it.
+                if (!courseVisibility.isVisibleToUser(userId, requireRef(t))) {
+                    throw new BadRequestException(
+                            "This course is no longer available to your organization.");
+                }
                 if (!spine.enrollmentExists(userId, requireRef(t))) {
                     requireNotFinished(access);
                     spine.ensureEnrollment(userId, t.getRefId());
@@ -679,16 +723,18 @@ public class MyProgramService {
         boolean dripEnabled = settingsOf(ctx.cohort().getId()).dripEnabled();
         Set<UUID> submitted = new HashSet<>(ctx.doneTaskIds());
         submitted.add(justSubmittedTaskId);
+        Set<UUID> blockedCourses = blockedCourseIds(ctx.cohort().getOrgId(), ctx.visibleModules());
         for (int i = 0; i < ctx.visibleModules().size(); i++) {
             LockState lock = ProgramRules.lockState(ctx.visibleModules(), i, dripEnabled, submitted,
-                    OffsetDateTime.now());
+                    blockedCourses, OffsetDateTime.now());
             if (lock != LockState.UNLOCKED) {
                 continue;
             }
             for (ProgramTask t : ProgramRules.liveTasks(ctx.visibleModules().get(i))) {
                 // Never point the continue-cursor at a task the member cannot
-                // complete in-app (none today) — that's a dead end.
-                if (t.getTaskType().completableInApp() && !submitted.contains(t.getId())) {
+                // act on — an uncompletable type, or a course their org can no
+                // longer open. That's a dead end.
+                if (ProgramRules.gates(t, blockedCourses) && !submitted.contains(t.getId())) {
                     return t;
                 }
             }

@@ -128,9 +128,9 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
                             hasItem("REVIEWED")))
                     .andExpect(jsonPath("$.work[?(@.type=='EXERCISE')].reviewedAt",
                             hasItem(notNullValue())))
-                    // course source: today's reality — auto-enrolment pillar = AI
+                    // course source: the stored column (spec §3), not a guess
                     .andExpect(jsonPath("$.work[?(@.type=='COURSE')].courseSource",
-                            hasItem("AI")))
+                            hasItem("AI_SUGGESTED")))
                     .andExpect(jsonPath("$.work[?(@.type=='COURSE')].context",
                             hasItem("Vision")))
                     .andExpect(jsonPath("$.work[?(@.type=='ASSESSMENT')].score",
@@ -383,7 +383,10 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
         UUID courseId = UUID.randomUUID();
         jdbc.update("INSERT INTO course (id, org_id, slug, title, state) VALUES (?, ?, ?, 'Pricing Foundations', 'PUBLISHED')",
                 courseId, orgA.getId(), "pricing-" + courseId);
-        jdbc.update("INSERT INTO enrollment (user_id, course_id, progress_pct) VALUES (?, ?, 38)",
+        // V168: the engine stamps source on its own inserts (spec §3), so the
+        // seed does too — otherwise this row would read SELF and the Work tab
+        // would honestly report a self-enrolment.
+        jdbc.update("INSERT INTO enrollment (user_id, course_id, progress_pct, source) VALUES (?, ?, 38, 'AI_SUGGESTED')",
                 founder.getId(), courseId);
         // Ledger row wants the pillar + submission seeded in seedAssessments —
         // insert after those exist (see seed order): use the latest submission.

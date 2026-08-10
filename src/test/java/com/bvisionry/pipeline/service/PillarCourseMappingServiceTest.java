@@ -156,7 +156,7 @@ class PillarCourseMappingServiceTest {
         });
 
         List<PillarCourseMappingResponse> saved = service.replace(pipelineId, pillarId,
-                body(new PillarCourseMappingItem(0, courseId)));
+                body(new PillarCourseMappingItem(0, courseId, null)));
 
         // The DELETE must reach the database before the INSERTs or the unique
         // index rejects re-saving an unchanged rule.
@@ -188,7 +188,7 @@ class PillarCourseMappingServiceTest {
         pillarIsFound();
 
         assertThatThrownBy(() -> service.replace(pipelineId, pillarId,
-                body(new PillarCourseMappingItem(3, courseId))))
+                body(new PillarCourseMappingItem(3, courseId, null))))
                 .isInstanceOf(BadRequestException.class)
                 // 1-based and named, matching how the admin UI numbers bands.
                 .hasMessageContaining("Band 4 does not exist")
@@ -207,7 +207,7 @@ class PillarCourseMappingServiceTest {
         pillarIsFound();
 
         assertThatThrownBy(() -> service.replace(pipelineId, pillarId,
-                body(new PillarCourseMappingItem(-1, courseId))))
+                body(new PillarCourseMappingItem(-1, courseId, null))))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("does not exist");
     }
@@ -256,8 +256,8 @@ class PillarCourseMappingServiceTest {
         pillarIsFound();
 
         assertThatThrownBy(() -> service.replace(pipelineId, pillarId,
-                body(new PillarCourseMappingItem(1, courseId),
-                        new PillarCourseMappingItem(1, courseId))))
+                body(new PillarCourseMappingItem(1, courseId, null),
+                        new PillarCourseMappingItem(1, courseId, null))))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("Strong");
     }
@@ -269,8 +269,8 @@ class PillarCourseMappingServiceTest {
         when(mappingRepository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
 
         assertThat(service.replace(pipelineId, pillarId,
-                body(new PillarCourseMappingItem(0, courseId),
-                        new PillarCourseMappingItem(1, courseId))))
+                body(new PillarCourseMappingItem(0, courseId, null),
+                        new PillarCourseMappingItem(1, courseId, null))))
                 .extracting(PillarCourseMappingResponse::bandLabel)
                 .containsExactly("Emerging", "Strong");
     }
@@ -281,7 +281,7 @@ class PillarCourseMappingServiceTest {
         when(courseCatalog.findByIdsUnscoped(anyCollection())).thenReturn(Map.of());
 
         assertThatThrownBy(() -> service.replace(pipelineId, pillarId,
-                body(new PillarCourseMappingItem(0, courseId))))
+                body(new PillarCourseMappingItem(0, courseId, null))))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining(courseId.toString());
 
@@ -295,7 +295,7 @@ class PillarCourseMappingServiceTest {
         pillar.setMaturityThresholds(Map.of());
 
         assertThatThrownBy(() -> service.replace(pipelineId, pillarId,
-                body(new PillarCourseMappingItem(0, courseId))))
+                body(new PillarCourseMappingItem(0, courseId, null))))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("General Information");
     }
@@ -306,7 +306,7 @@ class PillarCourseMappingServiceTest {
         pillar.setMaturityThresholds(null);
 
         assertThatThrownBy(() -> service.replace(pipelineId, pillarId,
-                body(new PillarCourseMappingItem(0, courseId))))
+                body(new PillarCourseMappingItem(0, courseId, null))))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("no maturity bands");
     }

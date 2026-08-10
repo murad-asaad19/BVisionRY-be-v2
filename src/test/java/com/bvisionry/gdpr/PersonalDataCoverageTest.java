@@ -77,7 +77,20 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // assignments.assigned_by. Not exported: an operator attribution
             // on the org's record, not data about the data subject.
             "cohort_launch_ledger.launched_by", "cohort_launch_grants.granted_by",
-            "course.instructor_id", "email_templates.updated_by", "enrollment.user_id",
+            "course.instructor_id",
+            // course.org_visibility_updated_by (V168): SET NULL — "who last set
+            // this course's org visibility" is a platform-operator attribution on
+            // the CATALOG's record, exactly like platform_settings.updated_by.
+            // Not exported: it is about a course, not about the data subject.
+            "course.org_visibility_updated_by",
+            "email_templates.updated_by",
+            // enrollment.assigned_by (V168, spec §3): SET NULL — an admin
+            // attribution on the ORG's record ("your admin assigned this"), like
+            // assignments.assigned_by. Erasing the admin must not erase the fact
+            // that the member was assigned the course. Not exported for the
+            // ADMIN; the enrolment itself is already exported for the LEARNER.
+            "enrollment.assigned_by",
+            "enrollment.user_id",
             // enrolment_overrides (V157): user_id CASCADEs with the user row — "an admin
             // took this founder off this course" is about that founder and nobody else,
             // so it dies with them. Exported as course_removals for auto_enrolments'
@@ -86,6 +99,13 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // ORG's record, like assignments.assigned_by; erasing the admin must not
             // erase the fact that the removal happened.
             "enrolment_overrides.removed_by", "enrolment_overrides.user_id",
+            // org_course_rules (V168, spec §3): created_by SET NULL — the rule is
+            // the ORGANIZATION's curation decision and must survive the admin who
+            // made it, with the attribution dropped. There is no user_id at all:
+            // that is the whole point of a read-time rule (it names no member),
+            // so nothing here is personal data about a learner and nothing is
+            // exported.
+            "org_course_rules.created_by", "org_course_rules.updated_by",
             "exercise_assignments.user_id", "exercise_comments.author_id",
             // founder_comparisons (V161): user_id CASCADEs with the user row —
             // the comparison is scores about that founder and nobody else, so it

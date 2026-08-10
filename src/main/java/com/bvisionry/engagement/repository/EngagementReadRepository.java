@@ -13,6 +13,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import com.bvisionry.common.programaccess.ProgramAudience;
+import com.bvisionry.common.programaccess.TaskCompletion;
 
 /**
  * Cross-feature reads for sessions + participation (spec §4), raw SQL through
@@ -115,49 +116,21 @@ public class EngagementReadRepository {
      * assignments row for a multi-cohort member.
      *
      * <p>Done-semantics source of truth: {@code programflow.web.ProgramRules}
-     * ({@code done()} + the per-type state mappings). Exercises count when
-     * SUBMITTED or REVIEWED — a CHANGES_REQUESTED copy is back with the member
-     * and does NOT count, matching the journey.
+     * via the shared {@link TaskCompletion#DONE_FOR_USER} fragment (the same
+     * rule the coach console, the ROI report and the due-reminder job count
+     * against). Exercises count when SUBMITTED or REVIEWED — a
+     * CHANGES_REQUESTED copy is back with the member and does NOT count,
+     * matching the journey.
      */
     public Counts assignmentCounts(UUID orgId, UUID cohortId, UUID memberId) {
         Counts program = jdbc.queryForObject("""
-                SELECT count(*) AS total, count(*) FILTER (WHERE x.done) AS done
-                FROM (
-                    SELECT CASE t.task_type
-                        WHEN 'LESSON' THEN EXISTS (
-                            SELECT 1 FROM program_submissions ps
-                            WHERE ps.task_id = t.id AND ps.user_id = :memberId
-                              AND ps.status = 'SUBMITTED')
-                        WHEN 'COURSE' THEN EXISTS (
-                            SELECT 1 FROM enrollment e
-                            WHERE e.user_id = :memberId AND e.course_id = t.ref_id
-                              AND e.status = 'COMPLETED')
-                        WHEN 'EXERCISE' THEN EXISTS (
-                            SELECT 1 FROM exercise_assignments ea
-                            JOIN exercise_submissions es ON es.assignment_id = ea.id
-                            WHERE ea.user_id = :memberId AND ea.template_id = t.ref_id
-                              AND es.status IN ('SUBMITTED', 'REVIEWED'))
-                        WHEN 'ASSESSMENT' THEN EXISTS (
-                            SELECT 1 FROM submissions s
-                            WHERE s.program_task_id = t.id AND s.user_id = :memberId
-                              AND s.submitted_at IS NOT NULL)
-                        WHEN 'WORKSHOP' THEN EXISTS (
-                            SELECT 1 FROM workshop_task_submissions wts
-                            JOIN workshop_exercise_tasks wet ON wet.id = wts.task_id
-                            JOIN workshop_exercises we ON we.id = wet.exercise_id
-                            WHERE we.workshop_id = t.ref_id AND wts.user_id = :memberId
-                              AND wts.completed_at IS NOT NULL)
-                        WHEN 'SURVEY' THEN EXISTS (
-                            SELECT 1 FROM survey_responses sr
-                            WHERE sr.survey_id = t.ref_id
-                              AND sr.respondent_user_id = :memberId)
-                    END AS done
-                    FROM program_tasks t
-                    JOIN program_modules m ON m.id = t.module_id AND m.cohort_id = :cohortId
-                    WHERE t.status = 'LIVE'
-                      AND %s
-                ) x
-                """.formatted(ProgramAudience.INCLUDES_USER.formatted(":memberId")),
+                SELECT count(*) AS total, count(*) FILTER (WHERE %s) AS done
+                FROM program_tasks t
+                JOIN program_modules m ON m.id = t.module_id AND m.cohort_id = :cohortId
+                WHERE t.status = 'LIVE'
+                  AND %s
+                """.formatted(TaskCompletion.DONE_FOR_USER.formatted(":memberId"),
+                        ProgramAudience.INCLUDES_USER.formatted(":memberId")),
                 new MapSqlParameterSource("cohortId", cohortId).addValue("memberId", memberId),
                 (rs, i) -> new Counts(rs.getInt("total"), rs.getInt("done")));
         Counts exercises = jdbc.queryForObject("""

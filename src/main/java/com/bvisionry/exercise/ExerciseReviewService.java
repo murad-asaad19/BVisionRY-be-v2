@@ -180,6 +180,10 @@ public class ExerciseReviewService {
         }
         submission.setStatus(ExerciseSubmissionStatus.CHANGES_REQUESTED);
         submission.setReviewedAt(null);
+        // Durable, never cleared: the queue's "resubmitted after changes"
+        // marker reads this — reviewedAt can't carry it, both the resubmit
+        // and this method null that.
+        submission.setChangesRequestedAt(Instant.now());
 
         notifyStatus(submission, OrgAuditActions.EXERCISE_CHANGES_REQUESTED,
                 "Changes requested",

@@ -18,16 +18,14 @@ public interface ProgramTaskRepository extends JpaRepository<ProgramTask, UUID> 
     Optional<ProgramTask> findWithModule(@Param("id") UUID id);
 
     /**
-     * Live tasks that may need a due-soon reminder: due inside [from, to] and
-     * never reminded. The caller narrows to each cohort's own due-soon window.
-     * LESSON only for now — the reminder's "already submitted" filter reads
-     * program_submissions, which other types don't have; Phase E (coach
-     * workspace) teaches it per-type done state and lifts this.
+     * Live tasks of ANY type that may need a due-soon reminder: due inside
+     * [from, to] and never reminded. The caller narrows to each cohort's own
+     * due-soon window and filters out learners whose per-type done state says
+     * the work is already done ({@code TaskSpineRepository#usersDoneWithTask}).
      */
     @Query("""
             select t from ProgramTask t join fetch t.module
             where t.status = :status and t.dueReminderSentAt is null
-              and t.taskType = com.bvisionry.programflow.domain.ProgramTaskType.LESSON
               and t.dueDate between :from and :to
             """)
     List<ProgramTask> findDueForReminder(

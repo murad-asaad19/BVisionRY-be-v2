@@ -15,6 +15,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import com.bvisionry.common.programaccess.ProgramAudience;
+import com.bvisionry.common.programaccess.TaskCompletion;
 
 /**
  * Cross-feature reads AND the open-endpoint's ensure-writes for the typed task
@@ -327,6 +328,25 @@ public class TaskSpineRepository {
                         rs.getObject("course_id", UUID.class), rs.getString("title"),
                         rs.getString("status"), rs.getInt("progress_pct"),
                         instant(rs, "enrolled_at"), instant(rs, "completed_at")));
+    }
+
+    /**
+     * The cohort-enrolled users who have DONE this task under its own type's
+     * rule (shared {@link TaskCompletion} fragment — ProgramRules semantics).
+     * The due-reminder job subtracts them from its recipients so no learner is
+     * nagged about work any surface already counts as complete.
+     */
+    public List<UUID> usersDoneWithTask(UUID taskId) {
+        return jdbc.query("""
+                SELECT cm.user_id
+                FROM program_tasks t
+                JOIN program_modules m ON m.id = t.module_id
+                JOIN cohort_members cm ON cm.cohort_id = m.cohort_id
+                WHERE t.id = :taskId
+                  AND %s
+                """.formatted(TaskCompletion.DONE_FOR_USER.formatted("cm.user_id")),
+                new MapSqlParameterSource("taskId", taskId),
+                (rs, i) -> rs.getObject("user_id", UUID.class));
     }
 
     /* ------------------------------------------------- validation probes */

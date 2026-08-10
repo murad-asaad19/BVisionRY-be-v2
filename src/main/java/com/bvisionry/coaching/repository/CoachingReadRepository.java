@@ -16,6 +16,7 @@ import org.springframework.stereotype.Repository;
 
 import com.bvisionry.common.coachaccess.CoachAccess;
 import com.bvisionry.common.programaccess.ProgramAudience;
+import com.bvisionry.common.programaccess.TaskCompletion;
 
 /**
  * Cross-feature reads for the coach console, expressed as raw SQL through
@@ -70,15 +71,74 @@ public class CoachingReadRepository {
     private static final String AUDIENCE = ProgramAudience.INCLUDES_USER;
 
     /**
-     * The roster row shape: grant-scoped cohort names plus grant-scoped
-     * program totals, both LATERAL so the whole query is O(visible founders),
-     * never O(org members × live tasks).
+     * "Done" for the task the composing query exposes as {@code t} — the
+     * shared per-type spine rule ({@code ProgramRules} semantics), so the
+     * roster, the module progress, the engagement record and the ROI report
+     * can never quote different completion numbers for the same founder.
+     */
+    private static final String TASK_DONE = TaskCompletion.DONE_FOR_USER;
+
+    /**
+     * The founder's own last-activity instant — GREATEST/MAX ignore NULLs in
+     * Postgres; coach review events are deliberately excluded. Twin of the
+     * expression in {@code founderprofile.FounderProfileReadRepository#member}
+     * (raw-SQL slices cannot share it without a common home; ponytail: two
+     * copies, promote to common the day a third appears). {@code %1$s} is the
+     * user alias.
+     */
+    private static final String LAST_ACTIVITY = """
+            GREATEST(
+                %1$s.last_login_at,
+                (SELECT max(GREATEST(aps.saved_at, aps.submitted_at))
+                   FROM program_submissions aps WHERE aps.user_id = %1$s.id),
+                (SELECT max(GREATEST(aes.last_saved_at, aes.submitted_at))
+                   FROM exercise_submissions aes WHERE aes.user_id = %1$s.id),
+                (SELECT max(GREATEST(asu.started_at, asu.submitted_at))
+                   FROM submissions asu WHERE asu.user_id = %1$s.id),
+                (SELECT max(GREATEST(aen.enrolled_at, aen.completed_at))
+                   FROM enrollment aen WHERE aen.user_id = %1$s.id)
+            )""";
+
+    /**
+     * The roster row shape: grant-scoped cohort names, grant-scoped per-type
+     * program completion, the FRI trajectory ends (latest + Δ vs earliest —
+     * the founder-profile rule: evaluated submissions ordered by
+     * {@code evaluated_at ASC NULLS LAST, created_at ASC}), the lowest
+     * incomplete module, the open-items split and the founder's last
+     * activity. All LATERAL/scalar subqueries, so the whole query stays
+     * O(visible founders), never O(org members × live tasks).
+     *
+     * <p><strong>"Unread replies" is a proxy, commented honestly:</strong>
+     * there is no read tracking, so it counts OPEN exercise-comment threads on
+     * the founder's submissions whose LAST message (root or reply, newest
+     * {@code created_at}, id tiebreak) was authored by the founder — i.e. the
+     * ball is in the coach's court. A thread the coach answered last, or a
+     * RESOLVED one, does not count.
      */
     private static final String ROSTER_SELECT = """
             SELECT u.id, u.name,
                    cn.names                 AS cohort_names,
                    COALESCE(p.total, 0)     AS total_tasks,
-                   COALESCE(p.submitted, 0) AS submitted_tasks
+                   COALESCE(p.done, 0)      AS submitted_tasks,
+                   fri.latest               AS fri_latest,
+                   CASE WHEN fri.taken >= 2 THEN fri.latest - fri.earliest END AS fri_delta,
+                   cur.module_name          AS current_module,
+                   (SELECT count(*)
+                    FROM exercise_assignments ea
+                    JOIN exercise_submissions es ON es.assignment_id = ea.id
+                    WHERE ea.organization_id = :orgId AND ea.user_id = u.id
+                      AND es.status = 'SUBMITTED') AS awaiting_review,
+                   (SELECT count(*)
+                    FROM exercise_comments rc
+                    JOIN exercise_submissions res ON res.id = rc.submission_id
+                    JOIN exercise_assignments rea ON rea.id = res.assignment_id
+                    WHERE rea.organization_id = :orgId AND rea.user_id = u.id
+                      AND rc.parent_id IS NULL AND rc.status = 'OPEN'
+                      AND (SELECT lc.author_id FROM exercise_comments lc
+                           WHERE lc.id = rc.id OR lc.parent_id = rc.id
+                           ORDER BY lc.created_at DESC, lc.id DESC LIMIT 1) = u.id
+                   ) AS unread_replies,
+                   %3$s AS last_activity_at
             FROM users u
             LEFT JOIN LATERAL (
                 SELECT string_agg(c.name, ', ' ORDER BY c.position, c.name) AS names
@@ -88,19 +148,45 @@ public class CoachingReadRepository {
                   AND %1$s
             ) cn ON true
             LEFT JOIN LATERAL (
-                SELECT count(DISTINCT t.id)       AS total,
-                       count(DISTINCT ps.task_id) AS submitted
+                SELECT count(*)                    AS total,
+                       count(*) FILTER (WHERE %4$s) AS done
                 FROM cohort_members cm
                 JOIN cohorts c          ON c.id = cm.cohort_id AND c.org_id = :orgId
                 JOIN program_modules m  ON m.cohort_id = c.id
                 JOIN program_tasks t    ON t.module_id = m.id AND t.status = 'LIVE'
-                LEFT JOIN program_submissions ps
-                       ON ps.task_id = t.id AND ps.user_id = u.id AND ps.status = 'SUBMITTED'
                 WHERE cm.user_id = u.id
                   AND %1$s
                   AND %2$s
             ) p ON true
-            """.formatted(GRANTED_COHORT.formatted("u.id"), AUDIENCE.formatted("u.id"));
+            LEFT JOIN LATERAL (
+                SELECT count(*) AS taken,
+                       max(f.score) FILTER (WHERE f.rn_first = 1) AS earliest,
+                       max(f.score) FILTER (WHERE f.rn_last = 1)  AS latest
+                FROM (SELECT os.overall_score_percentage AS score,
+                             row_number() OVER (ORDER BY s.evaluated_at ASC NULLS LAST,
+                                                         s.created_at ASC)  AS rn_first,
+                             row_number() OVER (ORDER BY s.evaluated_at DESC,
+                                                         s.created_at DESC) AS rn_last
+                      FROM submissions s
+                      JOIN overall_summaries os ON os.submission_id = s.id
+                      WHERE s.user_id = u.id AND s.status = 'EVALUATED') f
+            ) fri ON true
+            LEFT JOIN LATERAL (
+                SELECT m.name AS module_name
+                FROM cohort_members cm
+                JOIN cohorts c         ON c.id = cm.cohort_id AND c.org_id = :orgId
+                JOIN program_modules m ON m.cohort_id = c.id
+                WHERE cm.user_id = u.id
+                  AND %1$s
+                  AND %2$s
+                  AND EXISTS (SELECT 1 FROM program_tasks t
+                              WHERE t.module_id = m.id AND t.status = 'LIVE'
+                                AND NOT COALESCE(%4$s, false))
+                ORDER BY c.position, c.name, m.position, m.name
+                LIMIT 1
+            ) cur ON true
+            """.formatted(GRANTED_COHORT.formatted("u.id"), AUDIENCE.formatted("u.id"),
+                    LAST_ACTIVITY.formatted("u"), TASK_DONE.formatted("u.id"));
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -111,20 +197,22 @@ public class CoachingReadRepository {
     /* ------------------------------------------------------- console reads */
 
     public record RosterRow(UUID id, String name, String cohortNames,
-                            int totalTasks, int submittedTasks) {}
+                            int totalTasks, int submittedTasks,
+                            BigDecimal friLatest, BigDecimal friDelta,
+                            String currentModule, int awaitingReview, int unreadReplies,
+                            OffsetDateTime lastActivityAt) {}
 
     /**
-     * Every founder the coach may see, with grant-scoped completion counts.
-     * ponytail: unbounded — a caseload is tens of founders today; paginate
-     * when orgs run cohorts in the hundreds.
+     * Every founder the coach may see, with grant-scoped completion counts and
+     * the triage columns (FRI + Δ, current module, open-items split, last
+     * activity). ponytail: unbounded — a caseload is tens of founders today;
+     * paginate when orgs run cohorts in the hundreds.
      */
     public List<RosterRow> roster(UUID orgId, UUID coachId) {
         return jdbc.query(
                 ROSTER_SELECT + "WHERE " + VISIBLE_FOUNDER + " ORDER BY u.name, u.id",
                 params(orgId, coachId),
-                (rs, i) -> new RosterRow(rs.getObject("id", UUID.class), rs.getString("name"),
-                        rs.getString("cohort_names"),
-                        rs.getInt("total_tasks"), rs.getInt("submitted_tasks")));
+                CoachingReadRepository::rosterRow);
     }
 
     /** One visible founder's roster row, or empty when outside the union → 404. */
@@ -132,10 +220,50 @@ public class CoachingReadRepository {
         return jdbc.query(
                 ROSTER_SELECT + "WHERE u.id = :founderId AND " + VISIBLE_FOUNDER,
                 params(orgId, coachId).addValue("founderId", founderId),
-                (rs, i) -> new RosterRow(rs.getObject("id", UUID.class), rs.getString("name"),
-                        rs.getString("cohort_names"),
-                        rs.getInt("total_tasks"), rs.getInt("submitted_tasks")))
+                CoachingReadRepository::rosterRow)
                 .stream().findFirst();
+    }
+
+    private static RosterRow rosterRow(java.sql.ResultSet rs, int i) throws java.sql.SQLException {
+        return new RosterRow(rs.getObject("id", UUID.class), rs.getString("name"),
+                rs.getString("cohort_names"),
+                rs.getInt("total_tasks"), rs.getInt("submitted_tasks"),
+                rs.getBigDecimal("fri_latest"), rs.getBigDecimal("fri_delta"),
+                rs.getString("current_module"),
+                rs.getInt("awaiting_review"), rs.getInt("unread_replies"),
+                rs.getObject("last_activity_at", OffsetDateTime.class));
+    }
+
+    public record QueueRow(UUID assignmentId, UUID founderId, String founderName,
+                           String exerciseName, OffsetDateTime submittedAt,
+                           OffsetDateTime changesRequestedAt) {}
+
+    /**
+     * Every SUBMITTED exercise submission across the coach's visible founders,
+     * oldest first — the review queue. A non-null {@code changes_requested_at}
+     * on a SUBMITTED row = this copy came back after "request changes" (the
+     * stamp is write-once history; {@code reviewed_at} can't carry the signal
+     * because both the resubmit and requestChanges null it).
+     */
+    public List<QueueRow> reviewQueue(UUID orgId, UUID coachId) {
+        return jdbc.query("""
+                SELECT ea.id AS assignment_id, u.id AS founder_id, u.name AS founder_name,
+                       et.name AS exercise_name, es.submitted_at, es.changes_requested_at
+                FROM exercise_assignments ea
+                JOIN exercise_templates et ON et.id = ea.template_id
+                JOIN exercise_submissions es ON es.assignment_id = ea.id
+                JOIN users u ON u.id = ea.user_id
+                WHERE ea.organization_id = :orgId
+                  AND es.status = 'SUBMITTED'
+                  AND %s
+                ORDER BY es.submitted_at ASC NULLS LAST, ea.id
+                """.formatted(VISIBLE_FOUNDER),
+                params(orgId, coachId),
+                (rs, i) -> new QueueRow(rs.getObject("assignment_id", UUID.class),
+                        rs.getObject("founder_id", UUID.class), rs.getString("founder_name"),
+                        rs.getString("exercise_name"),
+                        rs.getObject("submitted_at", OffsetDateTime.class),
+                        rs.getObject("changes_requested_at", OffsetDateTime.class)));
     }
 
     public record CoachOfMemberRow(UUID id, String name, String bookingUrl) {}
@@ -208,25 +336,29 @@ public class CoachingReadRepository {
     public record ModuleProgressRow(String cohortName, String moduleName,
                                     int totalTasks, int submittedTasks) {}
 
-    /** Per-module progress over the GRANTED cohorts only (audience-filtered LIVE tasks). */
+    /**
+     * Per-module progress over the GRANTED cohorts only (audience-filtered
+     * LIVE tasks). Done-state is per task type via the shared
+     * {@link TaskCompletion} fragment — an EXERCISE or COURSE task counts when
+     * its owning slice says the member's side is done, not only LESSONs.
+     */
     public List<ModuleProgressRow> moduleProgress(UUID orgId, UUID coachId, UUID founderId) {
         return jdbc.query("""
                 SELECT c.name AS cohort_name, m.name AS module_name,
-                       count(DISTINCT t.id)       AS total,
-                       count(DISTINCT ps.task_id) AS submitted
+                       count(*)                    AS total,
+                       count(*) FILTER (WHERE %s)  AS submitted
                 FROM cohort_members cm
                 JOIN cohorts c          ON c.id = cm.cohort_id AND c.org_id = :orgId
                 JOIN program_modules m  ON m.cohort_id = c.id
                 JOIN program_tasks t    ON t.module_id = m.id AND t.status = 'LIVE'
-                LEFT JOIN program_submissions ps
-                       ON ps.task_id = t.id AND ps.user_id = cm.user_id AND ps.status = 'SUBMITTED'
                 WHERE cm.user_id = :founderId
                   AND %s
                   AND %s
                   AND EXISTS (SELECT 1 FROM users u WHERE u.id = :founderId AND %s)
                 GROUP BY c.name, c.position, m.name, m.position
                 ORDER BY c.position, c.name, m.position, m.name
-                """.formatted(GRANTED_COHORT.formatted(":founderId"),
+                """.formatted(TASK_DONE.formatted(":founderId"),
+                        GRANTED_COHORT.formatted(":founderId"),
                         AUDIENCE.formatted("cm.user_id"), VISIBLE_FOUNDER),
                 params(orgId, coachId).addValue("founderId", founderId),
                 (rs, i) -> new ModuleProgressRow(rs.getString("cohort_name"),

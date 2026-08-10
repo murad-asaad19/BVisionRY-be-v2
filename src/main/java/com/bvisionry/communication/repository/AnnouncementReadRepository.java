@@ -131,6 +131,38 @@ public class AnnouncementReadRepository {
         return Boolean.TRUE.equals(member);
     }
 
+    public record MemberFeedRow(UUID id, String cohortName, String authorName, String authorRole,
+                                String body, Instant createdAt) {}
+
+    /**
+     * The announcements a MEMBER received: posts to cohorts they belong to,
+     * newest first, with the author's name + role so the reader can label who
+     * is speaking ("Coach" / "Program admin"). No {@code flagged} — moderation
+     * state is never a recipient's signal. Same ceiling as the author feed.
+     */
+    public List<MemberFeedRow> memberFeed(UUID orgId, UUID memberId) {
+        return jdbc.query("""
+                        SELECT a.id, c.name AS cohort_name, u.name AS author_name,
+                               u.role AS author_role, a.body, a.created_at
+                        FROM announcements a
+                        JOIN cohorts c ON c.id = a.cohort_id AND c.org_id = :orgId
+                        JOIN cohort_members cm ON cm.cohort_id = a.cohort_id
+                                              AND cm.user_id = :memberId
+                        LEFT JOIN users u ON u.id = a.author_id
+                        WHERE a.org_id = :orgId
+                        ORDER BY a.created_at DESC
+                        LIMIT %d
+                        """.formatted(FEED_CEILING),
+                new MapSqlParameterSource("orgId", orgId).addValue("memberId", memberId),
+                (rs, i) -> new MemberFeedRow(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("cohort_name"),
+                        rs.getString("author_name"),
+                        rs.getString("author_role"),
+                        rs.getString("body"),
+                        rs.getObject("created_at", OffsetDateTime.class).toInstant()));
+    }
+
     /** A cohort's posts, newest first, org-scoped. */
     public List<FeedRow> feed(UUID orgId, UUID cohortId) {
         return jdbc.query("""

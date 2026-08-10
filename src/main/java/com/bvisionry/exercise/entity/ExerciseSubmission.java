@@ -50,6 +50,15 @@ public class ExerciseSubmission extends BaseEntity {
     @Column(name = "reviewed_at")
     private Instant reviewedAt;
 
+    /**
+     * §7b history, write-once: the FIRST (well, latest) time a reviewer sent
+     * this copy back. Never cleared by a resubmit or a later mark-reviewed —
+     * unlike {@link #reviewedAt}, which both of those null — so the review
+     * queue can honestly mark a SUBMITTED copy as "resubmitted after changes".
+     */
+    @Column(name = "changes_requested_at")
+    private Instant changesRequestedAt;
+
     @Version
     private Long version;
 }

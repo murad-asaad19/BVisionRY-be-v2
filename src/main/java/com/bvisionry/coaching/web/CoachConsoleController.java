@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.bvisionry.coaching.dto.CoachFounderDetailResponse;
 import com.bvisionry.coaching.dto.CoachProfileResponse;
+import com.bvisionry.coaching.dto.CoachReviewQueueResponse;
 import com.bvisionry.coaching.dto.CoachRosterResponse;
 import com.bvisionry.coaching.dto.UpdateCoachProfileRequest;
 
@@ -41,6 +42,12 @@ public class CoachConsoleController {
     @GetMapping("/roster")
     public CoachRosterResponse roster() {
         return service.roster();
+    }
+
+    /** The review queue — SUBMITTED exercises across the caller's founders, oldest first. */
+    @GetMapping("/queue")
+    public CoachReviewQueueResponse queue() {
+        return service.queue();
     }
 
     @GetMapping("/founders/{founderId}")

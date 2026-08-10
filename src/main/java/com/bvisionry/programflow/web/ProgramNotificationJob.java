@@ -5,7 +5,6 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -19,12 +18,11 @@ import com.bvisionry.programflow.domain.ModuleLockMode;
 import com.bvisionry.programflow.domain.ProgramModule;
 import com.bvisionry.programflow.domain.ProgramTask;
 import com.bvisionry.programflow.domain.ProgramTaskStatus;
-import com.bvisionry.programflow.domain.SubmissionStatus;
 import com.bvisionry.programflow.repository.CohortRepository;
 import com.bvisionry.programflow.repository.OrgMemberRow;
 import com.bvisionry.programflow.repository.ProgramModuleRepository;
 import com.bvisionry.programflow.repository.ProgramSettingsRepository;
-import com.bvisionry.programflow.repository.ProgramSubmissionRepository;
+import com.bvisionry.programflow.repository.TaskSpineRepository;
 import com.bvisionry.programflow.repository.ProgramTaskRepository;
 import com.bvisionry.programflow.repository.TeamRepository;
 
@@ -39,8 +37,8 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
  *
  * <ul>
  *   <li><b>Module unlocked</b> — a SCHEDULED module's {@code unlockAt} passed.</li>
- *   <li><b>Task due soon</b> — a LIVE task enters its cohort's due-soon window
- *       and the learner hasn't submitted.</li>
+ *   <li><b>Task due soon</b> — a LIVE task of any type enters its cohort's due-soon
+ *       window and the learner's per-type done state says it is not done.</li>
  * </ul>
  *
  * Both are send-once: the row is stamped ({@code unlock_notified_at} /
@@ -58,7 +56,7 @@ public class ProgramNotificationJob {
 
     private final ProgramModuleRepository modules;
     private final ProgramTaskRepository tasks;
-    private final ProgramSubmissionRepository submissions;
+    private final TaskSpineRepository spine;
     private final ProgramSettingsRepository settings;
     private final CohortRepository cohorts;
     private final TeamRepository teams;
@@ -103,12 +101,11 @@ public class ProgramNotificationJob {
                 continue; // not inside this cohort's own window yet — retried next run
             }
             task.setDueReminderSentAt(now);
-            Set<UUID> alreadySubmitted = submissions.findByTaskIdIn(List.of(task.getId())).stream()
-                    .filter(s -> s.getStatus() == SubmissionStatus.SUBMITTED)
-                    .map(s -> s.getUserId())
-                    .collect(Collectors.toSet());
+            // Per-type done state (spine SQL) — a COURSE task's reminder skips
+            // whoever completed the course, not whoever has a program submission.
+            Set<UUID> alreadyDone = Set.copyOf(spine.usersDoneWithTask(task.getId()));
             List<UUID> recipients = recipients(module).stream()
-                    .filter(id -> !alreadySubmitted.contains(id))
+                    .filter(id -> !alreadyDone.contains(id))
                     .toList();
             if (!recipients.isEmpty()) {
                 events.publishEvent(new ProgramFlowEvents.TaskDueSoon(

@@ -11,6 +11,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import com.bvisionry.common.programaccess.ProgramAudience;
+import com.bvisionry.common.programaccess.TaskCompletion;
 
 /**
  * ROI reporting reads (roadmap §7 item 16): one cohort's pillar movement from
@@ -58,8 +59,10 @@ import com.bvisionry.common.programaccess.ProgramAudience;
  * so the report can name exactly how many founders the movement describes.
  *
  * <p><strong>Completion</strong> follows the coach console's grain: LIVE tasks
- * of the cohort's modules whose audience includes the founder, against their
- * SUBMITTED program submissions.
+ * of the cohort's modules whose audience includes the founder, with per-type
+ * done state from the shared {@link TaskCompletion} fragment
+ * ({@code programflow.web.ProgramRules} semantics) — so this report, the coach
+ * console and the engagement record quote the same completion numbers.
  *
  * <p>ponytail: live aggregation, no materialised table — a cohort is tens of
  * founders and the scan is bounded by the cohort, not the platform. Add a
@@ -263,17 +266,16 @@ public class RoiReportReadRepository {
                 JOIN users u   ON u.id = cm.user_id AND u.organization_id = :orgId
                 LEFT JOIN summary sm ON sm.user_id = u.id
                 LEFT JOIN LATERAL (
-                    SELECT count(DISTINCT t.id)       AS total,
-                           count(DISTINCT ps.task_id) AS done
+                    SELECT count(*)                   AS total,
+                           count(*) FILTER (WHERE %s) AS done
                     FROM program_modules m
                     JOIN program_tasks t ON t.module_id = m.id AND t.status = 'LIVE'
-                    LEFT JOIN program_submissions ps
-                           ON ps.task_id = t.id AND ps.user_id = u.id AND ps.status = 'SUBMITTED'
                     WHERE m.cohort_id = c.id AND %s
                 ) pr ON true
                 WHERE c.id = :cohortId
                 ORDER BY u.name, u.id
-                """.formatted(ProgramAudience.INCLUDES_USER.formatted("u.id")),
+                """.formatted(TaskCompletion.DONE_FOR_USER.formatted("u.id"),
+                        ProgramAudience.INCLUDES_USER.formatted("u.id")),
                 params(orgId, cohortId, pipelineId),
                 (rs, i) -> new FounderRow(rs.getString("name"), rs.getInt("taken"),
                         rs.getObject("intake_on", LocalDate.class), rs.getBigDecimal("intake_score"),

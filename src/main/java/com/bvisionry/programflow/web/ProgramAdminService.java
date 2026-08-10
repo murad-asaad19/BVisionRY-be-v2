@@ -82,9 +82,8 @@ public class ProgramAdminService {
 
     @Transactional(readOnly = true)
     public BoardResponse getBoard(UUID orgId, UUID cohortId) {
-        cohortService.require(orgId, cohortId);
+        List<OrgMemberRow> members = cohortFounders(orgId, cohortId);
         List<ProgramModule> mods = modules.findByCohortIdOrderByPositionAsc(cohortId);
-        List<OrgMemberRow> members = teams.findOrgMembers(orgId);
         List<ModuleDto> moduleDtos = mods.stream()
                 .map(m -> ProgramMapper.toDto(m, reached(m, members)))
                 .toList();
@@ -154,7 +153,7 @@ public class ProgramAdminService {
         m.setSummary(req.summary());
         m.setPillarLabel(blankToNull(req.pillarLabel()));
         m.setPosition(modules.findByCohortIdOrderByPositionAsc(cohortId).size());
-        return ProgramMapper.toDto(modules.save(m), reached(m, teams.findOrgMembers(orgId)));
+        return ProgramMapper.toDto(modules.save(m), reached(m, cohortFounders(orgId, cohortId)));
     }
 
     public ModuleDto updateModule(UUID orgId, UUID cohortId, UUID moduleId, UpdateModuleRequest req) {
@@ -164,7 +163,7 @@ public class ProgramAdminService {
         m.setPillarLabel(blankToNull(req.pillarLabel()));
         m.setLockMode(req.lockMode());
         m.setUnlockAt(req.unlockAt());
-        return ProgramMapper.toDto(m, reached(m, teams.findOrgMembers(orgId)));
+        return ProgramMapper.toDto(m, reached(m, cohortFounders(orgId, cohortId)));
     }
 
     public AudienceDto updateAudience(UUID orgId, UUID cohortId, UUID moduleId, UpdateAudienceRequest req) {
@@ -212,7 +211,7 @@ public class ProgramAdminService {
         }
 
         return new AudienceDto(m.getAssignMode(), List.copyOf(m.getTeamIds()),
-                List.copyOf(m.getMemberIds()), reached(m, members));
+                List.copyOf(m.getMemberIds()), reached(m, cohortFounders(orgId, cohortId)));
     }
 
     /** Deletes the module with its tasks/fields/submissions (DB cascades). */
@@ -429,14 +428,14 @@ public class ProgramAdminService {
             m.getTasks().add(t);
         }
         m = modules.save(m);
-        return ProgramMapper.toDto(m, reached(m, teams.findOrgMembers(orgId)));
+        return ProgramMapper.toDto(m, reached(m, cohortFounders(orgId, cohortId)));
     }
 
     // ------------------------------------------------------------------ pulse
 
     @Transactional(readOnly = true)
     public PulseResponse getPulse(UUID orgId, UUID cohortId) {
-        cohortService.require(orgId, cohortId);
+        List<OrgMemberRow> founders = cohortFounders(orgId, cohortId);
         List<ProgramModule> mods = modules.findByCohortIdOrderByPositionAsc(cohortId);
         List<PulseColumn> columns = new ArrayList<>();
         List<UUID> taskIds = new ArrayList<>();
@@ -461,19 +460,18 @@ public class ProgramAdminService {
         Map<UUID, String> teamNames = teams.findByOrgIdOrderByCreatedAtAsc(orgId).stream()
                 .collect(Collectors.toMap(t -> t.getId(), t -> t.getName()));
 
-        List<OrgMemberRow> orgMembers = teams.findOrgMembers(orgId);
-        // Non-LESSON columns read their owning slice, batched for every member.
+        // Non-LESSON columns read their owning slice, batched for every founder.
         List<ProgramTask> typedTasks = mods.stream()
                 .flatMap(m -> ProgramRules.liveTasks(m).stream())
                 .filter(t -> t.getTaskType() != ProgramTaskType.LESSON)
                 .toList();
         Map<UUID, Map<UUID, JourneyTaskState>> typedByUser = myProgramService.typedStatesForPulse(
-                orgMembers.stream().map(OrgMemberRow::getId).toList(), typedTasks);
+                founders.stream().map(OrgMemberRow::getId).toList(), typedTasks);
         Map<UUID, ProgramTaskType> taskTypes = mods.stream()
                 .flatMap(m -> m.getTasks().stream())
                 .collect(Collectors.toMap(ProgramTask::getId, ProgramTask::getTaskType));
 
-        List<PulseRow> rows = orgMembers.stream().map(member -> {
+        List<PulseRow> rows = founders.stream().map(member -> {
             Map<UUID, ProgramSubmission> mine = byUserThenTask.getOrDefault(member.getId(), Map.of());
             Map<UUID, JourneyTaskState> myTyped = typedByUser.getOrDefault(member.getId(), Map.of());
             List<CellState> cells = new ArrayList<>(taskIds.size());
@@ -526,17 +524,13 @@ public class ProgramAdminService {
 
     /**
      * The cohort board's Founders tab (spec §2.3): the progress matrix over the
-     * ENROLLED founders (unlike the legacy pulse, which walks every org
-     * member). Works for a cohort in any lifecycle state — admins may inspect
-     * drafts and archives.
+     * enrolled founders. Works for a cohort in any lifecycle state — admins may
+     * inspect drafts and archives.
      */
     @Transactional(readOnly = true)
     public CohortMatrixResponse getMatrix(UUID orgId, UUID cohortId) {
-        var cohort = cohortService.require(orgId, cohortId);
         List<ProgramModule> mods = modules.findByCohortIdOrderByPositionAsc(cohortId);
-        List<OrgMemberRow> founders = teams.findOrgMembers(orgId).stream()
-                .filter(m -> cohort.getMemberIds().contains(m.getId()))
-                .toList();
+        List<OrgMemberRow> founders = cohortFounders(orgId, cohortId);
         List<UUID> founderIds = founders.stream().map(OrgMemberRow::getId).toList();
 
         List<ModuleColumn> moduleColumns = mods.stream()
@@ -614,9 +608,18 @@ public class ProgramAdminService {
                         continue;
                     }
                     boolean taskDone = isDone(t, myLessons, myTyped);
-                    total++;
+                    // A milestone assessment has its OWN column on this matrix
+                    // (baseline / check-in / distance) and the member's journey
+                    // renders it outside the module list too — counting it in
+                    // the module cell as well double-counts and makes the two
+                    // surfaces quote different fractions for the same module.
+                    if (t.getMilestoneRole() == null) {
+                        total++;
+                        if (taskDone) {
+                            done++;
+                        }
+                    }
                     if (taskDone) {
-                        done++;
                         maxDoneModulePosition = Math.max(maxDoneModulePosition, m.getPosition());
                     }
                     if (!taskDone && t.getDueDate() != null && t.getDueDate().isBefore(today)) {
@@ -648,8 +651,12 @@ public class ProgramAdminService {
 
             CohortBoardReadRepository.TriageRow tri = triage.get(member.getId());
             List<AttentionFlag> flags = new ArrayList<>();
-            if (tri == null || tri.lastActivityAt() == null
-                    || tri.lastActivityAt().isBefore(idleCutoff)) {
+            // Null last-activity is "no footprint yet", not "idle since the
+            // dawn of time": a founder who joined minutes ago must not be
+            // flagged IDLE (null-not-zero — the row's Last seen already reads
+            // "—", which is the honest signal).
+            if (tri != null && tri.lastActivityAt() != null
+                    && tri.lastActivityAt().isBefore(idleCutoff)) {
                 flags.add(AttentionFlag.IDLE);
             }
             if (anyOverdue) {
@@ -696,6 +703,21 @@ public class ProgramAdminService {
             return CellState.NOT_STARTED;
         }
         return ProgramRules.done(state) ? CellState.SUBMITTED : CellState.IN_DRAFT;
+    }
+
+    /**
+     * The cohort's roster: active org members enrolled in this cohort, and the
+     * single source every cohort-board count reads (board stats, module
+     * "reached", pulse, matrix). Audience teams/members stay org-scoped by
+     * design — an org member who is not enrolled is not a founder of this
+     * cohort and must not appear in, or be averaged into, its numbers.
+     * Doubles as the tenant guard: {@code require} owns that check.
+     */
+    private List<OrgMemberRow> cohortFounders(UUID orgId, UUID cohortId) {
+        Set<UUID> enrolled = cohortService.require(orgId, cohortId).getMemberIds();
+        return teams.findOrgMembers(orgId).stream()
+                .filter(m -> enrolled.contains(m.getId()))
+                .toList();
     }
 
     private int reached(ProgramModule m, List<OrgMemberRow> members) {

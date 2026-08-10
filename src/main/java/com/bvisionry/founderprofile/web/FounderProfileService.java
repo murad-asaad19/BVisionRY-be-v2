@@ -83,11 +83,32 @@ public class FounderProfileService {
         return last.subtract(first);
     }
 
+    /**
+     * A cohort task's Work-tab status. Only LESSON tasks own a
+     * {@code program_submissions} row, so reading that column alone reported
+     * every other type as "To do" forever; the DONE verdict comes from the
+     * shared authority ({@code TaskCompletion.DONE_FOR_USER}) instead, worded
+     * per type in this endpoint's existing vocabulary.
+     *
+     * <p>ponytail: done/not-done only — the authority is a boolean. An
+     * in-flight course or a changes-requested exercise still reads "To do"
+     * here; its own typed row on the same tab carries the finer state.
+     */
+    static String programStatus(FounderProfileReadRepository.ProgramTaskRow t) {
+        if (!t.done()) {
+            return t.status();
+        }
+        return switch (t.taskType()) {
+            case "COURSE", "WORKSHOP" -> "COMPLETED";
+            default -> "SUBMITTED";
+        };
+    }
+
     private List<FounderWorkItem> workItems(UUID orgId, UUID memberId) {
         List<FounderWorkItem> items = new ArrayList<>();
         reads.programTasks(orgId, memberId).forEach(t -> items.add(new FounderWorkItem(
                 "PROGRAM", t.taskId(), null, t.taskName(),
-                t.cohortName() + " · " + t.moduleName(), t.status(), null, null, null,
+                t.cohortName() + " · " + t.moduleName(), programStatus(t), null, null, null,
                 t.dueDate() == null ? null : t.dueDate().atStartOfDay(ZoneOffset.UTC).toInstant(),
                 t.savedAt(), t.submittedAt(), null, null, null, false, false, null, null, null)));
         reads.exercises(orgId, memberId).forEach(e -> items.add(new FounderWorkItem(

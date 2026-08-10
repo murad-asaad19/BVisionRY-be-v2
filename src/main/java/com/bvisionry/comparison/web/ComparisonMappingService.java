@@ -47,8 +47,10 @@ public class ComparisonMappingService {
     public PillarMappingResponse mappingForPair(UUID baselinePipelineId, UUID distancePipelineId) {
         List<PillarRow> base = reads.pillarsOf(baselinePipelineId);
         List<PillarRow> dist = reads.pillarsOf(distancePipelineId);
+        // Set.copyOf, not Set.of: the same instrument may play BOTH roles
+        // (a supported pair — spec D1), and Set.of rejects the duplicate.
         Map<UUID, String> pipelineNames =
-                reads.pipelineNames(Set.of(baselinePipelineId, distancePipelineId));
+                reads.pipelineNames(Set.copyOf(List.of(baselinePipelineId, distancePipelineId)));
         if (!pipelineNames.containsKey(baselinePipelineId)
                 || !pipelineNames.containsKey(distancePipelineId)) {
             throw new ResourceNotFoundException("Pipeline", baselinePipelineId + " / " + distancePipelineId);

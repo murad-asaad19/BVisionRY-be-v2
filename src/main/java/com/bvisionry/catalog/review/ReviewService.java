@@ -2,13 +2,12 @@ package com.bvisionry.catalog.review;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Optional;
 import java.util.UUID;
 
-import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.catalog.domain.Course;
@@ -92,18 +91,21 @@ public class ReviewService {
     // -------------------------------------------------------------------------
 
     /**
-     * Returns the current user's review for {@code slug}, or raises a 404.
+     * Returns the current user's review for {@code slug}, or empty when they
+     * have not reviewed it yet — "no review yet" is the NORMAL state on every
+     * player load, not an error, so it must not surface as a 404 (the browser
+     * logs one to the console on every visit and there is no client-side way to
+     * silence that). The controller maps empty to 204.
      */
     @Transactional(readOnly = true)
-    public ReviewDto getMyReview(String slug) {
+    public Optional<ReviewDto> getMyReview(String slug) {
         Course course = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
 
         UUID userId = SecurityUtils.getCurrentUserId();
 
         return reviews.findByCourse_IdAndUserId(course.getId(), userId)
-                .map(r -> toDto(r, course.getId()))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No review found"));
+                .map(r -> toDto(r, course.getId()));
     }
 
     // -------------------------------------------------------------------------

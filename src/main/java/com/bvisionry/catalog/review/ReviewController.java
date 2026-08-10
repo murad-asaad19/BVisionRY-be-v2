@@ -2,6 +2,7 @@ package com.bvisionry.catalog.review;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -61,12 +62,17 @@ public class ReviewController {
 
     @GetMapping("/me")
     @Operation(summary = "Get own review",
-            description = "Returns the current user's review for this course, or 404 if none exists.")
+            description = "Returns the current user's review for this course, or 204 when they have "
+                    + "not reviewed it yet. 'No review yet' is the normal state on every player load, "
+                    + "so it is deliberately NOT a 404 — the browser console logs every 404.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Review found"),
-            @ApiResponse(responseCode = "404", description = "No review from the current user for this course")
+            @ApiResponse(responseCode = "204", description = "No review from the current user for this course"),
+            @ApiResponse(responseCode = "404", description = "Course not found")
     })
-    public ReviewDto getMyReview(@PathVariable String slug) {
-        return service.getMyReview(slug);
+    public ResponseEntity<ReviewDto> getMyReview(@PathVariable String slug) {
+        return service.getMyReview(slug)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.noContent().build());
     }
 }

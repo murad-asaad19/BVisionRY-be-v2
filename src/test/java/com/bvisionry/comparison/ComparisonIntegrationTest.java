@@ -425,6 +425,56 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                     .isEmpty();
         }
 
+        /**
+         * ISSUE-1 / ISSUE-13: the SAME instrument on both sides. The pair's
+         * mapping must resolve (every pillar maps to itself — {@code Set.of}
+         * on the two equal pipeline ids used to throw "duplicate element",
+         * 500ing the mapping read AND swallowing the compute), the comparison
+         * must land WITH its pillar rows, and My Growth must leave "pending".
+         */
+        @Test
+        void sameInstrumentPair_mapsPillarsToThemselves_andWritesPillarRows() {
+            UUID baselineSubmission = insertEvaluatedSubmissionFor(founder, baselinePipelineId, 90,
+                    new BigDecimal("58.00"), null);
+            insertPillarEval(baselineSubmission, baselineVision, "50.00", "Emerging");
+            insertPillarEval(baselineSubmission, baselineFocus, "60.00", "Strong");
+            UUID distanceSubmission = insertEvaluatedSubmissionFor(founder, baselinePipelineId, 10,
+                    new BigDecimal("71.00"), distanceTaskId);
+            insertPillarEval(distanceSubmission, baselineVision, "62.00", "Strong");
+            insertPillarEval(distanceSubmission, baselineFocus, "78.00", "Strong");
+
+            PillarMappingResponse mapping =
+                    mappingService.mappingForPair(baselinePipelineId, baselinePipelineId);
+            assertThat(mapping.baselinePipelineName()).isEqualTo("Baseline FRI");
+            assertThat(mapping.distancePipelineName()).isEqualTo("Baseline FRI");
+            assertThat(mapping.mappings()).hasSize(3)
+                    .allSatisfy(m -> assertThat(m.distancePillarId()).isEqualTo(m.baselinePillarId()));
+
+            computeService.onSubmissionEvaluated(new EvaluationEvents.SubmissionEvaluated(
+                    distanceSubmission, founder.getId(), Map.of()));
+
+            FounderComparison c = comparisons
+                    .findByCohortIdAndUserId(samePairCohortId, founder.getId()).orElseThrow();
+            assertThat(c.getBaselineSubmissionId()).isEqualTo(baselineSubmission);
+            assertThat(c.getDistanceSubmissionId()).isEqualTo(distanceSubmission);
+
+            // Legacy is measured on neither submission → no row; the two
+            // evaluated pillars compare against THEMSELVES.
+            var rows = comparisonPillars.findByComparisonId(c.getId());
+            assertThat(rows).hasSize(2)
+                    .allSatisfy(r -> assertThat(r.getState()).isEqualTo(PillarComparisonState.MAPPED));
+            var vision = rows.stream()
+                    .filter(r -> baselineVision.equals(r.getBaselinePillarId())).findFirst()
+                    .orElseThrow();
+            assertThat(vision.getDistancePillarId()).isEqualTo(baselineVision);
+            assertThat(vision.getBeforePct()).isEqualByComparingTo("50.00");
+            assertThat(vision.getAfterPct()).isEqualByComparingTo("62.00");
+            assertThat(vision.getDelta()).isEqualByComparingTo("12.00");
+
+            // ISSUE-13: the member's growth page unlocks instead of waiting forever.
+            assertThat(queryService.myComparison(founder.getId()).state()).isEqualTo("done");
+        }
+
         private UUID insertEvaluatedSubmissionFor(User user, UUID pipelineId, int daysAgo,
                                                   BigDecimal overallScore, UUID programTaskId) {
             UUID assignmentId = jdbc

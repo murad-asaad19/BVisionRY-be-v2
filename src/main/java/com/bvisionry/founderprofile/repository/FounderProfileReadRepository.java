@@ -15,6 +15,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import com.bvisionry.common.programaccess.ProgramAudience;
+import com.bvisionry.common.programaccess.TaskCompletion;
 
 /**
  * Cross-feature reads for the shared founder profile (redesign spec §2.4),
@@ -100,26 +101,39 @@ public class FounderProfileReadRepository {
     /* ------------------------------------------------------------- work list */
 
     public record ProgramTaskRow(UUID taskId, String taskName, String cohortName, String moduleName,
-                                 LocalDate dueDate, String status, Instant savedAt, Instant submittedAt) {}
+                                 LocalDate dueDate, String taskType, boolean done,
+                                 String status, Instant savedAt, Instant submittedAt) {}
 
-    /** LIVE program tasks in the member's cohorts whose module audience includes them. */
+    /**
+     * LIVE program tasks in the member's cohorts whose module audience includes
+     * them, each with the shared per-type DONE verdict.
+     *
+     * <p>{@code ps.status} only ever exists for LESSON tasks, so a status read
+     * off it alone left every COURSE/EXERCISE/SURVEY/ASSESSMENT/WORKSHOP task
+     * stuck on "To do" even after the member finished it. {@code done} is the
+     * one done-semantics authority ({@link TaskCompletion#DONE_FOR_USER}) the
+     * journey, the pulse and the matrix already answer to.
+     */
     public List<ProgramTaskRow> programTasks(UUID orgId, UUID memberId) {
         return jdbc.query("""
                 SELECT t.id, t.name AS task_name, c.name AS cohort_name, m.name AS module_name,
-                       t.due_date, ps.status, ps.saved_at, ps.submitted_at
+                       t.due_date, t.task_type, COALESCE(%1$s, FALSE) AS done,
+                       ps.status, ps.saved_at, ps.submitted_at
                 FROM cohort_members cm
                 JOIN cohorts c         ON c.id = cm.cohort_id AND c.org_id = :orgId
                 JOIN program_modules m ON m.cohort_id = c.id
                 JOIN program_tasks t   ON t.module_id = m.id AND t.status = 'LIVE'
                 LEFT JOIN program_submissions ps ON ps.task_id = t.id AND ps.user_id = :memberId
                 WHERE cm.user_id = :memberId
-                  AND %s
+                  AND %2$s
                 ORDER BY c.position, c.name, m.position, t.position
-                """.formatted(ProgramAudience.INCLUDES_USER.formatted(":memberId")),
+                """.formatted(TaskCompletion.DONE_FOR_USER.formatted(":memberId"),
+                        ProgramAudience.INCLUDES_USER.formatted(":memberId")),
                 params(orgId, memberId),
                 (rs, i) -> new ProgramTaskRow(rs.getObject("id", UUID.class),
                         rs.getString("task_name"), rs.getString("cohort_name"),
                         rs.getString("module_name"), rs.getObject("due_date", LocalDate.class),
+                        rs.getString("task_type"), rs.getBoolean("done"),
                         rs.getString("status"), instant(rs, "saved_at"), instant(rs, "submitted_at")));
     }
 

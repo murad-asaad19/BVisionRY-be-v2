@@ -35,11 +35,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * pillar chips, milestone columns, per-founder cells, row-end triage and every
  * needs-attention flag reachable.
  *
- * <p>Cast: A never showed up (IDLE + OVERDUE) · B did later-module work but
- * skipped the baseline check-in (CHECKIN_UNSTARTED) · C answered the baseline,
- * scored 62 overall with one pillar at 20 (< the default 40 threshold →
- * PILLAR_BELOW_THRESHOLD) — and then walked past the MID-PROGRAM check-in
- * into module 3, so the generalized passed-it-by rule flags C too.
+ * <p>Cast: A logged in a month ago and has done nothing since (IDLE +
+ * OVERDUE) · B did later-module work but skipped the baseline check-in
+ * (CHECKIN_UNSTARTED) · C answered the baseline, scored 62 overall with one
+ * pillar at 20 (< the default 40 threshold → PILLAR_BELOW_THRESHOLD) — and
+ * then walked past the MID-PROGRAM check-in into module 3, so the generalized
+ * passed-it-by rule flags C too · D was enrolled minutes ago and has no
+ * footprint at all (no IDLE — null last-activity is "no data yet").
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -56,6 +58,7 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
     private User founderA;
     private User founderB;
     private User founderC;
+    private User founderD;
     private UUID cohortId;
     private UUID lessonModule1TaskId;
     private UUID baselineTaskId;
@@ -73,7 +76,11 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
         founderA = saveMember("a@matrix.invalid");
         founderB = saveMember("b@matrix.invalid");
         founderC = saveMember("c@matrix.invalid");
+        founderD = saveMember("d@matrix.invalid");
         TestAuthentication.authenticateAsOrgAdmin(users, org);
+        // A signed in once, a month ago, and never came back — genuinely idle.
+        jdbc.update("UPDATE users SET last_login_at = now() - interval '30 days' WHERE id = ?",
+                founderA.getId());
 
         UUID pipelineId = UUID.randomUUID();
         jdbc.update("INSERT INTO pipelines (id, name, status, created_by) VALUES (?, ?, 'PUBLISHED', ?)",
@@ -85,7 +92,7 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
         cohortId = UUID.randomUUID();
         jdbc.update("INSERT INTO cohorts (id, org_id, name, status, launched_at) "
                 + "VALUES (?, ?, 'Matrix Cohort', 'LAUNCHED', now())", cohortId, org.getId());
-        for (User u : new User[] {founderA, founderB, founderC}) {
+        for (User u : new User[] {founderA, founderB, founderC, founderD}) {
             jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
                     cohortId, u.getId());
         }
@@ -152,13 +159,16 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(matrix.milestoneColumns().get(1).taskId()).isEqualTo(checkinTaskId);
         assertThat(matrix.pillarThreshold()).isEqualTo(40);
 
-        assertThat(matrix.rows()).hasSize(3);
+        assertThat(matrix.rows()).hasSize(4);
         FounderRow a = row(matrix, founderA);
         FounderRow b = row(matrix, founderB);
         FounderRow c = row(matrix, founderC);
 
         // A: untouched cohort → idle, overdue on the past-due lesson; no baseline noise.
-        assertThat(a.moduleCells().get(0).total()).isEqualTo(2); // lesson + baseline assessment
+        // The module cell counts the LESSON only — the baseline assessment has
+        // its own milestone column and is excluded here, exactly as the member's
+        // journey module chip excludes it (one "module task count" definition).
+        assertThat(a.moduleCells().get(0).total()).isEqualTo(1);
         assertThat(a.moduleCells().get(0).done()).isZero();
         assertThat(a.milestoneCells().get(0).state()).isEqualTo(JourneyTaskState.NOT_STARTED);
         assertThat(a.attentionFlags())
@@ -168,6 +178,7 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // B: later-module work while the baseline sits untouched → check-in unstarted, not idle.
         assertThat(b.moduleCells().get(1).done()).isEqualTo(1);
+        assertThat(b.moduleCells().get(1).total()).as("mid check-in has its own column").isEqualTo(1);
         assertThat(b.attentionFlags())
                 .contains(AttentionFlag.CHECKIN_UNSTARTED)
                 .doesNotContain(AttentionFlag.IDLE);
@@ -185,6 +196,21 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(c.attentionFlags())
                 .contains(AttentionFlag.PILLAR_BELOW_THRESHOLD, AttentionFlag.CHECKIN_UNSTARTED);
         assertThat(c.awaitingReview()).isZero();
+    }
+
+    /**
+     * A founder enrolled minutes ago has NO last activity — which is "no data
+     * yet", not "idle for over a week". They still show up on the overdue
+     * strip like anybody else; only the idle verdict is withheld.
+     */
+    @Test
+    void brandNewFounderIsNotIdle() {
+        FounderRow d = row(adminService.getMatrix(org.getId(), cohortId), founderD);
+
+        assertThat(d.lastSeenAt()).isNull();
+        assertThat(d.attentionFlags())
+                .doesNotContain(AttentionFlag.IDLE)
+                .contains(AttentionFlag.OVERDUE_TASKS);
     }
 
     /* --------------------------------------------------------------- helpers */

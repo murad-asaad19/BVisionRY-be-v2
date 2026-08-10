@@ -1,6 +1,7 @@
 package com.bvisionry.founderprofile.web;
 
 import com.bvisionry.founderprofile.repository.FounderProfileReadRepository.FriPoint;
+import com.bvisionry.founderprofile.repository.FounderProfileReadRepository.ProgramTaskRow;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -9,7 +10,10 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** The header's Δ-so-far math (pure): latest minus earliest, null under two points. */
+/**
+ * The header's Δ-so-far math (pure): latest minus earliest, null under two
+ * points — plus the Work tab's per-type cohort-task status.
+ */
 class FounderProfileServiceTest {
 
     private static FriPoint point(String score) {
@@ -38,5 +42,37 @@ class FounderProfileServiceTest {
     @Test
     void nullScoresYieldNullNotAnException() {
         assertThat(FounderProfileService.friDelta(List.of(point(null), point("58.00")))).isNull();
+    }
+
+    private static ProgramTaskRow task(String type, boolean done, String submissionStatus) {
+        return new ProgramTaskRow(null, "T", "Cohort", "Module", null, type, done,
+                submissionStatus, null, null);
+    }
+
+    /**
+     * Only LESSON tasks own a program_submissions row, so every other type
+     * used to read "To do" (null) forever however finished it was.
+     */
+    @Test
+    void doneCohortTasksReportTheirTypesDoneWord() {
+        assertThat(FounderProfileService.programStatus(task("COURSE", true, null)))
+                .isEqualTo("COMPLETED");
+        assertThat(FounderProfileService.programStatus(task("WORKSHOP", true, null)))
+                .isEqualTo("COMPLETED");
+        assertThat(FounderProfileService.programStatus(task("EXERCISE", true, null)))
+                .isEqualTo("SUBMITTED");
+        assertThat(FounderProfileService.programStatus(task("SURVEY", true, null)))
+                .isEqualTo("SUBMITTED");
+        assertThat(FounderProfileService.programStatus(task("ASSESSMENT", true, null)))
+                .isEqualTo("SUBMITTED");
+        assertThat(FounderProfileService.programStatus(task("LESSON", true, "SUBMITTED")))
+                .isEqualTo("SUBMITTED");
+    }
+
+    @Test
+    void unfinishedTasksKeepTheirSubmissionStatus() {
+        assertThat(FounderProfileService.programStatus(task("LESSON", false, "DRAFT")))
+                .isEqualTo("DRAFT");
+        assertThat(FounderProfileService.programStatus(task("COURSE", false, null))).isNull();
     }
 }

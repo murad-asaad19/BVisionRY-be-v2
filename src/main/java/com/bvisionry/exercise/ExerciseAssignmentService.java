@@ -348,6 +348,7 @@ public class ExerciseAssignmentService {
                 submission != null ? submission.getId() : null,
                 submission != null ? submission.getStatus() : null,
                 submission != null ? submission.getSubmittedAt() : null,
+                submission != null ? submission.getChangesRequestedAt() : null,
                 openCommentCount,
                 assignment.getCreatedAt());
     }

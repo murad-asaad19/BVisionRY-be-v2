@@ -22,6 +22,13 @@ public record ExerciseSubmissionDetailResponse(
         Instant deadline,
         Instant lastSavedAt,
         Instant submittedAt,
+        /**
+         * When changes were last requested; null if they never were. Durable
+         * (never cleared on resubmit), so a SUBMITTED sheet carrying it is a
+         * RESUBMISSION — without it the review screen cannot tell a second pass
+         * from a first.
+         */
+        Instant changesRequestedAt,
         Instant reviewedAt,
         String memberName,
         String memberEmail,

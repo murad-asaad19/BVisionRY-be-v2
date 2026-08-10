@@ -136,8 +136,10 @@ public class ComparisonQueryService {
     }
 
     private FounderComparisonDto toDto(FounderComparison c, String userName) {
+        // Set.copyOf: the two submissions are distinct by construction today,
+        // but a duplicate here must never 500 the growth read.
         Map<UUID, Instant> evaluatedAt = reads.submissionEvaluatedAt(
-                Set.of(c.getBaselineSubmissionId(), c.getDistanceSubmissionId()));
+                Set.copyOf(List.of(c.getBaselineSubmissionId(), c.getDistanceSubmissionId())));
         var pillarRows = pillars.findByComparisonId(c.getId());
         // The distance pillars this comparison still measures BEFORE AND AFTER —
         // the set that decides which narratives are still attached (§6). MAPPED

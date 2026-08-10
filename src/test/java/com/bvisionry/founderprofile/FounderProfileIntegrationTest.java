@@ -116,14 +116,21 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(jsonPath("$.header.friDelta", is(21.25)))
                     .andExpect(jsonPath("$.header.friEvaluatedAt", notNullValue()))
                     .andExpect(jsonPath("$.header.lastActivityAt", notNullValue()))
-                    // unified work list: 2 program + 1 exercise + 1 course + 2 assessments
-                    .andExpect(jsonPath("$.work", hasSize(6)))
+                    // unified work list: 3 program + 1 exercise + 1 course + 2 assessments
+                    .andExpect(jsonPath("$.work", hasSize(7)))
                     .andExpect(jsonPath("$.work[?(@.type=='PROGRAM')].title",
                             hasItem("Task One")))
                     .andExpect(jsonPath("$.work[?(@.type=='PROGRAM' && @.title=='Task One')].status",
                             hasItem("SUBMITTED")))
                     .andExpect(jsonPath("$.work[?(@.type=='PROGRAM' && @.title=='Task One')].context",
                             hasItem("Cohort One · Module One")))
+                    // A cohort task reports the shared per-type done verdict, not
+                    // the program_submissions row it will never have: the finished
+                    // course reads COMPLETED, the untouched lesson stays a to-do.
+                    .andExpect(jsonPath("$.work[?(@.type=='PROGRAM' && @.title=='Course Task')].status",
+                            hasItem("COMPLETED")))
+                    .andExpect(jsonPath("$.work[?(@.type=='PROGRAM' && @.title=='Task Two')].status",
+                            hasItem(nullValue())))
                     .andExpect(jsonPath("$.work[?(@.type=='EXERCISE')].status",
                             hasItem("REVIEWED")))
                     .andExpect(jsonPath("$.work[?(@.type=='EXERCISE')].reviewedAt",
@@ -187,7 +194,7 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.header.name", is("founder.a")))
                     .andExpect(jsonPath("$.header.friLatest", is(71.25)))
-                    .andExpect(jsonPath("$.work", hasSize(6)))
+                    .andExpect(jsonPath("$.work", hasSize(7)))
                     .andExpect(jsonPath("$.notes[0].coachName", is("coach.a")));
         }
 
@@ -265,8 +272,9 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.modules", hasSize(1)))
                     .andExpect(jsonPath("$.modules[0].name", is("Module One")))
-                    .andExpect(jsonPath("$.progress.done", is(1)))
-                    .andExpect(jsonPath("$.progress.total", is(2)));
+                    // Task One submitted + the completed course task; Task Two open.
+                    .andExpect(jsonPath("$.progress.done", is(2)))
+                    .andExpect(jsonPath("$.progress.total", is(3)));
 
             TestAuthentication.authenticate(coach);
             mockMvc.perform(get("/api/v1/coach/founders/" + founder.getId() + "/journey"))
@@ -345,6 +353,7 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
     /** Module One in cohort1: Task One SUBMITTED, Task Two untouched. */
     private void seedProgram() {
         UUID moduleId = UUID.randomUUID();
+        this.moduleOneId = moduleId;
         jdbc.update("""
                 INSERT INTO program_modules (id, org_id, cohort_id, name, assign_mode, lock_mode)
                 VALUES (?, ?, ?, 'Module One', 'ALL', 'UNLOCKED')
@@ -386,14 +395,24 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
         // V168: the engine stamps source on its own inserts (spec §3), so the
         // seed does too — otherwise this row would read SELF and the Work tab
         // would honestly report a self-enrolment.
-        jdbc.update("INSERT INTO enrollment (user_id, course_id, progress_pct, source) VALUES (?, ?, 38, 'AI_SUGGESTED')",
-                founder.getId(), courseId);
+        jdbc.update("""
+                INSERT INTO enrollment (user_id, course_id, progress_pct, source, status, completed_at)
+                VALUES (?, ?, 100, 'AI_SUGGESTED', 'COMPLETED', now())
+                """, founder.getId(), courseId);
+        // A COHORT TASK over that same finished course: its done-ness lives in
+        // `enrollment`, never in `program_submissions` — the Work tab must read
+        // the shared done authority, not the (absent) submission row.
+        jdbc.update("""
+                INSERT INTO program_tasks (module_id, name, status, position, task_type, ref_id)
+                VALUES (?, 'Course Task', 'LIVE', 2, 'COURSE', ?)
+                """, moduleOneId, courseId);
         // Ledger row wants the pillar + submission seeded in seedAssessments —
         // insert after those exist (see seed order): use the latest submission.
         this.pendingCourseId = courseId;
     }
 
     private UUID pendingCourseId;
+    private UUID moduleOneId;
 
     /**
      * Two evaluated submissions: baseline 50.00, latest 71.25 (Δ +21.25).

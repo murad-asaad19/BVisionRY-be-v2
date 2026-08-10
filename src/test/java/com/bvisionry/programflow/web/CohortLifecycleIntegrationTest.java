@@ -156,6 +156,44 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
                 .doesNotThrowAnyException();
     }
 
+    /* ------------------------------------------------------- roster scoping */
+
+    /**
+     * Every cohort-board number counts the cohort's ROSTER, never the org: an
+     * active org member who was never enrolled is absent from the board stats
+     * tile, from a module's "reached", and from Pulse — so he cannot be
+     * averaged into the Pulse tiles or flagged "at risk" on someone else's
+     * cohort. An empty roster yields no rows at all, not the org's.
+     */
+    @Test
+    void boardStatsModuleReachAndPulse_countTheRosterNotTheOrg() {
+        User outsider = new User();
+        outsider.setEmail("never.enrolled@lifecycle.invalid");
+        outsider.setName("Never Enrolled");
+        outsider.setRole(com.bvisionry.common.enums.UserRole.MEMBER);
+        outsider.setStatus(com.bvisionry.common.enums.UserStatus.ACTIVE);
+        outsider.setOrganization(org);
+        users.saveAndFlush(outsider);
+        TestAuthentication.authenticate(admin);
+
+        assertThat(adminService.createModule(org.getId(), cohortId,
+                new CreateModuleRequest("Week 1", null, null)).audience().reached())
+                .as("an ALL-audience module reaches the roster, not the org").isEqualTo(1);
+        assertThat(adminService.getBoard(org.getId(), cohortId).stats().members())
+                .as("board stats tile = enrolled founders").isEqualTo(1);
+        assertThat(adminService.getPulse(org.getId(), cohortId).rows())
+                .extracting(com.bvisionry.programflow.dto.PulseResponse.PulseRow::userId)
+                .containsExactly(member.getId());
+        assertThat(adminService.getMatrix(org.getId(), cohortId).rows())
+                .extracting(com.bvisionry.programflow.dto.CohortMatrixResponse.FounderRow::userId)
+                .containsExactly(member.getId());
+
+        cohortService.setMembers(org.getId(), cohortId, new UpdateCohortMembersRequest(List.of()));
+        assertThat(adminService.getBoard(org.getId(), cohortId).stats().members()).isZero();
+        assertThat(adminService.getPulse(org.getId(), cohortId).rows())
+                .as("nobody enrolled → nothing to score, not the org roster").isEmpty();
+    }
+
     /* ------------------------------------------------ notification timing */
 
     /**

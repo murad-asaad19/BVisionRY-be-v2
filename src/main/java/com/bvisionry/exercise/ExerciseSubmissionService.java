@@ -302,6 +302,7 @@ public class ExerciseSubmissionService {
                 submission.getAssignment().getDeadline(),
                 submission.getLastSavedAt(),
                 submission.getSubmittedAt(),
+                submission.getChangesRequestedAt(),
                 submission.getReviewedAt(),
                 forAdmin ? member.getName() : null,
                 forAdmin && !isCoachCaller() ? member.getEmail() : null,

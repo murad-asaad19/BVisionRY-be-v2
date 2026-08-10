@@ -124,13 +124,18 @@ public class FounderProfileReadRepository {
     }
 
     public record ExerciseRow(UUID assignmentId, String exerciseName, Instant deadline, String status,
-                              Instant lastSavedAt, Instant submittedAt, Instant reviewedAt) {}
+                              Instant lastSavedAt, Instant submittedAt, Instant reviewedAt,
+                              String qualityTagLabel) {}
 
-    /** The member's exercise assignments with submission state + review timestamp. */
+    /**
+     * The member's exercise assignments with submission state + review timestamp,
+     * plus the §4 quality-tag label snapshot. The profile is a staff-only surface
+     * (admin + assigned coach), which is the only place the tag may show.
+     */
     public List<ExerciseRow> exercises(UUID orgId, UUID memberId) {
         return jdbc.query("""
                 SELECT ea.id, et.name, ea.deadline, es.status,
-                       es.last_saved_at, es.submitted_at, es.reviewed_at
+                       es.last_saved_at, es.submitted_at, es.reviewed_at, es.quality_tag_label
                 FROM exercise_assignments ea
                 JOIN exercise_templates et ON et.id = ea.template_id
                 LEFT JOIN exercise_submissions es ON es.assignment_id = ea.id AND es.user_id = :memberId
@@ -141,7 +146,7 @@ public class FounderProfileReadRepository {
                 (rs, i) -> new ExerciseRow(rs.getObject("id", UUID.class), rs.getString("name"),
                         instant(rs, "deadline"), rs.getString("status"),
                         instant(rs, "last_saved_at"), instant(rs, "submitted_at"),
-                        instant(rs, "reviewed_at")));
+                        instant(rs, "reviewed_at"), rs.getString("quality_tag_label")));
     }
 
     public record CourseRow(UUID courseId, String title, String status, int progressPct,

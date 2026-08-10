@@ -72,6 +72,27 @@ public class ExerciseReviewService {
         this.coachGate = coachGate;
     }
 
+    /** Setter-injected for the same frozen-signature reason as {@link #coachGate}. */
+    private QualityTagCatalog qualityTagCatalog;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setQualityTagCatalog(QualityTagCatalog qualityTagCatalog) {
+        this.qualityTagCatalog = qualityTagCatalog;
+    }
+
+    /**
+     * The §7b actor for the quality tag. Deliberately the shared-kernel port and
+     * not {@code SecurityUtils}: a new exercise→auth call site would mint a new
+     * frozen ArchUnit violation for an edge that has a legal alternative sitting
+     * right here (the sibling submission service already uses it).
+     */
+    private com.bvisionry.common.security.CurrentUserAccessor currentUserAccessor;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setCurrentUserAccessor(com.bvisionry.common.security.CurrentUserAccessor accessor) {
+        this.currentUserAccessor = accessor;
+    }
+
     @Transactional(readOnly = true)
     public ExerciseSubmissionDetailResponse getSubmission(UUID orgId, UUID assignmentId) {
         return submissionService.buildDetail(requireMemberSubmission(orgId, assignmentId), true);
@@ -191,14 +212,24 @@ public class ExerciseReviewService {
         return submissionService.buildDetail(submission, true);
     }
 
-    /** SUBMITTED → REVIEWED: the loop's terminal state (until the member edits again). */
+    /**
+     * SUBMITTED → REVIEWED: the loop's terminal state (until the member edits
+     * again). {@code qualityTagKey} is optional (spec §4): the tag rides the
+     * review because that is when the reviewer has an opinion; a null leaves
+     * whatever tag is already there alone — clearing is an explicit
+     * {@link #setQualityTag} call, not a side effect of re-reviewing.
+     */
     @Transactional
-    public ExerciseSubmissionDetailResponse markReviewed(UUID orgId, UUID assignmentId) {
+    public ExerciseSubmissionDetailResponse markReviewed(UUID orgId, UUID assignmentId,
+                                                         String qualityTagKey) {
         ExerciseSubmission submission = requireMemberSubmission(orgId, assignmentId);
         if (submission.getStatus() != ExerciseSubmissionStatus.SUBMITTED) {
             throw new BadRequestException(
                     "Only a submitted exercise can be marked reviewed (status was "
                             + submission.getStatus() + ").");
+        }
+        if (qualityTagKey != null) {
+            stampQualityTag(submission, qualityTagKey);
         }
         submission.setStatus(ExerciseSubmissionStatus.REVIEWED);
         submission.setReviewedAt(Instant.now());
@@ -207,6 +238,47 @@ public class ExerciseReviewService {
                 "Exercise reviewed",
                 "\"" + templateName(submission) + "\" has been reviewed.");
         return submissionService.buildDetail(submission, true);
+    }
+
+    /**
+     * Set, change or clear ({@code null} key) the quality tag on an already
+     * reviewed submission — re-tagging is allowed and re-stamps §7b. Metadata
+     * only: nothing here touches status, the member, or the participation
+     * score, so it sends no notification and the member is never told.
+     *
+     * <p>REVIEWED is required because the tag is a statement about work the
+     * reviewer has finished reading. A copy the member has since edited is back
+     * in SUBMITTED and gets its tag through {@link #markReviewed} again.
+     */
+    @Transactional
+    public ExerciseSubmissionDetailResponse setQualityTag(UUID orgId, UUID assignmentId,
+                                                          String qualityTagKey) {
+        ExerciseSubmission submission = requireMemberSubmission(orgId, assignmentId);
+        if (submission.getStatus() != ExerciseSubmissionStatus.REVIEWED) {
+            throw new BadRequestException(
+                    "Only a reviewed exercise can be tagged (status was "
+                            + submission.getStatus() + "). Mark it reviewed to tag it.");
+        }
+        if (qualityTagKey == null) {
+            submission.setQualityTagKey(null);
+            submission.setQualityTagLabel(null);
+            submission.setQualityTaggedAt(null);
+            submission.setQualityTaggedBy(null);
+        } else {
+            stampQualityTag(submission, qualityTagKey);
+        }
+        return submissionService.buildDetail(submission, true);
+    }
+
+    /**
+     * Validates against the CURRENT §7 tag set and snapshots its label, so a
+     * later rename or deletion never rewrites what the reviewer said.
+     */
+    private void stampQualityTag(ExerciseSubmission submission, String qualityTagKey) {
+        submission.setQualityTagLabel(qualityTagCatalog.requireLabel(qualityTagKey));
+        submission.setQualityTagKey(qualityTagKey);
+        submission.setQualityTaggedAt(Instant.now());
+        submission.setQualityTaggedBy(currentUserAccessor.require().userId());
     }
 
     private void notifyStatus(ExerciseSubmission submission, String auditAction,

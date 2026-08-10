@@ -84,7 +84,13 @@ public record FounderProfileResponse(
             /** Course removed via enrolment override (kept visible, flagged — never silently dropped). */
             boolean removed,
             /** COURSE only (spec §3): required work gates journey progress. */
-            boolean required) {}
+            boolean required,
+            /**
+             * EXERCISE only (spec §4): the reviewer's quality-tag label snapshot,
+             * null when untagged. Metadata for staff — this profile is only ever
+             * served to an org admin or the founder's own coach.
+             */
+            String qualityTagLabel) {}
 
     /** Latest evaluated assessment, one row per pillar — feeds the Growth tab's plain/pending states. */
     public record FounderPillarScore(

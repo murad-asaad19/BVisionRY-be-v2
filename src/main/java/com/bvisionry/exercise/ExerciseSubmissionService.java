@@ -266,6 +266,10 @@ public class ExerciseSubmissionService {
      * exposes the member's name/email (the member already knows their own) —
      * except the email for a COACH caller: {@code coach_sees} excludes contact
      * data, so a coach reviewing a submission gets the name only.
+     *
+     * <p>{@code forAdmin} also gates the quality tag and its options (spec §4):
+     * the tag is the reviewer's metadata about the work, and a member who saw
+     * "Thin" on their own sheet would read it as a grade nobody meant to give.
      */
     @Transactional(readOnly = true)
     public ExerciseSubmissionDetailResponse buildDetail(ExerciseSubmission submission, boolean forAdmin) {
@@ -305,7 +309,18 @@ public class ExerciseSubmissionService {
                 template.getExampleRow(),
                 template.isAllowAddRows(),
                 rows,
-                comments);
+                comments,
+                forAdmin ? submission.getQualityTagKey() : null,
+                forAdmin ? submission.getQualityTagLabel() : null,
+                forAdmin ? submission.getQualityTaggedAt() : null,
+                forAdmin && qualityTagCatalog != null
+                        ? qualityTagCatalog.reviewerName(submission.getQualityTaggedBy()) : null,
+                forAdmin && qualityTagCatalog != null
+                        ? qualityTagCatalog.tags().stream()
+                                .map(t -> new ExerciseSubmissionDetailResponse
+                                        .ExerciseQualityTagOption(t.key(), t.label()))
+                                .toList()
+                        : List.of());
     }
 
     @Transactional(readOnly = true)
@@ -350,6 +365,19 @@ public class ExerciseSubmissionService {
     @org.springframework.beans.factory.annotation.Autowired
     void setCurrentUserAccessor(CurrentUserAccessor currentUserAccessor) {
         this.currentUserAccessor = currentUserAccessor;
+    }
+
+    /**
+     * Setter-injected for the same frozen-signature reason as above (the bean
+     * itself is same-feature, so the edge is legal). Null in plain unit tests
+     * without a Spring context — the staff-only tag fields then read as absent
+     * rather than blowing up a member-path test.
+     */
+    private QualityTagCatalog qualityTagCatalog;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setQualityTagCatalog(QualityTagCatalog qualityTagCatalog) {
+        this.qualityTagCatalog = qualityTagCatalog;
     }
 
     /**

@@ -112,7 +112,17 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // dies with them (pillar rows cascade off the comparison). Exported
             // as distance_comparisons + distance_comparison_pillars.
             "founder_comparisons.user_id",
-            "exercise_submissions.user_id", "insight_report_member_ids.member_id",
+            "exercise_submissions.user_id",
+            // exercise_submissions.quality_tagged_by (V170, spec §4): SET NULL —
+            // the tag is a REVIEWER's judgement recorded on the ORG's copy of
+            // the member's work, like assignments.assigned_by, so erasing the
+            // reviewer drops the attribution and the tag survives. The TAG
+            // ITSELF is exported to the member (the exercise_submissions section
+            // is a SELECT *): the product hides it from their screens, but it is
+            // an assessment about them, so an Art. 15 request gets it — a UI
+            // choice is not a lawful basis for withholding.
+            "exercise_submissions.quality_tagged_by",
+            "insight_report_member_ids.member_id",
             "invitations.invited_by", "join_links.created_by", "notification_optouts.user_id",
             "notifications.user_id", "overall_summary_history.archived_by_admin_id",
             "password_reset_tokens.user_id", "pillar_evaluation_history.archived_by_admin_id",

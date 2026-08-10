@@ -5,6 +5,7 @@ import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.FieldValidationException;
 import com.bvisionry.common.scoringconfig.NarrativeWording;
 import com.bvisionry.common.scoringconfig.ParticipationFormula;
+import com.bvisionry.common.scoringconfig.QualityTags;
 import com.bvisionry.common.scoringconfig.ScoringBands;
 import com.bvisionry.platform.dto.ScoringConfigResponse;
 import com.bvisionry.platform.dto.ScoringConfigResponse.BandsSection;
@@ -50,7 +51,7 @@ public class ScoringConfigService {
 
     static final String FORMULA_KEY = ParticipationFormula.FORMULA_KEY;
     static final String PARTICIPATION_BANDS_KEY = ParticipationFormula.PARTICIPATION_BANDS_KEY;
-    static final String QUALITY_TAGS_KEY = "scoring.quality_tags";
+    static final String QUALITY_TAGS_KEY = QualityTags.KEY;
     static final String NARRATIVE_KEY = NarrativeWording.NARRATIVE_KEY;
 
     /** The protected, always-computed category (spec §4/§7 amended). */
@@ -75,11 +76,11 @@ public class ScoringConfigService {
         return ParticipationFormula.defaultParticipationBands();
     }
 
+    /** Delegates to the common defaults so the exercise review side can never drift. */
     static List<QualityTag> defaultQualityTags() {
-        return List.of(
-                new QualityTag("thin", "Thin"),
-                new QualityTag("adequate", "Adequate"),
-                new QualityTag("strong", "Strong"));
+        return QualityTags.defaults().stream()
+                .map(t -> new QualityTag(t.key(), t.label()))
+                .toList();
     }
 
     static String defaultNarrativeSentence() {

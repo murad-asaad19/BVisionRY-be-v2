@@ -225,7 +225,8 @@ public class CoachingReadRepository {
 
     public record QueueRow(UUID assignmentId, UUID founderId, String founderName,
                            String exerciseName, OffsetDateTime submittedAt,
-                           OffsetDateTime changesRequestedAt) {}
+                           OffsetDateTime changesRequestedAt,
+                           String qualityTagLabel) {}
 
     /**
      * Every SUBMITTED exercise submission across the coach's visible founders,
@@ -237,7 +238,8 @@ public class CoachingReadRepository {
     public List<QueueRow> reviewQueue(UUID orgId, UUID coachId) {
         return jdbc.query("""
                 SELECT ea.id AS assignment_id, u.id AS founder_id, u.name AS founder_name,
-                       et.name AS exercise_name, es.submitted_at, es.changes_requested_at
+                       et.name AS exercise_name, es.submitted_at, es.changes_requested_at,
+                       es.quality_tag_label
                 FROM exercise_assignments ea
                 JOIN exercise_templates et ON et.id = ea.template_id
                 JOIN exercise_submissions es ON es.assignment_id = ea.id
@@ -252,7 +254,8 @@ public class CoachingReadRepository {
                         rs.getObject("founder_id", UUID.class), rs.getString("founder_name"),
                         rs.getString("exercise_name"),
                         rs.getObject("submitted_at", OffsetDateTime.class),
-                        rs.getObject("changes_requested_at", OffsetDateTime.class)));
+                        rs.getObject("changes_requested_at", OffsetDateTime.class),
+                        rs.getString("quality_tag_label")));
     }
 
     public record CoachOfMemberRow(UUID id, String name, String bookingUrl) {}

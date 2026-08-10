@@ -59,6 +59,26 @@ public class ExerciseSubmission extends BaseEntity {
     @Column(name = "changes_requested_at")
     private Instant changesRequestedAt;
 
+    /**
+     * Reviewer's quality tag (spec §4/§11), V170 — <strong>metadata only</strong>,
+     * never an input to the participation score. {@code key} is the §7 stable
+     * identity; {@code label} is the snapshot taken at tagging time so a later
+     * rename or deletion of the tag never rewrites what the reviewer said.
+     * All four are re-stamped on a re-tag and nulled together on a clear.
+     */
+    @Column(name = "quality_tag_key")
+    private String qualityTagKey;
+
+    @Column(name = "quality_tag_label")
+    private String qualityTagLabel;
+
+    @Column(name = "quality_tagged_at")
+    private Instant qualityTaggedAt;
+
+    /** Bare id, not a relation: no JPA edges across features. */
+    @Column(name = "quality_tagged_by")
+    private java.util.UUID qualityTaggedBy;
+
     @Version
     private Long version;
 }

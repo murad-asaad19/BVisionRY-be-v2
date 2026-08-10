@@ -122,6 +122,79 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
                 .andExpect(status().isNotFound());
     }
 
+    /**
+     * Redesign F-11 ruling (2026-08-10): the sub-org Settings tab opens to that
+     * sub-org's own admins, split by decision ownership — the ORG PROFILE (name
+     * + description) is theirs. The class-level guard is SUPER_ADMIN-only, so
+     * the method-level in-org override on PUT /{id} is the whole defense and is
+     * asserted in both directions.
+     */
+    @Test
+    void update_orgAdminRenamesOwnOrg_butNotAForeignOne() throws Exception {
+        Organization own = new Organization(); own.setName("Own"); own.setActive(true);
+        own = organizationRepository.save(own);
+        Organization other = new Organization(); other.setName("Other"); other.setActive(true);
+        other = organizationRepository.save(other);
+        TestAuthentication.authenticateAsOrgAdmin(userRepository, own);
+
+        mockMvc.perform(put("/api/organizations/" + own.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name": "Renamed by its admin", "description": "New blurb"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name", is("Renamed by its admin")))
+                .andExpect(jsonPath("$.description", is("New blurb")))
+                // §7b: the Settings profile card stamps this moment, so the
+                // response has to carry it.
+                .andExpect(jsonPath("$.updatedAt", notNullValue()));
+
+        mockMvc.perform(put("/api/organizations/" + other.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name": "Hijacked", "description": null}
+                                """))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * The other half of the same ruling: everything a PLAN decides stays with
+     * Bvisionry. Opening the profile PUT must not leak into tier, trial or
+     * lifecycle — those keep the class-level SUPER_ADMIN-only guard, on the org
+     * admin's OWN org (the strongest case they could make).
+     */
+    @Test
+    void update_orgAdminCannotChangeTierTrialOrLifecycleOfTheirOwnOrg() throws Exception {
+        Organization own = new Organization(); own.setName("Own"); own.setActive(true);
+        own = organizationRepository.save(own);
+        TestAuthentication.authenticateAsOrgAdmin(userRepository, own);
+        String base = "/api/organizations/" + own.getId();
+
+        mockMvc.perform(patch(base + "/tier")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"tier": "FOUNDER_SUCCESS"}
+                                """))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post(base + "/trial")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"durationDays": 30}
+                                """))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(patch(base + "/active?active=false"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(delete(base))
+                .andExpect(status().isForbidden());
+
+        // …and nothing moved.
+        Organization after = organizationRepository.findById(own.getId()).orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(after.getSubscriptionTier())
+                .isEqualTo(SubscriptionTier.FREE);
+        org.assertj.core.api.Assertions.assertThat(after.isActive()).isTrue();
+        org.assertj.core.api.Assertions.assertThat(after.getTrialEndsAt()).isNull();
+    }
+
     @Test
     void changeTier_returns200() throws Exception {
         Organization org = new Organization();

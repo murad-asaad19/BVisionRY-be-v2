@@ -72,7 +72,16 @@ public class OrganizationController {
         return ResponseEntity.ok(organizationService.getById(id));
     }
 
+    // Name + description are the org's OWN profile, so this carries the same
+    // in-org override as GET /{id} and /{id}/nudge-settings rather than the
+    // class-level SUPER_ADMIN-only guard (redesign F-11 ruling, 2026-08-10: the
+    // sub-org Settings tab opens to that sub-org's admins, split by decision
+    // ownership). This request body carries name/description and NOTHING else —
+    // tier, trial, active state and deletion keep their own SUPER_ADMIN-only
+    // verbs above/below, which is why opening this one is not a widening of
+    // those. The write is audited (ORGANIZATION_UPDATED) either way.
     @PutMapping("/{id}")
+    @PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#id))")
     public ResponseEntity<OrganizationResponse> update(@PathVariable UUID id,
                                                         @Valid @RequestBody UpdateOrganizationRequest request) {
         UUID actorId = SecurityUtils.getCurrentUserId();

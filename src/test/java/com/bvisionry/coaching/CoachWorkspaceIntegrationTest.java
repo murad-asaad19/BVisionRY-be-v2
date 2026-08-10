@@ -439,7 +439,7 @@ class CoachWorkspaceIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private UUID insertCohort(UUID orgId, String name, UUID memberId) {
         UUID id = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name) VALUES (?, ?, ?)", id, orgId, name);
+        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')", id, orgId, name);
         jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)", id, memberId);
         return id;
     }

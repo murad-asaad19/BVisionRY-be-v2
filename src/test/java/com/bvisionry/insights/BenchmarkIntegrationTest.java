@@ -536,7 +536,7 @@ class BenchmarkIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private UUID insertCohort(UUID orgId, String name) {
         UUID id = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name) VALUES (?, ?, ?)", id, orgId, name);
+        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')", id, orgId, name);
         return id;
     }
 

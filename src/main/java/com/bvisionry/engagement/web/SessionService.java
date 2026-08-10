@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.engagement.domain.Session;
 import com.bvisionry.engagement.domain.SessionAttendance;
@@ -60,7 +61,7 @@ public class SessionService {
     }
 
     public SessionDto create(UUID orgId, UUID cohortId, UpsertSessionRequest req, UUID actorId) {
-        requireCohort(orgId, cohortId);
+        requireEditableCohort(orgId, cohortId);
         Session s = new Session();
         s.setOrgId(orgId);
         s.setCohortId(cohortId);
@@ -70,6 +71,7 @@ public class SessionService {
     }
 
     public SessionDto update(UUID orgId, UUID cohortId, UUID sessionId, UpsertSessionRequest req) {
+        requireEditableCohort(orgId, cohortId);
         Session s = requireSession(orgId, cohortId, sessionId);
         apply(s, cohortId, req);
         return withAttendance(s);
@@ -94,6 +96,7 @@ public class SessionService {
     }
 
     public void delete(UUID orgId, UUID cohortId, UUID sessionId) {
+        requireEditableCohort(orgId, cohortId);
         sessions.delete(requireSession(orgId, cohortId, sessionId));
     }
 
@@ -103,6 +106,7 @@ public class SessionService {
      */
     public SessionDto setAttendance(UUID orgId, UUID cohortId, UUID sessionId, UUID memberId,
                                     boolean present, UUID actorId) {
+        requireEditableCohort(orgId, cohortId);
         Session s = requireSession(orgId, cohortId, sessionId);
         if (!reads.isCohortMember(cohortId, memberId)) {
             throw new BadRequestException("This member is not enrolled in the cohort");
@@ -125,6 +129,19 @@ public class SessionService {
     }
 
     /* ------------------------------------------------------------- plumbing */
+
+    /**
+     * The V167 write gate: sessions and roll call stay mutable while the
+     * cohort is DRAFT/LAUNCHED/COMPLETED (a late roll-call tidy-up on a
+     * completed cohort is legitimate); ARCHIVED refuses every mutation.
+     */
+    private void requireEditableCohort(UUID orgId, UUID cohortId) {
+        String status = reads.cohortStatus(orgId, cohortId)
+                .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
+        if ("ARCHIVED".equals(status)) {
+            throw new IllegalOperationException("This cohort is archived and read-only.");
+        }
+    }
 
     /** The cohort, guarded to the org path (tenant isolation) — 404 otherwise. */
     private void requireCohort(UUID orgId, UUID cohortId) {

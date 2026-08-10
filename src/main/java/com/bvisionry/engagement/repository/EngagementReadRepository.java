@@ -50,6 +50,17 @@ public class EngagementReadRepository {
                 .stream().findFirst();
     }
 
+    /** The cohort's lifecycle status, org-scoped — the write-guard input (V167). */
+    public Optional<String> cohortStatus(UUID orgId, UUID cohortId) {
+        return jdbc.query("""
+                SELECT status FROM cohorts
+                WHERE id = :cohortId AND org_id = :orgId
+                """,
+                new MapSqlParameterSource("orgId", orgId).addValue("cohortId", cohortId),
+                (rs, i) -> rs.getString("status"))
+                .stream().findFirst();
+    }
+
     /** True when the id is an org-scoped MEMBER — the engagement read's 404 anchor. */
     public boolean isOrgMember(UUID orgId, UUID memberId) {
         Boolean exists = jdbc.queryForObject("""

@@ -3,7 +3,7 @@ package com.bvisionry.common.enums;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 
-import java.time.Period;
+import java.time.LocalDate;
 
 /**
  * The plans Bvisionry actually sells, per the pricing page
@@ -22,47 +22,88 @@ import java.time.Period;
  * row to {@code GROWTH} — the higher self-serve ceiling — so no paying
  * customer loses capacity on deploy.
  *
+ * <p><strong>The cohort meter is a LAUNCH quota over CALENDAR periods</strong>
+ * (redesign spec §8, V167): drafts are free, launching consumes quota, and the
+ * UI can always say "next launch available Oct 1". This replaced the previous
+ * creation-time rolling window — a rate on creation punished drafting, and a
+ * rolling window could never print a reset date.
+ *
  * <p>The ordinal order is the capacity order (cheapest first). Nothing persists
  * the ordinal ({@code @Enumerated(EnumType.STRING)} everywhere), so it is free
  * to read as a ranking.
  */
 public enum SubscriptionTier {
 
-    /** Not a sold plan: pre-purchase / lapsed-trial state. Metered like Starter. */
-    FREE("Free", new CohortRate(1, Period.ofMonths(3), "quarter")),
+    /**
+     * Not a sold plan: pre-purchase / lapsed-trial state. May DRAFT cohorts but
+     * never launch one (spec §8: launching is the paid act; the old model let
+     * FREE create one cohort per quarter, which under launch semantics would
+     * hand out a free measured cohort — deliberately closed to 0).
+     */
+    FREE("Free", new LaunchQuota(0, LaunchPeriodUnit.QUARTER)),
 
-    /** $299/mo — 1 cohort per quarter. */
-    STARTER("Starter", new CohortRate(1, Period.ofMonths(3), "quarter")),
+    /** $299/mo — 1 cohort launch per calendar quarter. */
+    STARTER("Starter", new LaunchQuota(1, LaunchPeriodUnit.QUARTER)),
 
-    /** $599/mo — 1 cohort per month. Also what a trial grants, and where V156 lands every ex-PREMIUM org. */
-    GROWTH("Growth", new CohortRate(1, Period.ofMonths(1), "month")),
+    /** $599/mo — 1 cohort launch per calendar month. Also where V156 lands every ex-PREMIUM org. */
+    GROWTH("Growth", new LaunchQuota(1, LaunchPeriodUnit.MONTH)),
 
-    /** Contact Sales — unlimited cohorts, and the only tier with learning content. */
+    /** Contact Sales — unlimited launches, and the only tier with learning content. */
     FOUNDER_SUCCESS("Founder Success", null);
 
-    /**
-     * How fast an org may CREATE cohorts. Deliberately a rate and not a seat
-     * count: the unit of value is a measured cohort, and nothing in the product
-     * meters founder headcount.
-     *
-     * @param max         cohorts allowed per window
-     * @param window      the rolling window (see {@code CohortService} for why rolling)
-     * @param windowLabel how to say {@code window} to a human — "quarter", "month"
-     */
-    public record CohortRate(int max, Period window, String windowLabel) {
+    /** The calendar grain a tier's launch allowance resets on. */
+    public enum LaunchPeriodUnit {
+        MONTH("month"),
+        QUARTER("quarter");
 
-        /** "1 cohort per quarter" — the ceiling half of a refusal message. */
+        private final String label;
+
+        LaunchPeriodUnit(String label) {
+            this.label = label;
+        }
+
+        /** "month" / "quarter" — the human half of a refusal or usage message. */
+        public String label() {
+            return label;
+        }
+
+        /** First day of the calendar period containing {@code date}. */
+        public LocalDate periodStart(LocalDate date) {
+            return this == MONTH
+                    ? date.withDayOfMonth(1)
+                    : date.withMonth(((date.getMonthValue() - 1) / 3) * 3 + 1).withDayOfMonth(1);
+        }
+
+        /** First day of the next calendar period — "resets Oct 1". */
+        public LocalDate nextPeriodStart(LocalDate date) {
+            return this == MONTH
+                    ? periodStart(date).plusMonths(1)
+                    : periodStart(date).plusMonths(3);
+        }
+    }
+
+    /**
+     * How many cohorts an org may LAUNCH per calendar period. A quota on the
+     * launch transition and not on creation: drafts cost nothing.
+     *
+     * @param perPeriod launches allowed per calendar period (0 = none)
+     * @param unit      the calendar grain the allowance resets on
+     */
+    public record LaunchQuota(int perPeriod, LaunchPeriodUnit unit) {
+
+        /** "1 launch per quarter" — the ceiling half of a refusal message. */
         public String describe() {
-            return max + (max == 1 ? " cohort per " : " cohorts per ") + windowLabel;
+            return perPeriod + (perPeriod == 1 ? " cohort launch per " : " cohort launches per ")
+                    + unit.label();
         }
     }
 
     private final String label;
-    private final CohortRate cohortRate;
+    private final LaunchQuota launchQuota;
 
-    SubscriptionTier(String label, CohortRate cohortRate) {
+    SubscriptionTier(String label, LaunchQuota launchQuota) {
         this.label = label;
-        this.cohortRate = cohortRate;
+        this.launchQuota = launchQuota;
     }
 
     /** Human-facing plan name, as printed on the pricing page. */
@@ -70,9 +111,9 @@ public enum SubscriptionTier {
         return label;
     }
 
-    /** The org's cohort-creation ceiling, or {@code null} when unlimited. */
-    public CohortRate cohortRate() {
-        return cohortRate;
+    /** The org's cohort-launch quota, or {@code null} when unlimited. */
+    public LaunchQuota launchQuota() {
+        return launchQuota;
     }
 
     /**

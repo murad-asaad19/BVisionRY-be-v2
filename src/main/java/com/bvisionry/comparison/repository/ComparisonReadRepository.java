@@ -74,7 +74,10 @@ public class ComparisonReadRepository {
 
     /**
      * The member's cohort with a fully-designated pair, newest first — the
-     * anchor for the member/coach growth read. ponytail: a member in two
+     * anchor for the member/coach growth read. Member-visible cohorts only
+     * (V167: LAUNCHED/COMPLETED) — a configured DRAFT must not become the
+     * member's growth anchor before launch; staff-facing joins stay
+     * unfiltered. ponytail: a member in two
      * designated cohorts sees the newest; per-cohort selection can come with
      * the cohort switcher if product asks.
      */
@@ -83,6 +86,7 @@ public class ComparisonReadRepository {
                 JOIN cohort_members cm ON cm.cohort_id = c.id AND cm.user_id = :userId
                 WHERE ps.baseline_pipeline_id IS NOT NULL
                   AND ps.distance_pipeline_id IS NOT NULL
+                  AND c.status IN ('LAUNCHED', 'COMPLETED')
                 ORDER BY c.created_at DESC
                 LIMIT 1
                 """,

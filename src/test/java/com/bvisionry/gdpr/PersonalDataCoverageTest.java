@@ -69,6 +69,14 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // so it dies with them. Exported as coach_profile: it is content
             // they authored about themselves.
             "coach_profiles.coach_id", "cohort_members.user_id",
+            // cohort_launch_ledger / cohort_launch_grants (V167): launched_by /
+            // granted_by SET NULL — the launch and the grant are the
+            // ORGANIZATION's billing/audit record (spec §8: the ledger is
+            // append-only and never refunded), so they outlive the actor's
+            // erasure with the attribution dropped, exactly like
+            // assignments.assigned_by. Not exported: an operator attribution
+            // on the org's record, not data about the data subject.
+            "cohort_launch_ledger.launched_by", "cohort_launch_grants.granted_by",
             "course.instructor_id", "email_templates.updated_by", "enrollment.user_id",
             // enrolment_overrides (V157): user_id CASCADEs with the user row — "an admin
             // took this founder off this course" is about that founder and nobody else,
@@ -93,6 +101,17 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             "program_submissions.user_id", "public_assessment_links.created_by",
             "push_subscriptions.user_id", "quiz_attempt.user_id", "refresh_tokens.user_id",
             "submission_pillar_unlocks.unlocked_by_admin_id", "submissions.user_id",
+            // sessions / session_attendance / session_expected_attendees (V163,
+            // pre-existing gap closed here): member_id CASCADEs with the user
+            // row — a presence tick / expected-attendee row is about that member
+            // and nobody else. Attendance is exported as session_attendance
+            // (already wired in PersonalDataRepository); the expected-attendee
+            // row is scheduling metadata with no content beyond the enrolment
+            // itself. sessions.created_by / session_attendance.marked_by are
+            // SET NULL — admin attributions on the ORG's record, like
+            // assignments.assigned_by.
+            "sessions.created_by", "session_attendance.marked_by",
+            "session_attendance.member_id", "session_expected_attendees.member_id",
             "survey_responses.respondent_user_id", "surveys.created_by", "team_members.user_id",
             "upgrade_requests.requested_by", "users.invited_by",
             "workshop_task_submissions.user_id", "workshop_team_members.user_id");

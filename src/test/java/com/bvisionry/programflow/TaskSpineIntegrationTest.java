@@ -109,7 +109,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                 """, surveyId, "Week 2 reflection", member.getId());
 
         cohortId = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name) VALUES (?, ?, ?)",
+        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')",
                 cohortId, org.getId(), "Cohort 1");
         jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
                 cohortId, member.getId());
@@ -345,7 +345,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         @Test
         void surveyOnlyModule_gatesTheNextModule_untilAnswered() {
             UUID dripCohort = UUID.randomUUID();
-            jdbc.update("INSERT INTO cohorts (id, org_id, name) VALUES (?, ?, ?)",
+            jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')",
                     dripCohort, org.getId(), "Drip cohort");
             jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
                     dripCohort, member.getId());

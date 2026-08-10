@@ -64,8 +64,8 @@ public class ProgramTaskSurveyService {
 
     /**
      * Submit a SURVEY journey task's response. Identity is taken from the
-     * current user, never the body; a FINISHED cohort is read-only (mirrors
-     * the journey's submit gate).
+     * current user, never the body; only a LAUNCHED cohort accepts writes —
+     * COMPLETED/ARCHIVED are read-only (mirrors the journey's submit gate).
      */
     @Transactional
     public SurveySubmitResponseDto submitForProgramTask(UUID taskId,
@@ -74,8 +74,11 @@ public class ProgramTaskSurveyService {
                                                         String userAgent) {
         ProgramTaskSurveyRepository.ProgramTaskSurveyRow row =
                 resolveEnrolledTask(taskId, currentUserId);
-        if ("FINISHED".equals(row.cohortStatus())) {
-            throw new BadRequestException("This cohort has finished — it is read-only now.");
+        // Writes only while LAUNCHED (V167 lifecycle): COMPLETED/ARCHIVED are
+        // read-only, DRAFT is invisible to members anyway — mirrors the
+        // journey's submit gate.
+        if (!"LAUNCHED".equals(row.cohortStatus())) {
+            throw new BadRequestException("This cohort is read-only now.");
         }
         Survey survey = resolvePublishedSurvey(row.surveyId());
 

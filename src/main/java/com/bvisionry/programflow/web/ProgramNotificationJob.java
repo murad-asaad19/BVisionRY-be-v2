@@ -121,8 +121,10 @@ public class ProgramNotificationJob {
     // learner hasn't unlocked yet is an admin scheduling quirk, not worth the
     // per-learner lockState pass here.
     private List<UUID> recipients(ProgramModule module) {
+        // Only a LAUNCHED cohort notifies: drafts aren't visible to members yet,
+        // completed/archived ones are done making noise.
         Cohort cohort = cohorts.findById(module.getCohortId()).orElse(null);
-        if (cohort == null || cohort.getStatus() == CohortStatus.FINISHED) {
+        if (cohort == null || cohort.getStatus() != CohortStatus.LAUNCHED) {
             return List.of();
         }
         Set<UUID> enrolled = cohort.getMemberIds();

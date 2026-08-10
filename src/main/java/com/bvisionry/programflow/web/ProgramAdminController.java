@@ -155,6 +155,13 @@ public class ProgramAdminController {
         return service.getPulse(orgId, cohortId);
     }
 
+    /** Founders progress matrix — the cohort board's first tab (spec §2.3). */
+    @GetMapping("/matrix")
+    public com.bvisionry.programflow.dto.CohortMatrixResponse getMatrix(
+            @PathVariable UUID orgId, @PathVariable UUID cohortId) {
+        return service.getMatrix(orgId, cohortId);
+    }
+
     /** AI composer — SSE: {@code status}* then {@code draft} (ModuleDraft JSON) or {@code error}. */
     @PostMapping(value = "/ai/compose", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public org.springframework.web.servlet.mvc.method.annotation.SseEmitter compose(

@@ -80,7 +80,7 @@ class MyProgramServiceTest {
         cohort = new Cohort();
         cohort.setId(cohortId);
         cohort.setOrgId(orgId);
-        cohort.setStatus(CohortStatus.ACTIVE);
+        cohort.setStatus(CohortStatus.LAUNCHED);
         cohort.getMemberIds().add(userId);
 
         module = new ProgramModule();

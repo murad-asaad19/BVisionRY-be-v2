@@ -25,8 +25,9 @@ import lombok.Setter;
 
 /**
  * A cohort: one program instance within an org. Owns its modules and settings
- * (both FK cohort_id), carries the enrolled learner set and an ACTIVE / FINISHED
- * lifecycle. Soft-coupled to identity by UUID, like the rest of the slice.
+ * (both FK cohort_id), carries the enrolled learner set and the DRAFT →
+ * LAUNCHED → COMPLETED / ARCHIVED lifecycle (spec §8). Soft-coupled to
+ * identity by UUID, like the rest of the slice.
  */
 @Entity
 @Table(name = "cohorts")
@@ -51,7 +52,17 @@ public class Cohort {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
-    private CohortStatus status = CohortStatus.ACTIVE;
+    private CohortStatus status = CohortStatus.DRAFT;
+
+    /** §7b lifecycle stamps — set once by their transition, never cleared. */
+    @Column(name = "launched_at")
+    private OffsetDateTime launchedAt;
+
+    @Column(name = "completed_at")
+    private OffsetDateTime completedAt;
+
+    @Column(name = "archived_at")
+    private OffsetDateTime archivedAt;
 
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(name = "cohort_members", joinColumns = @JoinColumn(name = "cohort_id"))

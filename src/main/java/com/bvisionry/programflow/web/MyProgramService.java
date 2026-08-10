@@ -71,7 +71,7 @@ public class MyProgramService {
 
     // --------------------------------------------------------------- cohorts
 
-    /** The cohorts the current learner is enrolled in (ACTIVE first), for the switcher. */
+    /** The cohorts the current learner is enrolled in (LAUNCHED first; DRAFT/ARCHIVED invisible), for the switcher. */
     @Transactional(readOnly = true)
     public List<LearnerCohortDto> myCohorts() {
         return cohorts.findEnrolled(currentUser.require().userId()).stream()
@@ -94,7 +94,7 @@ public class MyProgramService {
      * cohorts, so a foreign org id can only ever produce the empty journey.
      * Cohort choice mirrors {@link #resolveCohort}: an explicit request must
      * be one of the member's org-scoped cohorts (else 404); null defaults to
-     * the first enrolled (ACTIVE first).
+     * the first enrolled (LAUNCHED first; DRAFT/ARCHIVED are invisible here too — same rule as the member).
      */
     @Transactional(readOnly = true)
     public JourneyResponse journeyOfMember(UUID orgId, UUID memberId, UUID requestedCohortId) {
@@ -156,7 +156,7 @@ public class MyProgramService {
 
         return new JourneyResponse(s, new JourneyResponse.Progress(done, total),
                 gamification(ctx.mySubmissions()), journeyModules,
-                cohort.getId(), cohort.getStatus() == CohortStatus.FINISHED,
+                cohort.getId(), cohort.getStatus() == CohortStatus.COMPLETED,
                 cohort.getMemberIds().size(), direct);
     }
 
@@ -369,7 +369,7 @@ public class MyProgramService {
     /**
      * Resolves which cohort a learner is looking at. A non-null request must be
      * one they're enrolled in (else 404); a null request defaults to their first
-     * enrolled cohort (ACTIVE ones first), or null when they have none.
+     * enrolled visible cohort (LAUNCHED first), or null when they have none.
      */
     private Cohort resolveCohort(UUID userId, UUID requestedCohortId) {
         List<Cohort> enrolled = cohorts.findEnrolled(userId);
@@ -385,7 +385,7 @@ public class MyProgramService {
      * enrollment / exercise submission / tagged assessment submission /
      * workshop or survey participation).
      */
-    private record TypedState(JourneyTaskState state, Integer progressPct,
+    record TypedState(JourneyTaskState state, Integer progressPct,
             java.math.BigDecimal score, java.time.Instant submittedAt,
             java.time.Instant completedAt) {
 
@@ -404,7 +404,7 @@ public class MyProgramService {
             Map<UUID, TypedState> typedStates, Set<UUID> doneTaskIds) {
 
         boolean finished() {
-            return cohort.getStatus() == CohortStatus.FINISHED;
+            return cohort.getStatus() == CohortStatus.COMPLETED;
         }
     }
 
@@ -457,7 +457,8 @@ public class MyProgramService {
         return out;
     }
 
-    private Map<UUID, Map<UUID, TypedState>> typedStates(List<UUID> userIds,
+    /** Package-private: the cohort-board matrix reads full typed states (score + stamps). */
+    Map<UUID, Map<UUID, TypedState>> typedStates(List<UUID> userIds,
             List<ProgramTask> typedTasks) {
         Map<UUID, Map<UUID, TypedState>> byUser = new LinkedHashMap<>();
         if (userIds.isEmpty() || typedTasks.isEmpty()) {
@@ -570,7 +571,7 @@ public class MyProgramService {
     private record Access(Context ctx, ProgramTask task, ProgramModule module, int moduleIndex) {
     }
 
-    /** Like {@link #requireAccess} but rejects writes to a FINISHED (read-only) cohort. */
+    /** Like {@link #requireAccess} but rejects writes to a COMPLETED (read-only) cohort. */
     private Access requireWritableAccess(UUID taskId) {
         Access access = requireAccess(taskId);
         if (access.ctx().finished()) {
@@ -582,7 +583,7 @@ public class MyProgramService {
     /**
      * Loads the task and verifies the learner may work on it: LIVE, in a cohort
      * they're enrolled in, in a module whose audience includes them and — unless
-     * the cohort has finished (read-only review) — whose drip is unlocked.
+     * the cohort has completed (read-only review) — whose drip is unlocked.
      */
     private Access requireAccess(UUID taskId) {
         UUID userId = currentUser.require().userId();
@@ -625,7 +626,7 @@ public class MyProgramService {
      * The idempotent open action (spec §2.1/§3/§7b): ensures the prerequisite
      * in the owning slice exists — COURSE enrollment, EXERCISE assignment +
      * working copy, ASSESSMENT assignment + submission TAGGED with this task —
-     * and returns where to go. A FINISHED cohort may still open work that
+     * and returns where to go. A COMPLETED cohort may still open work that
      * already exists (read-only review) but never spawns new prerequisites.
      */
     public OpenTaskResponse open(UUID taskId) {

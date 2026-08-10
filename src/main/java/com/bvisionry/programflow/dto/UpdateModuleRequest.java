@@ -11,6 +11,7 @@ import jakarta.validation.constraints.Size;
 public record UpdateModuleRequest(
         @NotBlank @Size(max = 200) String name,
         String summary,
+        @Size(max = 120) String pillarLabel,
         @NotNull ModuleLockMode lockMode,
         OffsetDateTime unlockAt) {
 }

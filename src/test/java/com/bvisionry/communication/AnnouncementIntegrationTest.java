@@ -309,6 +309,32 @@ class AnnouncementIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(posted.body()).isEqualTo("Standup at 9.");
         }
 
+        /**
+         * V167: a DRAFT cohort is invisible to members, so a broadcast to it
+         * reaches nobody and never surfaces in a member's feed — even for a
+         * member already enrolled in the draft.
+         */
+        @Test
+        void aDraftCohortsBroadcastReachesNobody_andIsAbsentFromTheMemberFeed() throws Exception {
+            UUID draftCohort = UUID.randomUUID();
+            jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, 'Draft Cohort', 'DRAFT')",
+                    draftCohort, orgA.getId());
+            jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
+                    draftCohort, memberIn.getId());
+
+            TestAuthentication.authenticate(orgAdminA);
+            mockMvc.perform(postAnnouncement(orgA.getId(), draftCohort, "Sneak peek."))
+                    .andExpect(status().isCreated());
+            assertThat(singlePostedEvent().recipientIds()).isEmpty();
+
+            entityManager.flush();
+            TestAuthentication.authenticate(memberIn);
+            mockMvc.perform(get("/api/my/announcements"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[*].body",
+                            org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasItem("Sneak peek."))));
+        }
+
         @Test
         void aSuspendedMemberIsNotARecipient() throws Exception {
             jdbc.update("UPDATE users SET status = 'SUSPENDED' WHERE id = ?", memberAlsoIn.getId());
@@ -556,7 +582,7 @@ class AnnouncementIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private UUID insertCohort(UUID orgId, String name, UUID memberId) {
         UUID id = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name) VALUES (?, ?, ?)", id, orgId, name);
+        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')", id, orgId, name);
         if (memberId != null) {
             jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)", id, memberId);
         }

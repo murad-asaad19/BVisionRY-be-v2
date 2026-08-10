@@ -100,7 +100,13 @@ public class UpgradeRequestService {
         return UpgradeRequestResponse.from(saved, window);
     }
 
-    /** {@code billingOrg} is the requester's ROOT org (the parent when they sit in a sub-org). */
+    /**
+     * {@code billingOrg} is the requester's ROOT org (the parent when they sit
+     * in a sub-org). Eligibility used to be FREE-only; since the launch-quota
+     * work (spec §8) any tier BELOW the top one may request — a Starter org
+     * that hit "1 launch per quarter" is exactly who the Request-upgrade
+     * button exists for. Only the top plan has nothing to upgrade to.
+     */
     private void validateEligibility(User user, Organization billingOrg) {
         if (user.getRole() == UserRole.SUPER_ADMIN) {
             throw new BadRequestException("Super admins cannot request upgrades.");
@@ -108,7 +114,7 @@ public class UpgradeRequestService {
         if (billingOrg == null) {
             throw new BadRequestException("You must belong to an organization to request an upgrade.");
         }
-        if (billingOrg.getSubscriptionTier() != SubscriptionTier.FREE) {
+        if (billingOrg.getSubscriptionTier() == SubscriptionTier.FOUNDER_SUCCESS) {
             throw new BadRequestException(
                     "Your organization is already on the " + billingOrg.getSubscriptionTier().label() + " plan.");
         }

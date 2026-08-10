@@ -67,7 +67,7 @@ class CoachNoteIntegrationTest extends AbstractPostgresIntegrationTest {
         founderOutside = saveUser("outside@notes.invalid", UserRole.MEMBER, orgA);
 
         UUID cohort1 = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name) VALUES (?, ?, 'Cohort One')",
+        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, 'Cohort One', 'LAUNCHED')",
                 cohort1, orgA.getId());
         jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
                 cohort1, founder.getId());

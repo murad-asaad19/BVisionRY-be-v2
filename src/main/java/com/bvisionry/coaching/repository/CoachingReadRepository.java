@@ -79,25 +79,14 @@ public class CoachingReadRepository {
     private static final String TASK_DONE = TaskCompletion.DONE_FOR_USER;
 
     /**
-     * The founder's own last-activity instant — GREATEST/MAX ignore NULLs in
-     * Postgres; coach review events are deliberately excluded. Twin of the
-     * expression in {@code founderprofile.FounderProfileReadRepository#member}
-     * (raw-SQL slices cannot share it without a common home; ponytail: two
-     * copies, promote to common the day a third appears). {@code %1$s} is the
-     * user alias.
+     * The founder's own last-activity instant — the shared fragment
+     * ({@link com.bvisionry.common.programaccess.MemberActivity}, promoted on
+     * its third consumer), so the roster, the founder profile and the cohort
+     * board can never disagree about "last seen". {@code %1$s} is the user
+     * alias.
      */
-    private static final String LAST_ACTIVITY = """
-            GREATEST(
-                %1$s.last_login_at,
-                (SELECT max(GREATEST(aps.saved_at, aps.submitted_at))
-                   FROM program_submissions aps WHERE aps.user_id = %1$s.id),
-                (SELECT max(GREATEST(aes.last_saved_at, aes.submitted_at))
-                   FROM exercise_submissions aes WHERE aes.user_id = %1$s.id),
-                (SELECT max(GREATEST(asu.started_at, asu.submitted_at))
-                   FROM submissions asu WHERE asu.user_id = %1$s.id),
-                (SELECT max(GREATEST(aen.enrolled_at, aen.completed_at))
-                   FROM enrollment aen WHERE aen.user_id = %1$s.id)
-            )""";
+    private static final String LAST_ACTIVITY =
+            com.bvisionry.common.programaccess.MemberActivity.LAST_ACTIVITY;
 
     /**
      * The roster row shape: grant-scoped cohort names, grant-scoped per-type

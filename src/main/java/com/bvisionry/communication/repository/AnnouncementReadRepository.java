@@ -83,8 +83,10 @@ public class AnnouncementReadRepository {
 
     /**
      * The recipients of a broadcast: ACTIVE users of {@code orgId} enrolled in
-     * the cohort at send time, minus the author. Enrolment is the definition of
-     * the audience, so no role filter — but the org equality is carried on the
+     * the cohort at send time, minus the author — and only while the cohort is
+     * member-visible (V167: LAUNCHED/COMPLETED; a DRAFT's broadcast reaches
+     * nobody until launch, an ARCHIVED one is history). Enrolment is the
+     * definition of the audience, so no role filter — but the org equality is carried on the
      * user row too, so a member moved to another tenant with a stale enrolment
      * row drops out.
      */
@@ -96,6 +98,7 @@ public class AnnouncementReadRepository {
                                     AND u.organization_id = :orgId
                                     AND u.status = 'ACTIVE'
                         JOIN cohorts c ON c.id = cm.cohort_id AND c.org_id = :orgId
+                                      AND c.status IN ('LAUNCHED', 'COMPLETED')
                         WHERE cm.cohort_id = :cohortId
                           AND u.id <> :authorId
                         ORDER BY u.id
@@ -122,6 +125,7 @@ public class AnnouncementReadRepository {
                                           AND u.organization_id = :orgId
                                           AND u.status = 'ACTIVE'
                             JOIN cohorts c ON c.id = cm.cohort_id AND c.org_id = :orgId
+                                          AND c.status IN ('LAUNCHED', 'COMPLETED')
                             WHERE cm.cohort_id = :cohortId AND cm.user_id = :userId)
                         """,
                 new MapSqlParameterSource("orgId", orgId)
@@ -146,6 +150,7 @@ public class AnnouncementReadRepository {
                                u.role AS author_role, a.body, a.created_at
                         FROM announcements a
                         JOIN cohorts c ON c.id = a.cohort_id AND c.org_id = :orgId
+                                      AND c.status IN ('LAUNCHED', 'COMPLETED')
                         JOIN cohort_members cm ON cm.cohort_id = a.cohort_id
                                               AND cm.user_id = :memberId
                         LEFT JOIN users u ON u.id = a.author_id

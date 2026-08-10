@@ -5,5 +5,6 @@ import jakarta.validation.constraints.Size;
 
 public record CreateModuleRequest(
         @NotBlank @Size(max = 200) String name,
-        String summary) {
+        String summary,
+        @Size(max = 120) String pillarLabel) {
 }

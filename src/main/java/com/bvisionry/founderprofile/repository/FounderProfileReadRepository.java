@@ -48,27 +48,19 @@ public class FounderProfileReadRepository {
 
     /**
      * The profile's anchor row, org-scoped — empty means "not your member" →
-     * 404. {@code last_activity_at} is the greatest of the member's own action
-     * timestamps (GREATEST/MAX ignore NULLs in Postgres); coach review events
-     * are deliberately excluded — this is the FOUNDER's last activity.
+     * 404. {@code last_activity_at} is the member's own footprint via the
+     * shared {@link com.bvisionry.common.programaccess.MemberActivity}
+     * fragment (promoted on its third consumer); coach review events are
+     * deliberately excluded — this is the FOUNDER's last activity.
      */
     public Optional<MemberRow> member(UUID orgId, UUID memberId) {
         return jdbc.query("""
                 SELECT u.id, u.name, u.email, u.role, u.status, u.user_type, u.last_login_at,
-                       GREATEST(
-                           u.last_login_at,
-                           (SELECT max(GREATEST(ps.saved_at, ps.submitted_at))
-                              FROM program_submissions ps WHERE ps.user_id = u.id),
-                           (SELECT max(GREATEST(es.last_saved_at, es.submitted_at))
-                              FROM exercise_submissions es WHERE es.user_id = u.id),
-                           (SELECT max(GREATEST(s.started_at, s.submitted_at))
-                              FROM submissions s WHERE s.user_id = u.id),
-                           (SELECT max(GREATEST(e.enrolled_at, e.completed_at))
-                              FROM enrollment e WHERE e.user_id = u.id)
-                       ) AS last_activity_at
+                       %s AS last_activity_at
                 FROM users u
                 WHERE u.id = :memberId AND u.organization_id = :orgId AND u.role = 'MEMBER'
-                """,
+                """.formatted(com.bvisionry.common.programaccess.MemberActivity.LAST_ACTIVITY
+                        .formatted("u")),
                 params(orgId, memberId),
                 (rs, i) -> new MemberRow(rs.getObject("id", UUID.class), rs.getString("name"),
                         rs.getString("email"), rs.getString("role"), rs.getString("status"),

@@ -239,6 +239,30 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(after.getComputedAt()).isEqualTo(first.getComputedAt());
         }
 
+        /**
+         * V167: a member-facing growth anchor comes only from a cohort the
+         * member can SEE (LAUNCHED/COMPLETED) — a newer, fully-designated
+         * DRAFT must not become the anchor before launch.
+         */
+        @Test
+        void aNewerDraftPairCohort_neverBecomesTheMembersAnchor() {
+            UUID draft = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO cohorts (id, org_id, name, status, created_at)
+                    VALUES (?, ?, 'Draft pair cohort', 'DRAFT', now() + interval '1 day')
+                    """, draft, orgA.getId());
+            jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
+                    draft, founder2.getId());
+            jdbc.update("""
+                    INSERT INTO program_settings (cohort_id, baseline_pipeline_id, distance_pipeline_id)
+                    VALUES (?, ?, ?)
+                    """, draft, baselinePipelineId, distancePipelineId);
+
+            assertThat(queryService.myComparison(founder2.getId()).cohortId())
+                    .as("anchor stays on the launched cohort, not the newer draft")
+                    .isEqualTo(cohortId);
+        }
+
         /** The §5 guard: no designated pair → never tease a pending report. */
         @Test
         void memberWithoutDesignatedPair_getsNoneState() {
@@ -674,7 +698,7 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private UUID insertCohort(UUID orgId, String name, UUID memberId) {
         UUID id = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name) VALUES (?, ?, ?)", id, orgId, name);
+        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')", id, orgId, name);
         jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)", id, memberId);
         return id;
     }

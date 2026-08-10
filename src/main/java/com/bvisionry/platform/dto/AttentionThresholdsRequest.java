@@ -22,6 +22,10 @@ public record AttentionThresholdsRequest(
 
         @Min(value = 1, message = "onboardingStalledHours must be at least 1")
         @Max(value = 168, message = "onboardingStalledHours must be at most 168")
-        int onboardingStalledHours
+        int onboardingStalledHours,
+
+        @Min(value = 0, message = "pillarThreshold must be at least 0")
+        @Max(value = 100, message = "pillarThreshold must be at most 100")
+        int pillarThreshold
 ) {
 }

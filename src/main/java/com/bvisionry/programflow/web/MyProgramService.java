@@ -119,7 +119,7 @@ public class MyProgramService {
         if (cohort == null) {
             // Spec §2.1: no cohort → the page is Direct assignments only.
             return new JourneyResponse(ProgramSettingsDto.defaults(), new JourneyResponse.Progress(0, 0),
-                    gamification(List.of()), List.of(), null, false, direct);
+                    gamification(List.of()), List.of(), null, false, 0, direct);
         }
         Context ctx = context(userId, cohort);
         ProgramSettingsDto s = settingsOf(cohort.getId());
@@ -140,7 +140,7 @@ public class MyProgramService {
                 if (t.getTaskType() == ProgramTaskType.ASSESSMENT && row.score() != null) {
                     previousMilestoneScore = row.score();
                 }
-                // Uncompletable types (SURVEY, for now) render but count in
+                // An uncompletable type (none today) renders but counts in
                 // neither side of the progress fraction.
                 if (t.getTaskType().completableInApp()) {
                     if (ProgramRules.done(row.state())) {
@@ -156,7 +156,8 @@ public class MyProgramService {
 
         return new JourneyResponse(s, new JourneyResponse.Progress(done, total),
                 gamification(ctx.mySubmissions()), journeyModules,
-                cohort.getId(), cohort.getStatus() == CohortStatus.FINISHED, direct);
+                cohort.getId(), cohort.getStatus() == CohortStatus.FINISHED,
+                cohort.getMemberIds().size(), direct);
     }
 
     /** One typed journey row: LESSON keeps the legacy fields; other types read their slice. */
@@ -685,7 +686,7 @@ public class MyProgramService {
             }
             for (ProgramTask t : ProgramRules.liveTasks(ctx.visibleModules().get(i))) {
                 // Never point the continue-cursor at a task the member cannot
-                // complete in-app (SURVEY, for now) — that's a dead end.
+                // complete in-app (none today) — that's a dead end.
                 if (t.getTaskType().completableInApp() && !submitted.contains(t.getId())) {
                     return t;
                 }

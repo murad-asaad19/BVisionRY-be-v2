@@ -155,9 +155,6 @@ public class EngagementReadRepository {
                     FROM program_tasks t
                     JOIN program_modules m ON m.id = t.module_id AND m.cohort_id = :cohortId
                     WHERE t.status = 'LIVE'
-                      -- Mirrors ProgramTaskType.completableInApp(): a survey has
-                      -- no member route yet, so it counts against no one.
-                      AND t.task_type <> 'SURVEY'
                       AND %s
                 ) x
                 """.formatted(ProgramAudience.INCLUDES_USER.formatted(":memberId")),

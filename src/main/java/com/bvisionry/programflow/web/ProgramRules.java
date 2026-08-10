@@ -58,7 +58,7 @@ final class ProgramRules {
         if (index == 0) {
             return LockState.UNLOCKED;
         }
-        // Tasks a member cannot complete in-app (SURVEY, for now) never gate
+        // Tasks a member cannot complete in-app (none today) never gate
         // the next module — otherwise the journey deadlocks on them.
         boolean previousDone = liveTasks(modules.get(index - 1)).stream()
                 .filter(t -> t.getTaskType().completableInApp())

@@ -149,10 +149,12 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                     assertThat(t.state()).isEqualTo(JourneyTaskState.NOT_STARTED));
             assertThat(rows.get(3).milestoneRole()).isEqualTo(MilestoneRole.BASELINE);
             assertThat(rows.get(4).milestoneRole()).isEqualTo(MilestoneRole.CHECKIN);
-            // 6, not 7: the SURVEY task renders but is not completable in-app
-            // yet, so it counts in neither side of the progress fraction.
-            assertThat(journey.progress().total()).isEqualTo(6);
+            // 7: every typed task counts since D2 shipped the member survey
+            // route (completableInApp() is true for all types now).
+            assertThat(journey.progress().total()).isEqualTo(7);
             assertThat(journey.progress().done()).isZero();
+            // §11: the journey hero shows cohort size.
+            assertThat(journey.memberCount()).isEqualTo(1);
         }
 
         @Test
@@ -205,19 +207,20 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(rows.get(6).state()).isEqualTo(JourneyTaskState.DONE);
 
             // Progress counts every typed done-state; the lesson and the
-            // in-progress course don't count, and the SURVEY task (done or
-            // not) is excluded from both sides while uncompletable in-app.
-            assertThat(journey.progress().done()).isEqualTo(4);
-            assertThat(journey.progress().total()).isEqualTo(6);
+            // in-progress course don't count. The answered SURVEY counts on
+            // both sides since D2 (member survey route shipped).
+            assertThat(journey.progress().done()).isEqualTo(5);
+            assertThat(journey.progress().total()).isEqualTo(7);
             // Gamification points stay LESSON-only this phase.
             assertThat(journey.gamification().points()).isZero();
 
-            // Engagement assignments formula agrees with the spine (6 counted
-            // cohort tasks — survey excluded — 4 done; the member's exercise
-            // assignment is covered by the cohort task, so it adds nothing).
+            // Engagement assignments formula agrees with the spine (7 counted
+            // cohort tasks — survey included since D2 — 5 done; the member's
+            // exercise assignment is covered by the cohort task, so it adds
+            // nothing).
             var counts = engagementReads.assignmentCounts(org.getId(), cohortId, member.getId());
-            assertThat(counts.total()).isEqualTo(6);
-            assertThat(counts.done()).isEqualTo(4);
+            assertThat(counts.total()).isEqualTo(7);
+            assertThat(counts.done()).isEqualTo(5);
         }
     }
 
@@ -332,15 +335,15 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
     /* ------------------------------------------------------- survey gating */
 
     @Nested
-    class SurveyDoesNotDeadlockDrip {
+    class SurveyGatesDrip {
 
         /**
-         * Review #4: a LIVE survey task the member cannot complete in-app
-         * neither sequential-locks the next module nor counts in progress —
-         * a survey-only module 1 reads 1/1 done once module 2's lesson lands.
+         * D2 flip: SURVEY is completable in-app now (member survey route), so
+         * an unanswered survey-only module 1 sequential-locks module 2 like
+         * any other task — and a response unlocks it and counts in progress.
          */
         @Test
-        void surveyOnlyModule_neverLocksTheNextModule_norTheProgress() {
+        void surveyOnlyModule_gatesTheNextModule_untilAnswered() {
             UUID dripCohort = UUID.randomUUID();
             jdbc.update("INSERT INTO cohorts (id, org_id, name) VALUES (?, ?, ?)",
                     dripCohort, org.getId(), "Drip cohort");
@@ -370,11 +373,24 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                     VALUES (?, ?, 'SUBMITTED', '{}'::jsonb, now())
                     """, lesson, member.getId());
 
-            JourneyResponse journey = myProgramService.journey(dripCohort);
-            assertThat(journey.modules().get(1).lockState())
+            // Unanswered survey → module 2 stays sequential-locked; the
+            // already-submitted lesson still counts (progress ≠ lock).
+            JourneyResponse locked = myProgramService.journey(dripCohort);
+            assertThat(locked.modules().get(1).lockState())
+                    .isEqualTo(JourneyResponse.LockState.LOCKED_SEQUENTIAL);
+            assertThat(locked.progress().done()).isEqualTo(1);
+            assertThat(locked.progress().total()).isEqualTo(2);
+
+            // A survey response (the D2 member route's row shape) unlocks it.
+            jdbc.update("""
+                    INSERT INTO survey_responses (survey_id, source, respondent_user_id)
+                    VALUES (?, 'PROGRAM_TASK', ?)
+                    """, surveyId, member.getId());
+            JourneyResponse unlocked = myProgramService.journey(dripCohort);
+            assertThat(unlocked.modules().get(1).lockState())
                     .isEqualTo(JourneyResponse.LockState.UNLOCKED);
-            assertThat(journey.progress().done()).isEqualTo(1);
-            assertThat(journey.progress().total()).isEqualTo(1);
+            assertThat(unlocked.progress().done()).isEqualTo(2);
+            assertThat(unlocked.progress().total()).isEqualTo(2);
         }
     }
 
@@ -584,6 +600,61 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
+    /* -------------------------------------------------- member survey route */
+
+    @Nested
+    class MemberSurveyRoute {
+
+        @Autowired private com.bvisionry.survey.service.ProgramTaskSurveyService surveyResponses;
+        @Autowired private jakarta.persistence.EntityManager em;
+
+        @Test
+        void memberTakesTheSurveyTaskInApp_andTheJourneyFlipsToDone() {
+            // GET hands back the published definition for the enrolled member.
+            var dto = surveyResponses.getForProgramTask(surveyTaskId, member.getId());
+            assertThat(dto.id()).isEqualTo(surveyId);
+
+            // POST creates the PROGRAM_TASK response…
+            var result = surveyResponses.submitForProgramTask(surveyTaskId, member.getId(),
+                    new com.bvisionry.survey.dto.SurveySubmitRequest(null, null, List.of()),
+                    "it-agent");
+            assertThat(result.responseId()).isNotNull();
+            // The journey + duplicate gates read via JdbcTemplate — flush the
+            // JPA insert so they see the row inside this test transaction.
+            em.flush();
+            String source = jdbc.queryForObject(
+                    "SELECT source FROM survey_responses WHERE id = ?",
+                    String.class, result.responseId());
+            assertThat(source).isEqualTo("PROGRAM_TASK");
+
+            // …which IS the completion: journey DONE and counted (7/7 sides).
+            JourneyResponse journey = myProgramService.journey(cohortId);
+            JourneyTask surveyRow = journey.modules().get(0).tasks().get(6);
+            assertThat(surveyRow.state()).isEqualTo(JourneyTaskState.DONE);
+            assertThat(surveyRow.completedAt()).isNotNull();
+            assertThat(journey.progress().done()).isEqualTo(1);
+            assertThat(journey.progress().total()).isEqualTo(7);
+
+            // Second take → 409-shaped duplicate, on GET and POST alike.
+            assertThatThrownBy(() ->
+                    surveyResponses.getForProgramTask(surveyTaskId, member.getId()))
+                    .isInstanceOf(com.bvisionry.common.exception.DuplicateResourceException.class);
+            assertThatThrownBy(() -> surveyResponses.submitForProgramTask(surveyTaskId,
+                    member.getId(),
+                    new com.bvisionry.survey.dto.SurveySubmitRequest(null, null, List.of()),
+                    "it-agent"))
+                    .isInstanceOf(com.bvisionry.common.exception.DuplicateResourceException.class);
+        }
+
+        @Test
+        void aStrangerToTheCohort_getsA404_neverTheDefinition() {
+            User stranger = saveUser("spine.stranger@test.invalid", UserRole.MEMBER, org);
+            assertThatThrownBy(() ->
+                    surveyResponses.getForProgramTask(surveyTaskId, stranger.getId()))
+                    .isInstanceOf(com.bvisionry.common.exception.ResourceNotFoundException.class);
+        }
+    }
+
     /* ----------------------------------------------------------------- pulse */
 
     @Nested
@@ -612,8 +683,8 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(row.cells().get(4)).isEqualTo(CellState.NOT_STARTED);  // untouched check-in
             assertThat(row.cells().get(5)).isEqualTo(CellState.NOT_STARTED);  // workshop
             assertThat(row.cells().get(6)).isEqualTo(CellState.NOT_STARTED);  // survey
-            // Denominator is 6: the survey cell renders but never counts.
-            assertThat(row.completionPct()).isEqualTo(Math.round(2 * 100f / 6));
+            // Denominator is 7: the survey counts since D2 (member route shipped).
+            assertThat(row.completionPct()).isEqualTo(Math.round(2 * 100f / 7));
         }
     }
 

@@ -22,13 +22,14 @@ public enum ProgramTaskType {
 
     /**
      * Can a member currently bring this task to a done-state inside the app?
-     * False ONLY for SURVEY today: there is no member survey-response route
-     * yet, so a survey task must neither block sequential drip nor count in
-     * any completion denominator (journey progress, pulse, engagement) — it
-     * renders, and flips to done if a response happens to exist. D2 adds the
-     * member survey route and flips this to true.
+     * True for every type since D2 shipped the member survey-response route
+     * ({@code /api/my/program/tasks/{id}/survey}) — every task now blocks
+     * sequential drip and counts in every completion denominator (journey
+     * progress, pulse, engagement, continue-cursor). The predicate stays so a
+     * future not-yet-completable type flips ONE switch instead of re-auditing
+     * five call sites.
      */
     public boolean completableInApp() {
-        return this != SURVEY;
+        return true;
     }
 }

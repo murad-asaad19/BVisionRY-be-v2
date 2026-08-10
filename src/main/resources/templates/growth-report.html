@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <th:block th:replace="~{fragments/pdf-base :: pdfStyles}"></th:block>
+    <style>
+        /* ===== Growth-report specific ===== */
+        .lead-table { display: table; margin-top: 24px; }
+        .lead-cell { display: table-cell; vertical-align: middle; padding-right: 34px; }
+        .lead-score { font-size: 30pt; font-weight: 700; color: #051647; }
+        .lead-score-muted { color: #55647d; }
+        .lead-label { font-size: 8.5pt; font-weight: 600; letter-spacing: 0.1em;
+                      text-transform: uppercase; color: #55647d; margin-top: 4px; }
+        .lead-arrow { font-size: 18pt; color: #8896ad; }
+        .shift-badge {
+            display: inline-block; background: #051647; color: #ffffff;
+            padding: 4px 14px; border-radius: 999px; font-size: 10pt; font-weight: 700;
+        }
+        .meta-line { font-size: 9.5pt; color: #55647d; margin-top: 10px; }
+
+        .shift-table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 9.5pt; }
+        .shift-table th { background: #051647; color: #ffffff; padding: 7px 10px;
+                          text-align: left; font-weight: 600; }
+        .shift-table td { padding: 6px 10px; border-bottom: 1px solid #dce3ee; vertical-align: top; }
+        .shift-table .num { text-align: right; width: 52px; }
+        .pillar-name { font-weight: 700; color: #051647; }
+
+        .explainer {
+            margin-top: 16px; padding: 12px 16px; background: #f8f9fc;
+            border-left: 4px solid #d9ad62; border-radius: 0 10px 10px 0;
+            font-size: 10pt; color: #18233f; line-height: 1.5;
+        }
+        .section-title { font-size: 13pt; font-weight: 700; color: #051647; }
+    </style>
+</head>
+<body>
+
+<div class="page">
+    <p class="cover-eyebrow">My Growth</p>
+    <h1 class="page-heading"
+        th:text="${done} ? 'Where you were — and where you are now' : 'Your growth so far'">Title</h1>
+    <span class="accent-rule"></span>
+    <p class="meta-line">
+        <span th:text="${memberName}">Member</span>
+        <th:block th:if="${cohortName != null}"> · <span th:text="${cohortName}">Cohort</span></th:block>
+        · <span th:text="${reportDate}">Date</span>
+    </p>
+
+    <!-- Comparison lead (spec §5: lead with the comparison) -->
+    <div class="lead-table" th:if="${done}">
+        <div class="lead-cell">
+            <p class="lead-score lead-score-muted" th:text="${overallBefore}">58</p>
+            <p class="lead-label">Baseline · <span th:text="${baselineDate}">date</span></p>
+        </div>
+        <div class="lead-cell lead-arrow">&#8594;</div>
+        <div class="lead-cell">
+            <p class="lead-score" th:text="${overallAfter}">71</p>
+            <p class="lead-label">Distance · <span th:text="${distanceDate}">date</span></p>
+        </div>
+        <div class="lead-cell">
+            <span class="shift-badge" th:text="${overallShift}">+13 · Moderate shift</span>
+        </div>
+    </div>
+
+    <!-- Trajectory -->
+    <div class="section">
+        <p class="section-title">Your trajectory</p>
+        <table class="shift-table">
+            <thead>
+            <tr><th>Assessment</th><th>Evaluated</th><th class="num">Overall</th></tr>
+            </thead>
+            <tbody>
+            <tr th:each="t : ${trajectory}">
+                <td th:text="${t.assessment()}">Assessment</td>
+                <td th:text="${t.evaluated()}">Date</td>
+                <td class="num" th:text="${t.score()}">58</td>
+            </tr>
+            </tbody>
+        </table>
+        <p class="meta-line" th:if="${trajectory.isEmpty()}">No evaluated assessments yet.</p>
+    </div>
+
+    <!-- Pillar shifts, sorted by shift size (spec §5) -->
+    <div class="section" th:if="${done}">
+        <p class="section-title">Pillar shifts</p>
+        <table class="shift-table">
+            <thead>
+            <tr>
+                <th>Pillar</th>
+                <th class="num">Before</th>
+                <th class="num">After</th>
+                <th>Shift</th>
+                <th>Maturity</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="p : ${pillars}">
+                <td class="pillar-name" th:text="${p.pillar()}">Pillar</td>
+                <td class="num" th:text="${p.before()}">60</td>
+                <td class="num" th:text="${p.after()}">74</td>
+                <td th:text="${p.shift()}">+14 · Moderate shift</td>
+                <td th:text="${p.maturity()}">Formative → Established</td>
+            </tr>
+            </tbody>
+        </table>
+        <p class="meta-line">Computed <span th:text="${computedAt}">date</span></p>
+    </div>
+
+    <!-- Pending explainer — only when a distance pair actually exists (§5 guard) -->
+    <div class="explainer" th:if="${pending}">
+        Your distance report unlocks after the distance assessment is evaluated —
+        this page then becomes your before &#8594; after story: every pillar's shift
+        and your maturity movement.
+    </div>
+</div>
+
+</body>
+</html>

@@ -20,6 +20,12 @@ public record JourneyResponse(
         UUID cohortId,
         boolean readOnly,
         /**
+         * How many members the cohort has (spec §11: the journey hero shows
+         * cohort size). 0 when the member has no cohort. Week x-of-y and the
+         * progress % are derived client-side from modules + progress.
+         */
+        int memberCount,
+        /**
          * The member's work NOT attached to any cohort task (spec §2.1) —
          * present even when the member has no cohort at all.
          */

@@ -20,6 +20,11 @@ import java.util.UUID;
  *   <li>{@link WorkshopIntro} — authenticated pre-workshop intro survey,
  *       bound to a workshop by id; identity comes from the resolved
  *       {@link User}, same as {@link Member}.</li>
+ *   <li>{@link ProgramTask} — authenticated SURVEY journey task (redesign
+ *       spec §2.1, phase D2); keyed on (survey, member) only, matching the
+ *       journey's done-detection. Carries plain identity values, not the
+ *       {@code auth} entity — the architecture ratchet forbids NEW
+ *       cross-feature type dependencies.</li>
  * </ul>
  *
  * Sealing the type lets {@code persistResponse} branch with an exhaustive
@@ -27,7 +32,8 @@ import java.util.UUID;
  * fields from both flows.
  */
 public sealed interface ResponseContext
-        permits ResponseContext.Public, ResponseContext.Member, ResponseContext.WorkshopIntro {
+        permits ResponseContext.Public, ResponseContext.Member,
+                ResponseContext.WorkshopIntro, ResponseContext.ProgramTask {
 
     record Public(String email, String name, String ipHash, String cookieId,
                   UUID giftToken) implements ResponseContext {}
@@ -35,4 +41,6 @@ public sealed interface ResponseContext
     record Member(Submission submission, User user) implements ResponseContext {}
 
     record WorkshopIntro(UUID workshopId, User user) implements ResponseContext {}
+
+    record ProgramTask(UUID userId, String email, String name) implements ResponseContext {}
 }

@@ -480,7 +480,7 @@ public class ProgramAdminService {
                 } else {
                     state = cellOf(myTyped.get(taskId));
                 }
-                // Uncompletable types (SURVEY, for now) render a cell but count
+                // An uncompletable type (none today) renders a cell but counts
                 // in neither side of the completion percentage.
                 if (type.completableInApp()) {
                     assigned++;

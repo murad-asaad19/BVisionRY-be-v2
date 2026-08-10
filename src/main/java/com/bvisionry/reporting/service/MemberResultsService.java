@@ -3,7 +3,6 @@ package com.bvisionry.reporting.service;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.assessment.entity.Submission;
 import com.bvisionry.auth.SecurityUtils;
-import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.security.PremiumFeatureGuard;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.exception.ResourceNotFoundException;
@@ -82,16 +81,7 @@ public class MemberResultsService {
         CachedMemberResults cached = self.getCachedResults(submissionId);
         boolean isPremium = premiumFeatureGuard.isPremiumOrSuperAdmin(cached.organizationId());
         boolean isSuperAdmin = SecurityUtils.isSuperAdmin();
-        // Spec §2.4 privacy invariant: raw answer text is the member's own, and
-        // the PERSONAL pillar's entries ARE verbatim answers. The founder's own
-        // report keeps them; an ORG ADMIN or coach reading the same submission
-        // through the console does not — the founder profile that now links here
-        // promises "scores, narratives, strengths/edges, never raw answers".
-        User owner = submission.getUser();
-        boolean ownResults = owner != null
-                && owner.getId().equals(SecurityUtils.getCurrentUserId());
-        return applyViewerScope(cached.response(), isPremium, isSuperAdmin,
-                isSuperAdmin || ownResults);
+        return applyViewerScope(cached.response(), isPremium, isSuperAdmin);
     }
 
     /**
@@ -183,8 +173,7 @@ public class MemberResultsService {
      */
     private MemberResultsResponse applyViewerScope(MemberResultsResponse r,
                                                    boolean premium,
-                                                   boolean superAdmin,
-                                                   boolean maySeeAnswers) {
+                                                   boolean superAdmin) {
         boolean premiumDetailUnavailable = premium && isLegacyBlankPremium(r);
         return new MemberResultsResponse(
                 r.submissionId(), r.pipelineName(), r.overallScore(), r.summaryNarrative(),
@@ -197,7 +186,7 @@ public class MemberResultsService {
                 r.movingForwardNarrative(), r.postCompletion(),
                 superAdmin ? r.surveyResponse() : null,
                 superAdmin ? r.survey() : null,
-                maySeeAnswers ? r.personalInfo() : List.of(),
+                r.personalInfo(),
                 premiumDetailUnavailable
         );
     }

@@ -256,13 +256,12 @@ class MemberResultsServiceTest {
     }
 
     /**
-     * Spec §2.4 privacy invariant: the PERSONAL pillar's entries are verbatim
-     * member ANSWERS. The founder profile promises staff never see those, and
-     * the profile's Work tab links straight to this report — so an org admin
-     * gets the scores and none of the answer text. The owner still gets theirs.
+     * Murad 2026-08-10: PERSONAL-pillar intake demographics are deliberately
+     * org-admin-visible — they are intake data, not assessment answers; §2.4's
+     * invariant covers mindset answers only.
      */
     @Test
-    void getResults_staffViewer_stripsPersonalInfo_ownerKeepsIt() {
+    void getResults_orgAdmin_keepsPersonalInfo() {
         UUID submissionId = UUID.randomUUID();
         UUID orgId = UUID.randomUUID();
         UUID ownerId = UUID.randomUUID();
@@ -301,7 +300,9 @@ class MemberResultsServiceTest {
 
         // An ORG ADMIN of the same org, i.e. not the owner and not a super admin.
         authenticateAs(UserRole.ORG_ADMIN);
-        assertThat(memberResultsService.getResults(submissionId).personalInfo()).isEmpty();
+        assertThat(memberResultsService.getResults(submissionId).personalInfo())
+                .extracting(com.bvisionry.reporting.dto.PersonalInfoEntry::value)
+                .containsExactly("Runway.");
 
         // The founder reading their own report keeps every word of it.
         SecurityContextHolder.clearContext();

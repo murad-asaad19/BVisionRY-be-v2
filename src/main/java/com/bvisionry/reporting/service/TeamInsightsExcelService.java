@@ -99,14 +99,7 @@ public class TeamInsightsExcelService {
 
         Map<UUID, String> pillarOrder = TeamInsightsFormatter.buildPillarOrder(evaluationsBySubmission);
 
-        // Gender is a verbatim personal-pillar ANSWER (spec §2.4), so it obeys
-        // the same rule as the Profiles sheet below: it ships only when names
-        // do. Anonymised exports carried it on the Overview and Summary sheets
-        // while the sheet built to hold it was being dropped. Every reader uses
-        // getOrDefault, so an empty map simply renders the blank/"Unspecified".
-        List<UUID> allSubmissionIds = showNames
-                ? allSubmissions.stream().map(Submission::getId).toList()
-                : List.of();
+        List<UUID> allSubmissionIds = allSubmissions.stream().map(Submission::getId).toList();
         Map<UUID, String> genderBySubmission = allSubmissionIds.isEmpty()
                 ? Map.of()
                 : answerRepository.findBySubmissionIdsAndSystemKey(allSubmissionIds, SystemQuestion.GENDER).stream()

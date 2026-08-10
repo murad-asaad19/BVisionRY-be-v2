@@ -3,6 +3,7 @@ package com.bvisionry.platform;
 import com.bvisionry.common.audit.AuditLogger;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.FieldValidationException;
+import com.bvisionry.common.scoringconfig.NarrativeWording;
 import com.bvisionry.common.scoringconfig.ParticipationFormula;
 import com.bvisionry.common.scoringconfig.ScoringBands;
 import com.bvisionry.platform.dto.ScoringConfigResponse;
@@ -50,7 +51,7 @@ public class ScoringConfigService {
     static final String FORMULA_KEY = ParticipationFormula.FORMULA_KEY;
     static final String PARTICIPATION_BANDS_KEY = ParticipationFormula.PARTICIPATION_BANDS_KEY;
     static final String QUALITY_TAGS_KEY = "scoring.quality_tags";
-    static final String NARRATIVE_KEY = "scoring.narrative_wording";
+    static final String NARRATIVE_KEY = NarrativeWording.NARRATIVE_KEY;
 
     /** The protected, always-computed category (spec §4/§7 amended). */
     static final String ASSIGNMENTS_KEY = ParticipationFormula.ASSIGNMENTS_KEY;
@@ -82,11 +83,11 @@ public class ScoringConfigService {
     }
 
     static String defaultNarrativeSentence() {
-        return "There isn't enough before-data to compare this pillar yet.";
+        return NarrativeWording.defaultNotEnoughDataSentence();
     }
 
     static String defaultDeclineCloseInstruction() {
-        return "Every decline must end with a concrete next step — never a verdict.";
+        return NarrativeWording.defaultDeclineCloseInstruction();
     }
 
     /* ----------------------------------------------------------------- read */
@@ -149,7 +150,7 @@ public class ScoringConfigService {
 
     @Transactional
     public NarrativeWordingSection putNarrativeWording(String sentence, String declineInstruction,
-                                                       UUID actorId) {
+                                                       Boolean autoApprove, UUID actorId) {
         Map<String, String> errors = new LinkedHashMap<>();
         if (sentence == null || sentence.isBlank()) {
             errors.put("notEnoughDataSentence", "The sentence must not be blank.");
@@ -158,7 +159,8 @@ public class ScoringConfigService {
             errors.put("declineCloseInstruction", "The instruction must not be blank.");
         }
         throwIfInvalid(errors);
-        save(NARRATIVE_KEY, new NarrativeDoc(sentence.trim(), declineInstruction.trim()), actorId);
+        save(NARRATIVE_KEY, new NarrativeWording(sentence.trim(), declineInstruction.trim(),
+                autoApprove != null && autoApprove), actorId);
         return narrativeSection();
     }
 
@@ -167,14 +169,10 @@ public class ScoringConfigService {
      * existed parses with that field null and must not blank the card.
      */
     private NarrativeWordingSection narrativeSection() {
-        return section(NARRATIVE_KEY, NarrativeDoc.class, d -> d,
-                () -> new NarrativeDoc(defaultNarrativeSentence(), defaultDeclineCloseInstruction()),
-                (d, at, by) -> new NarrativeWordingSection(
-                        d.notEnoughDataSentence() == null || d.notEnoughDataSentence().isBlank()
-                                ? defaultNarrativeSentence() : d.notEnoughDataSentence(),
-                        d.declineCloseInstruction() == null || d.declineCloseInstruction().isBlank()
-                                ? defaultDeclineCloseInstruction() : d.declineCloseInstruction(),
-                        at, by));
+        return section(NARRATIVE_KEY, NarrativeWording.class, d -> d.withDefaults(),
+                NarrativeWording::defaults,
+                (d, at, by) -> new NarrativeWordingSection(d.notEnoughDataSentence(),
+                        d.declineCloseInstruction(), Boolean.TRUE.equals(d.autoApprove()), at, by));
     }
 
     /* ------------------------------------------------------------ validation */
@@ -253,9 +251,6 @@ public class ScoringConfigService {
     }
 
     record TagsDoc(List<QualityTag> tags) {
-    }
-
-    record NarrativeDoc(String notEnoughDataSentence, String declineCloseInstruction) {
     }
 
     private interface SectionFactory<V, S> {

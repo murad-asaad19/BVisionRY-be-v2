@@ -43,11 +43,14 @@ public record ScoringConfigResponse(
 
     /**
      * The fixed sentences the system emits (spec §7): the "not enough
-     * before-data" line and the decline-close instruction the M4 narrative
-     * job's guardrail validates against.
+     * before-data" line and the decline-close instruction the shift-narrative
+     * job's guardrail validates against, plus the §6 auto-approve toggle
+     * (OFF by default = human approval required before a narrative reaches the
+     * founder).
      */
     public record NarrativeWordingSection(
             String notEnoughDataSentence, String declineCloseInstruction,
+            boolean autoApprove,
             Instant updatedAt, String updatedBy) {
     }
 }

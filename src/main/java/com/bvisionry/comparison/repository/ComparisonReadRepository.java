@@ -348,10 +348,42 @@ public class ComparisonReadRepository {
                 });
     }
 
+    /**
+     * The per-pillar qualitative text blocks of a submission — the ONLY input
+     * the shift-narrative job (spec §6) is allowed to see. Scores are
+     * deliberately absent from this projection: "never generate from scores
+     * alone" is enforced by construction, not by asking the prompt nicely.
+     *
+     * <p>The columns are jsonb string arrays; they are read as raw JSON and
+     * parsed by the caller (this repository stays Jackson-free like the rest of
+     * the slice's raw-SQL reads).
+     */
+    public Map<UUID, RawPillarText> pillarTextBlocks(UUID submissionId) {
+        return jdbc.query("""
+                SELECT pillar_id,
+                       ai_whats_working::text     AS whats_working,
+                       ai_what_can_improve::text  AS what_can_improve
+                FROM pillar_evaluations
+                WHERE submission_id = :id AND ai_failed = false
+                """,
+                new MapSqlParameterSource("id", submissionId),
+                (rs, i) -> new RawPillarText(rs.getObject("pillar_id", UUID.class),
+                        rs.getString("whats_working"), rs.getString("what_can_improve")))
+                .stream().collect(Collectors.toMap(RawPillarText::pillarId, Function.identity()));
+    }
+
+    /** A pillar's two text blocks, still as raw jsonb text — parsed by the caller. */
+    public record RawPillarText(UUID pillarId, String whatsWorkingJson, String whatCanImproveJson) {}
+
     /* ----------------------------------------------------- platform config */
 
-    /** The raw shift-bands document — parsed (with defaults) by the caller. */
-    public Optional<String> shiftBandsJson(String key) {
+    /**
+     * The raw JSON document stored under a {@code platform_settings} key —
+     * parsed (with defaults) by the caller. Used for the shift bands and the
+     * narrative wording; the slice reads platform config by SQL because the
+     * ArchUnit ratchet forbids a comparison→platform import.
+     */
+    public Optional<String> settingText(String key) {
         return jdbc.query("SELECT value_text FROM platform_settings WHERE key = :key",
                 new MapSqlParameterSource("key", key),
                 (rs, i) -> rs.getString("value_text"))

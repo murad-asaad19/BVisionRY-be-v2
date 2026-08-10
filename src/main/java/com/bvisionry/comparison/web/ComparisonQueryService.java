@@ -2,6 +2,7 @@ package com.bvisionry.comparison.web;
 
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.comparison.domain.FounderComparison;
+import com.bvisionry.comparison.domain.PillarComparisonState;
 import com.bvisionry.comparison.dto.ComparisonSummaryDto;
 import com.bvisionry.comparison.dto.FounderComparisonDto;
 import com.bvisionry.comparison.dto.FounderComparisonDto.ComparisonPillarDto;
@@ -36,6 +37,7 @@ public class ComparisonQueryService {
     private final FounderComparisonRepository comparisons;
     private final FounderComparisonPillarRepository pillars;
     private final ComparisonReadRepository reads;
+    private final ShiftNarrativeService narratives;
 
     /* ---------------------------------------------------------- member view */
 
@@ -104,10 +106,15 @@ public class ComparisonQueryService {
      * Extends the Phase A DTO rather than forking a parallel shape.
      */
     public MyComparisonResponse memberComparisonForAdmin(UUID orgId, UUID userId) {
+        requireMemberInOrg(orgId, userId);
+        return myComparison(userId);
+    }
+
+    /** The org-admin member gate, shared with the narrative review endpoints. */
+    public void requireMemberInOrg(UUID orgId, UUID userId) {
         if (!reads.userInOrg(orgId, userId)) {
             throw new ResourceNotFoundException("Member", userId.toString());
         }
-        return myComparison(userId);
     }
 
     /* ----------------------------------------------------------- coach view */
@@ -131,7 +138,17 @@ public class ComparisonQueryService {
     private FounderComparisonDto toDto(FounderComparison c, String userName) {
         Map<UUID, Instant> evaluatedAt = reads.submissionEvaluatedAt(
                 Set.of(c.getBaselineSubmissionId(), c.getDistanceSubmissionId()));
-        List<ComparisonPillarDto> pillarDtos = pillars.findByComparisonId(c.getId()).stream()
+        var pillarRows = pillars.findByComparisonId(c.getId());
+        // The distance pillars this comparison still measures BEFORE AND AFTER —
+        // the set that decides which narratives are still attached (§6). MAPPED
+        // only: a remap can demote a pillar to newly-measured, and a narrative
+        // about a shift is meaningless once there is no "before" to shift from.
+        Set<UUID> mappedDistancePillarIds = pillarRows.stream()
+                .filter(p -> p.getState() == PillarComparisonState.MAPPED)
+                .map(com.bvisionry.comparison.domain.FounderComparisonPillar::getDistancePillarId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toSet());
+        List<ComparisonPillarDto> pillarDtos = pillarRows.stream()
                 .map(p -> new ComparisonPillarDto(p.getBaselinePillarId(), p.getDistancePillarId(),
                         p.getPillarNameSnapshot(), p.getState().name(), p.getBeforePct(),
                         p.getAfterPct(), p.getDelta(), p.getBandKey(), p.getBandLabel(),
@@ -148,6 +165,12 @@ public class ComparisonQueryService {
                 c.getOverallBandKey(), c.getOverallBandLabel(),
                 evaluatedAt.get(c.getBaselineSubmissionId()),
                 evaluatedAt.get(c.getDistanceSubmissionId()),
-                c.getComputedAt(), pillarDtos);
+                c.getComputedAt(), pillarDtos,
+                // Approved-only AND still-attached, on every surface that reads
+                // this DTO (§6). The count of what is still in review rides
+                // along so the member can be told "2 more are coming" — a
+                // number, never a word of unapproved prose.
+                narratives.approvedFor(c.getCohortId(), c.getUserId(), mappedDistancePillarIds),
+                narratives.draftCountFor(c.getCohortId(), c.getUserId(), mappedDistancePillarIds));
     }
 }

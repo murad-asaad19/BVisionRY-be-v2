@@ -31,6 +31,15 @@
             font-size: 10pt; color: #18233f; line-height: 1.5;
         }
         .section-title { font-size: 13pt; font-weight: 700; color: #051647; }
+
+        .narrative { margin-top: 10px; padding: 11px 14px; background: #f8f9fc;
+                     border: 1px solid #dce3ee; border-radius: 10px; }
+        .narrative-head { font-size: 10.5pt; font-weight: 700; color: #051647; }
+        .narrative-kind { font-size: 8pt; font-weight: 700; color: #005392;
+                          text-transform: uppercase; letter-spacing: 0.06em; }
+        .narrative-body { font-size: 9.5pt; color: #18233f; line-height: 1.55; margin: 5px 0 0; }
+        .narrative-next { margin: 7px 0 0; padding-top: 6px; border-top: 1px solid #dce3ee;
+                          font-size: 9.5pt; font-weight: 700; color: #18233f; }
     </style>
 </head>
 <body>
@@ -104,6 +113,24 @@
             </tbody>
         </table>
         <p class="meta-line">Computed <span th:text="${computedAt}">date</span></p>
+    </div>
+
+    <!-- Approved shift narratives (§5 layout item 4, §6 gate). The list arrives
+         approved-only from the service, so nothing here can leak a draft; the
+         whole section disappears when none are approved. -->
+    <div class="section" th:if="${done and !narratives.isEmpty()}">
+        <p class="section-title">What changed — in your own words</p>
+        <div class="narrative" th:each="n : ${narratives}">
+            <p class="narrative-head">
+                <span th:text="${n.pillarName()}">Pillar</span>
+                <span class="narrative-kind" th:text="${n.kindLabel()}">Resolved</span>
+            </p>
+            <p class="narrative-body" th:text="${n.body()}">Narrative</p>
+            <p class="narrative-next" th:if="${n.closingAction() != null}">
+                Next step: <span th:text="${n.closingAction()}">Do the thing.</span>
+            </p>
+            <p class="meta-line" th:text="${n.approved()}">Approved Oct 3</p>
+        </div>
     </div>
 
     <!-- Pending explainer — only when a distance pair actually exists (§5 guard) -->

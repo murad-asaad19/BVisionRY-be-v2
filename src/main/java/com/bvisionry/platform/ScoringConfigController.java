@@ -66,6 +66,6 @@ public class ScoringConfigController {
     public NarrativeWordingSection putNarrativeWording(
             @Valid @RequestBody UpdateNarrativeWordingRequest req) {
         return service.putNarrativeWording(req.notEnoughDataSentence(),
-                req.declineCloseInstruction(), currentUser.require().userId());
+                req.declineCloseInstruction(), req.autoApprove(), currentUser.require().userId());
     }
 }

@@ -55,6 +55,7 @@ public class ComparisonComputeService {
     private final FounderComparisonPillarRepository comparisonPillars;
     private final ComparisonPillarMappingRepository mappingRepo;
     private final ComparisonMappingService mappingService;
+    private final ShiftNarrativeService narratives;
     private final AuditLogger auditLogger;
     private final org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
@@ -80,8 +81,15 @@ public class ComparisonComputeService {
                     // the evaluation's async thread via `this`, where a self-invoked
                     // @Transactional would silently not apply, and the comparison +
                     // its pillar rows must commit together or not at all.
-                    transactionTemplate.executeWithoutResult(
-                            status -> computeIfReady(pair, event.founderId()));
+                    boolean computed = Boolean.TRUE.equals(transactionTemplate.execute(
+                            status -> computeIfReady(pair, event.founderId())));
+                    if (computed) {
+                        // §5 "distance done" is the narrative job's trigger (§6).
+                        // Dispatched AFTER the commit above, on its own executor, so
+                        // the model round-trips neither extend the compute
+                        // transaction nor can fail the comparison.
+                        narratives.generateTopPillarsAsync(pair.cohortId(), event.founderId());
+                    }
                 }
             }
         } catch (RuntimeException e) {
@@ -92,13 +100,21 @@ public class ComparisonComputeService {
 
     /**
      * The explicit history-restating action (spec §7): recompute every member
-     * of the cohort with current config + mapping. Logged. Narrative
-     * draft-reversion (§6) plugs in here when the narrative phase lands.
+     * of the cohort with current config + mapping. Logged.
+     *
+     * <p>Narratives are NOT regenerated and NOT deleted: §7 says approved
+     * narratives never auto-recompute — they return to draft so a human re-reads
+     * prose whose numbers have moved under it. Their anchor is
+     * {@code (cohort, user, distance pillar)}, not the comparison row this
+     * method deletes and rebuilds, so they simply survive the rebuild (see
+     * {@code V169} and {@code ShiftNarrative}) — with their decline flag and
+     * band label re-stamped from the new rows, so a changed band config binds.
      */
     @Transactional
     public RecomputeResponse recomputeCohort(UUID cohortId, UUID actorId) {
         PairCohortRow pair = reads.designatedPair(cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException("Designated comparison pair for cohort", cohortId.toString()));
+        int revertedNarratives = narratives.revertApprovalsForCohort(cohortId);
         int recomputed = 0;
         for (UUID userId : reads.cohortMembers(cohortId)) {
             comparisons.findByCohortIdAndUserId(cohortId, userId).ifPresent(existing -> {
@@ -110,9 +126,15 @@ public class ComparisonComputeService {
                 recomputed++;
             }
         }
+        // AFTER the rebuild: re-derive each narrative's decline flag + band label
+        // from the new pillar rows, so a §7 band edit binds the §6 guardrail
+        // (a pillar that is a decline NOW cannot be approved without a next step).
+        narratives.restampBandsForCohort(cohortId);
         auditLogger.log(actorId, pair.orgId(), "COMPARISON_COHORT_RECOMPUTED", "Cohort",
-                cohortId, Map.of("recomputed", recomputed));
-        log.info("Recomputed {} comparisons for cohort {} (actor {})", recomputed, cohortId, actorId);
+                cohortId, Map.of("recomputed", recomputed,
+                        "narrativesReturnedToDraft", revertedNarratives));
+        log.info("Recomputed {} comparisons for cohort {} (actor {}); {} approved narrative(s) "
+                + "returned to draft", recomputed, cohortId, actorId, revertedNarratives);
         return new RecomputeResponse(recomputed);
     }
 
@@ -246,7 +268,7 @@ public class ComparisonComputeService {
 
     /** The shift bands to compute with: platform config, or shipped defaults. */
     List<ScoringBands.Band> currentShiftBands() {
-        return reads.shiftBandsJson(ScoringBands.SHIFT_BANDS_KEY)
+        return reads.settingText(ScoringBands.SHIFT_BANDS_KEY)
                 .flatMap(json -> {
                     try {
                         BandsDoc doc = MAPPER.readValue(json, BandsDoc.class);

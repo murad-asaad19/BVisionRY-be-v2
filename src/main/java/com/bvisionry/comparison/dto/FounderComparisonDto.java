@@ -22,7 +22,21 @@ public record FounderComparisonDto(
         Instant baselineEvaluatedAt,
         Instant distanceEvaluatedAt,
         Instant computedAt,
-        List<ComparisonPillarDto> pillars) {
+        List<ComparisonPillarDto> pillars,
+        /**
+         * APPROVED shift narratives only (spec §6) — this DTO is the member's
+         * report payload as well as the staff one, so the approved-only filter
+         * lives here, once, where a draft cannot leak past it. Staff review
+         * drafts through the separate narrative-review endpoints.
+         */
+        List<ShiftNarrativeDto> narratives,
+        /**
+         * How many narratives are still awaiting review — a COUNT and nothing
+         * else, so My Growth can say "2 more insights are being reviewed" (spec
+         * §6 / the prototype's dashed placeholder) without a single unapproved
+         * word crossing the wire.
+         */
+        int draftNarrativeCount) {
 
     /**
      * A pillar row. {@code state} is MAPPED / NEWLY_MEASURED / NOT_REMEASURED —

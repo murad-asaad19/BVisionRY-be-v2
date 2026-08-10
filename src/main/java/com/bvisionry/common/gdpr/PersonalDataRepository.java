@@ -286,6 +286,14 @@ public class PersonalDataRepository {
                  WHERE comparison_id IN (SELECT id FROM founder_comparisons WHERE user_id = :userId)
                 """);
 
+        // Shift narratives (V169, spec §6): AI-written prose ABOUT the subject,
+        // reviewed and possibly edited by a human — squarely Art. 15 data about
+        // them, and not derivable from anything else exported. user_id CASCADEs
+        // with the users row, so erasure needs no statement; approved_by /
+        // edited_by are SET NULL like every other staff attribution.
+        EXPORT_SECTIONS.put("shift_narratives",
+                "SELECT * FROM shift_narratives WHERE user_id = :userId");
+
         EXPORT_SECTIONS.put("notifications", "SELECT * FROM notifications WHERE user_id = :userId");
         EXPORT_SECTIONS.put("notification_optouts", "SELECT * FROM notification_optouts WHERE user_id = :userId");
         EXPORT_SECTIONS.put("upgrade_requests", "SELECT * FROM upgrade_requests WHERE requested_by = :userId");

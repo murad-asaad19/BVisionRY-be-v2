@@ -51,6 +51,14 @@ public class MyGrowthExportService {
     /** Display-ready trajectory point. */
     public record TrajectoryRow(String assessment, String evaluated, String score) {}
 
+    /**
+     * Display-ready approved narrative (spec §5 layout item 4). Only APPROVED
+     * narratives ever reach here — {@code FounderComparisonDto.narratives} is
+     * filtered in the service, so neither export can leak a draft.
+     */
+    public record NarrativeRow(String pillarName, String kindLabel, String body,
+                               String closingAction, String approved) {}
+
     @Transactional(readOnly = true)
     public byte[] pdf(UUID userId) {
         MyComparisonResponse data = queries.myComparison(userId);
@@ -75,6 +83,7 @@ public class MyGrowthExportService {
             ctx.setVariable("computedAt", instant(c.computedAt()));
             ctx.setVariable("pillars", pillarRows(c.pillars()));
         }
+        ctx.setVariable("narratives", narrativeRows(c));
         return pdfRenderer.renderTemplate("growth-report", ctx);
     }
 
@@ -116,6 +125,17 @@ public class MyGrowthExportService {
                     shifts.row(p.pillar(), p.before(), p.after(), p.shift(), p.maturity());
                 }
                 shifts.autoSize();
+
+                List<NarrativeRow> narratives = narrativeRows(c);
+                if (!narratives.isEmpty()) {
+                    ExcelWorkbookBuilder.SheetBuilder sheet = wb.newSheet("Shift narratives");
+                    sheet.headers("Pillar", "Kind", "Narrative", "Next step", "Approved");
+                    for (NarrativeRow n : narratives) {
+                        sheet.row(n.pillarName(), n.kindLabel(), n.body(),
+                                n.closingAction() == null ? "—" : n.closingAction(), n.approved());
+                    }
+                    sheet.autoSize();
+                }
             }
 
             ExcelWorkbookBuilder.SheetBuilder trajectory = wb.newSheet("Trajectory");
@@ -151,6 +171,27 @@ public class MyGrowthExportService {
                 },
                 maturity(p.maturityBefore(), p.maturityAfter())))
                 .toList();
+    }
+
+    private List<NarrativeRow> narrativeRows(FounderComparisonDto c) {
+        if (c == null || c.narratives() == null) {
+            return List.of();
+        }
+        return c.narratives().stream()
+                .map(n -> new NarrativeRow(n.pillarName(), kindLabel(n.kind()), n.body(),
+                        n.closingAction(),
+                        // §7b: the approval stamp travels onto the export too.
+                        n.approvedAt() == null ? "—" : "Approved " + instant(n.approvedAt())))
+                .toList();
+    }
+
+    /** {@code CARRIED_FORWARD} → "Carried forward" — display only, the key is identity. */
+    static String kindLabel(String kind) {
+        if (kind == null || kind.isBlank()) {
+            return "";
+        }
+        String words = kind.replace('_', ' ').toLowerCase();
+        return Character.toUpperCase(words.charAt(0)) + words.substring(1);
     }
 
     private List<TrajectoryRow> trajectoryRows(MyComparisonResponse data) {

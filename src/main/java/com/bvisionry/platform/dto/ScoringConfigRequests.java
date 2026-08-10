@@ -29,8 +29,10 @@ public final class ScoringConfigRequests {
     public record UpdateQualityTagsRequest(@NotNull List<QualityTag> tags) {
     }
 
+    /** {@code autoApprove} is nullable so an older client's body still saves (null = off). */
     public record UpdateNarrativeWordingRequest(
             @NotNull String notEnoughDataSentence,
-            @NotNull String declineCloseInstruction) {
+            @NotNull String declineCloseInstruction,
+            Boolean autoApprove) {
     }
 }

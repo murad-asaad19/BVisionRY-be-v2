@@ -132,6 +132,15 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // assignments.assigned_by.
             "sessions.created_by", "session_attendance.marked_by",
             "session_attendance.member_id", "session_expected_attendees.member_id",
+            // shift_narratives (V169, spec §6): user_id CASCADEs with the user
+            // row — the narrative is prose about that founder and nobody else,
+            // so it dies with them. Exported as shift_narratives (AI-written
+            // content ABOUT them, Art. 15). approved_by / edited_by are SET NULL
+            // — a reviewer attribution on the ORG's record, like
+            // assignments.assigned_by: erasing the reviewer must not erase the
+            // fact that the narrative was approved before the founder saw it.
+            "shift_narratives.user_id", "shift_narratives.approved_by",
+            "shift_narratives.edited_by",
             "survey_responses.respondent_user_id", "surveys.created_by", "team_members.user_id",
             "upgrade_requests.requested_by", "users.invited_by",
             "workshop_task_submissions.user_id", "workshop_team_members.user_id");

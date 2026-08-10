@@ -28,11 +28,14 @@ import jakarta.validation.Valid;
  * Admin cohort management for an org.
  *
  * <ul>
- *   <li>GET    /api/organizations/{orgId}/cohorts                    — list cohorts</li>
- *   <li>POST   /api/organizations/{orgId}/cohorts                    — create cohort</li>
- *   <li>PUT    /api/organizations/{orgId}/cohorts/{cohortId}         — rename / set status</li>
- *   <li>PUT    /api/organizations/{orgId}/cohorts/{cohortId}/members — set enrolment</li>
- *   <li>DELETE /api/organizations/{orgId}/cohorts/{cohortId}         — delete (all its data)</li>
+ *   <li>GET    /api/organizations/{orgId}/cohorts                     — list cohorts</li>
+ *   <li>POST   /api/organizations/{orgId}/cohorts                     — create DRAFT cohort</li>
+ *   <li>PUT    /api/organizations/{orgId}/cohorts/{cohortId}          — rename</li>
+ *   <li>POST   /api/organizations/{orgId}/cohorts/{cohortId}/launch   — DRAFT → LAUNCHED (consumes quota; 409 when spent)</li>
+ *   <li>POST   /api/organizations/{orgId}/cohorts/{cohortId}/complete — LAUNCHED → COMPLETED</li>
+ *   <li>POST   /api/organizations/{orgId}/cohorts/{cohortId}/archive  — DRAFT/COMPLETED → ARCHIVED</li>
+ *   <li>PUT    /api/organizations/{orgId}/cohorts/{cohortId}/members  — set enrolment</li>
+ *   <li>DELETE /api/organizations/{orgId}/cohorts/{cohortId}          — delete (all its data; the launch ledger stands)</li>
  * </ul>
  */
 @RestController
@@ -64,6 +67,24 @@ public class CohortController {
             @PathVariable UUID cohortId,
             @Valid @RequestBody UpdateCohortRequest req) {
         return service.update(orgId, cohortId, req);
+    }
+
+    /** DRAFT → LAUNCHED. Quota-checked + ledgered in one transaction (spec §8). */
+    @PostMapping("/{cohortId}/launch")
+    public CohortDto launch(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
+        return service.launch(orgId, cohortId);
+    }
+
+    /** LAUNCHED → COMPLETED (member read-only closing state). */
+    @PostMapping("/{cohortId}/complete")
+    public CohortDto complete(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
+        return service.complete(orgId, cohortId);
+    }
+
+    /** DRAFT/COMPLETED → ARCHIVED (read-only for everyone). */
+    @PostMapping("/{cohortId}/archive")
+    public CohortDto archive(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
+        return service.archive(orgId, cohortId);
     }
 
     @PutMapping("/{cohortId}/members")

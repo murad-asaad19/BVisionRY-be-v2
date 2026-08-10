@@ -1,5 +1,6 @@
 package com.bvisionry.pipeline.service;
 
+import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.pipeline.dto.RecommendedCourseResponse;
 import com.bvisionry.pipeline.entity.AutoEnrolment;
@@ -19,6 +20,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * The founder's own view of what their assessments put them on:
@@ -55,6 +57,7 @@ public class FounderRecommendationService {
     private final AutoEnrolmentRepository ledger;
     private final CourseCatalogReadRepository courseCatalog;
     private final PillarRepository pillarRepository;
+    private final CourseVisibilityAccess courseVisibility;
     private final CurrentUserAccessor currentUser;
 
     /**
@@ -76,32 +79,70 @@ public class FounderRecommendationService {
     public List<RecommendedCourseResponse> myRecommendations() {
         UUID founderId = currentUser.require().userId();
 
-        List<AutoEnrolment> decisions = ledger.findByUserIdAndOutcomeOrderByCreatedAtDescIdAsc(
-                founderId, AutoEnrolmentOutcome.ENROLLED);
-        if (decisions.isEmpty()) {
+        // Open suggestions first: they are the only rows with an ACTION attached
+        // (one-tap Accept), so they lead the rail rather than sitting under
+        // courses the founder already has.
+        List<AutoEnrolment> allSuggested = ledger.findByUserIdAndOutcomeOrderByCreatedAtDescIdAsc(
+                founderId, AutoEnrolmentOutcome.SUGGESTED);
+        // An ACCEPTED suggestion keeps its ledger row and its reason; it simply
+        // stops offering the Accept button. Dropping it would make the card
+        // vanish the instant a member tapped it — the one moment the rail should
+        // be confirming what just happened.
+        List<AutoEnrolment> suggestions = allSuggested.stream()
+                .filter(d -> d.getAcceptedAt() == null).toList();
+        List<AutoEnrolment> enrolled = new java.util.ArrayList<>(
+                allSuggested.stream().filter(d -> d.getAcceptedAt() != null).toList());
+        enrolled.addAll(ledger.findByUserIdAndOutcomeOrderByCreatedAtDescIdAsc(
+                founderId, AutoEnrolmentOutcome.ENROLLED));
+        if (suggestions.isEmpty() && enrolled.isEmpty()) {
             return List.of();
         }
 
-        Set<UUID> courseIds = decisions.stream()
-                .map(AutoEnrolment::getCourseId).collect(Collectors.toSet());
-        Map<UUID, EnrolledCourse> courses = courseCatalog.findEnrolledByFounder(founderId, courseIds);
+        // Two course reads because the two halves ask different questions: an
+        // ENROLLED row is resolved through the enrolment (any state — the founder
+        // has it), a SUGGESTED row through the catalog (PUBLISHED only — they do
+        // not).
+        Map<UUID, EnrolledCourse> courses = new LinkedHashMap<>(
+                courseCatalog.findEnrolledByFounder(founderId, ids(enrolled)));
+        Set<UUID> suggestedIds = ids(suggestions);
+        Map<UUID, EnrolledCourse> suggestedCourses = courseCatalog.findPublishedByIds(suggestedIds);
+        // Spec §3: a rule may never surface a course the org cannot see. The
+        // engine already skips them at decision time; this re-check covers a
+        // suggestion made BEFORE the platform pulled the course.
+        Set<UUID> visible = courseVisibility.filterVisibleForUser(founderId, suggestedIds);
+        suggestedCourses.forEach((id, course) -> {
+            if (visible.contains(id)) {
+                courses.putIfAbsent(id, course);
+            }
+        });
 
-        Set<UUID> pillarIds = decisions.stream()
+        Set<UUID> pillarIds = Stream.concat(suggestions.stream(), enrolled.stream())
                 .map(AutoEnrolment::getPillarId).collect(Collectors.toSet());
         Map<UUID, String> pillarNames = pillarRepository.findAllById(pillarIds).stream()
                 .collect(Collectors.toMap(Pillar::getId, Pillar::getName));
 
         Map<UUID, RecommendedCourseResponse> newestPerCourse = new LinkedHashMap<>();
+        collect(newestPerCourse, suggestions, courses, pillarNames, true);
+        collect(newestPerCourse, enrolled, courses, pillarNames, false);
+        return List.copyOf(newestPerCourse.values());
+    }
+
+    private static void collect(Map<UUID, RecommendedCourseResponse> out, List<AutoEnrolment> decisions,
+                                Map<UUID, EnrolledCourse> courses, Map<UUID, String> pillarNames,
+                                boolean suggested) {
         for (AutoEnrolment decision : decisions) {
             EnrolledCourse course = courses.get(decision.getCourseId());
             String pillarName = pillarNames.get(decision.getPillarId());
             if (course == null || pillarName == null) {
                 continue;
             }
-            newestPerCourse.putIfAbsent(course.id(), new RecommendedCourseResponse(
+            out.putIfAbsent(course.id(), new RecommendedCourseResponse(
                     course.id(), course.title(), course.slug(), course.published(),
-                    pillarName, decision.getSubmissionId()));
+                    pillarName, decision.getSubmissionId(), suggested));
         }
-        return List.copyOf(newestPerCourse.values());
+    }
+
+    private static Set<UUID> ids(List<AutoEnrolment> decisions) {
+        return decisions.stream().map(AutoEnrolment::getCourseId).collect(Collectors.toSet());
     }
 }

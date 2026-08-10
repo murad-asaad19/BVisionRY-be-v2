@@ -3,6 +3,7 @@ package com.bvisionry.programflow.web;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -11,13 +12,14 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.bvisionry.common.enums.SubscriptionTier;
+import com.bvisionry.common.audit.AuditLogger;
 import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
-import com.bvisionry.common.security.PremiumFeatureGuard;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.programflow.domain.Cohort;
+import com.bvisionry.programflow.domain.CohortStatus;
 import com.bvisionry.programflow.domain.ProgramSurface;
 import com.bvisionry.programflow.dto.CohortDto;
 import com.bvisionry.programflow.dto.CreateCohortRequest;
@@ -30,17 +32,31 @@ import com.bvisionry.programflow.repository.TeamRepository;
 
 import lombok.RequiredArgsConstructor;
 
-/** Admin cohort management: list, create, rename/finish, delete, enrolment. */
+/**
+ * Admin cohort management: list, create, rename, lifecycle
+ * (DRAFT → LAUNCHED → COMPLETED / ARCHIVED, spec §8), delete, enrolment.
+ *
+ * <p>Creating a DRAFT is free — the old creation-time rolling-window ceiling
+ * is gone (spec §8: "drafts are free"). The paid act is LAUNCH, which consumes
+ * calendar-period quota via {@link LaunchQuotaService} in the same
+ * transaction as the append-only ledger insert.
+ */
 @Service
 @RequiredArgsConstructor
 @Transactional
 public class CohortService {
 
+    static final String ENTITY_COHORT = "Cohort";
+    static final String ACTION_LAUNCHED = "COHORT_LAUNCHED";
+    static final String ACTION_COMPLETED = "COHORT_COMPLETED";
+    static final String ACTION_ARCHIVED = "COHORT_ARCHIVED";
+
     private final CohortRepository cohorts;
     private final TeamRepository teams;
     private final ApplicationEventPublisher events;
-    /** Shared-kernel entitlement gate — supplies the effective tier and the super-admin bypass. */
-    private final PremiumFeatureGuard entitlements;
+    private final LaunchQuotaService launchQuota;
+    private final AuditLogger audit;
+    private final CurrentUserAccessor currentUser;
 
     @Transactional(readOnly = true)
     public List<CohortDto> list(UUID orgId) {
@@ -71,8 +87,12 @@ public class CohortService {
         cohorts.removeFromSurface(orgId, surface.name());
     }
 
+    /**
+     * Creates a DRAFT — free on every tier; quota is only consumed by launch.
+     * No enrolment notification here: a DRAFT is invisible to members, so the
+     * roster is told at {@link #launch} instead.
+     */
     public CohortDto create(UUID orgId, CreateCohortRequest req) {
-        requireCohortAllowance(orgId);
         Cohort c = new Cohort();
         c.setOrgId(orgId);
         c.setName(req.name());
@@ -80,28 +100,86 @@ public class CohortService {
         if (req.enrollAllMembers()) {
             teams.findOrgMembers(orgId).forEach(m -> c.getMemberIds().add(m.getId()));
         }
-        Cohort saved = cohorts.save(c);
-        if (!saved.getMemberIds().isEmpty()) {
-            events.publishEvent(new ProgramFlowEvents.CohortEnrolled(
-                    orgId, saved.getName(), List.copyOf(saved.getMemberIds())));
-        }
-        return CohortDto.of(saved);
+        return CohortDto.of(cohorts.save(c));
     }
 
+    /** Rename only — lifecycle moves through {@link #launch}/{@link #complete}/{@link #archive}. */
     public CohortDto update(UUID orgId, UUID cohortId, UpdateCohortRequest req) {
-        Cohort c = require(orgId, cohortId);
+        Cohort c = requireEditable(orgId, cohortId);
         c.setName(req.name());
-        c.setStatus(req.status());
         return CohortDto.of(c);
     }
 
+    /* ------------------------------------------------------------ lifecycle */
+
+    /**
+     * DRAFT → LAUNCHED. Consumes launch quota: the check and the append-only
+     * ledger insert happen in THIS transaction, serialized on the billing-root
+     * row lock (spec §8) — two concurrent launches can't both take the last
+     * slot. Quota exhausted → 409 with {nextAvailableDate, tier}.
+     */
+    public CohortDto launch(UUID orgId, UUID cohortId) {
+        Cohort c = require(orgId, cohortId);
+        if (c.getStatus() != CohortStatus.DRAFT) {
+            throw new IllegalOperationException("Only a draft cohort can be launched — this one is "
+                    + c.getStatus().name().toLowerCase() + ".");
+        }
+        launchQuota.consume(orgId, cohortId);
+        c.setStatus(CohortStatus.LAUNCHED);
+        c.setLaunchedAt(OffsetDateTime.now());
+        auditLifecycle(orgId, c, ACTION_LAUNCHED);
+        // The moment the cohort becomes visible is the moment the roster hears
+        // about it — draft-time enrolment stays silent by design.
+        if (!c.getMemberIds().isEmpty()) {
+            events.publishEvent(new ProgramFlowEvents.CohortEnrolled(
+                    orgId, c.getName(), List.copyOf(c.getMemberIds())));
+        }
+        return CohortDto.of(c);
+    }
+
+    /** LAUNCHED → COMPLETED: read-only for members (the closing screen); never refunds quota. */
+    public CohortDto complete(UUID orgId, UUID cohortId) {
+        Cohort c = require(orgId, cohortId);
+        if (c.getStatus() != CohortStatus.LAUNCHED) {
+            throw new IllegalOperationException("Only a launched cohort can be completed — this one is "
+                    + c.getStatus().name().toLowerCase() + ".");
+        }
+        c.setStatus(CohortStatus.COMPLETED);
+        c.setCompletedAt(OffsetDateTime.now());
+        auditLifecycle(orgId, c, ACTION_COMPLETED);
+        return CohortDto.of(c);
+    }
+
+    /**
+     * DRAFT / COMPLETED → ARCHIVED: read-only for everyone, invisible to
+     * members. A LAUNCHED cohort must be completed first — archiving is
+     * shelving, not an emergency stop.
+     */
+    public CohortDto archive(UUID orgId, UUID cohortId) {
+        Cohort c = require(orgId, cohortId);
+        if (c.getStatus() != CohortStatus.DRAFT && c.getStatus() != CohortStatus.COMPLETED) {
+            throw new IllegalOperationException("Only a draft or completed cohort can be archived — "
+                    + "this one is " + c.getStatus().name().toLowerCase() + ".");
+        }
+        c.setStatus(CohortStatus.ARCHIVED);
+        c.setArchivedAt(OffsetDateTime.now());
+        auditLifecycle(orgId, c, ACTION_ARCHIVED);
+        return CohortDto.of(c);
+    }
+
+    private void auditLifecycle(UUID orgId, Cohort c, String action) {
+        audit.log(currentUser.require().userId(), orgId, action, ENTITY_COHORT, c.getId(),
+                Map.of("name", c.getName()));
+    }
+
+    /** Deleting is allowed in any state; the launch ledger stands (no refund, spec §8). */
     public void delete(UUID orgId, UUID cohortId) {
         cohorts.delete(require(orgId, cohortId));
     }
 
     /** Replaces the enrolled learner set, validating every id is an org member. */
     public CohortDto setMembers(UUID orgId, UUID cohortId, UpdateCohortMembersRequest req) {
-        Cohort c = require(orgId, cohortId);
+        Cohort c = requireEditable(orgId, cohortId);
         Set<UUID> orgMemberIds = teams.findOrgMembers(orgId).stream()
                 .map(OrgMemberRow::getId).collect(Collectors.toSet());
         if (!orgMemberIds.containsAll(req.memberIds())) {
@@ -111,51 +189,13 @@ public class CohortService {
                 .filter(id -> !c.getMemberIds().contains(id))
                 .toList();
         c.setMemberIds(new LinkedHashSet<>(req.memberIds()));
-        if (!added.isEmpty()) {
+        // Only a LAUNCHED cohort notifies newcomers — a member added to a
+        // DRAFT can't see it yet (they hear at launch with everyone else),
+        // and a COMPLETED one has nothing left to start on.
+        if (!added.isEmpty() && c.getStatus() == CohortStatus.LAUNCHED) {
             events.publishEvent(new ProgramFlowEvents.CohortEnrolled(orgId, c.getName(), added));
         }
         return CohortDto.of(c);
-    }
-
-    /**
-     * Refuses a cohort the org's plan has no room for. The plan meters a RATE —
-     * cohorts per quarter (Starter) or per month (Growth), unlimited on Founder
-     * Success — never a founder headcount.
-     *
-     * <p>Enforcement is deliberately SOFT and one-sided: it runs on CREATE only.
-     * Nothing here ever disables, hides or reclassifies a cohort that already
-     * exists, so a downgrade (or this rule shipping at all) can never take an
-     * accelerator's running programme away mid-cohort.
-     *
-     * <p>The window is ROLLING, not calendar. "1 cohort per quarter" is a rate,
-     * and a calendar quarter lets an org create one on 31 Mar and another on
-     * 1 Apr — two cohorts in two days on a plan sold as one per quarter. Rolling
-     * is also the cheaper thing to explain in the refusal message: "in the past
-     * quarter" needs no reference to which quarter we are in.
-     *
-     * <p>SUPER_ADMIN bypasses, exactly as it bypasses every other entitlement
-     * gate ({@code PremiumFeatureGuard.checkPremium}) — an operator running a
-     * demo or seeding a customer must not be blocked by the customer's plan, and
-     * it is the escape hatch that keeps "soft" honest.
-     */
-    private void requireCohortAllowance(UUID orgId) {
-        // Empty = super admin, i.e. no ceiling applies at all. Do NOT read it as FREE.
-        SubscriptionTier tier = entitlements.governingTier(orgId).orElse(null);
-        if (tier == null) return;
-
-        SubscriptionTier.CohortRate rate = tier.cohortRate();
-        if (rate == null) return; // Founder Success — unlimited.
-
-        long used = cohorts.countCreatedInBillingFamilySince(
-                orgId, OffsetDateTime.now().minus(rate.window()));
-        if (used < rate.max()) return;
-
-        throw new IllegalOperationException(
-                "The " + tier.label() + " plan allows " + rate.describe()
-                        + ". Your organization has already created " + used
-                        + (used == 1 ? " cohort" : " cohorts") + " in the past " + rate.windowLabel()
-                        + " — sub-organizations share the parent organization's plan. Upgrade the plan"
-                        + " to run more cohorts; the cohorts you already have are unaffected.");
     }
 
     /** The cohort, guarded to the org path (tenant isolation). */
@@ -163,5 +203,18 @@ public class CohortService {
         return cohorts.findById(cohortId)
                 .filter(c -> c.getOrgId().equals(orgId))
                 .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
+    }
+
+    /**
+     * {@link #require} + the ARCHIVED read-only rule: members and curriculum
+     * stay editable in any non-archived state; an archived cohort refuses
+     * every mutation with a clear 409.
+     */
+    Cohort requireEditable(UUID orgId, UUID cohortId) {
+        Cohort c = require(orgId, cohortId);
+        if (c.getStatus() == CohortStatus.ARCHIVED) {
+            throw new IllegalOperationException("This cohort is archived and read-only.");
+        }
+        return c;
     }
 }

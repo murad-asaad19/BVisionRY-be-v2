@@ -13,6 +13,7 @@ import com.bvisionry.coaching.dto.CoachFounderDetailResponse.CoachModuleProgress
 import com.bvisionry.coaching.dto.CoachFounderDetailResponse.CoachPillarScore;
 import com.bvisionry.coaching.dto.CoachFounderSummary;
 import com.bvisionry.coaching.dto.CoachProfileResponse;
+import com.bvisionry.coaching.dto.CoachReviewQueueResponse;
 import com.bvisionry.coaching.dto.CoachRosterResponse;
 import com.bvisionry.coaching.dto.UpdateCoachProfileRequest;
 import com.bvisionry.coaching.repository.CoachProfileRepository;
@@ -89,6 +90,18 @@ public class CoachConsoleService {
         }
         return new CoachRosterResponse(reads.roster(caller.orgId(), caller.userId()).stream()
                 .map(CoachFounderSummary::from).toList());
+    }
+
+    /** The review queue: SUBMITTED exercises across the visible founders, oldest first. */
+    @Transactional(readOnly = true)
+    public CoachReviewQueueResponse queue() {
+        CurrentUser caller = currentUser.require();
+        if (caller.orgId() == null) {
+            return new CoachReviewQueueResponse(List.of());
+        }
+        return new CoachReviewQueueResponse(
+                reads.reviewQueue(caller.orgId(), caller.userId()).stream()
+                        .map(CoachReviewQueueResponse.CoachQueueItem::from).toList());
     }
 
     @Transactional(readOnly = true)

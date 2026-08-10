@@ -46,6 +46,9 @@ public class FakeLangChainChatModel implements ChatModel {
     }
 
     private static String defaultFor(String systemPrompt) {
+        if (systemPrompt.contains("closingAction")) {
+            return SHIFT_NARRATIVE_DEFAULT;
+        }
         if (systemPrompt.contains("teamThemes")) {
             return TEAM_INSIGHT_DEFAULT;
         }
@@ -74,6 +77,19 @@ public class FakeLangChainChatModel implements ChatModel {
               "developmentAreas": ["Feedback loop latency"],
               "corePattern": "Reflection without rapid follow-through.",
               "movingForward": "Pick one improvement, ship it, measure within two weeks."
+            }
+            """;
+
+    /**
+     * Shift-narrative default (redesign spec §6). Carries a non-empty
+     * {@code closingAction} so it also satisfies the decline guardrail — a spec
+     * that wants to exercise the retry path scripts the failing draft itself.
+     */
+    private static final String SHIFT_NARRATIVE_DEFAULT = """
+            {
+              "kind": "CARRIED_FORWARD",
+              "narrative": "The habit named in the first assessment is still here, and it has sharpened.",
+              "closingAction": "Name the next constraint before it becomes the bottleneck."
             }
             """;
 

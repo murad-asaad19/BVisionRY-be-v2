@@ -12,6 +12,7 @@ import com.bvisionry.aiengine.service.AiEvaluationEngine;
 import com.bvisionry.common.dto.AiUseDetectionResult;
 import com.bvisionry.common.dto.OverallSummaryResult;
 import com.bvisionry.common.dto.PillarEvaluationResult;
+import com.bvisionry.common.dto.ShiftNarrativeResult;
 import com.bvisionry.common.dto.TeamInsightResult;
 import com.bvisionry.common.enums.AICallStatus;
 import com.bvisionry.common.enums.PromptType;
@@ -252,6 +253,44 @@ public class OpenRouterChatService {
                 provenance, model, metadata, attemptLog,
                 () -> aiEngine.detectAiUse(systemPrompt, assessmentXml, model, asDouble(temperature), maxTokens,
                         attemptLog));
+    }
+
+    /**
+     * One pillar's qualitative shift narrative (redesign spec §6).
+     *
+     * <p>Routed on the INSIGHT model/temperature/token budget, not the evaluation
+     * ones: this call writes prose about text, it scores nothing, and the insight
+     * knobs are exactly the "generate readable narrative" profile the console
+     * already exposes. No new AI-config column — the smallest honest reuse.
+     *
+     * @param userMessage the ONLY input: pillar name + before/after text blocks.
+     *                    Never contains a score (enforced by the caller's
+     *                    projection, which does not select one).
+     * @param correction  appended to the system prompt on the single corrective
+     *                    retry (spec §6: re-ask once with the decline-close
+     *                    instruction); {@code null} on the first attempt.
+     */
+    public AIResponse<ShiftNarrativeResult> generateShiftNarrative(String userMessage, String correction,
+                                                                   CallMetadata metadata) {
+        AIConfiguration config = configService.getConfigEntity();
+
+        String model = config.getDefaultInsightModel();
+        BigDecimal temperature = config.getInsightTemperature();
+        int maxTokens = config.getMaxTokensInsight();
+
+        PromptTemplateResponse systemPromptTemplate =
+                promptTemplateService.getActivePrompt(PromptType.SHIFT_NARRATIVE);
+        String systemPrompt = correction == null || correction.isBlank()
+                ? systemPromptTemplate.content()
+                : systemPromptTemplate.content() + "\n\nCORRECTION — your previous answer was rejected: "
+                        + correction;
+
+        Provenance provenance = new Provenance(model, temperature, promptVersionId(systemPromptTemplate));
+        AttemptLog attemptLog = new AttemptLog();
+        return run("shift-narrative", systemPrompt, userMessage, null,
+                provenance, model, metadata, attemptLog,
+                () -> aiEngine.generateShiftNarrative(systemPrompt, userMessage, model,
+                        asDouble(temperature), maxTokens, attemptLog));
     }
 
     // ========== Call execution + observability ==========

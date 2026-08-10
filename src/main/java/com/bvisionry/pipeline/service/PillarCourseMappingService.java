@@ -7,6 +7,7 @@ import com.bvisionry.pipeline.dto.PillarCourseMappingResponse;
 import com.bvisionry.pipeline.dto.PillarCourseMappingsRequest;
 import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.PillarCourseMapping;
+import com.bvisionry.pipeline.entity.PillarCourseMode;
 import com.bvisionry.pipeline.repository.CourseCatalogReadRepository;
 import com.bvisionry.pipeline.repository.CourseCatalogReadRepository.CourseRef;
 import com.bvisionry.pipeline.repository.PillarCourseMappingRepository;
@@ -144,10 +145,24 @@ public class PillarCourseMappingService {
                     mapping.setPillar(pillar);
                     mapping.setBandPosition(item.bandPosition());
                     mapping.setCourseId(item.courseId());
+                    mapping.setMode(parseMode(item.mode()));
                     return mapping;
                 }).toList());
 
         return toResponses(pillar, saved);
+    }
+
+    /** Absent means AUTO_ASSIGN: the rule keeps doing what rules have always done. */
+    static PillarCourseMode parseMode(String value) {
+        if (value == null || value.isBlank()) {
+            return PillarCourseMode.AUTO_ASSIGN;
+        }
+        for (PillarCourseMode mode : PillarCourseMode.values()) {
+            if (mode.name().equalsIgnoreCase(value)) {
+                return mode;
+            }
+        }
+        throw new BadRequestException("mode must be SUGGEST or AUTO_ASSIGN");
     }
 
     /** The bands as the admin sees them numbered on screen: 1-based, named. */
@@ -182,7 +197,8 @@ public class PillarCourseMappingService {
                             band == null ? null : band.max(),
                             mapping.getCourseId(),
                             course == null ? null : course.title(),
-                            course == null ? null : course.state());
+                            course == null ? null : course.state(),
+                            mapping.getMode().name());
                 })
                 .sorted(Comparator.comparingInt(PillarCourseMappingResponse::bandPosition)
                         .thenComparing((PillarCourseMappingResponse r) ->

@@ -43,5 +43,7 @@ public record PillarCourseMappingResponse(
         Integer bandMaxScore,
         UUID courseId,
         String courseTitle,
-        String courseState
+        String courseState,
+        /** Spec §3: {@code SUGGEST} (recommend, one-tap Accept) or {@code AUTO_ASSIGN}. */
+        String mode
 ) {}

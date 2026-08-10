@@ -58,6 +58,13 @@ public class ProgramModule {
     @Column(name = "summary")
     private String summary;
 
+    /**
+     * The module's pillar/area chip (spec §2.3; D2 journey seam). Free label
+     * this phase — a structured pillar reference is a later, deliberate change.
+     */
+    @Column(name = "pillar_label", length = 120)
+    private String pillarLabel;
+
     @Column(name = "position", nullable = false)
     private int position = 0;
 

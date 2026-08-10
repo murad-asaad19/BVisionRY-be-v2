@@ -23,6 +23,7 @@ import com.bvisionry.communication.domain.Announcement;
 import com.bvisionry.communication.dto.AnnouncementCohortResponse;
 import com.bvisionry.communication.dto.AnnouncementResponse;
 import com.bvisionry.communication.dto.CreateAnnouncementRequest;
+import com.bvisionry.communication.dto.MyAnnouncementResponse;
 import com.bvisionry.communication.repository.AnnouncementReadRepository;
 import com.bvisionry.communication.repository.AnnouncementRepository;
 
@@ -94,6 +95,22 @@ public class AnnouncementService {
         boolean moderator = !isCoach(caller);
         return reads.feed(orgId, cohortId).stream()
                 .map(row -> AnnouncementResponse.from(row, moderator))
+                .toList();
+    }
+
+    /**
+     * The announcements the CALLER received: posts to cohorts they belong to,
+     * newest first. Identity is the scope — a caller with no org has received
+     * nothing, which is an empty list, not an error.
+     */
+    @Transactional(readOnly = true)
+    public List<MyAnnouncementResponse> myFeed() {
+        CurrentUser caller = currentUser.require();
+        if (caller.orgId() == null) {
+            return List.of();
+        }
+        return reads.memberFeed(caller.orgId(), caller.userId()).stream()
+                .map(MyAnnouncementResponse::from)
                 .toList();
     }
 

@@ -30,6 +30,9 @@ final class ProgramMapper {
                 t.getStatus(),
                 t.isAiDraft(),
                 t.getPosition(),
+                t.getTaskType(),
+                t.getRefId(),
+                t.getMilestoneRole(),
                 t.getFields().stream().map(ProgramMapper::toDto).toList());
     }
 
@@ -38,6 +41,7 @@ final class ProgramMapper {
                 m.getId(),
                 m.getName(),
                 m.getSummary(),
+                m.getPillarLabel(),
                 m.getPosition(),
                 m.getLockMode(),
                 m.getUnlockAt(),
@@ -49,6 +53,7 @@ final class ProgramMapper {
         return s == null
                 ? ProgramSettingsDto.defaults()
                 : new ProgramSettingsDto(s.getStageLabel(), s.isDripEnabled(), s.getDueSoonDays(),
-                        s.getEndLabel(), s.getEndAt());
+                        s.getEndLabel(), s.getEndAt(),
+                        s.getBaselinePipelineId(), s.getDistancePipelineId());
     }
 }

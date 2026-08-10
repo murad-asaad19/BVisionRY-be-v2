@@ -58,12 +58,39 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // an admin attribution on the org's record, like assignments.assigned_by.
             "coach_assignments.assigned_by", "coach_assignments.coach_id",
             "coach_assignments.member_id",
+            // coach_notes (V162): coach_id / member_id CASCADE with the user row
+            // — the note is the coach's judgement ABOUT the member, so it dies
+            // with either party. Exported for both sides as coach_notes (for
+            // the member it is data about them; for the coach, content they
+            // authored).
+            "coach_notes.coach_id", "coach_notes.member_id",
             // coach_profiles (V153): coach_id IS the PK and CASCADEs with the
             // user row — the booking link is about that coach and nobody else,
             // so it dies with them. Exported as coach_profile: it is content
             // they authored about themselves.
             "coach_profiles.coach_id", "cohort_members.user_id",
-            "course.instructor_id", "email_templates.updated_by", "enrollment.user_id",
+            // cohort_launch_ledger / cohort_launch_grants (V167): launched_by /
+            // granted_by SET NULL — the launch and the grant are the
+            // ORGANIZATION's billing/audit record (spec §8: the ledger is
+            // append-only and never refunded), so they outlive the actor's
+            // erasure with the attribution dropped, exactly like
+            // assignments.assigned_by. Not exported: an operator attribution
+            // on the org's record, not data about the data subject.
+            "cohort_launch_ledger.launched_by", "cohort_launch_grants.granted_by",
+            "course.instructor_id",
+            // course.org_visibility_updated_by (V168): SET NULL — "who last set
+            // this course's org visibility" is a platform-operator attribution on
+            // the CATALOG's record, exactly like platform_settings.updated_by.
+            // Not exported: it is about a course, not about the data subject.
+            "course.org_visibility_updated_by",
+            "email_templates.updated_by",
+            // enrollment.assigned_by (V168, spec §3): SET NULL — an admin
+            // attribution on the ORG's record ("your admin assigned this"), like
+            // assignments.assigned_by. Erasing the admin must not erase the fact
+            // that the member was assigned the course. Not exported for the
+            // ADMIN; the enrolment itself is already exported for the LEARNER.
+            "enrollment.assigned_by",
+            "enrollment.user_id",
             // enrolment_overrides (V157): user_id CASCADEs with the user row — "an admin
             // took this founder off this course" is about that founder and nobody else,
             // so it dies with them. Exported as course_removals for auto_enrolments'
@@ -72,8 +99,30 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // ORG's record, like assignments.assigned_by; erasing the admin must not
             // erase the fact that the removal happened.
             "enrolment_overrides.removed_by", "enrolment_overrides.user_id",
+            // org_course_rules (V168, spec §3): created_by SET NULL — the rule is
+            // the ORGANIZATION's curation decision and must survive the admin who
+            // made it, with the attribution dropped. There is no user_id at all:
+            // that is the whole point of a read-time rule (it names no member),
+            // so nothing here is personal data about a learner and nothing is
+            // exported.
+            "org_course_rules.created_by", "org_course_rules.updated_by",
             "exercise_assignments.user_id", "exercise_comments.author_id",
-            "exercise_submissions.user_id", "insight_report_member_ids.member_id",
+            // founder_comparisons (V161): user_id CASCADEs with the user row —
+            // the comparison is scores about that founder and nobody else, so it
+            // dies with them (pillar rows cascade off the comparison). Exported
+            // as distance_comparisons + distance_comparison_pillars.
+            "founder_comparisons.user_id",
+            "exercise_submissions.user_id",
+            // exercise_submissions.quality_tagged_by (V170, spec §4): SET NULL —
+            // the tag is a REVIEWER's judgement recorded on the ORG's copy of
+            // the member's work, like assignments.assigned_by, so erasing the
+            // reviewer drops the attribution and the tag survives. The TAG
+            // ITSELF is exported to the member (the exercise_submissions section
+            // is a SELECT *): the product hides it from their screens, but it is
+            // an assessment about them, so an Art. 15 request gets it — a UI
+            // choice is not a lawful basis for withholding.
+            "exercise_submissions.quality_tagged_by",
+            "insight_report_member_ids.member_id",
             "invitations.invited_by", "join_links.created_by", "notification_optouts.user_id",
             "notifications.user_id", "overall_summary_history.archived_by_admin_id",
             "password_reset_tokens.user_id", "pillar_evaluation_history.archived_by_admin_id",
@@ -82,6 +131,26 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             "program_submissions.user_id", "public_assessment_links.created_by",
             "push_subscriptions.user_id", "quiz_attempt.user_id", "refresh_tokens.user_id",
             "submission_pillar_unlocks.unlocked_by_admin_id", "submissions.user_id",
+            // sessions / session_attendance / session_expected_attendees (V163,
+            // pre-existing gap closed here): member_id CASCADEs with the user
+            // row — a presence tick / expected-attendee row is about that member
+            // and nobody else. Attendance is exported as session_attendance
+            // (already wired in PersonalDataRepository); the expected-attendee
+            // row is scheduling metadata with no content beyond the enrolment
+            // itself. sessions.created_by / session_attendance.marked_by are
+            // SET NULL — admin attributions on the ORG's record, like
+            // assignments.assigned_by.
+            "sessions.created_by", "session_attendance.marked_by",
+            "session_attendance.member_id", "session_expected_attendees.member_id",
+            // shift_narratives (V169, spec §6): user_id CASCADEs with the user
+            // row — the narrative is prose about that founder and nobody else,
+            // so it dies with them. Exported as shift_narratives (AI-written
+            // content ABOUT them, Art. 15). approved_by / edited_by are SET NULL
+            // — a reviewer attribution on the ORG's record, like
+            // assignments.assigned_by: erasing the reviewer must not erase the
+            // fact that the narrative was approved before the founder saw it.
+            "shift_narratives.user_id", "shift_narratives.approved_by",
+            "shift_narratives.edited_by",
             "survey_responses.respondent_user_id", "surveys.created_by", "team_members.user_id",
             "upgrade_requests.requested_by", "users.invited_by",
             "workshop_task_submissions.user_id", "workshop_team_members.user_id");

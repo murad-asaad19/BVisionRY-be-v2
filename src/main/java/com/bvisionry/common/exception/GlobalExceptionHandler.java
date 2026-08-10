@@ -68,6 +68,19 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Cohort-launch quota spent (spec §8): 409 with the machine-readable half
+     * the UI needs — {@code nextAvailableDate} (null when no date helps:
+     * trial lifetime cap / FREE) and {@code tier}.
+     */
+    @ExceptionHandler(LaunchQuotaExceededException.class)
+    public ProblemDetail handleLaunchQuotaExceeded(LaunchQuotaExceededException ex) {
+        ProblemDetail problem = problem(HttpStatus.CONFLICT, ex.getMessage());
+        problem.setProperty("nextAvailableDate", ex.getNextAvailableDate());
+        problem.setProperty("tier", ex.getTier());
+        return problem;
+    }
+
+    /**
      * A unique/foreign-key constraint collision — most notably two concurrent
      * autosaves racing to insert the first answer for the same
      * (submission, question) pair past the V86 unique index. Without this it falls
@@ -80,6 +93,14 @@ public class GlobalExceptionHandler {
             org.springframework.dao.DataIntegrityViolationException ex) {
         log.warn("Data integrity violation: {}", ex.getMostSpecificCause().getMessage());
         return problem(HttpStatus.CONFLICT, "This change conflicts with a concurrent update. Please retry.");
+    }
+
+    /** Service-layer structural validation — same wire shape as bean validation below. */
+    @ExceptionHandler(FieldValidationException.class)
+    public ProblemDetail handleFieldValidation(FieldValidationException ex) {
+        ProblemDetail problem = problem(HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setProperty("fieldErrors", ex.getFieldErrors());
+        return problem;
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

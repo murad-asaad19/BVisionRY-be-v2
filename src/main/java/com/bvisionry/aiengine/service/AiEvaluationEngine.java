@@ -8,6 +8,7 @@ import com.bvisionry.aiengine.transport.Lc4jChatModelProvider;
 import com.bvisionry.common.dto.AiUseDetectionResult;
 import com.bvisionry.common.dto.OverallSummaryResult;
 import com.bvisionry.common.dto.PillarEvaluationResult;
+import com.bvisionry.common.dto.ShiftNarrativeResult;
 import com.bvisionry.common.dto.TeamInsightResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.guardrail.OutputGuardrailException;
@@ -196,6 +197,34 @@ public class AiEvaluationEngine {
         // the circuit.
         try {
             return aiResilience.execute(() -> service.detect(userMessage));
+        } catch (OutputGuardrailException ge) {
+            throw new SchemaValidationException(ge.getMessage(), guardrail.lastResponseText(), ge);
+        }
+    }
+
+    /**
+     * One pillar's qualitative shift narrative (spec §6). The guardrail's
+     * required-field list is deliberately {@code kind + narrative} only:
+     * {@code closingAction} is mandatory for DECLINE pillars alone, which is a
+     * config-driven rule the schema guardrail cannot see — the caller
+     * ({@code ShiftNarrativeService}) validates it in code and re-asks once with
+     * the configured decline-close instruction appended.
+     */
+    public Result<ShiftNarrativeResult> generateShiftNarrative(String systemPrompt, String userMessage,
+                                                               String model, double temperature, int maxTokens,
+                                                               AttemptLog attemptLog) {
+        StructuredOutputGuardrail guardrail =
+                new StructuredOutputGuardrail(MAPPER, List.of("kind", "narrative"), null, attemptLog);
+        ShiftNarrativeWriter service = AiServices.builder(ShiftNarrativeWriter.class)
+                .chatModel(modelFor(model, temperature, maxTokens))
+                // Per-call memory — see evaluatePillar for why the repair loop needs it.
+                .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
+                .systemMessageProvider(memoryId -> systemPrompt)
+                .outputGuardrails(guardrail)
+                .outputGuardrailsConfig(retryConfig())
+                .build();
+        try {
+            return aiResilience.execute(() -> service.write(userMessage));
         } catch (OutputGuardrailException ge) {
             throw new SchemaValidationException(ge.getMessage(), guardrail.lastResponseText(), ge);
         }

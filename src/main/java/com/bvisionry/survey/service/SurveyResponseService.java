@@ -438,10 +438,14 @@ public class SurveyResponseService {
         return survey;
     }
 
-    private SurveySubmitResponseDto persistResponse(Survey survey,
-                                                     List<SurveyAnswerSubmitDto> submittedAnswers,
-                                                     ResponseContext context,
-                                                     String userAgent) {
+    /**
+     * Package-private so same-slice siblings ({@link ProgramTaskSurveyService})
+     * reuse the one validation + persistence path instead of forking it.
+     */
+    SurveySubmitResponseDto persistResponse(Survey survey,
+                                            List<SurveyAnswerSubmitDto> submittedAnswers,
+                                            ResponseContext context,
+                                            String userAgent) {
         Map<UUID, SurveyQuestion> questionIndex = new HashMap<>();
         for (var pillar : survey.getPillars()) {
             for (var q : pillar.getQuestions()) {
@@ -595,6 +599,14 @@ public class SurveyResponseService {
                 response.setRespondentUserId(w.user().getId());
                 response.setRespondentEmail(normalize(w.user().getEmail()));
                 response.setRespondentName(normalize(w.user().getName()));
+                response.setIpHash(null);
+                response.setCookieId(null);
+            }
+            case ResponseContext.ProgramTask p -> {
+                response.setSource(ResponseSource.PROGRAM_TASK);
+                response.setRespondentUserId(p.userId());
+                response.setRespondentEmail(normalize(p.email()));
+                response.setRespondentName(normalize(p.name()));
                 response.setIpHash(null);
                 response.setCookieId(null);
             }

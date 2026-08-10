@@ -76,6 +76,7 @@ class EnrollmentServiceTest {
     @Mock private MediaService mediaService;
     @Mock private CertificateService certificateService;
     @Mock private UserRepository users;
+    @Mock private com.bvisionry.common.coursevisibility.CourseVisibilityAccess courseVisibility;
 
     @InjectMocks
     private EnrollmentService service;
@@ -99,6 +100,14 @@ class EnrollmentServiceTest {
         currentUser.setStatus(UserStatus.ACTIVE);
 
         authenticate(currentUser);
+
+        // Spec §3 visibility is a new gate in front of enroll() and
+        // lessonContent(); these tests are about the enrolment rules, so the
+        // course is visible. The refusal has its own coverage in
+        // CourseWiringIntegrationTest.
+        org.mockito.Mockito.lenient().when(courseVisibility.isVisibleToUser(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(true);
     }
 
     @AfterEach

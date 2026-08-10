@@ -1,0 +1,642 @@
+package com.bvisionry.programflow.repository;
+
+import java.math.BigDecimal;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Repository;
+
+import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
+import com.bvisionry.common.programaccess.ProgramAudience;
+import com.bvisionry.common.programaccess.TaskCompletion;
+
+/**
+ * Cross-feature reads AND the open-endpoint's ensure-writes for the typed task
+ * spine (redesign spec §1/§2.1), raw SQL through
+ * {@link NamedParameterJdbcTemplate} — same stance as
+ * {@code founderprofile.FounderProfileReadRepository}: the ArchUnit ratchet
+ * forbids new feature→feature imports, so this class depends on the schema of
+ * the owning slices (enrollment, exercise, assessment, workshops, survey).
+ *
+ * <p><strong>Writes.</strong> The open endpoint must ensure a prerequisite row
+ * exists (enrollment / exercise assignment+submission / assessment
+ * assignment + tagged submission) and return synchronously, so the inserts
+ * live here as raw SQL rather than in the owning slice's service. They
+ * replicate only the structural invariants (unique constraints, defaults,
+ * starter-row seeding); audit rows and "assigned to you" push notifications
+ * are deliberately NOT replicated — the member opened the work themselves.
+ * All inserts are idempotent via the owning tables' unique constraints
+ * (ON CONFLICT DO NOTHING + re-select).
+ *
+ * <p><strong>Tenancy:</strong> every entry point is keyed on member/cohort ids
+ * the CALLER has already proved are in scope ({@code MyProgramService}'s
+ * enrolled-cohort + audience access checks).
+ */
+@Repository
+public class TaskSpineRepository {
+
+    private final NamedParameterJdbcTemplate jdbc;
+
+    public TaskSpineRepository(NamedParameterJdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /* ------------------------------------------------- per-type status reads */
+
+    public record CourseStateRow(UUID userId, UUID courseId, String status, int progressPct,
+                                 Instant enrolledAt, Instant completedAt) {}
+
+    /**
+     * Enrollment state per (member, course) for COURSE task rows. An
+     * admin-CANCELLED row reads as "not enrolled" (the member sees not
+     * started; {@link #ensureEnrollment} reactivates it on open).
+     */
+    public List<CourseStateRow> courseStates(Collection<UUID> userIds, Collection<UUID> courseIds) {
+        if (userIds.isEmpty() || courseIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.query("""
+                SELECT e.user_id, e.course_id, e.status, e.progress_pct, e.enrolled_at, e.completed_at
+                FROM enrollment e
+                WHERE e.user_id IN (:userIds) AND e.course_id IN (:courseIds)
+                  AND e.status <> 'CANCELLED'
+                """,
+                new MapSqlParameterSource("userIds", userIds).addValue("courseIds", courseIds),
+                (rs, i) -> new CourseStateRow(rs.getObject("user_id", UUID.class),
+                        rs.getObject("course_id", UUID.class), rs.getString("status"),
+                        rs.getInt("progress_pct"), instant(rs, "enrolled_at"),
+                        instant(rs, "completed_at")));
+    }
+
+    public record ExerciseStateRow(UUID userId, UUID templateId, UUID submissionId, String status,
+                                   Instant submittedAt, Instant reviewedAt) {}
+
+    /**
+     * Exercise submission state per (member, template) for EXERCISE task rows.
+     * One submission per member assignment (DB-unique), newest assignment wins
+     * should a member somehow hold the template in two orgs.
+     */
+    public List<ExerciseStateRow> exerciseStates(Collection<UUID> userIds,
+                                                 Collection<UUID> templateIds) {
+        if (userIds.isEmpty() || templateIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.query("""
+                SELECT DISTINCT ON (ea.user_id, ea.template_id)
+                       ea.user_id, ea.template_id, es.id AS submission_id, es.status,
+                       es.submitted_at, es.reviewed_at
+                FROM exercise_assignments ea
+                JOIN exercise_submissions es ON es.assignment_id = ea.id
+                WHERE ea.user_id IN (:userIds) AND ea.template_id IN (:templateIds)
+                ORDER BY ea.user_id, ea.template_id, ea.created_at DESC
+                """,
+                new MapSqlParameterSource("userIds", userIds).addValue("templateIds", templateIds),
+                (rs, i) -> new ExerciseStateRow(rs.getObject("user_id", UUID.class),
+                        rs.getObject("template_id", UUID.class),
+                        rs.getObject("submission_id", UUID.class), rs.getString("status"),
+                        instant(rs, "submitted_at"), instant(rs, "reviewed_at")));
+    }
+
+    public record AssessmentStateRow(UUID userId, UUID taskId, UUID submissionId, String status,
+                                     Instant submittedAt, Instant evaluatedAt, BigDecimal score) {}
+
+    /**
+     * The member's submission TAGGED to each ASSESSMENT task (same-pipeline
+     * correctness: the tag, not the pipeline, identifies the milestone),
+     * newest per (member, task), with the evaluated overall score.
+     */
+    public List<AssessmentStateRow> assessmentStates(Collection<UUID> userIds,
+                                                     Collection<UUID> taskIds) {
+        if (userIds.isEmpty() || taskIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.query("""
+                SELECT DISTINCT ON (s.user_id, s.program_task_id)
+                       s.user_id, s.program_task_id, s.id AS submission_id, s.status,
+                       s.submitted_at, s.evaluated_at, os.overall_score_percentage AS score
+                FROM submissions s
+                LEFT JOIN overall_summaries os ON os.submission_id = s.id
+                WHERE s.user_id IN (:userIds) AND s.program_task_id IN (:taskIds)
+                ORDER BY s.user_id, s.program_task_id, s.created_at DESC
+                """,
+                new MapSqlParameterSource("userIds", userIds).addValue("taskIds", taskIds),
+                (rs, i) -> new AssessmentStateRow(rs.getObject("user_id", UUID.class),
+                        rs.getObject("program_task_id", UUID.class),
+                        rs.getObject("submission_id", UUID.class), rs.getString("status"),
+                        instant(rs, "submitted_at"), instant(rs, "evaluated_at"),
+                        rs.getBigDecimal("score")));
+    }
+
+    public record BaselineFallbackRow(UUID userId, UUID pipelineId, UUID submissionId,
+                                      Instant submittedAt, Instant evaluatedAt, BigDecimal score) {}
+
+    /**
+     * The member's EARLIEST evaluated submission per (member, pipeline) — the
+     * pre-spine visibility fallback for BASELINE milestone tasks with no
+     * tagged submission. Ordering mirrors the comparison slice's baseline
+     * resolution exactly (evaluated_at ASC NULLS LAST, created_at ASC), so
+     * the journey band and the stored comparison agree on what the baseline is.
+     */
+    public List<BaselineFallbackRow> earliestEvaluatedForPipelines(Collection<UUID> userIds,
+                                                                   Collection<UUID> pipelineIds) {
+        if (userIds.isEmpty() || pipelineIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.query("""
+                SELECT DISTINCT ON (s.user_id, a.pipeline_id)
+                       s.user_id, a.pipeline_id, s.id AS submission_id,
+                       s.submitted_at, s.evaluated_at, os.overall_score_percentage AS score
+                FROM submissions s
+                JOIN assignments a ON a.id = s.assignment_id
+                LEFT JOIN overall_summaries os ON os.submission_id = s.id
+                WHERE s.user_id IN (:userIds) AND a.pipeline_id IN (:pipelineIds)
+                  AND s.status = 'EVALUATED'
+                ORDER BY s.user_id, a.pipeline_id, s.evaluated_at ASC NULLS LAST, s.created_at ASC
+                """,
+                new MapSqlParameterSource("userIds", userIds).addValue("pipelineIds", pipelineIds),
+                (rs, i) -> new BaselineFallbackRow(rs.getObject("user_id", UUID.class),
+                        rs.getObject("pipeline_id", UUID.class),
+                        rs.getObject("submission_id", UUID.class),
+                        instant(rs, "submitted_at"), instant(rs, "evaluated_at"),
+                        rs.getBigDecimal("score")));
+    }
+
+    public record ParticipationRow(UUID userId, UUID refId, Instant completedAt) {}
+
+    /** Members who completed at least one task of each workshop (WORKSHOP done-state). */
+    public List<ParticipationRow> workshopParticipation(Collection<UUID> userIds,
+                                                        Collection<UUID> workshopIds) {
+        if (userIds.isEmpty() || workshopIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.query("""
+                SELECT wts.user_id, we.workshop_id AS ref_id, max(wts.completed_at) AS completed_at
+                FROM workshop_task_submissions wts
+                JOIN workshop_exercise_tasks wet ON wet.id = wts.task_id
+                JOIN workshop_exercises we ON we.id = wet.exercise_id
+                WHERE wts.user_id IN (:userIds) AND we.workshop_id IN (:workshopIds)
+                  AND wts.completed_at IS NOT NULL
+                GROUP BY wts.user_id, we.workshop_id
+                """,
+                new MapSqlParameterSource("userIds", userIds).addValue("workshopIds", workshopIds),
+                this::participationRow);
+    }
+
+    /** Members who responded to each survey (SURVEY done-state). */
+    public List<ParticipationRow> surveyParticipation(Collection<UUID> userIds,
+                                                      Collection<UUID> surveyIds) {
+        if (userIds.isEmpty() || surveyIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.query("""
+                SELECT sr.respondent_user_id AS user_id, sr.survey_id AS ref_id,
+                       max(sr.submitted_at) AS completed_at
+                FROM survey_responses sr
+                WHERE sr.respondent_user_id IN (:userIds) AND sr.survey_id IN (:surveyIds)
+                GROUP BY sr.respondent_user_id, sr.survey_id
+                """,
+                new MapSqlParameterSource("userIds", userIds).addValue("surveyIds", surveyIds),
+                this::participationRow);
+    }
+
+    private ParticipationRow participationRow(ResultSet rs, int i) throws SQLException {
+        return new ParticipationRow(rs.getObject("user_id", UUID.class),
+                rs.getObject("ref_id", UUID.class), instant(rs, "completed_at"));
+    }
+
+    /* ---------------------------------------------------- direct assignments */
+
+    /**
+     * Refs already represented by a LIVE cohort task of {@code taskType} that
+     * reaches this member (audience-checked) — direct-assignment rows for
+     * these refs are cohort work, not "direct" (spec §2.1 exclusion).
+     */
+    private static final String COVERED_BY_COHORT_TASK = """
+            EXISTS (SELECT 1
+                    FROM cohort_members cm
+                    JOIN program_modules m ON m.cohort_id = cm.cohort_id
+                    JOIN program_tasks t ON t.module_id = m.id
+                    WHERE cm.user_id = :memberId AND t.status = 'LIVE'
+                      AND t.task_type = %s AND t.ref_id = %s
+                      AND """ + ProgramAudience.INCLUDES_USER.formatted(":memberId") + ")";
+
+    public record DirectExerciseRow(UUID assignmentId, UUID templateId, String title,
+                                    UUID submissionId, String status, Instant deadline,
+                                    Instant assignedAt, Instant submittedAt, Instant reviewedAt) {}
+
+    public List<DirectExerciseRow> directExercises(UUID orgId, UUID memberId) {
+        return jdbc.query("""
+                SELECT ea.id, ea.template_id, et.name AS title, es.id AS submission_id, es.status,
+                       ea.deadline, ea.created_at AS assigned_at, es.submitted_at, es.reviewed_at
+                FROM exercise_assignments ea
+                JOIN exercise_templates et ON et.id = ea.template_id
+                LEFT JOIN exercise_submissions es ON es.assignment_id = ea.id
+                WHERE ea.organization_id = :orgId AND ea.user_id = :memberId
+                  AND NOT %s
+                ORDER BY ea.created_at DESC
+                """.formatted(COVERED_BY_COHORT_TASK.formatted("'EXERCISE'", "ea.template_id")),
+                params(orgId, memberId),
+                (rs, i) -> new DirectExerciseRow(rs.getObject("id", UUID.class),
+                        rs.getObject("template_id", UUID.class), rs.getString("title"),
+                        rs.getObject("submission_id", UUID.class), rs.getString("status"),
+                        instant(rs, "deadline"), instant(rs, "assigned_at"),
+                        instant(rs, "submitted_at"), instant(rs, "reviewed_at")));
+    }
+
+    public record DirectAssessmentRow(UUID assignmentId, UUID pipelineId, String title,
+                                      UUID submissionId, String status, Instant deadline,
+                                      Instant assignedAt, Instant submittedAt, Instant evaluatedAt,
+                                      BigDecimal score) {}
+
+    /**
+     * Member assessment assignments not REPRESENTED by any cohort task
+     * (review decision #6), with the latest submission's state. An assignment
+     * is represented — and therefore excluded — only when (a) one of its
+     * submissions is tagged to a LIVE cohort task of the member's (the tag is
+     * proof of representation; audience was enforced when the tag was
+     * created), or (b) a BASELINE milestone task references its pipeline AND
+     * the member has an evaluated submission — the exact condition under
+     * which the journey's pre-spine baseline fallback will display it. Any
+     * other assignment on the pipeline stays listed as direct work.
+     */
+    public List<DirectAssessmentRow> directAssessments(UUID orgId, UUID memberId) {
+        return jdbc.query("""
+                SELECT a.id, a.pipeline_id, p.name AS title, a.deadline,
+                       a.created_at AS assigned_at, s.id AS submission_id, s.status,
+                       s.submitted_at, s.evaluated_at, os.overall_score_percentage AS score
+                FROM assignments a
+                JOIN pipelines p ON p.id = a.pipeline_id
+                LEFT JOIN LATERAL (SELECT s2.id, s2.status, s2.submitted_at, s2.evaluated_at
+                                   FROM submissions s2
+                                   WHERE s2.assignment_id = a.id AND s2.user_id = :memberId
+                                   ORDER BY s2.created_at DESC LIMIT 1) s ON true
+                LEFT JOIN overall_summaries os ON os.submission_id = s.id
+                WHERE a.organization_id = :orgId AND a.user_id = :memberId
+                  AND NOT EXISTS (
+                      SELECT 1 FROM submissions st
+                      JOIN program_tasks t ON t.id = st.program_task_id AND t.status = 'LIVE'
+                      JOIN program_modules m ON m.id = t.module_id
+                      JOIN cohort_members cm ON cm.cohort_id = m.cohort_id
+                                            AND cm.user_id = :memberId
+                      WHERE st.assignment_id = a.id AND st.user_id = :memberId)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM cohort_members cm
+                      JOIN program_modules m ON m.cohort_id = cm.cohort_id
+                      JOIN program_tasks t ON t.module_id = m.id
+                      WHERE cm.user_id = :memberId AND t.status = 'LIVE'
+                        AND t.task_type = 'ASSESSMENT' AND t.milestone_role = 'BASELINE'
+                        AND t.ref_id = a.pipeline_id
+                        AND %s
+                        AND EXISTS (SELECT 1 FROM submissions se
+                                    WHERE se.assignment_id = a.id AND se.user_id = :memberId
+                                      AND se.status = 'EVALUATED'))
+                ORDER BY a.created_at DESC
+                """.formatted(ProgramAudience.INCLUDES_USER.formatted(":memberId")),
+                params(orgId, memberId),
+                (rs, i) -> new DirectAssessmentRow(rs.getObject("id", UUID.class),
+                        rs.getObject("pipeline_id", UUID.class), rs.getString("title"),
+                        rs.getObject("submission_id", UUID.class), rs.getString("status"),
+                        instant(rs, "deadline"), instant(rs, "assigned_at"),
+                        instant(rs, "submitted_at"), instant(rs, "evaluated_at"),
+                        rs.getBigDecimal("score")));
+    }
+
+    public record DirectCourseRow(UUID enrollmentId, UUID courseId, String title, String status,
+                                  int progressPct, Instant enrolledAt, Instant completedAt,
+                                  String source, boolean required, Instant deadline) {}
+
+    /**
+     * The member's courses that no cohort task covers - spec section 3's four
+     * sources as the journey's "Direct assignments" section sees them.
+     *
+     * <p>Two halves, and the second is the point: real {@code enrollment} rows,
+     * UNION the org rules covering this member that have no row YET. Without the
+     * union a required org-wide course would be invisible in the journey until
+     * the member happened to open the Library, which is precisely backwards. The
+     * row is written on first open ({@link #ensureEnrollment}).
+     *
+     * <p><strong>Semantics owner:</strong>
+     * {@code courseaccess.domain.EffectiveCourses}. This is a deliberate SQL
+     * subset of that merge - no AI suggestions (a suggestion is an offer, not
+     * work), and the same three rules: an org rule outranks a SELF/AI source but
+     * never a DIRECT one, {@code required} is a union, and the earliest deadline
+     * binds. Change one, change the other.
+     *
+     * <p>The UN-materialized half is filtered by visibility + PUBLISHED, matching
+     * {@code CourseAccessService#accept}: a claim the member would be refused is
+     * a dead row. Materialized rows are not — spec §3's downgrade policy keeps
+     * progress visible.
+     */
+    public List<DirectCourseRow> directCourses(UUID memberId) {
+        String notCovered = "NOT " + COVERED_BY_COHORT_TASK.formatted("'COURSE'", "%s");
+        return jdbc.query("""
+                SELECT e.id, e.course_id, c.title, e.status, e.progress_pct,
+                       e.enrolled_at, e.completed_at,
+                       CASE WHEN r.course_id IS NOT NULL AND e.source <> 'DIRECT'
+                            THEN 'ORG_RULE' ELSE e.source END AS source,
+                       (e.required OR COALESCE(r.required, FALSE)) AS required,
+                       LEAST(e.deadline, r.deadline) AS deadline
+                FROM enrollment e
+                JOIN course c ON c.id = e.course_id
+                LEFT JOIN org_course_rules r
+                       ON r.course_id = e.course_id
+                      AND r.org_id = (SELECT organization_id FROM users WHERE id = :memberId)
+                      AND NOT EXISTS (SELECT 1 FROM enrolment_overrides o
+                                       WHERE o.user_id = :memberId AND o.course_id = e.course_id)
+                WHERE e.user_id = :memberId
+                  AND e.status <> 'CANCELLED'
+                  AND %1$s
+                UNION ALL
+                SELECT NULL, r.course_id, c.title, NULL, 0,
+                       r.created_at, NULL, 'ORG_RULE', r.required, r.deadline
+                FROM org_course_rules r
+                JOIN course c ON c.id = r.course_id
+                WHERE r.org_id = (SELECT organization_id FROM users WHERE id = :memberId)
+                  AND NOT EXISTS (SELECT 1 FROM enrollment e2
+                                   WHERE e2.user_id = :memberId AND e2.course_id = r.course_id
+                                     AND e2.status <> 'CANCELLED')
+                  AND NOT EXISTS (SELECT 1 FROM enrolment_overrides o
+                                   WHERE o.user_id = :memberId AND o.course_id = r.course_id)
+                  AND c.state = 'PUBLISHED' AND %3$s
+                  AND %2$s
+                ORDER BY 6 DESC
+                """.formatted(notCovered.formatted("e.course_id"), notCovered.formatted("r.course_id"),
+                        CourseVisibilityAccess.VISIBLE_TO_ORG.formatted(
+                                "(SELECT organization_id FROM users WHERE id = :memberId)")),
+                new MapSqlParameterSource("memberId", memberId),
+                (rs, i) -> new DirectCourseRow(rs.getObject("id", UUID.class),
+                        rs.getObject("course_id", UUID.class), rs.getString("title"),
+                        rs.getString("status"), rs.getInt("progress_pct"),
+                        instant(rs, "enrolled_at"), instant(rs, "completed_at"),
+                        rs.getString("source"), rs.getBoolean("required"),
+                        instant(rs, "deadline")));
+    }
+
+    /**
+     * The cohort-enrolled users who have DONE this task under its own type's
+     * rule (shared {@link TaskCompletion} fragment — ProgramRules semantics).
+     * The due-reminder job subtracts them from its recipients so no learner is
+     * nagged about work any surface already counts as complete.
+     */
+    public List<UUID> usersDoneWithTask(UUID taskId) {
+        return jdbc.query("""
+                SELECT cm.user_id
+                FROM program_tasks t
+                JOIN program_modules m ON m.id = t.module_id
+                JOIN cohort_members cm ON cm.cohort_id = m.cohort_id
+                WHERE t.id = :taskId
+                  AND %s
+                """.formatted(TaskCompletion.DONE_FOR_USER.formatted("cm.user_id")),
+                new MapSqlParameterSource("taskId", taskId),
+                (rs, i) -> rs.getObject("user_id", UUID.class));
+    }
+
+    /**
+     * Cohort members with a course past its deadline and unfinished (spec §3:
+     * "overdue shows in the journey and the needs-attention strip").
+     *
+     * <p>Both halves of the enrollment model: real rows (served by
+     * {@code ix_enrollment_deadline}) and org rules nobody has opened yet, minus
+     * exclusions. Required AND optional — §3 says overdue shows, and does not
+     * qualify that by the flag.
+     */
+    public java.util.Set<UUID> membersWithOverdueCourses(UUID cohortId) {
+        return new java.util.HashSet<>(jdbc.query("""
+                SELECT cm.user_id
+                FROM cohort_members cm
+                WHERE cm.cohort_id = :cohortId
+                  AND (EXISTS (SELECT 1 FROM enrollment e
+                                WHERE e.user_id = cm.user_id
+                                  AND e.status NOT IN ('CANCELLED', 'COMPLETED')
+                                  AND e.deadline IS NOT NULL AND e.deadline < NOW())
+                    OR EXISTS (SELECT 1
+                                 FROM org_course_rules r
+                                 JOIN users u ON u.id = cm.user_id AND u.organization_id = r.org_id
+                                WHERE r.deadline IS NOT NULL AND r.deadline < NOW()
+                                  AND NOT EXISTS (SELECT 1 FROM enrolment_overrides o
+                                                   WHERE o.user_id = cm.user_id
+                                                     AND o.course_id = r.course_id)
+                                  AND NOT EXISTS (SELECT 1 FROM enrollment e2
+                                                   WHERE e2.user_id = cm.user_id
+                                                     AND e2.course_id = r.course_id
+                                                     AND e2.status IN ('CANCELLED', 'COMPLETED'))))
+                """,
+                new MapSqlParameterSource("cohortId", cohortId),
+                (rs, i) -> rs.getObject("user_id", UUID.class)));
+    }
+
+    /* ------------------------------------------------- validation probes */
+
+    /**
+     * The task's reference exists in its owning slice (validation, review #7).
+     * A LIVE COURSE task additionally requires the course to be published;
+     * WORKSHOP is org-scoped (workshops belong to one org). LESSON has no ref.
+     */
+    public boolean refExists(com.bvisionry.programflow.domain.ProgramTaskType type, UUID refId,
+                             UUID orgId, boolean live) {
+        String sql = switch (type) {
+            case LESSON -> null;
+            // Spec section 3: an org admin may only point a task at a course the
+            // platform has made visible to their org. The ref picker filters, but
+            // the filter is cosmetic - this is the control.
+            case COURSE -> live
+                    ? "SELECT EXISTS (SELECT 1 FROM course c WHERE c.id = :id AND c.state = 'PUBLISHED' AND "
+                            + CourseVisibilityAccess.VISIBLE_TO_ORG.formatted(":orgId") + ")"
+                    : "SELECT EXISTS (SELECT 1 FROM course c WHERE c.id = :id AND "
+                            + CourseVisibilityAccess.VISIBLE_TO_ORG.formatted(":orgId") + ")";
+            case EXERCISE -> "SELECT EXISTS (SELECT 1 FROM exercise_templates WHERE id = :id)";
+            case ASSESSMENT -> "SELECT EXISTS (SELECT 1 FROM pipelines WHERE id = :id)";
+            case WORKSHOP -> "SELECT EXISTS (SELECT 1 FROM workshops WHERE id = :id AND org_id = :orgId)";
+            case SURVEY -> "SELECT EXISTS (SELECT 1 FROM surveys WHERE id = :id)";
+        };
+        if (sql == null) {
+            return true;
+        }
+        return Boolean.TRUE.equals(jdbc.queryForObject(sql,
+                new MapSqlParameterSource("id", refId).addValue("orgId", orgId), Boolean.class));
+    }
+
+    /** Any submission carries this task's milestone tag → the ref is frozen (review #7b). */
+    public boolean hasTaggedSubmissions(UUID taskId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM submissions WHERE program_task_id = :taskId)",
+                new MapSqlParameterSource("taskId", taskId), Boolean.class));
+    }
+
+    /* --------------------------------------------------- open ensure-writes */
+
+    /** A LIVE (non-CANCELLED) enrollment exists — an admin-removed row doesn't count. */
+    public boolean enrollmentExists(UUID userId, UUID courseId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (SELECT 1 FROM enrollment
+                               WHERE user_id = :userId AND course_id = :courseId
+                                 AND status <> 'CANCELLED')
+                """,
+                new MapSqlParameterSource("userId", userId).addValue("courseId", courseId),
+                Boolean.class));
+    }
+
+    /**
+     * Idempotent enrollment on task open (spec §3: enrollment happens on open,
+     * not render). An admin-CANCELLED row keeps its unique-constraint slot, so
+     * the insert no-ops and the UPDATE hands the member their course back with
+     * progress intact — status derived exactly like
+     * {@code EnrollmentService.reactivateIfRemoved} (COMPLETED when they had
+     * finished, else ACTIVE).
+     *
+     * <p><strong>Claim-aware source</strong> (spec §3): the row records the
+     * STRONGEST claim that already covers this member, so a rule-derived course
+     * materializes as ORG_RULE and its rule can still unassign it —
+     * "unassignment is one delete" has to hold for the members who opened it
+     * too. Only a course NO rule covers is DIRECT: a cohort task is an admin
+     * putting it in front of this member by name. DO NOTHING on conflict, so a
+     * member who already had the course keeps whatever story it carried.
+     */
+    public void ensureEnrollment(UUID userId, UUID courseId) {
+        MapSqlParameterSource params =
+                new MapSqlParameterSource("userId", userId).addValue("courseId", courseId);
+        jdbc.update("""
+                INSERT INTO enrollment (user_id, course_id, status, source)
+                VALUES (:userId, :courseId, 'ACTIVE',
+                        CASE WHEN EXISTS (SELECT 1
+                                            FROM org_course_rules r
+                                            JOIN users u ON u.id = :userId
+                                                        AND u.organization_id = r.org_id
+                                           WHERE r.course_id = :courseId)
+                             THEN 'ORG_RULE' ELSE 'DIRECT' END)
+                ON CONFLICT ON CONSTRAINT uq_enrollment_user_course DO NOTHING
+                """, params);
+        jdbc.update("""
+                UPDATE enrollment
+                SET status = CASE WHEN completed_at IS NOT NULL THEN 'COMPLETED' ELSE 'ACTIVE' END
+                WHERE user_id = :userId AND course_id = :courseId AND status = 'CANCELLED'
+                """, params);
+    }
+
+    /** The member's exercise submission for the template within the org, if any. */
+    public Optional<UUID> findExerciseSubmissionId(UUID orgId, UUID templateId, UUID userId) {
+        return jdbc.query("""
+                SELECT es.id
+                FROM exercise_assignments ea
+                JOIN exercise_submissions es ON es.assignment_id = ea.id
+                WHERE ea.organization_id = :orgId AND ea.template_id = :templateId
+                  AND ea.user_id = :userId
+                """,
+                exerciseParams(orgId, templateId, userId),
+                (rs, i) -> rs.getObject("id", UUID.class))
+                .stream().findFirst();
+    }
+
+    /**
+     * Ensures the member's exercise assignment + working-copy submission exist
+     * (assigned_by = the member: they opened the cohort task themselves) and
+     * seeds the template's starter rows exactly like
+     * {@code ExerciseAssignmentService.createAssignmentForMember} does.
+     */
+    public UUID ensureExerciseSubmission(UUID orgId, UUID templateId, UUID userId) {
+        jdbc.update("""
+                INSERT INTO exercise_assignments (template_id, organization_id, user_id, assigned_by)
+                VALUES (:templateId, :orgId, :userId, :userId)
+                ON CONFLICT (organization_id, template_id, user_id) WHERE user_id IS NOT NULL
+                DO NOTHING
+                """, exerciseParams(orgId, templateId, userId));
+        UUID assignmentId = jdbc.queryForObject("""
+                SELECT id FROM exercise_assignments
+                WHERE organization_id = :orgId AND template_id = :templateId AND user_id = :userId
+                """, exerciseParams(orgId, templateId, userId), UUID.class);
+
+        int created = jdbc.update("""
+                INSERT INTO exercise_submissions (assignment_id, user_id)
+                VALUES (:assignmentId, :userId)
+                ON CONFLICT (assignment_id) DO NOTHING
+                """,
+                new MapSqlParameterSource("assignmentId", assignmentId).addValue("userId", userId));
+        UUID submissionId = jdbc.queryForObject(
+                "SELECT id FROM exercise_submissions WHERE assignment_id = :assignmentId",
+                new MapSqlParameterSource("assignmentId", assignmentId), UUID.class);
+        if (created > 0) {
+            jdbc.update("""
+                    INSERT INTO exercise_rows (submission_id, display_order, cells, is_starter)
+                    SELECT :submissionId, a.ord - 1, a.elem, true
+                    FROM exercise_templates et,
+                         jsonb_array_elements(et.starter_rows) WITH ORDINALITY AS a(elem, ord)
+                    WHERE et.id = :templateId AND et.starter_rows IS NOT NULL
+                    """,
+                    new MapSqlParameterSource("submissionId", submissionId)
+                            .addValue("templateId", templateId));
+        }
+        return submissionId;
+    }
+
+    /** The member's newest submission tagged to this milestone task, if any. */
+    public Optional<UUID> findTaggedSubmissionId(UUID userId, UUID taskId) {
+        return jdbc.query("""
+                SELECT id FROM submissions
+                WHERE user_id = :userId AND program_task_id = :taskId
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                new MapSqlParameterSource("userId", userId).addValue("taskId", taskId),
+                (rs, i) -> rs.getObject("id", UUID.class))
+                .stream().findFirst();
+    }
+
+    /**
+     * Ensures the member's assessment assignment for the pipeline exists and
+     * creates the IN_PROGRESS submission tagged with the milestone task id.
+     * Milestone submissions deliberately bypass the assignment's
+     * {@code max_check_ins} cap — the cohort's task schedule IS the cap.
+     */
+    public UUID createTaggedSubmission(UUID orgId, UUID pipelineId, UUID userId, UUID taskId) {
+        jdbc.update("""
+                INSERT INTO assignments (pipeline_id, organization_id, user_id, assigned_by)
+                VALUES (:pipelineId, :orgId, :userId, :userId)
+                ON CONFLICT (organization_id, pipeline_id, user_id) WHERE user_id IS NOT NULL
+                DO NOTHING
+                """,
+                new MapSqlParameterSource("pipelineId", pipelineId).addValue("orgId", orgId)
+                        .addValue("userId", userId));
+        UUID assignmentId = jdbc.queryForObject("""
+                SELECT id FROM assignments
+                WHERE organization_id = :orgId AND pipeline_id = :pipelineId AND user_id = :userId
+                """,
+                new MapSqlParameterSource("pipelineId", pipelineId).addValue("orgId", orgId)
+                        .addValue("userId", userId),
+                UUID.class);
+        // Race-safe like the other ensure-writes: uq_submissions_user_program_task
+        // makes the double-open loser a no-op, and the re-select returns the
+        // winner's row.
+        jdbc.update("""
+                INSERT INTO submissions (assignment_id, user_id, status, program_task_id)
+                VALUES (:assignmentId, :userId, 'IN_PROGRESS', :taskId)
+                ON CONFLICT (user_id, program_task_id) WHERE program_task_id IS NOT NULL
+                DO NOTHING
+                """,
+                new MapSqlParameterSource("assignmentId", assignmentId).addValue("userId", userId)
+                        .addValue("taskId", taskId));
+        return findTaggedSubmissionId(userId, taskId).orElseThrow();
+    }
+
+    /* ---------------------------------------------------------------- helpers */
+
+    private static MapSqlParameterSource params(UUID orgId, UUID memberId) {
+        return new MapSqlParameterSource("orgId", orgId).addValue("memberId", memberId);
+    }
+
+    private static MapSqlParameterSource exerciseParams(UUID orgId, UUID templateId, UUID userId) {
+        return new MapSqlParameterSource("orgId", orgId).addValue("templateId", templateId)
+                .addValue("userId", userId);
+    }
+
+    private static Instant instant(ResultSet rs, String column) throws SQLException {
+        OffsetDateTime value = rs.getObject(column, OffsetDateTime.class);
+        return value == null ? null : value.toInstant();
+    }
+}

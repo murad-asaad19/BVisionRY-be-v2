@@ -38,4 +38,16 @@ public class ProgramSettings {
 
     @Column(name = "end_at")
     private OffsetDateTime endAt;
+
+    /**
+     * Distance-comparison pair designation (spec §5): the cohort's baseline
+     * and distance assessment pipelines. Bare UUIDs — the comparison slice
+     * reads them cross-feature via raw SQL. Both null = no distance report is
+     * ever teased for this cohort (the "no pending state" guard).
+     */
+    @Column(name = "baseline_pipeline_id")
+    private UUID baselinePipelineId;
+
+    @Column(name = "distance_pipeline_id")
+    private UUID distancePipelineId;
 }

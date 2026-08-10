@@ -1,0 +1,392 @@
+package com.bvisionry.comparison.repository;
+
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Repository;
+
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+/**
+ * Cross-feature reads for the comparison slice, expressed as raw SQL — the
+ * ArchUnit ratchet forbids new feature→feature imports, so (like
+ * {@code coaching.repository.CoachingReadRepository}) this class depends on
+ * the schema: submissions/assignments ({@code assessment}), pillar
+ * evaluations + overall summaries ({@code evaluation}), pipelines/pillars
+ * ({@code pipeline}), cohorts + program settings ({@code programflow}) and the
+ * shift-bands document ({@code platform_settings}).
+ */
+@Repository
+public class ComparisonReadRepository {
+
+    private final NamedParameterJdbcTemplate jdbc;
+
+    public ComparisonReadRepository(NamedParameterJdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    /* ---------------------------------------------------- pair designation */
+
+    public record PairCohortRow(UUID cohortId, UUID orgId, String cohortName,
+                                UUID baselinePipelineId, UUID distancePipelineId) {}
+
+    private static final String PAIR_SELECT = """
+            SELECT c.id AS cohort_id, c.org_id, c.name AS cohort_name,
+                   ps.baseline_pipeline_id, ps.distance_pipeline_id
+            FROM program_settings ps
+            JOIN cohorts c ON c.id = ps.cohort_id
+            """;
+
+    /** The cohort's designated pair — empty when either side is undesignated. */
+    public Optional<PairCohortRow> designatedPair(UUID cohortId) {
+        return jdbc.query(PAIR_SELECT + """
+                WHERE ps.cohort_id = :cohortId
+                  AND ps.baseline_pipeline_id IS NOT NULL
+                  AND ps.distance_pipeline_id IS NOT NULL
+                """,
+                new MapSqlParameterSource("cohortId", cohortId), this::pairRow)
+                .stream().findFirst();
+    }
+
+    /**
+     * Every cohort the user belongs to whose fully-designated pair names
+     * {@code pipelineId} on EITHER side — the compute trigger fans out from an
+     * evaluated submission through this.
+     */
+    public List<PairCohortRow> pairsInvolving(UUID userId, UUID pipelineId) {
+        return jdbc.query(PAIR_SELECT + """
+                JOIN cohort_members cm ON cm.cohort_id = c.id AND cm.user_id = :userId
+                WHERE ps.baseline_pipeline_id IS NOT NULL
+                  AND ps.distance_pipeline_id IS NOT NULL
+                  AND (ps.baseline_pipeline_id = :pipelineId
+                       OR ps.distance_pipeline_id = :pipelineId)
+                """,
+                new MapSqlParameterSource("userId", userId).addValue("pipelineId", pipelineId),
+                this::pairRow);
+    }
+
+    /**
+     * The member's cohort with a fully-designated pair, newest first — the
+     * anchor for the member/coach growth read. Member-visible cohorts only
+     * (V167: LAUNCHED/COMPLETED) — a configured DRAFT must not become the
+     * member's growth anchor before launch; staff-facing joins stay
+     * unfiltered. ponytail: a member in two
+     * designated cohorts sees the newest; per-cohort selection can come with
+     * the cohort switcher if product asks.
+     */
+    public Optional<PairCohortRow> memberPairCohort(UUID userId) {
+        return jdbc.query(PAIR_SELECT + """
+                JOIN cohort_members cm ON cm.cohort_id = c.id AND cm.user_id = :userId
+                WHERE ps.baseline_pipeline_id IS NOT NULL
+                  AND ps.distance_pipeline_id IS NOT NULL
+                  AND c.status IN ('LAUNCHED', 'COMPLETED')
+                ORDER BY c.created_at DESC
+                LIMIT 1
+                """,
+                new MapSqlParameterSource("userId", userId), this::pairRow)
+                .stream().findFirst();
+    }
+
+    private PairCohortRow pairRow(java.sql.ResultSet rs, int i) throws java.sql.SQLException {
+        return new PairCohortRow(rs.getObject("cohort_id", UUID.class),
+                rs.getObject("org_id", UUID.class), rs.getString("cohort_name"),
+                rs.getObject("baseline_pipeline_id", UUID.class),
+                rs.getObject("distance_pipeline_id", UUID.class));
+    }
+
+    /* ------------------------------------------------- cohorts and tenancy */
+
+    /** The cohort constrained to the org — empty when absent or foreign → 404. */
+    public Optional<String> cohortNameInOrg(UUID orgId, UUID cohortId) {
+        return jdbc.query(
+                "SELECT name FROM cohorts WHERE id = :cohortId AND org_id = :orgId",
+                new MapSqlParameterSource("orgId", orgId).addValue("cohortId", cohortId),
+                (rs, i) -> rs.getString("name"))
+                .stream().findFirst();
+    }
+
+    /** The cohort's org — for the SUPER_ADMIN recompute path (no org in the URL). */
+    public Optional<UUID> cohortOrg(UUID cohortId) {
+        return jdbc.query("SELECT org_id FROM cohorts WHERE id = :cohortId",
+                new MapSqlParameterSource("cohortId", cohortId),
+                (rs, i) -> rs.getObject("org_id", UUID.class))
+                .stream().findFirst();
+    }
+
+    public List<UUID> cohortMembers(UUID cohortId) {
+        return jdbc.query("SELECT user_id FROM cohort_members WHERE cohort_id = :cohortId",
+                new MapSqlParameterSource("cohortId", cohortId),
+                (rs, i) -> rs.getObject("user_id", UUID.class));
+    }
+
+    /** Whether the user belongs to the org — the admin-side member gate (404 when false). */
+    public boolean userInOrg(UUID orgId, UUID userId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (SELECT 1 FROM users
+                               WHERE id = :userId AND organization_id = :orgId)
+                """,
+                new MapSqlParameterSource("orgId", orgId).addValue("userId", userId),
+                Boolean.class));
+    }
+
+    public Map<UUID, String> userNames(Collection<UUID> userIds) {
+        if (userIds.isEmpty()) {
+            return Map.of();
+        }
+        return jdbc.query("SELECT id, name FROM users WHERE id IN (:ids)",
+                new MapSqlParameterSource("ids", userIds),
+                (rs, i) -> Map.entry(rs.getObject("id", UUID.class), rs.getString("name")))
+                .stream().collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    /* -------------------------------------------------- pipelines + pillars */
+
+    public record PillarRow(UUID id, String name, int displayOrder) {}
+
+    public List<PillarRow> pillarsOf(UUID pipelineId) {
+        return jdbc.query("""
+                SELECT id, name, display_order FROM pillars
+                WHERE pipeline_id = :pipelineId
+                ORDER BY display_order, name
+                """,
+                new MapSqlParameterSource("pipelineId", pipelineId),
+                (rs, i) -> new PillarRow(rs.getObject("id", UUID.class),
+                        rs.getString("name"), rs.getInt("display_order")));
+    }
+
+    public Map<UUID, String> pipelineNames(Collection<UUID> pipelineIds) {
+        if (pipelineIds.isEmpty()) {
+            return Map.of();
+        }
+        return jdbc.query("SELECT id, name FROM pipelines WHERE id IN (:ids)",
+                new MapSqlParameterSource("ids", pipelineIds),
+                (rs, i) -> Map.entry(rs.getObject("id", UUID.class), rs.getString("name")))
+                .stream().collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    /* ---------------------------------------------- submissions + evaluation */
+
+    public record SubmissionRow(UUID id, UUID userId, UUID pipelineId, Instant evaluatedAt) {}
+
+    /** Owner + pipeline of a member submission — empty for anonymous public ones. */
+    public Optional<SubmissionRow> submission(UUID submissionId) {
+        return jdbc.query("""
+                SELECT s.id, s.user_id, a.pipeline_id, s.evaluated_at
+                FROM submissions s
+                JOIN assignments a ON a.id = s.assignment_id
+                WHERE s.id = :id AND s.user_id IS NOT NULL
+                """,
+                new MapSqlParameterSource("id", submissionId), this::submissionRow)
+                .stream().findFirst();
+    }
+
+    /** The user's latest cleanly-evaluated submission for a pipeline (distance side). */
+    public Optional<SubmissionRow> latestEvaluatedSubmission(UUID userId, UUID pipelineId) {
+        return evaluatedSubmission(userId, pipelineId, "DESC");
+    }
+
+    public record MilestoneTaskRow(UUID taskId, UUID refId) {}
+
+    /**
+     * The cohort's milestone task of the given role (typed task spine, spec
+     * §5), ANY publish status: for the compute (and the pending-tease guard)
+     * the tag on the submission is authoritative — a task un-published after
+     * members already answered it must still resolve. The journey/open side
+     * keeps its own LIVE filter. Uniqueness is enforced at the task write;
+     * LIMIT 1 is belt and braces.
+     */
+    public Optional<MilestoneTaskRow> milestoneTask(UUID cohortId, String role) {
+        return jdbc.query("""
+                SELECT t.id, t.ref_id
+                FROM program_tasks t
+                JOIN program_modules m ON m.id = t.module_id
+                WHERE m.cohort_id = :cohortId AND t.task_type = 'ASSESSMENT'
+                  AND t.milestone_role = :role
+                LIMIT 1
+                """,
+                new MapSqlParameterSource("cohortId", cohortId).addValue("role", role),
+                (rs, i) -> new MilestoneTaskRow(rs.getObject("id", UUID.class),
+                        rs.getObject("ref_id", UUID.class)))
+                .stream().findFirst();
+    }
+
+    /**
+     * The user's latest cleanly-evaluated submission TAGGED to the given
+     * milestone task — the same-pipeline-safe resolution. The pipeline
+     * predicate guards against a tag that drifted from the designated pair
+     * (also validated at the task write).
+     */
+    public Optional<SubmissionRow> latestEvaluatedTaggedSubmission(UUID userId, UUID taskId,
+                                                                   UUID pipelineId) {
+        return jdbc.query("""
+                SELECT s.id, s.user_id, a.pipeline_id, s.evaluated_at
+                FROM submissions s
+                JOIN assignments a ON a.id = s.assignment_id
+                WHERE s.user_id = :userId
+                  AND s.program_task_id = :taskId
+                  AND a.pipeline_id = :pipelineId
+                  AND s.status = 'EVALUATED'
+                ORDER BY s.evaluated_at DESC NULLS LAST, s.created_at DESC
+                LIMIT 1
+                """,
+                new MapSqlParameterSource("userId", userId).addValue("taskId", taskId)
+                        .addValue("pipelineId", pipelineId),
+                this::submissionRow)
+                .stream().findFirst();
+    }
+
+    /**
+     * The user's EARLIEST cleanly-evaluated submission for a pipeline — the
+     * baseline side. Baseline means intake: a member re-taking the baseline
+     * pipeline (check-ins allow it) must not silently shift the baseline to
+     * the newest retake.
+     */
+    public Optional<SubmissionRow> earliestEvaluatedSubmission(UUID userId, UUID pipelineId) {
+        return evaluatedSubmission(userId, pipelineId, "ASC");
+    }
+
+    private Optional<SubmissionRow> evaluatedSubmission(UUID userId, UUID pipelineId,
+                                                        String direction) {
+        return jdbc.query("""
+                SELECT s.id, s.user_id, a.pipeline_id, s.evaluated_at
+                FROM submissions s
+                JOIN assignments a ON a.id = s.assignment_id
+                WHERE s.user_id = :userId
+                  AND a.pipeline_id = :pipelineId
+                  AND s.status = 'EVALUATED'
+                ORDER BY s.evaluated_at %1$s NULLS LAST, s.created_at %1$s
+                LIMIT 1
+                """.formatted(direction),
+                new MapSqlParameterSource("userId", userId).addValue("pipelineId", pipelineId),
+                this::submissionRow)
+                .stream().findFirst();
+    }
+
+    public Map<UUID, Instant> submissionEvaluatedAt(Collection<UUID> submissionIds) {
+        if (submissionIds.isEmpty()) {
+            return Map.of();
+        }
+        // evaluated_at IS NOT NULL: absent keys, never NPEs — callers treat
+        // a missing entry as "no timestamp to show".
+        return jdbc.query("""
+                SELECT id, evaluated_at FROM submissions
+                WHERE id IN (:ids) AND evaluated_at IS NOT NULL
+                """,
+                new MapSqlParameterSource("ids", submissionIds),
+                (rs, i) -> Map.entry(rs.getObject("id", UUID.class),
+                        rs.getTimestamp("evaluated_at").toInstant()))
+                .stream().collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    private SubmissionRow submissionRow(java.sql.ResultSet rs, int i) throws java.sql.SQLException {
+        java.sql.Timestamp ts = rs.getTimestamp("evaluated_at");
+        return new SubmissionRow(rs.getObject("id", UUID.class),
+                rs.getObject("user_id", UUID.class),
+                rs.getObject("pipeline_id", UUID.class),
+                ts == null ? null : ts.toInstant());
+    }
+
+    public Optional<BigDecimal> overallScore(UUID submissionId) {
+        return jdbc.query("""
+                SELECT overall_score_percentage FROM overall_summaries
+                WHERE submission_id = :id
+                """,
+                new MapSqlParameterSource("id", submissionId),
+                (rs, i) -> rs.getBigDecimal("overall_score_percentage"))
+                .stream().findFirst();
+    }
+
+    public record PillarEvalRow(UUID pillarId, BigDecimal scorePercentage, String maturityLabel) {}
+
+    /**
+     * The STORED per-pillar scores + maturity labels of a submission. The label
+     * is the band identity of record (RULING 4 / D-2 — never re-derive from
+     * the score), which is exactly how this slice reuses
+     * {@code ScoringService.deriveMaturityLabel} without duplicating it.
+     */
+    public Map<UUID, PillarEvalRow> pillarEvaluations(UUID submissionId) {
+        return jdbc.query("""
+                SELECT pillar_id, score_percentage, maturity_label
+                FROM pillar_evaluations
+                WHERE submission_id = :id AND ai_failed = false
+                """,
+                new MapSqlParameterSource("id", submissionId),
+                (rs, i) -> new PillarEvalRow(rs.getObject("pillar_id", UUID.class),
+                        rs.getBigDecimal("score_percentage"), rs.getString("maturity_label")))
+                .stream().collect(Collectors.toMap(PillarEvalRow::pillarId, Function.identity()));
+    }
+
+    public record TrajectoryRow(UUID submissionId, String pipelineName,
+                                BigDecimal overallScore, Instant evaluatedAt) {}
+
+    /** Every evaluated overall score of the user, oldest first — the trajectory chart. */
+    public List<TrajectoryRow> trajectory(UUID userId) {
+        return jdbc.query("""
+                SELECT s.id, p.name AS pipeline_name,
+                       os.overall_score_percentage, s.evaluated_at
+                FROM submissions s
+                JOIN assignments a ON a.id = s.assignment_id
+                JOIN pipelines p ON p.id = a.pipeline_id
+                JOIN overall_summaries os ON os.submission_id = s.id
+                WHERE s.user_id = :userId AND s.status = 'EVALUATED'
+                ORDER BY s.evaluated_at ASC NULLS LAST, s.created_at ASC
+                """,
+                new MapSqlParameterSource("userId", userId),
+                (rs, i) -> {
+                    java.sql.Timestamp ts = rs.getTimestamp("evaluated_at");
+                    return new TrajectoryRow(rs.getObject("id", UUID.class),
+                            rs.getString("pipeline_name"),
+                            rs.getBigDecimal("overall_score_percentage"),
+                            ts == null ? null : ts.toInstant());
+                });
+    }
+
+    /**
+     * The per-pillar qualitative text blocks of a submission — the ONLY input
+     * the shift-narrative job (spec §6) is allowed to see. Scores are
+     * deliberately absent from this projection: "never generate from scores
+     * alone" is enforced by construction, not by asking the prompt nicely.
+     *
+     * <p>The columns are jsonb string arrays; they are read as raw JSON and
+     * parsed by the caller (this repository stays Jackson-free like the rest of
+     * the slice's raw-SQL reads).
+     */
+    public Map<UUID, RawPillarText> pillarTextBlocks(UUID submissionId) {
+        return jdbc.query("""
+                SELECT pillar_id,
+                       ai_whats_working::text     AS whats_working,
+                       ai_what_can_improve::text  AS what_can_improve
+                FROM pillar_evaluations
+                WHERE submission_id = :id AND ai_failed = false
+                """,
+                new MapSqlParameterSource("id", submissionId),
+                (rs, i) -> new RawPillarText(rs.getObject("pillar_id", UUID.class),
+                        rs.getString("whats_working"), rs.getString("what_can_improve")))
+                .stream().collect(Collectors.toMap(RawPillarText::pillarId, Function.identity()));
+    }
+
+    /** A pillar's two text blocks, still as raw jsonb text — parsed by the caller. */
+    public record RawPillarText(UUID pillarId, String whatsWorkingJson, String whatCanImproveJson) {}
+
+    /* ----------------------------------------------------- platform config */
+
+    /**
+     * The raw JSON document stored under a {@code platform_settings} key —
+     * parsed (with defaults) by the caller. Used for the shift bands and the
+     * narrative wording; the slice reads platform config by SQL because the
+     * ArchUnit ratchet forbids a comparison→platform import.
+     */
+    public Optional<String> settingText(String key) {
+        return jdbc.query("SELECT value_text FROM platform_settings WHERE key = :key",
+                new MapSqlParameterSource("key", key),
+                (rs, i) -> rs.getString("value_text"))
+                .stream().findFirst().filter(s -> s != null && !s.isBlank());
+    }
+}

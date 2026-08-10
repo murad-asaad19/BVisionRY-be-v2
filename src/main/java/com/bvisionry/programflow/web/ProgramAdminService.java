@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -15,17 +16,28 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.exception.FieldValidationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.programflow.domain.AudienceMode;
 import com.bvisionry.programflow.domain.FieldType;
+import com.bvisionry.programflow.domain.MilestoneRole;
 import com.bvisionry.programflow.domain.ProgramModule;
 import com.bvisionry.programflow.domain.ProgramSettings;
 import com.bvisionry.programflow.domain.ProgramSubmission;
 import com.bvisionry.programflow.domain.ProgramTask;
 import com.bvisionry.programflow.domain.ProgramTaskField;
+import com.bvisionry.programflow.domain.ProgramTaskType;
 import com.bvisionry.programflow.domain.SubmissionStatus;
+import com.bvisionry.programflow.dto.JourneyTaskState;
 import com.bvisionry.programflow.dto.AudienceDto;
 import com.bvisionry.programflow.dto.BoardResponse;
+import com.bvisionry.programflow.dto.CohortMatrixResponse;
+import com.bvisionry.programflow.dto.CohortMatrixResponse.AttentionFlag;
+import com.bvisionry.programflow.dto.CohortMatrixResponse.FounderRow;
+import com.bvisionry.programflow.dto.CohortMatrixResponse.MilestoneCell;
+import com.bvisionry.programflow.dto.CohortMatrixResponse.MilestoneColumn;
+import com.bvisionry.programflow.dto.CohortMatrixResponse.ModuleCell;
+import com.bvisionry.programflow.dto.CohortMatrixResponse.ModuleColumn;
 import com.bvisionry.programflow.dto.CreateModuleRequest;
 import com.bvisionry.programflow.dto.FieldUpsert;
 import com.bvisionry.programflow.dto.ModuleDto;
@@ -39,6 +51,7 @@ import com.bvisionry.programflow.dto.TaskDto;
 import com.bvisionry.programflow.dto.UpdateAudienceRequest;
 import com.bvisionry.programflow.dto.UpdateModuleRequest;
 import com.bvisionry.programflow.dto.UpdateTaskRequest;
+import com.bvisionry.programflow.repository.CohortBoardReadRepository;
 import com.bvisionry.programflow.repository.OrgMemberRow;
 import com.bvisionry.programflow.repository.ProgramModuleRepository;
 import com.bvisionry.programflow.repository.ProgramSettingsRepository;
@@ -60,6 +73,9 @@ public class ProgramAdminService {
     private final ProgramSettingsRepository settings;
     private final TeamRepository teams;
     private final CohortService cohortService;
+    private final MyProgramService myProgramService;
+    private final com.bvisionry.programflow.repository.TaskSpineRepository spine;
+    private final CohortBoardReadRepository boardReads;
     private final ApplicationEventPublisher events;
 
     // ------------------------------------------------------------------ board
@@ -80,7 +96,7 @@ public class ProgramAdminService {
     }
 
     public ProgramSettingsDto updateSettings(UUID orgId, UUID cohortId, ProgramSettingsDto req) {
-        cohortService.require(orgId, cohortId);
+        cohortService.requireEditable(orgId, cohortId);
         ProgramSettings s = settings.findById(cohortId).orElseGet(() -> {
             ProgramSettings created = new ProgramSettings();
             created.setCohortId(cohortId);
@@ -91,33 +107,68 @@ public class ProgramAdminService {
         s.setDueSoonDays(req.dueSoonDays());
         s.setEndLabel(req.endLabel());
         s.setEndAt(req.endAt());
+        // Same-instrument (retake) pairs are allowed since the typed task
+        // spine: the DISTANCE milestone task's submission tag — not "latest
+        // evaluated" — identifies the distance submission, so an equal pair
+        // can no longer self-compare.
+        Map<String, String> errors = new LinkedHashMap<>();
+        milestonePipelineSyncError(cohortId, MilestoneRole.BASELINE, req.baselinePipelineId())
+                .ifPresent(msg -> errors.put("baselinePipelineId", msg));
+        milestonePipelineSyncError(cohortId, MilestoneRole.DISTANCE, req.distancePipelineId())
+                .ifPresent(msg -> errors.put("distancePipelineId", msg));
+        if (!errors.isEmpty()) {
+            throw new FieldValidationException(errors);
+        }
+        s.setBaselinePipelineId(req.baselinePipelineId());
+        s.setDistancePipelineId(req.distancePipelineId());
         return ProgramMapper.toDto(settings.save(s));
+    }
+
+    /**
+     * The designated pipeline and the cohort's milestone task must agree
+     * (spec §5): a BASELINE/DISTANCE milestone task referencing pipeline X
+     * while the designation says Y would tag submissions the comparison
+     * could never resolve.
+     */
+    private java.util.Optional<String> milestonePipelineSyncError(UUID cohortId,
+            MilestoneRole role, UUID designatedPipelineId) {
+        if (designatedPipelineId == null) {
+            return java.util.Optional.empty();
+        }
+        boolean mismatch = tasks.findByCohortAndMilestoneRole(cohortId, role).stream()
+                .anyMatch(t -> t.getRefId() != null && !t.getRefId().equals(designatedPipelineId));
+        return mismatch
+                ? java.util.Optional.of("The cohort's " + role.name().toLowerCase()
+                        + " milestone task references a different pipeline.")
+                : java.util.Optional.empty();
     }
 
     // ---------------------------------------------------------------- modules
 
     public ModuleDto createModule(UUID orgId, UUID cohortId, CreateModuleRequest req) {
-        cohortService.require(orgId, cohortId);
+        cohortService.requireEditable(orgId, cohortId);
         ProgramModule m = new ProgramModule();
         m.setOrgId(orgId);
         m.setCohortId(cohortId);
         m.setName(req.name());
         m.setSummary(req.summary());
+        m.setPillarLabel(blankToNull(req.pillarLabel()));
         m.setPosition(modules.findByCohortIdOrderByPositionAsc(cohortId).size());
         return ProgramMapper.toDto(modules.save(m), reached(m, teams.findOrgMembers(orgId)));
     }
 
     public ModuleDto updateModule(UUID orgId, UUID cohortId, UUID moduleId, UpdateModuleRequest req) {
-        ProgramModule m = requireModule(orgId, cohortId, moduleId);
+        ProgramModule m = requireEditableModule(orgId, cohortId, moduleId);
         m.setName(req.name());
         m.setSummary(req.summary());
+        m.setPillarLabel(blankToNull(req.pillarLabel()));
         m.setLockMode(req.lockMode());
         m.setUnlockAt(req.unlockAt());
         return ProgramMapper.toDto(m, reached(m, teams.findOrgMembers(orgId)));
     }
 
     public AudienceDto updateAudience(UUID orgId, UUID cohortId, UUID moduleId, UpdateAudienceRequest req) {
-        ProgramModule m = requireModule(orgId, cohortId, moduleId);
+        ProgramModule m = requireEditableModule(orgId, cohortId, moduleId);
         List<OrgMemberRow> members = teams.findOrgMembers(orgId);
 
         if (req.mode() == AudienceMode.TEAMS) {
@@ -144,7 +195,9 @@ public class ProgramAdminService {
         m.setMemberIds(new LinkedHashSet<>(req.memberIds()));
 
         // "New module assigned" for learners the audience newly reaches — only
-        // ones enrolled in this cohort (audience teams/members are org-scoped).
+        // ones enrolled in this cohort (audience teams/members are org-scoped),
+        // and only while the cohort is LAUNCHED: a DRAFT's module is invisible
+        // to members and a COMPLETED cohort is read-only for them.
         var cohort = cohortService.require(orgId, cohortId);
         List<UUID> newlyAssigned = members.stream()
                 .filter(member -> cohort.getMemberIds().contains(member.getId()))
@@ -152,7 +205,8 @@ public class ProgramAdminService {
                 .filter(member -> ProgramRules.includes(m, member.getId(), member.getTeamId()))
                 .map(OrgMemberRow::getId)
                 .toList();
-        if (!newlyAssigned.isEmpty()) {
+        if (!newlyAssigned.isEmpty()
+                && cohort.getStatus() == com.bvisionry.programflow.domain.CohortStatus.LAUNCHED) {
             events.publishEvent(new ProgramFlowEvents.ModuleAssigned(
                     orgId, m.getName(), cohort.getName(), newlyAssigned));
         }
@@ -163,7 +217,7 @@ public class ProgramAdminService {
 
     /** Deletes the module with its tasks/fields/submissions (DB cascades). */
     public void deleteModule(UUID orgId, UUID cohortId, UUID moduleId) {
-        ProgramModule m = requireModule(orgId, cohortId, moduleId);
+        ProgramModule m = requireEditableModule(orgId, cohortId, moduleId);
         modules.delete(m);
         // Compact positions so createModule's size-based position stays unique.
         int position = 0;
@@ -176,25 +230,43 @@ public class ProgramAdminService {
 
     // ------------------------------------------------------------------ tasks
 
-    public TaskDto createTask(UUID orgId, UUID cohortId, UUID moduleId) {
-        ProgramModule m = requireModule(orgId, cohortId, moduleId);
+    public TaskDto createTask(UUID orgId, UUID cohortId, UUID moduleId, ProgramTaskType taskType) {
+        ProgramModule m = requireEditableModule(orgId, cohortId, moduleId);
+        ProgramTaskType type = taskType == null ? ProgramTaskType.LESSON : taskType;
         ProgramTask t = new ProgramTask();
         t.setModule(m);
-        t.setName("Untitled task");
+        t.setTaskType(type);
+        t.setName("Untitled " + type.name().toLowerCase() + " task");
         t.setPosition(m.getTasks().size());
-        ProgramTaskField intro = new ProgramTaskField();
-        intro.setTask(t);
-        intro.setFieldType(FieldType.INSTRUCTIONS);
-        intro.setRequired(false);
-        intro.setPosition(0);
-        intro.setConfig(new LinkedHashMap<>(Map.of("text", "Describe what the founder needs to do.")));
-        t.getFields().add(intro);
+        if (type == ProgramTaskType.LESSON) {
+            ProgramTaskField intro = new ProgramTaskField();
+            intro.setTask(t);
+            intro.setFieldType(FieldType.INSTRUCTIONS);
+            intro.setRequired(false);
+            intro.setPosition(0);
+            intro.setConfig(new LinkedHashMap<>(Map.of("text", "Describe what the founder needs to do.")));
+            t.getFields().add(intro);
+        } else if (type == ProgramTaskType.ASSESSMENT) {
+            // A valid default (check-ins are the common case); the builder can
+            // switch to BASELINE/DISTANCE, which uniqueness-validates on save.
+            t.setMilestoneRole(MilestoneRole.CHECKIN);
+        }
         m.getTasks().add(t);
         return ProgramMapper.toDto(tasks.save(t));
     }
 
     public TaskDto updateTask(UUID orgId, UUID cohortId, UUID taskId, UpdateTaskRequest req) {
+        cohortService.requireEditable(orgId, cohortId);
         ProgramTask t = requireTask(orgId, cohortId, taskId);
+        // Additive contract: a request without taskType (pre-spine builder)
+        // leaves the whole type/ref/milestone trio untouched.
+        ProgramTaskType type = req.taskType() == null ? t.getTaskType() : req.taskType();
+        UUID refId = req.taskType() == null ? t.getRefId() : req.refId();
+        MilestoneRole role = req.taskType() == null ? t.getMilestoneRole() : req.milestoneRole();
+        validateSpine(orgId, cohortId, t, type, refId, role, req.status(), req.fields().size());
+        t.setTaskType(type);
+        t.setRefId(refId);
+        t.setMilestoneRole(role);
         t.setName(req.name());
         t.setDueDate(req.dueDate());
         t.setStatus(req.status());
@@ -203,8 +275,60 @@ public class ProgramAdminService {
         return ProgramMapper.toDto(t);
     }
 
+    /**
+     * Typed-spine rules (spec §1/§5): the per-task structural rules from
+     * {@link ProgramRules#taskTypeFieldErrors}, plus the cohort-level ones —
+     * at most ONE BASELINE and ONE DISTANCE milestone per cohort, and a
+     * BASELINE/DISTANCE task's pipeline must match the designated pair when
+     * one is designated. (Task moves stay within the cohort by construction,
+     * so create/update cover every mutation that could break these.)
+     */
+    private void validateSpine(UUID orgId, UUID cohortId, ProgramTask t, ProgramTaskType type,
+            UUID refId, MilestoneRole role,
+            com.bvisionry.programflow.domain.ProgramTaskStatus status, int fieldCount) {
+        Map<String, String> errors = new LinkedHashMap<>(
+                ProgramRules.taskTypeFieldErrors(type, refId, role, status, fieldCount));
+        // The reference must actually exist in its owning slice (review #7a);
+        // a LIVE course task also requires the course to be published.
+        if (errors.isEmpty() && refId != null
+                && !spine.refExists(type, refId, orgId,
+                        status == com.bvisionry.programflow.domain.ProgramTaskStatus.LIVE)) {
+            errors.put("refId", "The referenced " + type.name().toLowerCase()
+                    + (type == ProgramTaskType.COURSE
+                            ? " was not found or is not published." : " was not found."));
+        }
+        // Once members have answered a milestone, its instrument is frozen —
+        // re-pointing the ref would orphan their tagged submissions (review #7b).
+        if (errors.isEmpty() && t.getTaskType() == ProgramTaskType.ASSESSMENT
+                && t.getRefId() != null && !t.getRefId().equals(refId)
+                && spine.hasTaggedSubmissions(t.getId())) {
+            errors.put("refId", "Members have already answered this milestone — "
+                    + "its assessment pipeline can no longer change.");
+        }
+        if (errors.isEmpty() && (role == MilestoneRole.BASELINE || role == MilestoneRole.DISTANCE)) {
+            boolean taken = tasks.findByCohortAndMilestoneRole(cohortId, role).stream()
+                    .anyMatch(other -> !other.getId().equals(t.getId()));
+            if (taken) {
+                errors.put("milestoneRole", "This cohort already has a "
+                        + role.name().toLowerCase() + " milestone task.");
+            }
+            UUID designated = settings.findById(cohortId)
+                    .map(s -> role == MilestoneRole.BASELINE
+                            ? s.getBaselinePipelineId() : s.getDistancePipelineId())
+                    .orElse(null);
+            if (designated != null && refId != null && !designated.equals(refId)) {
+                errors.put("refId", "The cohort's designated " + role.name().toLowerCase()
+                        + " assessment is a different pipeline.");
+            }
+        }
+        if (!errors.isEmpty()) {
+            throw new FieldValidationException(errors);
+        }
+    }
+
     /** Deletes the task with its fields/submissions (orphan removal + DB cascades). */
     public void deleteTask(UUID orgId, UUID cohortId, UUID taskId) {
+        cohortService.requireEditable(orgId, cohortId);
         ProgramTask t = requireTask(orgId, cohortId, taskId);
         ProgramModule m = t.getModule();
         m.getTasks().remove(t);
@@ -221,6 +345,7 @@ public class ProgramAdminService {
      * written — removing from the source collection would orphan-delete the task.
      */
     public TaskDto moveTask(UUID orgId, UUID cohortId, UUID taskId, MoveTaskRequest req) {
+        cohortService.requireEditable(orgId, cohortId);
         ProgramTask t = requireTask(orgId, cohortId, taskId);
         ProgramModule source = t.getModule();
         ProgramModule target = requireModule(orgId, cohortId, req.moduleId());
@@ -275,7 +400,7 @@ public class ProgramAdminService {
 
     /** "Add to board": persists an AI-composed draft as a module of AI-draft tasks. */
     public ModuleDto addDraftModule(UUID orgId, UUID cohortId, com.bvisionry.programflow.dto.ModuleDraft draft) {
-        cohortService.require(orgId, cohortId);
+        cohortService.requireEditable(orgId, cohortId);
         ProgramModule m = new ProgramModule();
         m.setOrgId(orgId);
         m.setCohortId(cohortId);
@@ -336,8 +461,21 @@ public class ProgramAdminService {
         Map<UUID, String> teamNames = teams.findByOrgIdOrderByCreatedAtAsc(orgId).stream()
                 .collect(Collectors.toMap(t -> t.getId(), t -> t.getName()));
 
-        List<PulseRow> rows = teams.findOrgMembers(orgId).stream().map(member -> {
+        List<OrgMemberRow> orgMembers = teams.findOrgMembers(orgId);
+        // Non-LESSON columns read their owning slice, batched for every member.
+        List<ProgramTask> typedTasks = mods.stream()
+                .flatMap(m -> ProgramRules.liveTasks(m).stream())
+                .filter(t -> t.getTaskType() != ProgramTaskType.LESSON)
+                .toList();
+        Map<UUID, Map<UUID, JourneyTaskState>> typedByUser = myProgramService.typedStatesForPulse(
+                orgMembers.stream().map(OrgMemberRow::getId).toList(), typedTasks);
+        Map<UUID, ProgramTaskType> taskTypes = mods.stream()
+                .flatMap(m -> m.getTasks().stream())
+                .collect(Collectors.toMap(ProgramTask::getId, ProgramTask::getTaskType));
+
+        List<PulseRow> rows = orgMembers.stream().map(member -> {
             Map<UUID, ProgramSubmission> mine = byUserThenTask.getOrDefault(member.getId(), Map.of());
+            Map<UUID, JourneyTaskState> myTyped = typedByUser.getOrDefault(member.getId(), Map.of());
             List<CellState> cells = new ArrayList<>(taskIds.size());
             int assigned = 0;
             long done = 0;
@@ -349,13 +487,24 @@ public class ProgramAdminService {
                     cells.add(CellState.NOT_ASSIGNED);
                     continue;
                 }
-                assigned++;
-                ProgramSubmission s = mine.get(taskIds.get(i));
-                CellState state = s == null
-                        ? CellState.NOT_STARTED
-                        : s.getStatus() == SubmissionStatus.SUBMITTED ? CellState.SUBMITTED : CellState.IN_DRAFT;
-                if (state == CellState.SUBMITTED) {
-                    done++;
+                UUID taskId = taskIds.get(i);
+                ProgramTaskType type = taskTypes.get(taskId);
+                CellState state;
+                if (type == ProgramTaskType.LESSON) {
+                    ProgramSubmission s = mine.get(taskId);
+                    state = s == null
+                            ? CellState.NOT_STARTED
+                            : s.getStatus() == SubmissionStatus.SUBMITTED ? CellState.SUBMITTED : CellState.IN_DRAFT;
+                } else {
+                    state = cellOf(myTyped.get(taskId));
+                }
+                // A task that does not GATE renders a cell but counts in neither
+                // side of the completion percentage (ProgramRules.gates).
+                if (type.completableInApp()) {
+                    assigned++;
+                    if (state == CellState.SUBMITTED) {
+                        done++;
+                    }
                 }
                 cells.add(state);
             }
@@ -368,12 +517,201 @@ public class ProgramAdminService {
         return new PulseResponse(columns, rows, dueSoonDays);
     }
 
+    // ----------------------------------------------------------------- matrix
+
+    /** Platform key for the needs-attention "pillar under threshold" rule (§11). */
+    static final String KEY_PILLAR_THRESHOLD = "attention.pillar_threshold";
+    static final int DEFAULT_PILLAR_THRESHOLD = 40;
+    private static final int IDLE_DAYS = 7;
+
+    /**
+     * The cohort board's Founders tab (spec §2.3): the progress matrix over the
+     * ENROLLED founders (unlike the legacy pulse, which walks every org
+     * member). Works for a cohort in any lifecycle state — admins may inspect
+     * drafts and archives.
+     */
+    @Transactional(readOnly = true)
+    public CohortMatrixResponse getMatrix(UUID orgId, UUID cohortId) {
+        var cohort = cohortService.require(orgId, cohortId);
+        List<ProgramModule> mods = modules.findByCohortIdOrderByPositionAsc(cohortId);
+        List<OrgMemberRow> founders = teams.findOrgMembers(orgId).stream()
+                .filter(m -> cohort.getMemberIds().contains(m.getId()))
+                .toList();
+        List<UUID> founderIds = founders.stream().map(OrgMemberRow::getId).toList();
+
+        List<ModuleColumn> moduleColumns = mods.stream()
+                .map(m -> new ModuleColumn(m.getId(), m.getName(), m.getPillarLabel(), m.getPosition()))
+                .toList();
+
+        // Milestone columns: LIVE ASSESSMENT tasks carrying a milestone role, board order.
+        List<ProgramTask> milestoneTasks = mods.stream()
+                .flatMap(m -> ProgramRules.liveTasks(m).stream())
+                .filter(t -> t.getTaskType() == ProgramTaskType.ASSESSMENT
+                        && t.getMilestoneRole() != null)
+                .toList();
+        List<MilestoneColumn> milestoneColumns = milestoneTasks.stream()
+                .map(t -> new MilestoneColumn(t.getId(), t.getName(), t.getMilestoneRole(),
+                        t.getDueDate()))
+                .toList();
+
+        // Per-founder per-task done-state, via the same machinery as the pulse
+        // and the member journey (single source of done semantics).
+        List<ProgramTask> typedTasks = mods.stream()
+                .flatMap(m -> ProgramRules.liveTasks(m).stream())
+                .filter(t -> t.getTaskType() != ProgramTaskType.LESSON)
+                .toList();
+        Map<UUID, Map<UUID, MyProgramService.TypedState>> typedByUser =
+                myProgramService.typedStates(founderIds, typedTasks);
+        List<UUID> lessonTaskIds = mods.stream()
+                .flatMap(m -> ProgramRules.liveTasks(m).stream())
+                .filter(t -> t.getTaskType() == ProgramTaskType.LESSON)
+                .map(ProgramTask::getId)
+                .toList();
+        Map<UUID, Map<UUID, ProgramSubmission>> lessonByUser = lessonTaskIds.isEmpty()
+                ? Map.of()
+                : submissions.findByTaskIdIn(lessonTaskIds).stream().collect(Collectors.groupingBy(
+                        ProgramSubmission::getUserId,
+                        Collectors.toMap(ProgramSubmission::getTaskId, Function.identity())));
+
+        Map<UUID, CohortBoardReadRepository.TriageRow> triage = boardReads
+                .triage(orgId, founderIds).stream()
+                .collect(Collectors.toMap(CohortBoardReadRepository.TriageRow::userId,
+                        Function.identity()));
+        int pillarThreshold = boardReads.platformInt(KEY_PILLAR_THRESHOLD, DEFAULT_PILLAR_THRESHOLD);
+
+        java.time.LocalDate today = java.time.LocalDate.now();
+        java.time.OffsetDateTime idleCutoff = java.time.OffsetDateTime.now().minusDays(IDLE_DAYS);
+        // Spec §3: COURSE tasks whose course the org can no longer see, and the
+        // members with a course deadline already past. Two batched reads for the
+        // whole matrix, not two per founder.
+        Set<UUID> blockedCourses = myProgramService.blockedCourseIds(orgId, mods);
+        Set<UUID> overdueCourseMembers = spine.membersWithOverdueCourses(cohortId);
+
+        List<FounderRow> rows = founders.stream().map(member -> {
+            Map<UUID, MyProgramService.TypedState> myTyped =
+                    typedByUser.getOrDefault(member.getId(), Map.of());
+            Map<UUID, ProgramSubmission> myLessons =
+                    lessonByUser.getOrDefault(member.getId(), Map.of());
+
+            boolean anyOverdue = overdueCourseMembers.contains(member.getId());
+            boolean courseUnavailable = false;
+            int maxDoneModulePosition = -1;
+
+            List<ModuleCell> moduleCells = new ArrayList<>(mods.size());
+            for (ProgramModule m : mods) {
+                if (!ProgramRules.includes(m, member.getId(), member.getTeamId())) {
+                    moduleCells.add(new ModuleCell(false, 0, 0));
+                    continue;
+                }
+                int done = 0;
+                int total = 0;
+                for (ProgramTask t : ProgramRules.liveTasks(m)) {
+                    if (!ProgramRules.gates(t, blockedCourses)) {
+                        // A course the org can no longer open holds nothing and
+                        // counts nowhere — but it is worth an admin's attention.
+                        courseUnavailable = courseUnavailable
+                                || t.getTaskType() == ProgramTaskType.COURSE;
+                        continue;
+                    }
+                    boolean taskDone = isDone(t, myLessons, myTyped);
+                    total++;
+                    if (taskDone) {
+                        done++;
+                        maxDoneModulePosition = Math.max(maxDoneModulePosition, m.getPosition());
+                    }
+                    if (!taskDone && t.getDueDate() != null && t.getDueDate().isBefore(today)) {
+                        anyOverdue = true;
+                    }
+                }
+                moduleCells.add(new ModuleCell(true, done, total));
+            }
+
+            // "Walked past a check-in": ANY non-DISTANCE milestone (baseline or
+            // mid-program check-in) left undone while the founder has already
+            // produced work in a LATER module. DISTANCE is exempt — it is the
+            // end-of-cohort measurement, everything is "later work" before it.
+            boolean skippedCheckin = false;
+            List<MilestoneCell> milestoneCells = new ArrayList<>(milestoneTasks.size());
+            for (ProgramTask t : milestoneTasks) {
+                boolean assigned = ProgramRules.includes(t.getModule(), member.getId(),
+                        member.getTeamId());
+                MyProgramService.TypedState ts = myTyped.getOrDefault(t.getId(),
+                        MyProgramService.TypedState.NOT_STARTED);
+                milestoneCells.add(new MilestoneCell(assigned, ts.state(), ts.score(),
+                        ts.submittedAt(), ts.completedAt()));
+                if (t.getMilestoneRole() != MilestoneRole.DISTANCE && assigned
+                        && !ProgramRules.done(ts.state())
+                        && maxDoneModulePosition > t.getModule().getPosition()) {
+                    skippedCheckin = true;
+                }
+            }
+
+            CohortBoardReadRepository.TriageRow tri = triage.get(member.getId());
+            List<AttentionFlag> flags = new ArrayList<>();
+            if (tri == null || tri.lastActivityAt() == null
+                    || tri.lastActivityAt().isBefore(idleCutoff)) {
+                flags.add(AttentionFlag.IDLE);
+            }
+            if (anyOverdue) {
+                flags.add(AttentionFlag.OVERDUE_TASKS);
+            }
+            if (skippedCheckin) {
+                flags.add(AttentionFlag.CHECKIN_UNSTARTED);
+            }
+            if (courseUnavailable) {
+                flags.add(AttentionFlag.COURSE_UNAVAILABLE);
+            }
+            if (tri != null && tri.minPillarScore() != null
+                    && tri.minPillarScore().intValue() < pillarThreshold) {
+                flags.add(AttentionFlag.PILLAR_BELOW_THRESHOLD);
+            }
+
+            java.math.BigDecimal friLatest = tri == null ? null : tri.friLatest();
+            java.math.BigDecimal friDelta = tri == null || tri.evaluatedCount() < 2 ? null
+                    : tri.friLatest().subtract(tri.friEarliest());
+            return new FounderRow(member.getId(), member.getName(), moduleCells, milestoneCells,
+                    friLatest, friDelta, tri == null ? 0 : tri.awaitingReview(),
+                    tri == null ? null : tri.lastActivityAt(), flags);
+        }).toList();
+
+        return new CohortMatrixResponse(moduleColumns, milestoneColumns, rows, pillarThreshold);
+    }
+
+    /** Done per the shared spine rule: LESSON = SUBMITTED submission, typed = ProgramRules.done. */
+    private static boolean isDone(ProgramTask t, Map<UUID, ProgramSubmission> myLessons,
+            Map<UUID, MyProgramService.TypedState> myTyped) {
+        if (t.getTaskType() == ProgramTaskType.LESSON) {
+            ProgramSubmission sub = myLessons.get(t.getId());
+            return sub != null && sub.getStatus() == SubmissionStatus.SUBMITTED;
+        }
+        MyProgramService.TypedState ts = myTyped.get(t.getId());
+        return ts != null && ProgramRules.done(ts.state());
+    }
+
     // ---------------------------------------------------------------- helpers
+
+    /** Typed-task state → pulse cell: done-states read as SUBMITTED, activity as IN_DRAFT. */
+    private static CellState cellOf(JourneyTaskState state) {
+        if (state == null || state == JourneyTaskState.NOT_STARTED) {
+            return CellState.NOT_STARTED;
+        }
+        return ProgramRules.done(state) ? CellState.SUBMITTED : CellState.IN_DRAFT;
+    }
 
     private int reached(ProgramModule m, List<OrgMemberRow> members) {
         return (int) members.stream()
                 .filter(member -> ProgramRules.includes(m, member.getId(), member.getTeamId()))
                 .count();
+    }
+
+    /** {@link #requireModule} behind the cohort's ARCHIVED read-only gate. */
+    private ProgramModule requireEditableModule(UUID orgId, UUID cohortId, UUID moduleId) {
+        cohortService.requireEditable(orgId, cohortId);
+        return requireModule(orgId, cohortId, moduleId);
+    }
+
+    private static String blankToNull(String v) {
+        return v == null || v.isBlank() ? null : v.trim();
     }
 
     private ProgramModule requireModule(UUID orgId, UUID cohortId, UUID moduleId) {

@@ -56,6 +56,9 @@ class MyProgramServiceTest {
     @Mock
     private TeamRepository teams;
     @Mock
+    private com.bvisionry.programflow.repository.TaskSpineRepository spine;
+    @Mock private com.bvisionry.common.coursevisibility.CourseVisibilityAccess courseVisibility;
+    @Mock
     private CurrentUserAccessor currentUser;
     @Mock
     private org.springframework.context.ApplicationEventPublisher eventPublisher;
@@ -73,12 +76,12 @@ class MyProgramServiceTest {
     @BeforeEach
     void setUp() {
         service = new MyProgramService(cohorts, modules, tasks, submissions, settings, teams,
-                currentUser, eventPublisher);
+                spine, courseVisibility, currentUser, eventPublisher);
 
         cohort = new Cohort();
         cohort.setId(cohortId);
         cohort.setOrgId(orgId);
-        cohort.setStatus(CohortStatus.ACTIVE);
+        cohort.setStatus(CohortStatus.LAUNCHED);
         cohort.getMemberIds().add(userId);
 
         module = new ProgramModule();
@@ -187,6 +190,23 @@ class MyProgramServiceTest {
 
         assertThat(response.pointsEarned()).isZero();
         assertThat(existing.getPointsAwarded()).isEqualTo(55);
+    }
+
+    @Test
+    void nonLessonTasksRejectThePlayerAndSubmitPaths() {
+        task.setTaskType(com.bvisionry.programflow.domain.ProgramTaskType.COURSE);
+        task.setRefId(UUID.randomUUID());
+        task.getFields().clear();
+
+        assertThatThrownBy(() -> service.player(task.getId()))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("open it instead");
+        assertThatThrownBy(() -> service.submit(task.getId(), Map.of()))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("open it instead");
+        assertThatThrownBy(() -> service.saveAnswers(task.getId(), Map.of()))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("open it instead");
     }
 
     @Test

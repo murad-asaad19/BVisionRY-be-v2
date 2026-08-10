@@ -26,14 +26,18 @@ import com.bvisionry.programflow.domain.ProgramModule;
 import com.bvisionry.programflow.domain.ProgramSubmission;
 import com.bvisionry.programflow.domain.ProgramTask;
 import com.bvisionry.programflow.domain.ProgramTaskStatus;
+import com.bvisionry.programflow.domain.ProgramTaskType;
 import com.bvisionry.programflow.domain.SubmissionStatus;
+import com.bvisionry.programflow.dto.DirectAssignmentDto;
 import com.bvisionry.programflow.dto.GamificationDto;
 import com.bvisionry.programflow.dto.JourneyResponse;
 import com.bvisionry.programflow.dto.JourneyResponse.JourneyModule;
 import com.bvisionry.programflow.dto.JourneyResponse.JourneyTask;
 import com.bvisionry.programflow.dto.JourneyResponse.LockState;
+import com.bvisionry.programflow.dto.JourneyTaskState;
 import com.bvisionry.programflow.dto.LeaderboardResponse;
 import com.bvisionry.programflow.dto.LearnerCohortDto;
+import com.bvisionry.programflow.dto.OpenTaskResponse;
 import com.bvisionry.programflow.dto.PlayerResponse;
 import com.bvisionry.programflow.dto.ProgramSettingsDto;
 import com.bvisionry.programflow.dto.SaveAnswersResponse;
@@ -44,6 +48,7 @@ import com.bvisionry.programflow.repository.ProgramModuleRepository;
 import com.bvisionry.programflow.repository.ProgramSettingsRepository;
 import com.bvisionry.programflow.repository.ProgramSubmissionRepository;
 import com.bvisionry.programflow.repository.ProgramTaskRepository;
+import com.bvisionry.programflow.repository.TaskSpineRepository;
 import com.bvisionry.programflow.repository.TeamRepository;
 
 import lombok.RequiredArgsConstructor;
@@ -60,12 +65,14 @@ public class MyProgramService {
     private final ProgramSubmissionRepository submissions;
     private final ProgramSettingsRepository settings;
     private final TeamRepository teams;
+    private final TaskSpineRepository spine;
+    private final com.bvisionry.common.coursevisibility.CourseVisibilityAccess courseVisibility;
     private final CurrentUserAccessor currentUser;
     private final ApplicationEventPublisher eventPublisher;
 
     // --------------------------------------------------------------- cohorts
 
-    /** The cohorts the current learner is enrolled in (ACTIVE first), for the switcher. */
+    /** The cohorts the current learner is enrolled in (LAUNCHED first; DRAFT/ARCHIVED invisible), for the switcher. */
     @Transactional(readOnly = true)
     public List<LearnerCohortDto> myCohorts() {
         return cohorts.findEnrolled(currentUser.require().userId()).stream()
@@ -76,38 +83,169 @@ public class MyProgramService {
 
     @Transactional(readOnly = true)
     public JourneyResponse journey(UUID cohortId) {
-        UUID userId = currentUser.require().userId();
-        Cohort cohort = resolveCohort(userId, cohortId);
+        CurrentUser me = currentUser.require();
+        return buildJourney(me.userId(), me.orgId(), resolveCohort(me.userId(), cohortId));
+    }
+
+    /**
+     * Read-only journey of ANOTHER member for the shared founder profile
+     * (redesign spec §2.4 — "read-only reuse of the member's Journey").
+     * CALLERS AUTHORIZE FIRST (org guard stack or {@code CoachAccess}); this
+     * method's own tenancy contribution is the org filter on the enrolled
+     * cohorts, so a foreign org id can only ever produce the empty journey.
+     * Cohort choice mirrors {@link #resolveCohort}: an explicit request must
+     * be one of the member's org-scoped cohorts (else 404); null defaults to
+     * the first enrolled (LAUNCHED first; DRAFT/ARCHIVED are invisible here too — same rule as the member).
+     */
+    @Transactional(readOnly = true)
+    public JourneyResponse journeyOfMember(UUID orgId, UUID memberId, UUID requestedCohortId) {
+        List<Cohort> enrolled = cohorts.findEnrolled(memberId).stream()
+                .filter(c -> orgId.equals(c.getOrgId()))
+                .toList();
+        Cohort cohort;
+        if (requestedCohortId != null) {
+            cohort = enrolled.stream()
+                    .filter(c -> c.getId().equals(requestedCohortId))
+                    .findFirst()
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "Cohort", requestedCohortId.toString()));
+        } else {
+            cohort = enrolled.isEmpty() ? null : enrolled.get(0);
+        }
+        return buildJourney(memberId, orgId, cohort);
+    }
+
+    private JourneyResponse buildJourney(UUID userId, UUID orgId, Cohort cohort) {
+        List<DirectAssignmentDto> direct = directAssignments(orgId, userId);
         if (cohort == null) {
+            // Spec §2.1: no cohort → the page is Direct assignments only.
             return new JourneyResponse(ProgramSettingsDto.defaults(), new JourneyResponse.Progress(0, 0),
-                    gamification(List.of()), List.of(), null, false);
+                    gamification(List.of()), List.of(), null, false, 0, direct);
         }
         Context ctx = context(userId, cohort);
         ProgramSettingsDto s = settingsOf(cohort.getId());
+        Set<UUID> blockedCourses = blockedCourseIds(orgId, ctx.visibleModules());
 
         List<JourneyModule> journeyModules = new ArrayList<>();
         int done = 0;
         int total = 0;
+        // The payoff "before" (spec §2.1/§5): walking modules in board order,
+        // each evaluated milestone's score becomes the next milestone's before.
+        java.math.BigDecimal previousMilestoneScore = null;
         for (int i = 0; i < ctx.visibleModules().size(); i++) {
             ProgramModule m = ctx.visibleModules().get(i);
             LockState lock = ProgramRules.lockState(ctx.visibleModules(), i, s.dripEnabled(),
-                    ctx.submittedTaskIds(), OffsetDateTime.now());
-            List<JourneyTask> journeyTasks = ProgramRules.liveTasks(m).stream().map(t -> {
-                ProgramSubmission sub = ctx.myByTask().get(t.getId());
-                int steps = t.getFields().size();
-                int questions = (int) t.getFields().stream().filter(f -> f.getFieldType().answerable()).count();
-                return new JourneyTask(t.getId(), t.getName(), t.getDueDate(), questions, steps,
-                        sub == null ? null : sub.getStatus());
-            }).toList();
-            done += (int) journeyTasks.stream().filter(t -> t.myStatus() == SubmissionStatus.SUBMITTED).count();
-            total += journeyTasks.size();
+                    ctx.doneTaskIds(), blockedCourses, OffsetDateTime.now());
+            List<JourneyTask> journeyTasks = new ArrayList<>();
+            for (ProgramTask t : ProgramRules.liveTasks(m)) {
+                JourneyTask row = journeyTask(t, ctx, previousMilestoneScore, blockedCourses);
+                if (t.getTaskType() == ProgramTaskType.ASSESSMENT && row.score() != null) {
+                    previousMilestoneScore = row.score();
+                }
+                // A task that does not GATE renders but counts in neither side of
+                // the progress fraction (ProgramRules.gates — the one predicate).
+                if (ProgramRules.gates(t, blockedCourses)) {
+                    if (ProgramRules.done(row.state())) {
+                        done++;
+                    }
+                    total++;
+                }
+                journeyTasks.add(row);
+            }
             journeyModules.add(new JourneyModule(m.getId(), m.getName(), m.getSummary(), lock, m.getUnlockAt(),
                     i > 0 ? ctx.visibleModules().get(i - 1).getName() : null, journeyTasks));
         }
 
+        // Spec §3/§10: a REQUIRED course assigned outside the cohort (org rule or
+        // direct) gates journey progress too — that is what "required" buys the
+        // admin. Optional ones display and never gate. Cohort COURSE tasks are
+        // already counted above; the task is the gate there.
+        for (DirectAssignmentDto d : direct) {
+            if (d.taskType() == ProgramTaskType.COURSE && d.required()) {
+                total++;
+                if (ProgramRules.done(d.state())) {
+                    done++;
+                }
+            }
+        }
+
         return new JourneyResponse(s, new JourneyResponse.Progress(done, total),
                 gamification(ctx.mySubmissions()), journeyModules,
-                cohort.getId(), cohort.getStatus() == CohortStatus.FINISHED);
+                cohort.getId(), cohort.getStatus() == CohortStatus.COMPLETED,
+                cohort.getMemberIds().size(), direct);
+    }
+
+    /** One typed journey row: LESSON keeps the legacy fields; other types read their slice. */
+    private JourneyTask journeyTask(ProgramTask t, Context ctx,
+            java.math.BigDecimal previousMilestoneScore, Set<UUID> blockedCourses) {
+        if (t.getTaskType() == ProgramTaskType.LESSON) {
+            ProgramSubmission sub = ctx.myByTask().get(t.getId());
+            int steps = t.getFields().size();
+            int questions = (int) t.getFields().stream()
+                    .filter(f -> f.getFieldType().answerable()).count();
+            return new JourneyTask(t.getId(), t.getName(), t.getDueDate(), questions, steps,
+                    sub == null ? null : sub.getStatus(),
+                    ProgramTaskType.LESSON, null, null,
+                    ProgramRules.lessonState(sub == null ? null : sub.getStatus()),
+                    null, null, null,
+                    sub == null || sub.getSubmittedAt() == null ? null : sub.getSubmittedAt().toInstant(),
+                    null, false);
+        }
+        TypedState ts = ctx.typedStates().getOrDefault(t.getId(), TypedState.NOT_STARTED);
+        return new JourneyTask(t.getId(), t.getName(), t.getDueDate(), 0, 0, null,
+                t.getTaskType(), t.getRefId(), t.getMilestoneRole(), ts.state(),
+                ts.progressPct(), ts.score(),
+                t.getTaskType() == ProgramTaskType.ASSESSMENT ? previousMilestoneScore : null,
+                ts.submittedAt(), ts.completedAt(),
+                t.getTaskType() == ProgramTaskType.COURSE && t.getRefId() != null
+                        && blockedCourses.contains(t.getRefId()));
+    }
+
+    /**
+     * COURSE task refs the cohort's org may no longer SEE (spec §3). One batched
+     * query per journey/board render; empty when the org has none.
+     */
+    Set<UUID> blockedCourseIds(UUID orgId, List<ProgramModule> modules) {
+        Set<UUID> refs = modules.stream()
+                .flatMap(m -> ProgramRules.liveTasks(m).stream())
+                .filter(t -> t.getTaskType() == ProgramTaskType.COURSE && t.getRefId() != null)
+                .map(ProgramTask::getRefId)
+                .collect(java.util.stream.Collectors.toSet());
+        return courseVisibility.invisibleCourseIds(orgId, refs);
+    }
+
+    /* ------------------------------------------------- direct assignments */
+
+    /** The member's work not attached to any cohort task (spec §2.1). */
+    private List<DirectAssignmentDto> directAssignments(UUID orgId, UUID userId) {
+        if (orgId == null) {
+            return List.of();
+        }
+        List<DirectAssignmentDto> rows = new ArrayList<>();
+        for (var e : spine.directExercises(orgId, userId)) {
+            rows.add(new DirectAssignmentDto(e.assignmentId(), ProgramTaskType.EXERCISE,
+                    e.templateId(), e.submissionId(), e.title(),
+                    ProgramRules.exerciseState(e.status()), null, null,
+                    e.deadline(), e.assignedAt(), e.submittedAt(), e.reviewedAt(), null, false));
+        }
+        for (var a : spine.directAssessments(orgId, userId)) {
+            rows.add(new DirectAssignmentDto(a.assignmentId(), ProgramTaskType.ASSESSMENT,
+                    a.pipelineId(), a.submissionId(), a.title(),
+                    ProgramRules.assessmentState(a.status()), null, a.score(),
+                    a.deadline(), a.assignedAt(), a.submittedAt(), a.evaluatedAt(), null, false));
+        }
+        for (var c : spine.directCourses(userId)) {
+            // A rule-derived row has no enrollment yet, so status is null and
+            // ProgramRules.courseState maps it to NOT_STARTED — exactly right:
+            // the member has the course and has not started it. The row appears
+            // when they open it (TaskSpineRepository#ensureEnrollment).
+            rows.add(new DirectAssignmentDto(c.enrollmentId(), ProgramTaskType.COURSE,
+                    c.courseId(), c.courseId(), c.title(),
+                    ProgramRules.courseState(c.status()), c.progressPct(), null,
+                    c.deadline(), c.enrolledAt(), null, c.completedAt(),
+                    c.source(), c.required()));
+        }
+        return rows;
     }
 
     // ----------------------------------------------------------------- player
@@ -115,6 +253,7 @@ public class MyProgramService {
     @Transactional(readOnly = true)
     public PlayerResponse player(UUID taskId) {
         Access access = requireAccess(taskId);
+        requireLesson(access.task());
         ProgramSubmission sub = submissions
                 .findByTaskIdAndUserId(taskId, access.ctx().userId()).orElse(null);
         ProgramTask t = access.task();
@@ -138,11 +277,14 @@ public class MyProgramService {
      */
     @Transactional(readOnly = true)
     public ProgramTask requirePlayableTask(UUID taskId) {
-        return requireAccess(taskId).task();
+        ProgramTask t = requireAccess(taskId).task();
+        requireLesson(t);
+        return t;
     }
 
     public SaveAnswersResponse saveAnswers(UUID taskId, Map<String, Object> answers) {
         Access access = requireWritableAccess(taskId);
+        requireLesson(access.task());
         ProgramSubmission sub = submissions.findByTaskIdAndUserId(taskId, access.ctx().userId())
                 .orElseGet(() -> {
                     ProgramSubmission created = new ProgramSubmission();
@@ -158,6 +300,7 @@ public class MyProgramService {
 
     public SubmitResponse submit(UUID taskId, Map<String, Object> answers) {
         Access access = requireWritableAccess(taskId);
+        requireLesson(access.task());
         ProgramTask t = access.task();
 
         List<UUID> missing = ProgramRules.missingRequired(t.getFields(), answers);
@@ -261,7 +404,7 @@ public class MyProgramService {
     /**
      * Resolves which cohort a learner is looking at. A non-null request must be
      * one they're enrolled in (else 404); a null request defaults to their first
-     * enrolled cohort (ACTIVE ones first), or null when they have none.
+     * enrolled visible cohort (LAUNCHED first), or null when they have none.
      */
     private Cohort resolveCohort(UUID userId, UUID requestedCohortId) {
         List<Cohort> enrolled = cohorts.findEnrolled(userId);
@@ -272,13 +415,31 @@ public class MyProgramService {
         return enrolled.isEmpty() ? null : enrolled.get(0);
     }
 
-    /** The learner's visible modules and submissions within one cohort, loaded once per request. */
+    /**
+     * A non-LESSON task's member state read from its owning slice (course
+     * enrollment / exercise submission / tagged assessment submission /
+     * workshop or survey participation).
+     */
+    record TypedState(JourneyTaskState state, Integer progressPct,
+            java.math.BigDecimal score, java.time.Instant submittedAt,
+            java.time.Instant completedAt) {
+
+        static final TypedState NOT_STARTED =
+                new TypedState(JourneyTaskState.NOT_STARTED, null, null, null, null);
+    }
+
+    /**
+     * The learner's visible modules, submissions and typed-task states within
+     * one cohort, loaded once per request. {@code doneTaskIds} counts every
+     * task type (LESSON submitted, course completed, exercise submitted or
+     * reviewed, …) — the drip lock and next-task cursor run on it.
+     */
     private record Context(UUID userId, Cohort cohort, List<ProgramModule> visibleModules,
             List<ProgramSubmission> mySubmissions, Map<UUID, ProgramSubmission> myByTask,
-            Set<UUID> submittedTaskIds) {
+            Map<UUID, TypedState> typedStates, Set<UUID> doneTaskIds) {
 
         boolean finished() {
-            return cohort.getStatus() == CohortStatus.FINISHED;
+            return cohort.getStatus() == CohortStatus.COMPLETED;
         }
     }
 
@@ -296,11 +457,140 @@ public class MyProgramService {
                 .toList();
         Map<UUID, ProgramSubmission> byTask = mine.stream()
                 .collect(Collectors.toMap(ProgramSubmission::getTaskId, s -> s));
-        Set<UUID> submitted = mine.stream()
+
+        List<ProgramTask> typedTasks = visible.stream()
+                .flatMap(m -> ProgramRules.liveTasks(m).stream())
+                .filter(t -> t.getTaskType() != ProgramTaskType.LESSON)
+                .toList();
+        Map<UUID, TypedState> typedStates = typedStates(List.of(userId), typedTasks)
+                .getOrDefault(userId, Map.of());
+
+        Set<UUID> done = new HashSet<>();
+        mine.stream()
                 .filter(s -> s.getStatus() == SubmissionStatus.SUBMITTED)
                 .map(ProgramSubmission::getTaskId)
-                .collect(Collectors.toSet());
-        return new Context(userId, cohort, visible, mine, byTask, submitted);
+                .forEach(done::add);
+        typedStates.forEach((taskId, ts) -> {
+            if (ProgramRules.done(ts.state())) {
+                done.add(taskId);
+            }
+        });
+        return new Context(userId, cohort, visible, mine, byTask, typedStates, done);
+    }
+
+    /**
+     * Batch cross-slice status read for non-LESSON tasks, reduced to the
+     * unified state vocabulary — the admin pulse's door into the spine
+     * (keyed user → task → state; absent = not started).
+     */
+    Map<UUID, Map<UUID, JourneyTaskState>> typedStatesForPulse(List<UUID> userIds,
+            List<ProgramTask> typedTasks) {
+        Map<UUID, Map<UUID, JourneyTaskState>> out = new LinkedHashMap<>();
+        typedStates(userIds, typedTasks).forEach((userId, byTask) -> byTask.forEach(
+                (taskId, ts) -> out.computeIfAbsent(userId, k -> new LinkedHashMap<>())
+                        .put(taskId, ts.state())));
+        return out;
+    }
+
+    /** Package-private: the cohort-board matrix reads full typed states (score + stamps). */
+    Map<UUID, Map<UUID, TypedState>> typedStates(List<UUID> userIds,
+            List<ProgramTask> typedTasks) {
+        Map<UUID, Map<UUID, TypedState>> byUser = new LinkedHashMap<>();
+        if (userIds.isEmpty() || typedTasks.isEmpty()) {
+            return byUser;
+        }
+        Map<ProgramTaskType, List<ProgramTask>> byType = typedTasks.stream()
+                .filter(t -> t.getRefId() != null)
+                .collect(Collectors.groupingBy(ProgramTask::getTaskType));
+
+        // COURSE — enrollment per (user, course); several tasks may share a ref.
+        List<ProgramTask> courses = byType.getOrDefault(ProgramTaskType.COURSE, List.of());
+        if (!courses.isEmpty()) {
+            var rows = spine.courseStates(userIds, refs(courses));
+            for (var r : rows) {
+                TypedState ts = new TypedState(ProgramRules.courseState(r.status()),
+                        r.progressPct(), null, null, r.completedAt());
+                forTasksWithRef(courses, r.courseId(),
+                        taskId -> put(byUser, r.userId(), taskId, ts));
+            }
+        }
+        List<ProgramTask> exercises = byType.getOrDefault(ProgramTaskType.EXERCISE, List.of());
+        if (!exercises.isEmpty()) {
+            for (var r : spine.exerciseStates(userIds, refs(exercises))) {
+                TypedState ts = new TypedState(ProgramRules.exerciseState(r.status()),
+                        null, null, r.submittedAt(), r.reviewedAt());
+                forTasksWithRef(exercises, r.templateId(),
+                        taskId -> put(byUser, r.userId(), taskId, ts));
+            }
+        }
+        // ASSESSMENT — keyed by TASK id (the submission tag), not by ref:
+        // same-pipeline milestones stay distinguishable.
+        List<ProgramTask> assessments = byType.getOrDefault(ProgramTaskType.ASSESSMENT, List.of());
+        if (!assessments.isEmpty()) {
+            var taskIds = assessments.stream().map(ProgramTask::getId).toList();
+            for (var r : spine.assessmentStates(userIds, taskIds)) {
+                put(byUser, r.userId(), r.taskId(), new TypedState(
+                        ProgramRules.assessmentState(r.status()), null,
+                        "EVALUATED".equals(r.status()) ? r.score() : null,
+                        r.submittedAt(), r.evaluatedAt()));
+            }
+            // Pre-spine visibility (review decision #6): a BASELINE milestone
+            // with NO tagged submission falls back to the member's EARLIEST
+            // evaluated submission of that pipeline — mirroring the comparison
+            // slice's baseline resolution exactly, so the journey band and the
+            // report agree. CHECKIN/DISTANCE stay tag-only.
+            List<ProgramTask> baselineTasks = assessments.stream()
+                    .filter(t -> t.getMilestoneRole()
+                            == com.bvisionry.programflow.domain.MilestoneRole.BASELINE)
+                    .toList();
+            for (var r : spine.earliestEvaluatedForPipelines(userIds, refs(baselineTasks))) {
+                for (ProgramTask t : baselineTasks) {
+                    if (r.pipelineId().equals(t.getRefId())
+                            && !byUser.getOrDefault(r.userId(), Map.of()).containsKey(t.getId())) {
+                        put(byUser, r.userId(), t.getId(), new TypedState(
+                                JourneyTaskState.EVALUATED, null, r.score(),
+                                r.submittedAt(), r.evaluatedAt()));
+                    }
+                }
+            }
+        }
+        List<ProgramTask> workshops = byType.getOrDefault(ProgramTaskType.WORKSHOP, List.of());
+        if (!workshops.isEmpty()) {
+            for (var r : spine.workshopParticipation(userIds, refs(workshops))) {
+                TypedState ts = new TypedState(JourneyTaskState.DONE, null, null,
+                        null, r.completedAt());
+                forTasksWithRef(workshops, r.refId(),
+                        taskId -> put(byUser, r.userId(), taskId, ts));
+            }
+        }
+        List<ProgramTask> surveys = byType.getOrDefault(ProgramTaskType.SURVEY, List.of());
+        if (!surveys.isEmpty()) {
+            for (var r : spine.surveyParticipation(userIds, refs(surveys))) {
+                TypedState ts = new TypedState(JourneyTaskState.DONE, null, null,
+                        r.completedAt(), r.completedAt());
+                forTasksWithRef(surveys, r.refId(),
+                        taskId -> put(byUser, r.userId(), taskId, ts));
+            }
+        }
+        return byUser;
+    }
+
+    private static List<UUID> refs(List<ProgramTask> tasks) {
+        return tasks.stream().map(ProgramTask::getRefId).distinct().toList();
+    }
+
+    private static void forTasksWithRef(List<ProgramTask> tasks, UUID refId,
+            java.util.function.Consumer<UUID> taskIdConsumer) {
+        for (ProgramTask t : tasks) {
+            if (refId.equals(t.getRefId())) {
+                taskIdConsumer.accept(t.getId());
+            }
+        }
+    }
+
+    private static void put(Map<UUID, Map<UUID, TypedState>> byUser, UUID userId, UUID taskId,
+            TypedState state) {
+        byUser.computeIfAbsent(userId, k -> new LinkedHashMap<>()).put(taskId, state);
     }
 
     /** A stream findFirst() would NPE on a null team id, so use a plain loop. */
@@ -316,7 +606,7 @@ public class MyProgramService {
     private record Access(Context ctx, ProgramTask task, ProgramModule module, int moduleIndex) {
     }
 
-    /** Like {@link #requireAccess} but rejects writes to a FINISHED (read-only) cohort. */
+    /** Like {@link #requireAccess} but rejects writes to a COMPLETED (read-only) cohort. */
     private Access requireWritableAccess(UUID taskId) {
         Access access = requireAccess(taskId);
         if (access.ctx().finished()) {
@@ -328,7 +618,7 @@ public class MyProgramService {
     /**
      * Loads the task and verifies the learner may work on it: LIVE, in a cohort
      * they're enrolled in, in a module whose audience includes them and — unless
-     * the cohort has finished (read-only review) — whose drip is unlocked.
+     * the cohort has completed (read-only review) — whose drip is unlocked.
      */
     private Access requireAccess(UUID taskId) {
         UUID userId = currentUser.require().userId();
@@ -351,7 +641,9 @@ public class MyProgramService {
         if (!ctx.finished()) {
             boolean dripEnabled = settingsOf(cohort.getId()).dripEnabled();
             LockState lock = ProgramRules.lockState(ctx.visibleModules(), index, dripEnabled,
-                    ctx.submittedTaskIds(), OffsetDateTime.now());
+                    ctx.doneTaskIds(),
+                    blockedCourseIds(cohort.getOrgId(), ctx.visibleModules()),
+                    OffsetDateTime.now());
             if (lock != LockState.UNLOCKED) {
                 throw new BadRequestException("This module hasn't unlocked yet");
             }
@@ -359,20 +651,90 @@ public class MyProgramService {
         return new Access(ctx, t, ctx.visibleModules().get(index), index);
     }
 
+    /** Lessons are the only tasks with an in-place form; other types open via {@link #open}. */
+    private static void requireLesson(ProgramTask t) {
+        if (t.getTaskType() != ProgramTaskType.LESSON) {
+            throw new BadRequestException(
+                    "This is a " + t.getTaskType().name().toLowerCase() + " task — open it instead.");
+        }
+    }
+
+    /**
+     * The idempotent open action (spec §2.1/§3/§7b): ensures the prerequisite
+     * in the owning slice exists — COURSE enrollment, EXERCISE assignment +
+     * working copy, ASSESSMENT assignment + submission TAGGED with this task —
+     * and returns where to go. A COMPLETED cohort may still open work that
+     * already exists (read-only review) but never spawns new prerequisites.
+     */
+    public OpenTaskResponse open(UUID taskId) {
+        Access access = requireAccess(taskId);
+        ProgramTask t = access.task();
+        UUID userId = access.ctx().userId();
+        UUID orgId = access.ctx().cohort().getOrgId();
+        UUID target = switch (t.getTaskType()) {
+            case LESSON -> t.getId();
+            case WORKSHOP, SURVEY -> requireRef(t);
+            case COURSE -> {
+                // Spec §3 downgrade policy: no NEW content opens for a course the
+                // org can no longer see. The journey row already says so; this is
+                // the control behind it.
+                if (!courseVisibility.isVisibleToUser(userId, requireRef(t))) {
+                    throw new BadRequestException(
+                            "This course is no longer available to your organization.");
+                }
+                if (!spine.enrollmentExists(userId, requireRef(t))) {
+                    requireNotFinished(access);
+                    spine.ensureEnrollment(userId, t.getRefId());
+                }
+                yield t.getRefId();
+            }
+            case EXERCISE -> spine.findExerciseSubmissionId(orgId, requireRef(t), userId)
+                    .orElseGet(() -> {
+                        requireNotFinished(access);
+                        return spine.ensureExerciseSubmission(orgId, t.getRefId(), userId);
+                    });
+            case ASSESSMENT -> spine.findTaggedSubmissionId(userId, t.getId())
+                    .orElseGet(() -> {
+                        requireNotFinished(access);
+                        return spine.createTaggedSubmission(orgId, requireRef(t), userId, t.getId());
+                    });
+        };
+        return new OpenTaskResponse(t.getId(), t.getTaskType(), t.getRefId(), target,
+                java.time.Instant.now());
+    }
+
+    private static UUID requireRef(ProgramTask t) {
+        if (t.getRefId() == null) {
+            // Unreachable for LIVE tasks (validated at publish); defense in depth.
+            throw new BadRequestException("This task has no reference configured yet.");
+        }
+        return t.getRefId();
+    }
+
+    private static void requireNotFinished(Access access) {
+        if (access.ctx().finished()) {
+            throw new BadRequestException("This cohort has finished — it is read-only now.");
+        }
+    }
+
     /** The next task to continue with: first non-submitted LIVE task in an unlocked module. */
     private ProgramTask nextTask(Access access, UUID justSubmittedTaskId) {
         Context ctx = access.ctx();
         boolean dripEnabled = settingsOf(ctx.cohort().getId()).dripEnabled();
-        Set<UUID> submitted = new HashSet<>(ctx.submittedTaskIds());
+        Set<UUID> submitted = new HashSet<>(ctx.doneTaskIds());
         submitted.add(justSubmittedTaskId);
+        Set<UUID> blockedCourses = blockedCourseIds(ctx.cohort().getOrgId(), ctx.visibleModules());
         for (int i = 0; i < ctx.visibleModules().size(); i++) {
             LockState lock = ProgramRules.lockState(ctx.visibleModules(), i, dripEnabled, submitted,
-                    OffsetDateTime.now());
+                    blockedCourses, OffsetDateTime.now());
             if (lock != LockState.UNLOCKED) {
                 continue;
             }
             for (ProgramTask t : ProgramRules.liveTasks(ctx.visibleModules().get(i))) {
-                if (!submitted.contains(t.getId())) {
+                // Never point the continue-cursor at a task the member cannot
+                // act on — an uncompletable type, or a course their org can no
+                // longer open. That's a dead end.
+                if (ProgramRules.gates(t, blockedCourses) && !submitted.contains(t.getId())) {
                     return t;
                 }
             }

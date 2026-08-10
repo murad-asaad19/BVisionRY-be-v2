@@ -5,6 +5,7 @@ import com.bvisionry.exercise.dto.CreateExerciseCommentRequest;
 import com.bvisionry.exercise.dto.ExerciseAssignmentResponse;
 import com.bvisionry.exercise.dto.ExerciseCommentResponse;
 import com.bvisionry.exercise.dto.ExerciseSubmissionDetailResponse;
+import com.bvisionry.exercise.dto.SetQualityTagRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -106,11 +107,24 @@ public class ExerciseAssignmentController {
         return ResponseEntity.ok(reviewService.requestChanges(orgId, id));
     }
 
+    /** Optional body carries the §4 quality tag chosen alongside the review. */
     @PostMapping("/{id}/mark-reviewed")
     @PreAuthorize(REVIEW_ACCESS)
     public ResponseEntity<ExerciseSubmissionDetailResponse> markReviewed(
             @PathVariable UUID orgId,
-            @PathVariable UUID id) {
-        return ResponseEntity.ok(reviewService.markReviewed(orgId, id));
+            @PathVariable UUID id,
+            @RequestBody(required = false) SetQualityTagRequest request) {
+        return ResponseEntity.ok(reviewService.markReviewed(orgId, id,
+                request == null ? null : request.qualityTagKey()));
+    }
+
+    /** Set / change / clear the quality tag on an already reviewed submission (§4). */
+    @PatchMapping("/{id}/quality-tag")
+    @PreAuthorize(REVIEW_ACCESS)
+    public ResponseEntity<ExerciseSubmissionDetailResponse> setQualityTag(
+            @PathVariable UUID orgId,
+            @PathVariable UUID id,
+            @RequestBody SetQualityTagRequest request) {
+        return ResponseEntity.ok(reviewService.setQualityTag(orgId, id, request.qualityTagKey()));
     }
 }

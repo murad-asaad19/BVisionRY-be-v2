@@ -94,6 +94,16 @@ public class Submission extends BaseEntity {
     @Column(name = "evaluation_claimed_at")
     private Instant evaluationClaimedAt;
 
+    /**
+     * The journey milestone (program task) that spawned this submission — a
+     * bare uuid, no cross-slice FK (redesign spec §1/§5, typed task spine).
+     * Set when the member opens an ASSESSMENT task; null for direct/public
+     * submissions. The comparison slice resolves same-pipeline baseline/
+     * distance submissions through this tag.
+     */
+    @Column(name = "program_task_id")
+    private UUID programTaskId;
+
     public Instant getEffectiveDeadline() {
         if (deadlineOverride != null) return deadlineOverride;
         return assignment != null ? assignment.getDeadline() : null;

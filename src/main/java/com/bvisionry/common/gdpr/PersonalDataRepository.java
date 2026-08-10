@@ -256,11 +256,43 @@ public class PersonalDataRepository {
         EXPORT_SECTIONS.put("coach_assignments",
                 "SELECT * FROM coach_assignments WHERE coach_id = :userId OR member_id = :userId");
 
+        // Coach notes (V162): the coach's judgement ABOUT the member — exported
+        // for both sides (data about the member; content the coach authored).
+        // Erasure needs no statement: both FKs CASCADE with the user row.
+        EXPORT_SECTIONS.put("coach_notes",
+                "SELECT * FROM coach_notes WHERE coach_id = :userId OR member_id = :userId");
+
+        // Session attendance (V163): presence marks ABOUT the member. Erasure
+        // needs no statement: member_id CASCADEs with the users row and
+        // marked_by is SET NULL like every other admin attribution.
+        EXPORT_SECTIONS.put("session_attendance",
+                "SELECT * FROM session_attendance WHERE member_id = :userId");
+
         // The subject's own coach profile (V153) — a link they published about
         // themselves. Erasure needs no statement: coach_id is the PK and
         // CASCADEs with the users row.
         EXPORT_SECTIONS.put("coach_profile",
                 "SELECT * FROM coach_profiles WHERE coach_id = :userId");
+
+        // Distance comparisons (V161): scores computed ABOUT the subject and
+        // nobody else — user_id CASCADEs with the users row (pillar rows cascade
+        // off the comparison), so erasure needs no statement. Exported with the
+        // per-pillar snapshot rows: it is a stored evaluation outcome about them
+        // that the raw pillar_evaluations sections above do not aggregate.
+        EXPORT_SECTIONS.put("distance_comparisons",
+                "SELECT * FROM founder_comparisons WHERE user_id = :userId");
+        EXPORT_SECTIONS.put("distance_comparison_pillars", """
+                SELECT * FROM founder_comparison_pillars
+                 WHERE comparison_id IN (SELECT id FROM founder_comparisons WHERE user_id = :userId)
+                """);
+
+        // Shift narratives (V169, spec §6): AI-written prose ABOUT the subject,
+        // reviewed and possibly edited by a human — squarely Art. 15 data about
+        // them, and not derivable from anything else exported. user_id CASCADEs
+        // with the users row, so erasure needs no statement; approved_by /
+        // edited_by are SET NULL like every other staff attribution.
+        EXPORT_SECTIONS.put("shift_narratives",
+                "SELECT * FROM shift_narratives WHERE user_id = :userId");
 
         EXPORT_SECTIONS.put("notifications", "SELECT * FROM notifications WHERE user_id = :userId");
         EXPORT_SECTIONS.put("notification_optouts", "SELECT * FROM notification_optouts WHERE user_id = :userId");

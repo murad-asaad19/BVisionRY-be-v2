@@ -1,6 +1,7 @@
 package com.bvisionry.programflow.dto;
 
 import java.time.OffsetDateTime;
+import java.util.UUID;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -13,9 +14,11 @@ public record ProgramSettingsDto(
         boolean dripEnabled,
         @Min(1) @Max(10) int dueSoonDays,
         @Size(max = 120) String endLabel,
-        OffsetDateTime endAt) {
+        OffsetDateTime endAt,
+        UUID baselinePipelineId,
+        UUID distancePipelineId) {
 
     public static ProgramSettingsDto defaults() {
-        return new ProgramSettingsDto("Week", true, 3, null, null);
+        return new ProgramSettingsDto("Week", true, 3, null, null, null, null);
     }
 }

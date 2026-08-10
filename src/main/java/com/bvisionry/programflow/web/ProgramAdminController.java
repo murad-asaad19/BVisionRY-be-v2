@@ -110,13 +110,16 @@ public class ProgramAdminController {
         service.deleteModule(orgId, cohortId, moduleId);
     }
 
+    /** Creates a task; {@code taskType} defaults to LESSON (the form-based flow). */
     @PostMapping("/modules/{moduleId}/tasks")
     @ResponseStatus(HttpStatus.CREATED)
     public TaskDto createTask(
             @PathVariable UUID orgId,
             @PathVariable UUID cohortId,
-            @PathVariable UUID moduleId) {
-        return service.createTask(orgId, cohortId, moduleId);
+            @PathVariable UUID moduleId,
+            @org.springframework.web.bind.annotation.RequestParam(required = false)
+            com.bvisionry.programflow.domain.ProgramTaskType taskType) {
+        return service.createTask(orgId, cohortId, moduleId, taskType);
     }
 
     @PutMapping("/tasks/{taskId}")
@@ -150,6 +153,13 @@ public class ProgramAdminController {
     @GetMapping("/pulse")
     public PulseResponse getPulse(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
         return service.getPulse(orgId, cohortId);
+    }
+
+    /** Founders progress matrix — the cohort board's first tab (spec §2.3). */
+    @GetMapping("/matrix")
+    public com.bvisionry.programflow.dto.CohortMatrixResponse getMatrix(
+            @PathVariable UUID orgId, @PathVariable UUID cohortId) {
+        return service.getMatrix(orgId, cohortId);
     }
 
     /** AI composer — SSE: {@code status}* then {@code draft} (ModuleDraft JSON) or {@code error}. */

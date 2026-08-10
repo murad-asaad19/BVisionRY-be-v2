@@ -46,18 +46,21 @@ public class FounderEnrolmentWriteRepository {
      * {@code EnrollmentService#createEnrollment} handles, resolved in the statement
      * rather than in a catch block.
      *
-     * <p>Every other column is left to its schema default (ACTIVE, 0%, now()), so
-     * an auto-enrolment is indistinguishable from one the founder made themselves —
-     * which it should be: the player, certificates and progress must not care how
-     * someone arrived.
+     * <p>Every other column is left to its schema default (ACTIVE, 0%, now(), NOT
+     * required, no deadline), so the player, certificates and progress cannot tell
+     * how someone arrived — which they must not. The one column that IS set is
+     * {@code source} (V168, spec §3): a founder is entitled to know a course is on
+     * their shelf because an assessment put it there. DO NOTHING on conflict keeps
+     * that honest in the other direction too — a course they chose themselves, or
+     * an admin assigned by name, keeps ITS source rather than being relabelled.
      *
      * @return {@code true} when a NEW row was written, {@code false} when the
      *         founder was already enrolled. The caller records which.
      */
     public boolean enrolIfAbsent(UUID userId, UUID courseId) {
         return jdbc.update("""
-                INSERT INTO enrollment (user_id, course_id)
-                VALUES (:userId, :courseId)
+                INSERT INTO enrollment (user_id, course_id, source)
+                VALUES (:userId, :courseId, 'AI_SUGGESTED')
                 ON CONFLICT ON CONSTRAINT uq_enrollment_user_course DO NOTHING
                 """,
                 new MapSqlParameterSource()

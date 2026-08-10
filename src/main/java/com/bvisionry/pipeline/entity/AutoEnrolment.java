@@ -75,4 +75,12 @@ public class AutoEnrolment extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "outcome", nullable = false, length = 32)
     private AutoEnrolmentOutcome outcome;
+
+    /**
+     * When the founder took a {@link AutoEnrolmentOutcome#SUGGESTED} row up
+     * (spec §7b). Null on every other outcome, and on a suggestion still open —
+     * which is exactly the predicate the recommendation reads use.
+     */
+    @Column(name = "accepted_at")
+    private java.time.Instant acceptedAt;
 }

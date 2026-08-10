@@ -10,6 +10,8 @@ public enum UpgradeFeatureContext {
     ORG_INSIGHTS("Org Insights"),
     BENCHMARKS("Benchmarks"),
     ROI_REPORT("ROI Reporting"),
+    /** The quota-blocked cohort Launch button (redesign spec §8). */
+    COHORT_QUOTA("Cohort launches"),
     OTHER("General");
 
     private final String label;

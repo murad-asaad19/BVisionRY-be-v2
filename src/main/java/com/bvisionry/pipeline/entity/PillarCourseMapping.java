@@ -2,7 +2,9 @@ package com.bvisionry.pipeline.entity;
 
 import com.bvisionry.common.entity.BaseEntity;
 import jakarta.persistence.Column;
+import jakarta.persistence.EnumType;
 import jakarta.persistence.Entity;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
@@ -46,4 +48,13 @@ public class PillarCourseMapping extends BaseEntity {
     /** FK to {@code course.id} — stored as a plain UUID (no {@code @ManyToOne}). */
     @Column(name = "course_id", nullable = false)
     private UUID courseId;
+
+    /**
+     * Spec §3: Suggest (recommend, one-tap Accept) or Auto-assign (enrol on
+     * evaluation). Defaults to AUTO_ASSIGN so a rule written before V168 — and
+     * one written without thinking about it — keeps doing what it always did.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "mode", nullable = false, length = 20)
+    private PillarCourseMode mode = PillarCourseMode.AUTO_ASSIGN;
 }

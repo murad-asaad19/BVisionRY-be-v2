@@ -83,8 +83,10 @@ public class AnnouncementReadRepository {
 
     /**
      * The recipients of a broadcast: ACTIVE users of {@code orgId} enrolled in
-     * the cohort at send time, minus the author. Enrolment is the definition of
-     * the audience, so no role filter — but the org equality is carried on the
+     * the cohort at send time, minus the author — and only while the cohort is
+     * member-visible (V167: LAUNCHED/COMPLETED; a DRAFT's broadcast reaches
+     * nobody until launch, an ARCHIVED one is history). Enrolment is the
+     * definition of the audience, so no role filter — but the org equality is carried on the
      * user row too, so a member moved to another tenant with a stale enrolment
      * row drops out.
      */
@@ -96,6 +98,7 @@ public class AnnouncementReadRepository {
                                     AND u.organization_id = :orgId
                                     AND u.status = 'ACTIVE'
                         JOIN cohorts c ON c.id = cm.cohort_id AND c.org_id = :orgId
+                                      AND c.status IN ('LAUNCHED', 'COMPLETED')
                         WHERE cm.cohort_id = :cohortId
                           AND u.id <> :authorId
                         ORDER BY u.id
@@ -122,6 +125,7 @@ public class AnnouncementReadRepository {
                                           AND u.organization_id = :orgId
                                           AND u.status = 'ACTIVE'
                             JOIN cohorts c ON c.id = cm.cohort_id AND c.org_id = :orgId
+                                          AND c.status IN ('LAUNCHED', 'COMPLETED')
                             WHERE cm.cohort_id = :cohortId AND cm.user_id = :userId)
                         """,
                 new MapSqlParameterSource("orgId", orgId)
@@ -129,6 +133,39 @@ public class AnnouncementReadRepository {
                         .addValue("userId", userId),
                 Boolean.class);
         return Boolean.TRUE.equals(member);
+    }
+
+    public record MemberFeedRow(UUID id, String cohortName, String authorName, String authorRole,
+                                String body, Instant createdAt) {}
+
+    /**
+     * The announcements a MEMBER received: posts to cohorts they belong to,
+     * newest first, with the author's name + role so the reader can label who
+     * is speaking ("Coach" / "Program admin"). No {@code flagged} — moderation
+     * state is never a recipient's signal. Same ceiling as the author feed.
+     */
+    public List<MemberFeedRow> memberFeed(UUID orgId, UUID memberId) {
+        return jdbc.query("""
+                        SELECT a.id, c.name AS cohort_name, u.name AS author_name,
+                               u.role AS author_role, a.body, a.created_at
+                        FROM announcements a
+                        JOIN cohorts c ON c.id = a.cohort_id AND c.org_id = :orgId
+                                      AND c.status IN ('LAUNCHED', 'COMPLETED')
+                        JOIN cohort_members cm ON cm.cohort_id = a.cohort_id
+                                              AND cm.user_id = :memberId
+                        LEFT JOIN users u ON u.id = a.author_id
+                        WHERE a.org_id = :orgId
+                        ORDER BY a.created_at DESC
+                        LIMIT %d
+                        """.formatted(FEED_CEILING),
+                new MapSqlParameterSource("orgId", orgId).addValue("memberId", memberId),
+                (rs, i) -> new MemberFeedRow(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("cohort_name"),
+                        rs.getString("author_name"),
+                        rs.getString("author_role"),
+                        rs.getString("body"),
+                        rs.getObject("created_at", OffsetDateTime.class).toInstant()));
     }
 
     /** A cohort's posts, newest first, org-scoped. */

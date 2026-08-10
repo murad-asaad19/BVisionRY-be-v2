@@ -255,6 +255,67 @@ class MemberResultsServiceTest {
         assertThat(response.survey()).isNull();
     }
 
+    /**
+     * Murad 2026-08-10: PERSONAL-pillar intake demographics are deliberately
+     * org-admin-visible — they are intake data, not assessment answers; §2.4's
+     * invariant covers mindset answers only.
+     */
+    @Test
+    void getResults_orgAdmin_keepsPersonalInfo() {
+        UUID submissionId = UUID.randomUUID();
+        UUID orgId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+
+        Organization org = new Organization();
+        org.setId(orgId);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
+
+        Pipeline pipeline = new Pipeline();
+        pipeline.setName("Founder Readiness");
+
+        Assignment assignment = new Assignment();
+        assignment.setPipeline(pipeline);
+        assignment.setOrganization(org);
+
+        User owner = new User();
+        owner.setId(ownerId);
+
+        Submission submission = new Submission();
+        submission.setId(submissionId);
+        submission.setAssignment(assignment);
+        submission.setUser(owner);
+        submission.setStatus(SubmissionStatus.EVALUATED);
+        submission.setEvaluatedAt(Instant.now());
+
+        OverallSummary summary = new OverallSummary();
+        summary.setOverallScorePercentage(new BigDecimal("70.00"));
+
+        when(submissionRepository.findById(submissionId)).thenReturn(Optional.of(submission));
+        when(pillarEvaluationRepository.findBySubmissionId(submissionId)).thenReturn(List.of());
+        when(overallSummaryRepository.findBySubmissionId(submissionId)).thenReturn(Optional.of(summary));
+        when(premiumFeatureGuard.isPremiumOrSuperAdmin(orgId)).thenReturn(true);
+        when(personalInfoResolver.resolve(submissionId)).thenReturn(
+                List.of(new com.bvisionry.reporting.dto.PersonalInfoEntry(
+                        "What keeps you up at night?", "Runway.")));
+
+        // An ORG ADMIN of the same org, i.e. not the owner and not a super admin.
+        authenticateAs(UserRole.ORG_ADMIN);
+        assertThat(memberResultsService.getResults(submissionId).personalInfo())
+                .extracting(com.bvisionry.reporting.dto.PersonalInfoEntry::value)
+                .containsExactly("Runway.");
+
+        // The founder reading their own report keeps every word of it.
+        SecurityContextHolder.clearContext();
+        User self = new User();
+        self.setId(ownerId);
+        self.setRole(UserRole.MEMBER);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(self, null, List.of()));
+        assertThat(memberResultsService.getResults(submissionId).personalInfo())
+                .extracting(com.bvisionry.reporting.dto.PersonalInfoEntry::value)
+                .containsExactly("Runway.");
+    }
+
     @Test
     void getPillarDetail_returnsFullAiFeedback() {
         UUID submissionId = UUID.randomUUID();

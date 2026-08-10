@@ -2,6 +2,7 @@ package com.bvisionry.comparison;
 
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
+import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.event.EvaluationEvents;
@@ -39,10 +40,13 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.is;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -620,6 +624,118 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.state", is("done")))
                     .andExpect(jsonPath("$.comparison.overallBandLabel", is("Moderate")));
+        }
+    }
+
+    /* -------------------------------------------------------- staff exports */
+
+    /**
+     * Spec §11: "the founder profile Growth tab gets the same PDF/Excel
+     * exports". Both staff doors render the SAME renderer the member's own
+     * export uses, so the three surfaces can never disagree; what differs is
+     * only who is allowed to ask.
+     */
+    @Nested
+    class StaffGrowthExports {
+
+        private static final String XLSX =
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+        @Test
+        void orgAdminDownloadsBothFormats_forAMemberOfTheirOrg() throws Exception {
+            computeFounder1();
+            makePremium(orgA);
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.export@test.invalid", UserRole.ORG_ADMIN, orgA));
+
+            mockMvc.perform(get(adminReport("growth-report.pdf", founder1)))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType(MediaType.APPLICATION_PDF))
+                    .andExpect(header().string("Content-Disposition",
+                            containsString("Growth_Report.pdf")));
+
+            mockMvc.perform(get(adminReport("growth-report.xlsx", founder1)))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType(XLSX));
+        }
+
+        /** The comparison read and the export must agree on who exists. */
+        @Test
+        void foreignAdminIsRefused_andAForeignMemberIs404() throws Exception {
+            computeFounder1();
+            makePremium(orgA);
+
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.export.b@test.invalid", UserRole.ORG_ADMIN, orgB));
+            mockMvc.perform(get(adminReport("growth-report.pdf", founder1)))
+                    .andExpect(status().isForbidden());
+
+            User outsider = saveUser("outsider.export@test.invalid", UserRole.MEMBER, orgB);
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.export.a@test.invalid", UserRole.ORG_ADMIN, orgA));
+            mockMvc.perform(get(adminReport("growth-report.pdf", outsider)))
+                    .andExpect(status().isNotFound());
+        }
+
+        /** Same plan gate as the member's own export — the org's tier entitles it. */
+        @Test
+        void freeTierOrgIsRefusedThePdf() throws Exception {
+            computeFounder1();
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.export.free@test.invalid", UserRole.ORG_ADMIN, orgA));
+            mockMvc.perform(get(adminReport("growth-report.pdf", founder1)))
+                    .andExpect(status().isForbidden());
+        }
+
+        /** A member has no business on a STAFF door, even for their own report. */
+        @Test
+        void theFounderThemselvesCannotUseTheStaffDoors() throws Exception {
+            computeFounder1();
+            makePremium(orgA);
+
+            TestAuthentication.authenticate(founder1);
+            mockMvc.perform(get(adminReport("growth-report.pdf", founder1)))
+                    .andExpect(status().isForbidden());
+            mockMvc.perform(get("/api/v1/coach/founders/" + founder1.getId()
+                            + "/growth-report.pdf"))
+                    .andExpect(status().isForbidden());
+        }
+
+        /** The coach door obeys the same assignment union as the comparison read. */
+        @Test
+        void coachExportIsGatedByTheAssignmentUnion() throws Exception {
+            computeFounder1();
+            makePremium(orgA);
+            User coach = saveUser("coach.export@test.invalid", UserRole.COACH, orgA);
+
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(get("/api/v1/coach/founders/" + founder1.getId()
+                            + "/growth-report.pdf"))
+                    .andExpect(status().isNotFound());
+
+            jdbc.update("""
+                    INSERT INTO coach_assignments (org_id, coach_id, cohort_id, member_id)
+                    VALUES (?, ?, ?, ?)
+                    """, orgA.getId(), coach.getId(), cohortId, null);
+
+            mockMvc.perform(get("/api/v1/coach/founders/" + founder1.getId()
+                            + "/growth-report.pdf"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType(MediaType.APPLICATION_PDF));
+            mockMvc.perform(get("/api/v1/coach/founders/" + founder1.getId()
+                            + "/growth-report.xlsx"))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType(XLSX));
+        }
+
+        private String adminReport(String file, User member) {
+            return "/api/organizations/" + orgA.getId() + "/members/"
+                    + member.getId() + "/" + file;
+        }
+
+        private void makePremium(Organization org) {
+            org.setSubscriptionTier(SubscriptionTier.GROWTH);
+            organizationRepository.saveAndFlush(org);
         }
     }
 

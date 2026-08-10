@@ -125,7 +125,7 @@ public class FounderProfileReadRepository {
 
     public record ExerciseRow(UUID assignmentId, String exerciseName, Instant deadline, String status,
                               Instant lastSavedAt, Instant submittedAt, Instant reviewedAt,
-                              String qualityTagLabel) {}
+                              String qualityTagLabel, Instant qualityTaggedAt, Instant assignedAt) {}
 
     /**
      * The member's exercise assignments with submission state + review timestamp,
@@ -135,7 +135,8 @@ public class FounderProfileReadRepository {
     public List<ExerciseRow> exercises(UUID orgId, UUID memberId) {
         return jdbc.query("""
                 SELECT ea.id, et.name, ea.deadline, es.status,
-                       es.last_saved_at, es.submitted_at, es.reviewed_at, es.quality_tag_label
+                       es.last_saved_at, es.submitted_at, es.reviewed_at, es.quality_tag_label,
+                       es.quality_tagged_at, ea.created_at AS assigned_at
                 FROM exercise_assignments ea
                 JOIN exercise_templates et ON et.id = ea.template_id
                 LEFT JOIN exercise_submissions es ON es.assignment_id = ea.id AND es.user_id = :memberId
@@ -146,7 +147,8 @@ public class FounderProfileReadRepository {
                 (rs, i) -> new ExerciseRow(rs.getObject("id", UUID.class), rs.getString("name"),
                         instant(rs, "deadline"), rs.getString("status"),
                         instant(rs, "last_saved_at"), instant(rs, "submitted_at"),
-                        instant(rs, "reviewed_at"), rs.getString("quality_tag_label")));
+                        instant(rs, "reviewed_at"), rs.getString("quality_tag_label"),
+                        instant(rs, "quality_tagged_at"), instant(rs, "assigned_at")));
     }
 
     public record CourseRow(UUID courseId, String title, String status, int progressPct,
@@ -218,7 +220,8 @@ public class FounderProfileReadRepository {
 
     public record AssessmentRow(UUID assignmentId, UUID submissionId, String pipelineName,
                                 Instant deadline, String status, Instant startedAt,
-                                Instant submittedAt, Instant evaluatedAt, BigDecimal score) {}
+                                Instant submittedAt, Instant evaluatedAt, BigDecimal score,
+                                Instant assignedAt) {}
 
     /**
      * One row per assessment submission (check-ins produce several), plus a
@@ -230,7 +233,7 @@ public class FounderProfileReadRepository {
                 SELECT a.id AS assignment_id, s.id AS submission_id, p.name AS pipeline_name,
                        COALESCE(s.deadline_override, a.deadline) AS deadline,
                        s.status, s.started_at, s.submitted_at, s.evaluated_at,
-                       os.overall_score_percentage AS score
+                       os.overall_score_percentage AS score, a.created_at AS assigned_at
                 FROM assignments a
                 JOIN pipelines p ON p.id = a.pipeline_id
                 LEFT JOIN submissions s ON s.assignment_id = a.id AND s.user_id = :memberId
@@ -243,7 +246,7 @@ public class FounderProfileReadRepository {
                         rs.getObject("submission_id", UUID.class), rs.getString("pipeline_name"),
                         instant(rs, "deadline"), rs.getString("status"), instant(rs, "started_at"),
                         instant(rs, "submitted_at"), instant(rs, "evaluated_at"),
-                        rs.getBigDecimal("score")));
+                        rs.getBigDecimal("score"), instant(rs, "assigned_at")));
     }
 
     /* ------------------------------------------------- pillar snapshot, notes */

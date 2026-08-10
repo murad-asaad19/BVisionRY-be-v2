@@ -56,6 +56,28 @@ public record EngagementRecordResponse(List<CohortEngagement> cohorts) {
             BigDecimal points) {
     }
 
+    /**
+     * Every founder in one cohort with their participation score, for the
+     * cohort board's Pulse tab (spec §4 names Pulse as a participation
+     * surface). Same {@link ParticipationDto} the founder profile renders, so
+     * the two surfaces can never quote different numbers.
+     *
+     * <p>{@code average} is the mean of the members who HAVE a score — a
+     * founder with no denominator in any category is excluded rather than
+     * counted as zero, matching the null-not-zero rule inside the score.
+     */
+    public record CohortParticipationResponse(
+            List<MemberParticipation> members,
+            BigDecimal average) {
+    }
+
+    /** One roster row's score for the Pulse column. */
+    public record MemberParticipation(
+            UUID memberId,
+            String memberName,
+            ParticipationDto participation) {
+    }
+
     /** A held session with this founder's §7b-stamped attendance. */
     public record SessionHistoryItem(
             UUID sessionId,

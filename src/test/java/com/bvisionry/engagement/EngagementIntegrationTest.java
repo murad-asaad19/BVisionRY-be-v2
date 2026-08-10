@@ -411,6 +411,67 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
+    /* ------------------------------------------------- Pulse participation */
+
+    /**
+     * Spec §4 names Pulse as a participation surface. One request for the whole
+     * roster, scoring each founder through the SAME code the per-member record
+     * uses — so the Pulse column and the founder profile can never disagree.
+     */
+    @Nested
+    class CohortParticipationRead {
+
+        private String url(UUID cohortId) {
+            return "/api/organizations/" + orgA.getId() + "/cohorts/" + cohortId
+                    + "/participation";
+        }
+
+        @Test
+        void rosterScoresMatchThePerMemberRecord_andAverageSkipsUnscoredFounders()
+                throws Exception {
+            seedAssignmentsForFounder();
+            UUID attended = insertSession(cohort1, "WORKSHOP", "-7 days");
+            insertSession(cohort1, "WORKSHOP", "-1 day");
+            jdbc.update("""
+                    INSERT INTO session_attendance (session_id, member_id, marked_by)
+                    VALUES (?, ?, ?)
+                    """, attended, founder.getId(), admin.getId());
+
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(url(cohort1)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.members", hasSize(1)))
+                    .andExpect(jsonPath("$.members[0].memberId", is(founder.getId().toString())))
+                    // Identical to the per-member record's number for this founder.
+                    .andExpect(jsonPath("$.members[0].participation.score", is(61.1)))
+                    .andExpect(jsonPath("$.members[0].participation.bandLabel", is("Partial")))
+                    .andExpect(jsonPath("$.average", is(61.1)));
+
+            // A founder with no denominator scores null, so the average has
+            // nothing to average — null, never a misleading 0.
+            mockMvc.perform(get(url(cohort2)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.members", hasSize(1)))
+                    .andExpect(jsonPath("$.members[0].participation.score", nullValue()))
+                    .andExpect(jsonPath("$.average", nullValue()));
+        }
+
+        @Test
+        void adminsOnly_andAForeignCohortIs404() throws Exception {
+            TestAuthentication.authenticate(adminB);
+            mockMvc.perform(get(url(cohort1))).andExpect(status().isForbidden());
+
+            // Participation is never member-facing (spec §4), not even the coach door.
+            TestAuthentication.authenticate(founder);
+            mockMvc.perform(get(url(cohort1))).andExpect(status().isForbidden());
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(get(url(cohort1))).andExpect(status().isForbidden());
+
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(url(UUID.randomUUID()))).andExpect(status().isNotFound());
+        }
+    }
+
     /* ------------------------------------------------------------ seeding */
 
     private Organization saveOrg(String name) {

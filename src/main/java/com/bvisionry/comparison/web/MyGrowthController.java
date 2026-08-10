@@ -9,7 +9,6 @@ import com.bvisionry.common.security.PremiumFeatureGuard;
 import com.bvisionry.comparison.dto.MyComparisonResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -45,15 +44,8 @@ public class MyGrowthController {
     public ResponseEntity<byte[]> reportPdf(
             @RequestParam(defaultValue = "download") String mode) {
         CurrentUser me = requirePremium();
-        byte[] pdf = exports.pdf(me.userId());
-        String filename = "My_Growth_Report.pdf";
-        String disposition = "preview".equals(mode)
-                ? "inline; filename=\"" + filename + "\""
-                : "attachment; filename=\"" + filename + "\"";
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, disposition)
-                .contentType(MediaType.APPLICATION_PDF)
-                .body(pdf);
+        return MyGrowthExportService.pdfResponse(
+                exports.pdf(me.userId()), "My_Growth_Report.pdf", mode);
     }
 
     @GetMapping(path = "/report/excel",

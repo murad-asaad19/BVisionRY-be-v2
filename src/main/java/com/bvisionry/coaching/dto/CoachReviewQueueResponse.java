@@ -30,7 +30,13 @@ public record CoachReviewQueueResponse(List<CoachQueueItem> items) {
              * was tagged on an earlier pass and has come back for re-review.
              * Metadata: it never orders or filters the queue.
              */
-            String qualityTagLabel) {
+            String qualityTagLabel,
+            /**
+             * §7b: when that tag was applied. The chip is about an EARLIER pass,
+             * so without its date a stale "Thin" reads as a verdict on the copy
+             * now waiting in the queue.
+             */
+            Instant qualityTaggedAt) {
 
         public static CoachQueueItem from(QueueRow row) {
             return new CoachQueueItem(row.assignmentId(), row.founderId(), row.founderName(),
@@ -38,7 +44,8 @@ public record CoachReviewQueueResponse(List<CoachQueueItem> items) {
                     row.submittedAt() == null ? null : row.submittedAt().toInstant(),
                     row.changesRequestedAt() != null,
                     row.changesRequestedAt() == null ? null : row.changesRequestedAt().toInstant(),
-                    row.qualityTagLabel());
+                    row.qualityTagLabel(),
+                    row.qualityTaggedAt() == null ? null : row.qualityTaggedAt().toInstant());
         }
     }
 }

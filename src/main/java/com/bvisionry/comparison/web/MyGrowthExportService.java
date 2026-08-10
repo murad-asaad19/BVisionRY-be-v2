@@ -12,11 +12,15 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.thymeleaf.context.Context;
 
 import com.bvisionry.common.excel.ExcelWorkbookBuilder;
+import com.bvisionry.common.excel.XlsxResponse;
 import com.bvisionry.common.pdf.PdfRenderer;
 import com.bvisionry.comparison.dto.FounderComparisonDto;
 import com.bvisionry.comparison.dto.FounderComparisonDto.ComparisonPillarDto;
@@ -153,6 +157,27 @@ public class MyGrowthExportService {
     }
 
     /* -------------------------------------------------------------- helpers */
+
+    /**
+     * Download filename for a growth export, from the founder's own name —
+     * shared by the member's identity-scoped door and the two staff doors
+     * (spec §11), so an admin holding three founders' reports can tell them
+     * apart. Sanitised because a display name is user input.
+     */
+    public String reportFilename(UUID userId, String extension) {
+        return XlsxResponse.sanitizeFilename(memberName(userId).replace(' ', '_'))
+                + "_Growth_Report." + extension;
+    }
+
+    /** Content-disposition shape shared by every PDF door here. */
+    public static ResponseEntity<byte[]> pdfResponse(byte[] pdf, String filename, String mode) {
+        String disposition = ("preview".equals(mode) ? "inline" : "attachment")
+                + "; filename=\"" + filename + "\"";
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, disposition)
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(pdf);
+    }
 
     private String memberName(UUID userId) {
         String name = reads.userNames(Set.of(userId)).get(userId);

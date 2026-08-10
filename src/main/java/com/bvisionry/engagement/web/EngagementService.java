@@ -1,9 +1,12 @@
 package com.bvisionry.engagement.web;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -16,6 +19,8 @@ import com.bvisionry.common.scoringconfig.ScoringBands;
 import com.bvisionry.engagement.domain.SessionType;
 import com.bvisionry.engagement.dto.EngagementRecordResponse;
 import com.bvisionry.engagement.dto.EngagementRecordResponse.CohortEngagement;
+import com.bvisionry.engagement.dto.EngagementRecordResponse.CohortParticipationResponse;
+import com.bvisionry.engagement.dto.EngagementRecordResponse.MemberParticipation;
 import com.bvisionry.engagement.dto.EngagementRecordResponse.ParticipationDto;
 import com.bvisionry.engagement.dto.EngagementRecordResponse.SessionHistoryItem;
 import com.bvisionry.engagement.repository.EngagementReadRepository;
@@ -63,6 +68,40 @@ public class EngagementService {
                         participation(orgId, cohort.id(), memberId, categories, bands),
                         history(cohort.id(), memberId)))
                 .toList());
+    }
+
+    /**
+     * Every founder in one cohort with their participation score (spec §4:
+     * Pulse is a participation surface). Config is read ONCE for the whole
+     * roster, so a cohort scores against a single consistent formula.
+     *
+     * <p>ponytail: two small reads per member (assignment counts + session
+     * counts) — one round trip per row, not one HTTP call per row. At a few
+     * hundred founders per cohort that is fine; if a cohort ever gets big
+     * enough to feel it, the upgrade is to group both reads BY member and
+     * join in Java, not to cache the score.
+     */
+    public CohortParticipationResponse cohortParticipation(UUID orgId, UUID cohortId) {
+        if (reads.cohort(orgId, cohortId).isEmpty()) {
+            throw new ResourceNotFoundException("Cohort", cohortId.toString());
+        }
+        List<ParticipationFormula.Category> categories = currentCategories();
+        List<ScoringBands.Band> bands = currentBands();
+
+        List<MemberParticipation> members = reads.roster(cohortId).stream()
+                .map(row -> new MemberParticipation(row.id(), row.name(),
+                        participation(orgId, cohortId, row.id(), categories, bands)))
+                .toList();
+
+        List<BigDecimal> scored = members.stream()
+                .map(m -> m.participation().score())
+                .filter(Objects::nonNull)
+                .toList();
+        BigDecimal average = scored.isEmpty() ? null
+                : scored.stream().reduce(BigDecimal.ZERO, BigDecimal::add)
+                        .divide(BigDecimal.valueOf(scored.size()), 1, RoundingMode.HALF_UP);
+
+        return new CohortParticipationResponse(members, average);
     }
 
     /* ------------------------------------------------------------- compute */

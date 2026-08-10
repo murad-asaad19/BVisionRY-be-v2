@@ -589,13 +589,18 @@ public class AssignmentService {
                 : 0;
 
         User user = assignment.getUser();
+        // Hoisted: both the survey gate below and the §2.4 personal-info gate
+        // need these, and one call site each keeps the ArchUnit frozen store
+        // from growing a duplicate entry for an edge it already carries.
+        UUID memberId = user != null ? user.getId() : null;
+        boolean superAdmin = SecurityUtils.isSuperAdmin();
 
         // Survey response visibility is restricted to the platform Super Admin
         // (Conductor). Org Admins and members must see no signal that a survey
         // exists or has been submitted, so we skip the lookup entirely for
         // non-super-admin viewers and let `surveySummary` stay null.
         SurveySummary surveySummary = null;
-        if (SecurityUtils.isSuperAdmin() && pipeline.getPostCompletionSurveyId() != null) {
+        if (superAdmin && pipeline.getPostCompletionSurveyId() != null) {
             SurveyResponse surveyResponse = submission != null
                     ? surveyResponseRepository
                             .findFirstBySubmissionIdOrderBySubmittedAtDesc(submission.getId())
@@ -607,7 +612,14 @@ public class AssignmentService {
                     surveyResponse != null ? surveyResponse.getSubmittedAt() : null);
         }
 
-        List<PersonalInfoEntry> personalInfo = submission != null
+        // Spec §2.4: the PERSONAL pillar's entries are verbatim member answers.
+        // This detail is an ADMIN surface, so only a super admin (or the member
+        // looking at their own assignment) sees them — same gate as
+        // MemberResultsService.applyViewerScope, which owns the sibling path.
+        boolean maySeeAnswers = submission != null
+                && (superAdmin
+                        || (memberId != null && memberId.equals(SecurityUtils.getCurrentUserId())));
+        List<PersonalInfoEntry> personalInfo = maySeeAnswers
                 ? personalInfoResolver.resolve(submission.getId())
                 : List.of();
 
@@ -617,7 +629,7 @@ public class AssignmentService {
                 pipeline.getName(),
                 pipeline.getVersion(),
                 assignment.getOrganization().getId(),
-                user != null ? user.getId() : null,
+                memberId,
                 user != null ? user.getName() : null,
                 user != null ? user.getEmail() : null,
                 assignment.getAssignedBy(),

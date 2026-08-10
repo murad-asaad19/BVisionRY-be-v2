@@ -90,7 +90,15 @@ public record FounderProfileResponse(
              * null when untagged. Metadata for staff — this profile is only ever
              * served to an org admin or the founder's own coach.
              */
-            String qualityTagLabel) {}
+            String qualityTagLabel,
+            /** §7b: when the tag was applied, for the chip's hover stamp. */
+            Instant qualityTaggedAt,
+            /**
+             * §7b: when this work was PUT on the member's plate. The row's
+             * fallback WHEN — without it an assigned-but-never-opened exercise
+             * or assessment is the one undated row on the tab.
+             */
+            Instant assignedAt) {}
 
     /** Latest evaluated assessment, one row per pillar — feeds the Growth tab's plain/pending states. */
     public record FounderPillarScore(

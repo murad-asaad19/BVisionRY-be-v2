@@ -89,11 +89,12 @@ public class FounderProfileService {
                 "PROGRAM", t.taskId(), null, t.taskName(),
                 t.cohortName() + " · " + t.moduleName(), t.status(), null, null, null,
                 t.dueDate() == null ? null : t.dueDate().atStartOfDay(ZoneOffset.UTC).toInstant(),
-                t.savedAt(), t.submittedAt(), null, null, null, false, false, null)));
+                t.savedAt(), t.submittedAt(), null, null, null, false, false, null, null, null)));
         reads.exercises(orgId, memberId).forEach(e -> items.add(new FounderWorkItem(
                 "EXERCISE", e.assignmentId(), null, e.exerciseName(), null, e.status(),
                 null, null, null, e.deadline(), e.lastSavedAt(), e.submittedAt(),
-                e.reviewedAt(), null, null, false, false, e.qualityTagLabel())));
+                e.reviewedAt(), null, null, false, false, e.qualityTagLabel(),
+                e.qualityTaggedAt(), e.assignedAt())));
         // Spec §3: the source is a stored column now, not a guess off the pillar
         // sub-select. A null status means an org rule covers the member with no
         // enrollment row yet — the Work tab shows it as assigned.
@@ -102,11 +103,12 @@ public class FounderProfileService {
                 c.status() == null ? "ASSIGNED" : c.status(),
                 c.source() == null ? "SELF" : c.source(), c.progressPct(), null, c.deadline(),
                 c.enrolledAt(), null, null, null, c.completedAt(), c.removed(), c.required(),
-                null)));
+                null, null, c.enrolledAt())));
         reads.assessments(orgId, memberId).forEach(a -> items.add(new FounderWorkItem(
                 "ASSESSMENT", a.assignmentId(), a.submissionId(), a.pipelineName(), null,
                 a.status(), null, null, a.score(), a.deadline(), a.startedAt(),
-                a.submittedAt(), null, a.evaluatedAt(), null, false, false, null)));
+                a.submittedAt(), null, a.evaluatedAt(), null, false, false, null,
+                null, a.assignedAt())));
         return items;
     }
 }

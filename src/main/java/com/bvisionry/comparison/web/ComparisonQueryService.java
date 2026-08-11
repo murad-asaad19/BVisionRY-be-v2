@@ -3,6 +3,7 @@ package com.bvisionry.comparison.web;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.comparison.domain.FounderComparison;
 import com.bvisionry.comparison.domain.PillarComparisonState;
+import com.bvisionry.comparison.dto.CohortComparisonStatus;
 import com.bvisionry.comparison.dto.ComparisonSummaryDto;
 import com.bvisionry.comparison.dto.FounderComparisonDto;
 import com.bvisionry.comparison.dto.FounderComparisonDto.ComparisonPillarDto;
@@ -38,6 +39,7 @@ public class ComparisonQueryService {
     private final FounderComparisonPillarRepository pillars;
     private final ComparisonReadRepository reads;
     private final ShiftNarrativeService narratives;
+    private final ComparisonComputeService compute;
 
     /* ---------------------------------------------------------- member view */
 
@@ -88,6 +90,23 @@ public class ComparisonQueryService {
                 .sorted(Comparator.comparing(ComparisonSummaryDto::userName,
                         Comparator.nullsLast(String::compareToIgnoreCase)))
                 .toList();
+    }
+
+    /**
+     * The cohort's uncomputed-but-ready founders (see
+     * {@link ComparisonComputeService#foundersAwaitingComparison}) — the admin's
+     * only visibility into a compute that never landed, since the failure path
+     * is deliberately silent for the member's evaluation.
+     */
+    public CohortComparisonStatus cohortComparisonStatus(UUID orgId, UUID cohortId) {
+        requireCohortInOrg(orgId, cohortId);
+        List<UUID> pending = compute.foundersAwaitingComparison(cohortId);
+        Map<UUID, String> names = reads.userNames(pending);
+        return new CohortComparisonStatus(pending.size(), pending.stream()
+                .map(id -> new CohortComparisonStatus.PendingFounder(id, names.get(id)))
+                .sorted(Comparator.comparing(CohortComparisonStatus.PendingFounder::name,
+                        Comparator.nullsLast(String::compareToIgnoreCase)))
+                .toList());
     }
 
     public FounderComparisonDto cohortComparisonForUser(UUID orgId, UUID cohortId, UUID userId) {

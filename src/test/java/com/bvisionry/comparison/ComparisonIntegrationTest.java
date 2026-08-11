@@ -9,6 +9,7 @@ import com.bvisionry.common.event.EvaluationEvents;
 import com.bvisionry.comparison.domain.FounderComparison;
 import com.bvisionry.comparison.domain.MappingSource;
 import com.bvisionry.comparison.domain.PillarComparisonState;
+import com.bvisionry.comparison.dto.CohortComparisonStatus;
 import com.bvisionry.comparison.dto.MyComparisonResponse;
 import com.bvisionry.comparison.dto.PillarMappingResponse;
 import com.bvisionry.comparison.repository.FounderComparisonPillarRepository;
@@ -598,6 +599,78 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                     .findByCohortIdAndUserId(cohortId, founder1.getId()).orElseThrow();
             assertThat(after.getOverallBandLabel()).isEqualTo("Solid");
             assertThat(after.getOverallBandKey()).isEqualTo("band_1");
+        }
+    }
+
+    /* ------------------------------------------- not-computed visibility */
+
+    /**
+     * ISSUE-1/ISSUE-13: a compute that throws is swallowed so the member's
+     * evaluation survives — which used to make the stuck state invisible. The
+     * state is derived, not stored: enrolled + both sides evaluated + no
+     * {@code founder_comparisons} row.
+     */
+    @Nested
+    class NotComputedVisibility {
+
+        @Test
+        void countsOnlyFoundersReadyButUncomputed() throws Exception {
+            // founder1 has both sides evaluated and no row yet; founder2 has a
+            // baseline only, so they are not waiting on anything.
+            var before = queryService.cohortComparisonStatus(orgA.getId(), cohortId);
+            assertThat(before.notComputed()).isEqualTo(1);
+            assertThat(before.founders()).singleElement()
+                    .extracting(CohortComparisonStatus.PendingFounder::userId)
+                    .isEqualTo(founder1.getId());
+
+            computeFounder1();
+
+            assertThat(queryService.cohortComparisonStatus(orgA.getId(), cohortId).notComputed())
+                    .as("a founder with a stored comparison is not counted")
+                    .isZero();
+        }
+
+        @Test
+        void undesignatedCohort_reportsNothing() {
+            UUID pairless = insertCohort(orgA.getId(), "Pairless", founder1.getId());
+            assertThat(queryService.cohortComparisonStatus(orgA.getId(), pairless).notComputed())
+                    .isZero();
+        }
+
+        @Test
+        void orgAdminSeesTheCountOnTheirCohort() throws Exception {
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.status@test.invalid", UserRole.ORG_ADMIN, orgA));
+            mockMvc.perform(get("/api/organizations/" + orgA.getId()
+                            + "/cohorts/" + cohortId + "/comparison-status"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.notComputed", is(1)))
+                    .andExpect(jsonPath("$.founders[0].userId", is(founder1.getId().toString())));
+        }
+
+        @Test
+        void orgAdminRecomputesOwnCohort_butNotAnotherOrgs() throws Exception {
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.recompute@test.invalid", UserRole.ORG_ADMIN, orgA));
+            mockMvc.perform(post("/api/organizations/" + orgA.getId()
+                            + "/cohorts/" + cohortId + "/comparisons/recompute"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.recomputed", is(1)));
+            assertThat(comparisons.findByCohortIdAndUserId(cohortId, founder1.getId()))
+                    .as("the repair actually lands the row the member was waiting for")
+                    .isPresent();
+
+            // Another org's admin is refused at the org gate...
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.b.recompute@test.invalid", UserRole.ORG_ADMIN, orgB));
+            mockMvc.perform(post("/api/organizations/" + orgA.getId()
+                            + "/cohorts/" + cohortId + "/comparisons/recompute"))
+                    .andExpect(status().isForbidden());
+
+            // ...and org A's cohort smuggled under their OWN org id is a 404.
+            mockMvc.perform(post("/api/organizations/" + orgB.getId()
+                            + "/cohorts/" + cohortId + "/comparisons/recompute"))
+                    .andExpect(status().isNotFound());
         }
     }
 

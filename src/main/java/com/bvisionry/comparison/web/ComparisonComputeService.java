@@ -148,6 +148,49 @@ public class ComparisonComputeService {
      * self-invocation.
      */
     boolean computeIfReady(PairCohortRow pair, UUID userId) {
+        Optional<Sides> sides = resolveSides(pair, userId);
+        if (sides.isEmpty()) {
+            return false;
+        }
+        SubmissionRow baselineRow = sides.get().baseline();
+        SubmissionRow distanceRow = sides.get().distance();
+
+        List<ScoringBands.Band> bands = currentShiftBands();
+        BigDecimal before = reads.overallScore(baselineRow.id()).orElse(null);
+        BigDecimal after = reads.overallScore(distanceRow.id()).orElse(null);
+        BigDecimal delta = before != null && after != null ? after.subtract(before) : null;
+        ScoringBands.Band overallBand = delta == null ? null : ScoringBands.resolve(bands, delta);
+
+        FounderComparison c = new FounderComparison();
+        c.setCohortId(pair.cohortId());
+        c.setOrgId(pair.orgId());
+        c.setUserId(userId);
+        c.setBaselineSubmissionId(baselineRow.id());
+        c.setDistanceSubmissionId(distanceRow.id());
+        c.setOverallBefore(before);
+        c.setOverallAfter(after);
+        c.setOverallDelta(delta);
+        c.setOverallBandKey(overallBand == null ? null : overallBand.key());
+        c.setOverallBandLabel(overallBand == null ? null : overallBand.label());
+        c.setConfigSnapshot(bands);
+        c.setComputedAt(Instant.now());
+        comparisons.save(c);
+
+        comparisonPillars.saveAll(pillarRows(c, pair, baselineRow.id(), distanceRow.id(), bands));
+        return true;
+    }
+
+    /** The two submissions a comparison is built from. */
+    record Sides(SubmissionRow baseline, SubmissionRow distance) {
+    }
+
+    /**
+     * Resolves the pair's two sides for a founder, or empty when the
+     * comparison is not computable yet. Shared by the compute and by
+     * {@link #foundersAwaitingComparison} so "ready" can never mean two
+     * different things on the write and the read side.
+     */
+    Optional<Sides> resolveSides(PairCohortRow pair, UUID userId) {
         // Typed task spine (spec §5): milestone-task submission tags beat the
         // by-pipeline heuristics — they are what make same-pipeline pairs
         // resolvable. Baseline = the submission tagged to the cohort's
@@ -175,37 +218,40 @@ public class ComparisonComputeService {
             distance = Optional.empty();
         }
         if (baseline.isEmpty() || distance.isEmpty()) {
-            return false;
+            return Optional.empty();
         }
         if (baseline.get().id().equals(distance.get().id())) {
             // Defense in depth against a self-comparison (e.g. an equal pair
             // where the member's only evaluated submission is the distance).
-            return false;
+            return Optional.empty();
         }
+        return Optional.of(new Sides(baseline.get(), distance.get()));
+    }
 
-        List<ScoringBands.Band> bands = currentShiftBands();
-        BigDecimal before = reads.overallScore(baseline.get().id()).orElse(null);
-        BigDecimal after = reads.overallScore(distance.get().id()).orElse(null);
-        BigDecimal delta = before != null && after != null ? after.subtract(before) : null;
-        ScoringBands.Band overallBand = delta == null ? null : ScoringBands.resolve(bands, delta);
+    /* ------------------------------------------------------ the detection */
 
-        FounderComparison c = new FounderComparison();
-        c.setCohortId(pair.cohortId());
-        c.setOrgId(pair.orgId());
-        c.setUserId(userId);
-        c.setBaselineSubmissionId(baseline.get().id());
-        c.setDistanceSubmissionId(distance.get().id());
-        c.setOverallBefore(before);
-        c.setOverallAfter(after);
-        c.setOverallDelta(delta);
-        c.setOverallBandKey(overallBand == null ? null : overallBand.key());
-        c.setOverallBandLabel(overallBand == null ? null : overallBand.label());
-        c.setConfigSnapshot(bands);
-        c.setComputedAt(Instant.now());
-        comparisons.save(c);
-
-        comparisonPillars.saveAll(pillarRows(c, pair, baseline.get().id(), distance.get().id(), bands));
-        return true;
+    /**
+     * Enrolled founders of the cohort whose comparison IS computable — both
+     * sides evaluated per {@link #resolveSides} — but for whom no
+     * {@code founder_comparisons} row exists. Derived from data that already
+     * exists; nothing about the failure is stored.
+     *
+     * <p>Empty when the cohort has no fully-designated pair: without a pair
+     * there is nothing to compute and nothing to report.
+     */
+    @Transactional(readOnly = true)
+    public List<UUID> foundersAwaitingComparison(UUID cohortId) {
+        Optional<PairCohortRow> pair = reads.designatedPair(cohortId);
+        if (pair.isEmpty()) {
+            return List.of();
+        }
+        // ponytail: roster-bounded N+1 of indexed lookups, reusing the exact
+        // resolution the compute uses. Fold into one SQL if a cohort ever
+        // grows past the point where an admin read notices.
+        return reads.cohortMembers(cohortId).stream()
+                .filter(userId -> comparisons.findByCohortIdAndUserId(cohortId, userId).isEmpty())
+                .filter(userId -> resolveSides(pair.get(), userId).isPresent())
+                .toList();
     }
 
     private List<FounderComparisonPillar> pillarRows(FounderComparison c, PairCohortRow pair,

@@ -36,7 +36,8 @@ public record CohortMatrixResponse(
     public record FounderRow(
             UUID userId,
             String name,
-            /** The founder's org — a cross-org roster's grouping label (spec §13). */
+            /** The founder's org — profile links + cross-org grouping (spec §13). */
+            UUID orgId,
             String orgName,
             List<ModuleCell> moduleCells,
             List<MilestoneCell> milestoneCells,

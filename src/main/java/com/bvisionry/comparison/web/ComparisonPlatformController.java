@@ -33,7 +33,14 @@ public class ComparisonPlatformController {
 
     private final ComparisonMappingService mappingService;
     private final ComparisonComputeService computeService;
+    private final ComparisonQueryService queries;
     private final CurrentUserAccessor currentUser;
+
+    /** The cohort's uncomputed-but-ready founders — the platform board's repair prompt (spec §13). */
+    @GetMapping("/comparisons/cohorts/{cohortId}/status")
+    public com.bvisionry.comparison.dto.CohortComparisonStatus status(@PathVariable UUID cohortId) {
+        return queries.cohortComparisonStatusPlatform(cohortId);
+    }
 
     @GetMapping("/comparison-mappings")
     public PillarMappingResponse mapping(@RequestParam UUID baselinePipelineId,

@@ -100,6 +100,11 @@ public class ComparisonQueryService {
      */
     public CohortComparisonStatus cohortComparisonStatus(UUID orgId, UUID cohortId) {
         requireCohortInOrg(orgId, cohortId);
+        return cohortComparisonStatusPlatform(cohortId);
+    }
+
+    /** SUPER_ADMIN variant for the platform board (spec §13): no org in the URL. */
+    public CohortComparisonStatus cohortComparisonStatusPlatform(UUID cohortId) {
         List<UUID> pending = compute.foundersAwaitingComparison(cohortId);
         Map<UUID, String> names = reads.userNames(pending);
         return new CohortComparisonStatus(pending.size(), pending.stream()

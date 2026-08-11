@@ -662,7 +662,8 @@ public class ProgramAdminService {
             java.math.BigDecimal friLatest = tri == null ? null : tri.friLatest();
             java.math.BigDecimal friDelta = tri == null || tri.evaluatedCount() < 2 ? null
                     : tri.friLatest().subtract(tri.friEarliest());
-            return new FounderRow(member.getId(), member.getName(), member.getOrgName(),
+            return new FounderRow(member.getId(), member.getName(),
+                    member.getOrgId(), member.getOrgName(),
                     moduleCells, milestoneCells,
                     friLatest, friDelta, tri == null ? 0 : tri.awaitingReview(),
                     tri == null ? null : tri.lastActivityAt(), flags);

@@ -1,5 +1,6 @@
 package com.bvisionry.organization;
 
+import com.bvisionry.common.progress.CourseProgressSql;
 import com.bvisionry.organization.dto.MemberCourseResponse;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -62,7 +63,7 @@ public class MemberCourseRepository {
         List<MemberCourseResponse> rows = new ArrayList<>();
         jdbc.query("""
                 SELECT c.id, c.title, c.slug,
-                       e.status, e.progress_pct, e.enrolled_at, e.completed_at,
+                       e.status, %1$s AS progress_pct, e.enrolled_at, e.completed_at,
                        (SELECT p.name
                           FROM auto_enrolments a
                           JOIN pillars p ON p.id = a.pillar_id
@@ -78,7 +79,7 @@ public class MemberCourseRepository {
                          ON o.user_id = e.user_id AND o.course_id = e.course_id
                  WHERE e.user_id = :userId
                  ORDER BY e.enrolled_at DESC, c.title ASC
-                """,
+                """.formatted(CourseProgressSql.LIVE_PROGRESS_PCT),
                 new MapSqlParameterSource("userId", userId),
                 rs -> {
                     String status = rs.getString("status");

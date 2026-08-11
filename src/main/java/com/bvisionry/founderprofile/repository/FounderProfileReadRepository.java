@@ -16,6 +16,7 @@ import org.springframework.stereotype.Repository;
 
 import com.bvisionry.common.programaccess.ProgramAudience;
 import com.bvisionry.common.programaccess.TaskCompletion;
+import com.bvisionry.common.progress.CourseProgressSql;
 
 /**
  * Cross-feature reads for the shared founder profile (redesign spec §2.4),
@@ -190,7 +191,7 @@ public class FounderProfileReadRepository {
      */
     public List<CourseRow> courses(UUID orgId, UUID memberId) {
         return jdbc.query("""
-                SELECT c.id, c.title, e.status, e.progress_pct, e.enrolled_at, e.completed_at,
+                SELECT c.id, c.title, e.status, %1$s AS progress_pct, e.enrolled_at, e.completed_at,
                        (SELECT p.name
                           FROM auto_enrolments a
                           JOIN pillars p ON p.id = a.pillar_id
@@ -222,7 +223,7 @@ public class FounderProfileReadRepository {
                   AND NOT EXISTS (SELECT 1 FROM enrolment_overrides o2
                                    WHERE o2.user_id = :memberId AND o2.course_id = r.course_id)
                 ORDER BY 5 DESC, 2 ASC
-                """,
+                """.formatted(CourseProgressSql.LIVE_PROGRESS_PCT),
                 new MapSqlParameterSource("memberId", memberId).addValue("orgId", orgId),
                 (rs, i) -> new CourseRow(rs.getObject("id", UUID.class), rs.getString("title"),
                         rs.getString("status"), rs.getInt("progress_pct"),

@@ -2,6 +2,7 @@ package com.bvisionry.courseaccess.repository;
 
 import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
 import com.bvisionry.common.enums.EnrollmentSource;
+import com.bvisionry.common.progress.CourseProgressSql;
 import com.bvisionry.courseaccess.domain.EffectiveCourses.CourseMeta;
 import com.bvisionry.courseaccess.domain.EffectiveCourses.EnrolmentRow;
 import com.bvisionry.courseaccess.domain.EffectiveCourses.RuleRow;
@@ -50,12 +51,12 @@ public class CourseAccessReadRepository {
     /** Real enrollment rows, whatever put them there. */
     public List<EnrolmentRow> enrolments(UUID userId) {
         return jdbc.query("""
-                SELECT e.course_id, e.source, e.status, e.progress_pct, e.required,
+                SELECT e.course_id, e.source, e.status, %1$s AS progress_pct, e.required,
                        e.deadline, e.enrolled_at, e.completed_at, ab.name AS assigned_by_name
                   FROM enrollment e
                   LEFT JOIN users ab ON ab.id = e.assigned_by
                  WHERE e.user_id = :userId AND e.status <> 'CANCELLED'
-                """,
+                """.formatted(CourseProgressSql.LIVE_PROGRESS_PCT),
                 new MapSqlParameterSource("userId", userId),
                 (rs, i) -> new EnrolmentRow(
                         rs.getObject("course_id", UUID.class),

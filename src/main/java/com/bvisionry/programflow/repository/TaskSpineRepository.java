@@ -17,6 +17,7 @@ import org.springframework.stereotype.Repository;
 import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
 import com.bvisionry.common.programaccess.ProgramAudience;
 import com.bvisionry.common.programaccess.TaskCompletion;
+import com.bvisionry.common.progress.CourseProgressSql;
 
 /**
  * Cross-feature reads AND the open-endpoint's ensure-writes for the typed task
@@ -64,11 +65,12 @@ public class TaskSpineRepository {
             return List.of();
         }
         return jdbc.query("""
-                SELECT e.user_id, e.course_id, e.status, e.progress_pct, e.enrolled_at, e.completed_at
+                SELECT e.user_id, e.course_id, e.status, %1$s AS progress_pct,
+                       e.enrolled_at, e.completed_at
                 FROM enrollment e
                 WHERE e.user_id IN (:userIds) AND e.course_id IN (:courseIds)
                   AND e.status <> 'CANCELLED'
-                """,
+                """.formatted(CourseProgressSql.LIVE_PROGRESS_PCT),
                 new MapSqlParameterSource("userIds", userIds).addValue("courseIds", courseIds),
                 (rs, i) -> new CourseStateRow(rs.getObject("user_id", UUID.class),
                         rs.getObject("course_id", UUID.class), rs.getString("status"),
@@ -338,7 +340,7 @@ public class TaskSpineRepository {
     public List<DirectCourseRow> directCourses(UUID memberId) {
         String notCovered = "NOT " + COVERED_BY_COHORT_TASK.formatted("'COURSE'", "%s");
         return jdbc.query("""
-                SELECT e.id, e.course_id, c.title, e.status, e.progress_pct,
+                SELECT e.id, e.course_id, c.title, e.status, %4$s AS progress_pct,
                        e.enrolled_at, e.completed_at,
                        CASE WHEN r.course_id IS NOT NULL AND e.source <> 'DIRECT'
                             THEN 'ORG_RULE' ELSE e.source END AS source,
@@ -370,7 +372,8 @@ public class TaskSpineRepository {
                 ORDER BY 6 DESC
                 """.formatted(notCovered.formatted("e.course_id"), notCovered.formatted("r.course_id"),
                         CourseVisibilityAccess.VISIBLE_TO_ORG.formatted(
-                                "(SELECT organization_id FROM users WHERE id = :memberId)")),
+                                "(SELECT organization_id FROM users WHERE id = :memberId)"),
+                        CourseProgressSql.LIVE_PROGRESS_PCT),
                 new MapSqlParameterSource("memberId", memberId),
                 (rs, i) -> new DirectCourseRow(rs.getObject("id", UUID.class),
                         rs.getObject("course_id", UUID.class), rs.getString("title"),

@@ -115,7 +115,7 @@ public class EnrollmentService {
         }
 
         return enrollments.findAnyByUserIdAndCourseId(userId, enrolledCourseId)
-                .map(e -> toDto(reactivateIfRemoved(e), course))
+                .map(e -> live(toDto(reactivateIfRemoved(e), course), e))
                 .orElseGet(() -> createEnrollment(userId, course));
     }
 
@@ -163,7 +163,7 @@ public class EnrollmentService {
             return toDto(enrollments.saveAndFlush(e), course);
         } catch (DataIntegrityViolationException ex) {
             return enrollments.findByUserIdAndCourseId(userId, course.getId())
-                    .map(existing -> toDto(existing, course))
+                    .map(existing -> live(toDto(existing, course), existing))
                     .orElseThrow(() -> ex);
         }
     }
@@ -182,8 +182,9 @@ public class EnrollmentService {
         Map<UUID, Course> byId = courses.findAllById(
                         list.stream().map(Enrollment::getCourseId).collect(Collectors.toSet()))
                 .stream().collect(Collectors.toMap(Course::getId, c -> c));
+        Map<UUID, Integer> pct = livePct(list);
         return list.stream()
-                .map(e -> toDto(e, byId.get(e.getCourseId())))
+                .map(e -> live(toDto(e, byId.get(e.getCourseId())), e, pct))
                 .toList();
     }
 
@@ -219,7 +220,7 @@ public class EnrollmentService {
                 course.getId().toString(),
                 course.getSlug(),
                 course.getTitle(),
-                toDto(enrollment, course),
+                live(toDto(enrollment, course), enrollment),
                 sectionViews);
     }
 
@@ -365,6 +366,45 @@ public class EnrollmentService {
                 e.getProgressPct(),
                 e.getEnrolledAt(),
                 e.getCompletedAt());
+    }
+
+    /**
+     * The same DTO with progress counted against the course's CURRENT lessons
+     * instead of the {@code progress_pct} column.
+     *
+     * <p>That column is a cache only the learner's own completions ever write, and
+     * its denominator lives in another slice: an author who adds, deletes or
+     * replaces lessons moves the lesson count (and cascade-deletes the
+     * {@code content_progress} rows pointing at the old ones) without any write
+     * touching the enrolment, so every enrolment keeps reporting the percentage
+     * that was true at the last click. Derived here rather than repaired on the
+     * authoring path because no schedule of "recompute on lesson change" survives
+     * the next mutation someone forgets. Shared with the five raw-SQL reads in
+     * other slices via {@link com.bvisionry.common.progress.CourseProgressSql}.
+     *
+     * <p>A patch on the record rather than a parameter on {@code toDto}: the
+     * ArchUnit ratchet freezes the exact signature that may name a
+     * {@code catalog.Course}, and a new one is a new frozen violation.
+     */
+    private EnrollmentDto live(EnrollmentDto dto, Enrollment e, Map<UUID, Integer> livePct) {
+        return new EnrollmentDto(dto.id(), dto.courseId(), dto.courseTitle(), dto.courseSlug(),
+                dto.status(), livePct.getOrDefault(e.getId(), e.getProgressPct()),
+                dto.enrolledAt(), dto.completedAt());
+    }
+
+    private EnrollmentDto live(EnrollmentDto dto, Enrollment e) {
+        return live(dto, e, livePct(List.of(e)));
+    }
+
+    /** See {@link #live}. Falls back to the stored value for any row not returned. */
+    private Map<UUID, Integer> livePct(List<Enrollment> list) {
+        if (list.isEmpty()) {
+            return Map.of();
+        }
+        return enrollments.livePct(list.stream().map(Enrollment::getId).toList())
+                .stream()
+                .collect(Collectors.toMap(EnrollmentRepository.LivePct::getId,
+                        EnrollmentRepository.LivePct::getPct));
     }
 
     private LearnViewDto.SectionView toSectionView(Section s, Set<UUID> completed) {

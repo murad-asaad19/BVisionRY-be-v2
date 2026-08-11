@@ -1,5 +1,6 @@
 package com.bvisionry.enrollment.repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -8,6 +9,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
+import com.bvisionry.common.progress.CourseProgressSql;
 import com.bvisionry.enrollment.domain.Enrollment;
 
 /**
@@ -75,4 +77,21 @@ public interface EnrollmentRepository extends JpaRepository<Enrollment, UUID> {
             + " WHERE user_id = :userId AND course_id = :courseId)", nativeQuery = true)
     boolean isRemovedByAdmin(UUID userId, UUID courseId);
 
+    /**
+     * Completion percent counted against each course's CURRENT lesson set — see
+     * {@link CourseProgressSql}. Native and sharing that one expression with the
+     * five raw-SQL read sites in other slices, because {@code progress_pct} is a
+     * cache the lesson set can invalidate behind its back and a second formula
+     * here would drift from theirs.
+     */
+    @Query(value = "SELECT e.id AS id, " + CourseProgressSql.LIVE_PROGRESS_PCT
+            + " AS pct FROM enrollment e WHERE e.id IN (:ids)", nativeQuery = true)
+    List<LivePct> livePct(Collection<UUID> ids);
+
+    /** One row of {@link #livePct}. */
+    interface LivePct {
+        UUID getId();
+
+        int getPct();
+    }
 }

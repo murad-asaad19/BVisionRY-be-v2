@@ -37,6 +37,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -403,6 +404,38 @@ class CourseWiringIntegrationTest extends AbstractPostgresIntegrationTest {
                 .isEqualTo(40);
     }
 
+    /**
+     * {@code enrollment.progress_pct} is only ever written by a learner's own
+     * completion, so replacing a course's lessons used to leave every enrolment
+     * frozen at a percentage nothing on screen agreed with — a member's journey
+     * and player header read "60% complete" over a sidebar with nothing ticked.
+     * The percent is now counted against the course's CURRENT lessons at read
+     * time ({@code CourseProgressSql}), on both surfaces.
+     */
+    @Test
+    void progressCountsTheCoursesCurrentLessons_notTheCachedPercent() {
+        orgCourses.assign(org.getId(),
+                new AssignCourseRequest(courseId, AssignCourseRequest.AUDIENCE_ORG, null, false, null),
+                admin.getId());
+        spine.ensureEnrollment(member.getId(), courseId);
+        jdbc.update("UPDATE enrollment SET progress_pct = 60 WHERE user_id = :u",
+                new MapSqlParameterSource("u", member.getId()));
+
+        // The author republishes the course with a different lesson set; the
+        // completions that made it 60% cascaded away with the rows they pointed at.
+        List<UUID> lessons = lessons(4);
+
+        assertThat(only(courseAccess.effectiveCoursesOf(member.getId(), org.getId())).progressPct())
+                .isZero();
+        assertThat(spine.directCourses(member.getId()).get(0).progressPct()).isZero();
+
+        completeLesson(lessons.get(0));
+
+        assertThat(only(courseAccess.effectiveCoursesOf(member.getId(), org.getId())).progressPct())
+                .isEqualTo(25);
+        assertThat(spine.directCourses(member.getId()).get(0).progressPct()).isEqualTo(25);
+    }
+
     @Test
     void anExcludedMemberCannotSelfEnrol() {
         orgCourses.removeForMember(org.getId(), member.getId(), courseId, "not relevant",
@@ -541,6 +574,34 @@ class CourseWiringIntegrationTest extends AbstractPostgresIntegrationTest {
                 """,
                 new MapSqlParameterSource("orgId", org.getId()).addValue("slug", slug)
                         .addValue("title", title), UUID.class);
+    }
+
+    /** A section of {@code n} lessons on the seeded course. */
+    private List<UUID> lessons(int n) {
+        UUID sectionId = UUID.randomUUID();
+        jdbc.update("INSERT INTO section (id, org_id, course_id, title) VALUES (:s, :o, :c, 'Module 1')",
+                new MapSqlParameterSource("s", sectionId).addValue("o", org.getId())
+                        .addValue("c", courseId));
+        return IntStream.rangeClosed(1, n).mapToObj(i -> {
+            UUID id = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO content (id, org_id, section_id, title, sequence)
+                    VALUES (:id, :o, :s, :t, :q)
+                    """,
+                    new MapSqlParameterSource("id", id).addValue("o", org.getId())
+                            .addValue("s", sectionId).addValue("t", "Lesson " + i).addValue("q", i));
+            return id;
+        }).toList();
+    }
+
+    private void completeLesson(UUID contentId) {
+        jdbc.update("""
+                INSERT INTO content_progress (enrollment_id, content_id, completed, completed_at)
+                SELECT e.id, :content, true, now() FROM enrollment e
+                 WHERE e.user_id = :u AND e.course_id = :c
+                """,
+                new MapSqlParameterSource("content", contentId)
+                        .addValue("u", member.getId()).addValue("c", courseId));
     }
 
     private record PillarRef(UUID pipelineId, UUID pillarId) {}

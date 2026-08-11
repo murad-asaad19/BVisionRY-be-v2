@@ -16,12 +16,12 @@ public final class ProgramFlowEvents {
     private ProgramFlowEvents() {
     }
 
-    /** Learners were enrolled into a cohort (roster edit or org import). */
-    public record CohortEnrolled(UUID orgId, String cohortName, List<UUID> userIds) {
+    /** Learners were enrolled into a cohort (roster edit, org assignment or auto-enroll). */
+    public record CohortEnrolled(String cohortName, List<UUID> userIds) {
     }
 
     /** A module's audience now includes these enrolled learners (admin assignment). */
-    public record ModuleAssigned(UUID orgId, String moduleName, String cohortName, List<UUID> userIds) {
+    public record ModuleAssigned(String moduleName, String cohortName, List<UUID> userIds) {
     }
 
     /** A SCHEDULED module's unlock time passed for these enrolled learners. */

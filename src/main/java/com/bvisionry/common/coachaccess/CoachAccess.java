@@ -94,8 +94,8 @@ public class CoachAccess {
             EXISTS (
                 SELECT 1
                 FROM coach_assignments gca
-                JOIN cohorts gcc ON gcc.id = gca.cohort_id
-                                AND gcc.org_id = gca.org_id
+                JOIN cohort_orgs gcc ON gcc.cohort_id = gca.cohort_id
+                                    AND gcc.org_id = gca.org_id
                 WHERE gca.org_id = :orgId
                   AND gca.coach_id = :coachId
                   AND gca.cohort_id = %1$s

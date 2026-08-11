@@ -24,9 +24,9 @@ import lombok.RequiredArgsConstructor;
  * per-founder profile read — there is no member-facing door (§4 DECIDED).
  */
 @RestController
-@RequestMapping(path = "/api/organizations/{orgId}/cohorts/{cohortId}/participation",
+@RequestMapping(path = "/api/cohorts/{cohortId}/participation",
         produces = MediaType.APPLICATION_JSON_VALUE)
-@PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId))")
+@PreAuthorize("hasAuthority('SUPER_ADMIN')")
 @RequiredArgsConstructor
 @Tag(name = "Engagement (admin)", description = "Participation score + attendance history for one founder.")
 public class CohortParticipationController {
@@ -34,8 +34,7 @@ public class CohortParticipationController {
     private final EngagementService service;
 
     @GetMapping
-    public CohortParticipationResponse cohortParticipation(@PathVariable UUID orgId,
-            @PathVariable UUID cohortId) {
-        return service.cohortParticipation(orgId, cohortId);
+    public CohortParticipationResponse cohortParticipation(@PathVariable UUID cohortId) {
+        return service.cohortParticipation(cohortId);
     }
 }

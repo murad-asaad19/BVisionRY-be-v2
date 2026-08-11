@@ -65,7 +65,7 @@ public class EngagementService {
         List<ScoringBands.Band> bands = currentBands();
         return new EngagementRecordResponse(reads.memberCohorts(orgId, memberId).stream()
                 .map(cohort -> new CohortEngagement(cohort.id(), cohort.name(),
-                        participation(orgId, cohort.id(), memberId, categories, bands),
+                        participation(cohort.id(), memberId, categories, bands),
                         history(cohort.id(), memberId)))
                 .toList());
     }
@@ -81,8 +81,8 @@ public class EngagementService {
      * enough to feel it, the upgrade is to group both reads BY member and
      * join in Java, not to cache the score.
      */
-    public CohortParticipationResponse cohortParticipation(UUID orgId, UUID cohortId) {
-        if (reads.cohort(orgId, cohortId).isEmpty()) {
+    public CohortParticipationResponse cohortParticipation(UUID cohortId) {
+        if (reads.cohort(cohortId).isEmpty()) {
             throw new ResourceNotFoundException("Cohort", cohortId.toString());
         }
         List<ParticipationFormula.Category> categories = currentCategories();
@@ -90,7 +90,7 @@ public class EngagementService {
 
         List<MemberParticipation> members = reads.roster(cohortId).stream()
                 .map(row -> new MemberParticipation(row.id(), row.name(),
-                        participation(orgId, cohortId, row.id(), categories, bands)))
+                        participation(cohortId, row.id(), categories, bands)))
                 .toList();
 
         List<BigDecimal> scored = members.stream()
@@ -106,7 +106,7 @@ public class EngagementService {
 
     /* ------------------------------------------------------------- compute */
 
-    private ParticipationDto participation(UUID orgId, UUID cohortId, UUID memberId,
+    private ParticipationDto participation(UUID cohortId, UUID memberId,
                                            List<ParticipationFormula.Category> categories,
                                            List<ScoringBands.Band> bands) {
         Map<String, Counts> sessionCounts = new HashMap<>();
@@ -119,7 +119,7 @@ public class EngagementService {
                 // ponytail: "assigned" = today's LIVE program tasks + exercise
                 // assignments; the full typed task spine replaces this in a
                 // later phase.
-                Counts counts = reads.assignmentCounts(orgId, cohortId, memberId);
+                Counts counts = reads.assignmentCounts(cohortId, memberId);
                 return new CategoryInput(category, counts.done(), counts.total());
             }
             Counts counts = sessionCounts.getOrDefault(category.key(), new Counts(0, 0));

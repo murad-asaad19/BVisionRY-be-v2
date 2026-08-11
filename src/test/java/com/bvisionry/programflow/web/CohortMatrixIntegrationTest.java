@@ -90,8 +90,10 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
                 pillarId, pipelineId, "Mindset");
 
         cohortId = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name, status, launched_at) "
-                + "VALUES (?, ?, 'Matrix Cohort', 'LAUNCHED', now())", cohortId, org.getId());
+        jdbc.update("INSERT INTO cohorts (id, name, status, launched_at) "
+                + "VALUES (?, 'Matrix Cohort', 'LAUNCHED', now())", cohortId);
+        jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)",
+                cohortId, org.getId());
         for (User u : new User[] {founderA, founderB, founderC, founderD}) {
             jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
                     cohortId, u.getId());
@@ -146,7 +148,7 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void matrix_columnsCellsTriageAndAttentionFlags() {
-        CohortMatrixResponse matrix = adminService.getMatrix(org.getId(), cohortId);
+        CohortMatrixResponse matrix = adminService.getMatrix(cohortId);
 
         // Columns: three modules (pillar chip on the first), two milestone
         // columns in board order (baseline, then the mid-program check-in).
@@ -205,7 +207,7 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
      */
     @Test
     void brandNewFounderIsNotIdle() {
-        FounderRow d = row(adminService.getMatrix(org.getId(), cohortId), founderD);
+        FounderRow d = row(adminService.getMatrix(cohortId), founderD);
 
         assertThat(d.lastSeenAt()).isNull();
         assertThat(d.attentionFlags())
@@ -234,9 +236,9 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
     private UUID insertModule(String name, String pillarLabel, int position) {
         UUID id = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO program_modules (id, org_id, cohort_id, name, pillar_label, lock_mode, position)
-                VALUES (?, ?, ?, ?, ?, 'UNLOCKED', ?)
-                """, id, org.getId(), cohortId, name, pillarLabel, position);
+                INSERT INTO program_modules (id, cohort_id, name, pillar_label, lock_mode, position)
+                VALUES (?, ?, ?, ?, 'UNLOCKED', ?)
+                """, id, cohortId, name, pillarLabel, position);
         return id;
     }
 

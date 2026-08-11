@@ -227,7 +227,8 @@ class MyWorkshopPlayIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void workshopRunsWithoutAnyCohort() {
         Fixture f = fixture(WorkshopStatus.ACTIVE);
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM cohorts WHERE org_id = ?",
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM cohort_orgs WHERE org_id = ?",
                 Integer.class, f.org().getId()))
                 .as("premise: the org owning this workshop has no cohort")
                 .isZero();

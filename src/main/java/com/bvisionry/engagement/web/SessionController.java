@@ -26,14 +26,15 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
 /**
- * The cohort board Sessions tab (spec §4): session CRUD + roll call, org
- * admins only. Attendance is entered here by admins — coaches read
- * engagement through the founder profile, members never see it.
+ * The cohort board Sessions tab (spec §4): session CRUD + roll call. Spec
+ * §13: the board is platform-scoped, super admin only. Attendance is entered
+ * here — coaches read engagement through the founder profile, members never
+ * see it.
  */
 @RestController
-@RequestMapping(path = "/api/organizations/{orgId}/cohorts/{cohortId}/sessions",
+@RequestMapping(path = "/api/cohorts/{cohortId}/sessions",
         produces = MediaType.APPLICATION_JSON_VALUE)
-@PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId))")
+@PreAuthorize("hasAuthority('SUPER_ADMIN')")
 @RequiredArgsConstructor
 @Tag(name = "Sessions (admin)", description = "Cohort sessions and attendance roll call.")
 public class SessionController {
@@ -42,36 +43,36 @@ public class SessionController {
     private final CurrentUserAccessor currentUser;
 
     @GetMapping
-    public CohortSessionsResponse list(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
-        return service.list(orgId, cohortId);
+    public CohortSessionsResponse list(@PathVariable UUID cohortId) {
+        return service.list(cohortId);
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public SessionDto create(@PathVariable UUID orgId, @PathVariable UUID cohortId,
+    public SessionDto create(@PathVariable UUID cohortId,
             @Valid @RequestBody UpsertSessionRequest req) {
-        return service.create(orgId, cohortId, req, currentUser.require().userId());
+        return service.create(cohortId, req, currentUser.require().userId());
     }
 
     @PutMapping("/{sessionId}")
-    public SessionDto update(@PathVariable UUID orgId, @PathVariable UUID cohortId,
+    public SessionDto update(@PathVariable UUID cohortId,
             @PathVariable UUID sessionId, @Valid @RequestBody UpsertSessionRequest req) {
-        return service.update(orgId, cohortId, sessionId, req);
+        return service.update(cohortId, sessionId, req);
     }
 
     @DeleteMapping("/{sessionId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void delete(@PathVariable UUID orgId, @PathVariable UUID cohortId,
+    public void delete(@PathVariable UUID cohortId,
             @PathVariable UUID sessionId) {
-        service.delete(orgId, cohortId, sessionId);
+        service.delete(cohortId, sessionId);
     }
 
     /** The roll-call tick/untick — §7b stamped with who marked and when. */
     @PutMapping("/{sessionId}/attendance/{memberId}")
-    public SessionDto setAttendance(@PathVariable UUID orgId, @PathVariable UUID cohortId,
+    public SessionDto setAttendance(@PathVariable UUID cohortId,
             @PathVariable UUID sessionId, @PathVariable UUID memberId,
             @Valid @RequestBody AttendanceRequest req) {
-        return service.setAttendance(orgId, cohortId, sessionId, memberId, req.present(),
+        return service.setAttendance(cohortId, sessionId, memberId, req.present(),
                 currentUser.require().userId());
     }
 }

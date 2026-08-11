@@ -163,7 +163,8 @@ public class BenchmarkReadRepository {
               AND EXISTS (SELECT 1 FROM cohort_members cm
                           JOIN cohorts c ON c.id = cm.cohort_id
                           WHERE cm.user_id = s.user_id
-                            AND c.id = :cohortId AND c.org_id = :orgId)
+                            AND c.id = :cohortId
+                            AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId))
             """;
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -202,10 +203,13 @@ public class BenchmarkReadRepository {
                 (rs, i) -> new PillarRef(rs.getObject("id", UUID.class), rs.getString("name")));
     }
 
-    /** The cohort's name, constrained to the org — empty when absent or foreign. */
+    /** The cohort's name, constrained to the org's assignments (spec §13) — empty when absent or foreign. */
     public Optional<String> cohortNameInOrg(UUID orgId, UUID cohortId) {
-        return jdbc.query(
-                "SELECT name FROM cohorts WHERE id = :cohortId AND org_id = :orgId",
+        return jdbc.query("""
+                SELECT c.name FROM cohorts c
+                JOIN cohort_orgs cox ON cox.cohort_id = c.id AND cox.org_id = :orgId
+                WHERE c.id = :cohortId
+                """,
                 new MapSqlParameterSource("orgId", orgId).addValue("cohortId", cohortId),
                 (rs, i) -> rs.getString("name"))
                 .stream().findFirst();

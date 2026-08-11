@@ -33,7 +33,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 
 /**
- * Admin program-flow endpoints for one cohort (program board, task builder, pulse).
+ * Program-flow authoring for one platform cohort (spec §13 — super admin
+ * only): program board, task builder, pulse, matrix, AI composer.
  *
  * <ul>
  *   <li>GET  …/cohorts/{cohortId}/program                        — full board</li>
@@ -47,9 +48,9 @@ import jakarta.validation.Valid;
  * </ul>
  */
 @RestController
-@RequestMapping(path = "/api/organizations/{orgId}/cohorts/{cohortId}/program",
+@RequestMapping(path = "/api/cohorts/{cohortId}/program",
         produces = MediaType.APPLICATION_JSON_VALUE)
-@PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId))")
+@PreAuthorize("hasAuthority('SUPER_ADMIN')")
 @Tag(name = "Program Flow (admin)", description = "Program board, task builder, cohort pulse.")
 public class ProgramAdminController {
 
@@ -62,122 +63,110 @@ public class ProgramAdminController {
     }
 
     @GetMapping
-    public BoardResponse getBoard(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
-        return service.getBoard(orgId, cohortId);
+    public BoardResponse getBoard(@PathVariable UUID cohortId) {
+        return service.getBoard(cohortId);
     }
 
     @PutMapping("/settings")
     public ProgramSettingsDto updateSettings(
-            @PathVariable UUID orgId,
             @PathVariable UUID cohortId,
             @Valid @RequestBody ProgramSettingsDto req) {
-        return service.updateSettings(orgId, cohortId, req);
+        return service.updateSettings(cohortId, req);
     }
 
     @PostMapping("/modules")
     @ResponseStatus(HttpStatus.CREATED)
     public ModuleDto createModule(
-            @PathVariable UUID orgId,
             @PathVariable UUID cohortId,
             @Valid @RequestBody CreateModuleRequest req) {
-        return service.createModule(orgId, cohortId, req);
+        return service.createModule(cohortId, req);
     }
 
     @PutMapping("/modules/{moduleId}")
     public ModuleDto updateModule(
-            @PathVariable UUID orgId,
             @PathVariable UUID cohortId,
             @PathVariable UUID moduleId,
             @Valid @RequestBody UpdateModuleRequest req) {
-        return service.updateModule(orgId, cohortId, moduleId, req);
+        return service.updateModule(cohortId, moduleId, req);
     }
 
     @PutMapping("/modules/{moduleId}/audience")
     public AudienceDto updateAudience(
-            @PathVariable UUID orgId,
             @PathVariable UUID cohortId,
             @PathVariable UUID moduleId,
             @Valid @RequestBody UpdateAudienceRequest req) {
-        return service.updateAudience(orgId, cohortId, moduleId, req);
+        return service.updateAudience(cohortId, moduleId, req);
     }
 
     @DeleteMapping("/modules/{moduleId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteModule(
-            @PathVariable UUID orgId,
             @PathVariable UUID cohortId,
             @PathVariable UUID moduleId) {
-        service.deleteModule(orgId, cohortId, moduleId);
+        service.deleteModule(cohortId, moduleId);
     }
 
     /** Creates a task; {@code taskType} defaults to LESSON (the form-based flow). */
     @PostMapping("/modules/{moduleId}/tasks")
     @ResponseStatus(HttpStatus.CREATED)
     public TaskDto createTask(
-            @PathVariable UUID orgId,
             @PathVariable UUID cohortId,
             @PathVariable UUID moduleId,
             @org.springframework.web.bind.annotation.RequestParam(required = false)
             com.bvisionry.programflow.domain.ProgramTaskType taskType) {
-        return service.createTask(orgId, cohortId, moduleId, taskType);
+        return service.createTask(cohortId, moduleId, taskType);
     }
 
     @PutMapping("/tasks/{taskId}")
     public TaskDto updateTask(
-            @PathVariable UUID orgId,
             @PathVariable UUID cohortId,
             @PathVariable UUID taskId,
             @Valid @RequestBody UpdateTaskRequest req) {
-        return service.updateTask(orgId, cohortId, taskId, req);
+        return service.updateTask(cohortId, taskId, req);
     }
 
     @DeleteMapping("/tasks/{taskId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteTask(
-            @PathVariable UUID orgId,
             @PathVariable UUID cohortId,
             @PathVariable UUID taskId) {
-        service.deleteTask(orgId, cohortId, taskId);
+        service.deleteTask(cohortId, taskId);
     }
 
     /** Board drag-and-drop: move a task to a module/index (same module = reorder). */
     @PutMapping("/tasks/{taskId}/move")
     public TaskDto moveTask(
-            @PathVariable UUID orgId,
             @PathVariable UUID cohortId,
             @PathVariable UUID taskId,
             @Valid @RequestBody MoveTaskRequest req) {
-        return service.moveTask(orgId, cohortId, taskId, req);
+        return service.moveTask(cohortId, taskId, req);
     }
 
     @GetMapping("/pulse")
-    public PulseResponse getPulse(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
-        return service.getPulse(orgId, cohortId);
+    public PulseResponse getPulse(@PathVariable UUID cohortId) {
+        return service.getPulse(cohortId);
     }
 
     /** Founders progress matrix — the cohort board's first tab (spec §2.3). */
     @GetMapping("/matrix")
-    public com.bvisionry.programflow.dto.CohortMatrixResponse getMatrix(
-            @PathVariable UUID orgId, @PathVariable UUID cohortId) {
-        return service.getMatrix(orgId, cohortId);
+    public com.bvisionry.programflow.dto.CohortMatrixResponse getMatrix(@PathVariable UUID cohortId) {
+        return service.getMatrix(cohortId);
     }
 
     /** AI composer — SSE: {@code status}* then {@code draft} (ModuleDraft JSON) or {@code error}. */
     @PostMapping(value = "/ai/compose", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public org.springframework.web.servlet.mvc.method.annotation.SseEmitter compose(
-            @PathVariable UUID orgId,
             @PathVariable UUID cohortId,
             @Valid @RequestBody ComposeRequest req) {
-        return aiService.compose(orgId, cohortId, req.prompt());
+        return aiService.compose(cohortId, req.prompt());
     }
 
     /** "Add to board" — persists a (possibly task-filtered) composer draft. */
     @PostMapping("/ai/modules")
     @ResponseStatus(HttpStatus.CREATED)
     public ModuleDto addDraftModule(
-            @PathVariable UUID orgId,
             @PathVariable UUID cohortId,
             @Valid @RequestBody ModuleDraft draft) {
-        return service.addDraftModule(orgId, cohortId, draft);
+        return service.addDraftModule(cohortId, draft);
     }
 }

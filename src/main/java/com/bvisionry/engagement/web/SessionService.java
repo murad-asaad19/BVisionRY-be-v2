@@ -44,12 +44,12 @@ public class SessionService {
     private final EngagementReadRepository reads;
 
     @Transactional(readOnly = true)
-    public CohortSessionsResponse list(UUID orgId, UUID cohortId) {
-        requireCohort(orgId, cohortId);
+    public CohortSessionsResponse list(UUID cohortId) {
+        requireCohort(cohortId);
         List<RosterMember> roster = reads.roster(cohortId).stream()
                 .map(r -> new RosterMember(r.id(), r.name(), r.email()))
                 .toList();
-        List<Session> all = sessions.findByOrgIdAndCohortIdOrderBySessionDateDesc(orgId, cohortId);
+        List<Session> all = sessions.findByCohortIdOrderBySessionDateDesc(cohortId);
         Map<UUID, List<SessionAttendance>> marks = attendance
                 .findBySessionIdIn(all.stream().map(Session::getId).toList())
                 .stream().collect(Collectors.groupingBy(SessionAttendance::getSessionId));
@@ -60,19 +60,18 @@ public class SessionService {
                 .toList());
     }
 
-    public SessionDto create(UUID orgId, UUID cohortId, UpsertSessionRequest req, UUID actorId) {
-        requireEditableCohort(orgId, cohortId);
+    public SessionDto create(UUID cohortId, UpsertSessionRequest req, UUID actorId) {
+        requireEditableCohort(cohortId);
         Session s = new Session();
-        s.setOrgId(orgId);
         s.setCohortId(cohortId);
         s.setCreatedBy(actorId);
         apply(s, cohortId, req);
         return toDto(sessions.save(s), List.of(), Map.of());
     }
 
-    public SessionDto update(UUID orgId, UUID cohortId, UUID sessionId, UpsertSessionRequest req) {
-        requireEditableCohort(orgId, cohortId);
-        Session s = requireSession(orgId, cohortId, sessionId);
+    public SessionDto update(UUID cohortId, UUID sessionId, UpsertSessionRequest req) {
+        requireEditableCohort(cohortId);
+        Session s = requireSession(cohortId, sessionId);
         apply(s, cohortId, req);
         return withAttendance(s);
     }
@@ -95,19 +94,19 @@ public class SessionService {
         s.setExpectedMemberIds(new LinkedHashSet<>(expected));
     }
 
-    public void delete(UUID orgId, UUID cohortId, UUID sessionId) {
-        requireEditableCohort(orgId, cohortId);
-        sessions.delete(requireSession(orgId, cohortId, sessionId));
+    public void delete(UUID cohortId, UUID sessionId) {
+        requireEditableCohort(cohortId);
+        sessions.delete(requireSession(cohortId, sessionId));
     }
 
     /**
      * The roll-call tick/untick. Present = a §7b-stamped presence row;
      * re-ticking keeps the original stamp (idempotent); untick deletes the row.
      */
-    public SessionDto setAttendance(UUID orgId, UUID cohortId, UUID sessionId, UUID memberId,
+    public SessionDto setAttendance(UUID cohortId, UUID sessionId, UUID memberId,
                                     boolean present, UUID actorId) {
-        requireEditableCohort(orgId, cohortId);
-        Session s = requireSession(orgId, cohortId, sessionId);
+        requireEditableCohort(cohortId);
+        Session s = requireSession(cohortId, sessionId);
         if (!reads.isCohortMember(cohortId, memberId)) {
             throw new BadRequestException("This member is not enrolled in the cohort");
         }
@@ -135,24 +134,24 @@ public class SessionService {
      * cohort is DRAFT/LAUNCHED/COMPLETED (a late roll-call tidy-up on a
      * completed cohort is legitimate); ARCHIVED refuses every mutation.
      */
-    private void requireEditableCohort(UUID orgId, UUID cohortId) {
-        String status = reads.cohortStatus(orgId, cohortId)
+    private void requireEditableCohort(UUID cohortId) {
+        String status = reads.cohortStatus(cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
         if ("ARCHIVED".equals(status)) {
             throw new IllegalOperationException("This cohort is archived and read-only.");
         }
     }
 
-    /** The cohort, guarded to the org path (tenant isolation) — 404 otherwise. */
-    private void requireCohort(UUID orgId, UUID cohortId) {
-        reads.cohort(orgId, cohortId)
+    /** The cohort must exist (spec §13: platform-scoped, super-admin only). */
+    private void requireCohort(UUID cohortId) {
+        reads.cohort(cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
     }
 
-    /** The session, guarded to the org + cohort path — 404 otherwise. */
-    Session requireSession(UUID orgId, UUID cohortId, UUID sessionId) {
+    /** The session, guarded to the cohort path — 404 otherwise. */
+    Session requireSession(UUID cohortId, UUID sessionId) {
         return sessions.findById(sessionId)
-                .filter(s -> s.getOrgId().equals(orgId) && s.getCohortId().equals(cohortId))
+                .filter(s -> s.getCohortId().equals(cohortId))
                 .orElseThrow(() -> new ResourceNotFoundException("Session", sessionId.toString()));
     }
 

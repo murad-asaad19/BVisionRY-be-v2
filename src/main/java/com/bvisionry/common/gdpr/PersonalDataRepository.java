@@ -246,7 +246,6 @@ public class PersonalDataRepository {
         EXPORT_SECTIONS.put("workshop_memberships", "SELECT * FROM workshop_team_members WHERE user_id = :userId");
         EXPORT_SECTIONS.put("workshop_submissions", "SELECT * FROM workshop_task_submissions WHERE user_id = :userId");
 
-        EXPORT_SECTIONS.put("team_memberships", "SELECT * FROM team_members WHERE user_id = :userId");
         EXPORT_SECTIONS.put("cohort_memberships", "SELECT * FROM cohort_members WHERE user_id = :userId");
 
         // Coach grants ABOUT the subject: as the coach (their caseload) or as

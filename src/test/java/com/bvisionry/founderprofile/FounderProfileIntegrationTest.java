@@ -345,7 +345,8 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private UUID insertCohort(UUID orgId, String name, UUID memberId) {
         UUID id = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')", id, orgId, name);
+        jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, ?, 'LAUNCHED')", id, name);
+        jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)", id, orgId);
         jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)", id, memberId);
         return id;
     }
@@ -355,9 +356,9 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
         UUID moduleId = UUID.randomUUID();
         this.moduleOneId = moduleId;
         jdbc.update("""
-                INSERT INTO program_modules (id, org_id, cohort_id, name, assign_mode, lock_mode)
-                VALUES (?, ?, ?, 'Module One', 'ALL', 'UNLOCKED')
-                """, moduleId, orgA.getId(), cohort1);
+                INSERT INTO program_modules (id, cohort_id, name, assign_mode, lock_mode)
+                VALUES (?, ?, 'Module One', 'ALL', 'UNLOCKED')
+                """, moduleId, cohort1);
         UUID task1 = UUID.randomUUID();
         jdbc.update("INSERT INTO program_tasks (id, module_id, name, status) VALUES (?, ?, 'Task One', 'LIVE')",
                 task1, moduleId);

@@ -45,7 +45,7 @@ final class ProgramMapper {
                 m.getPosition(),
                 m.getLockMode(),
                 m.getUnlockAt(),
-                new AudienceDto(m.getAssignMode(), List.copyOf(m.getTeamIds()), List.copyOf(m.getMemberIds()), reached),
+                new AudienceDto(m.getAssignMode(), List.copyOf(m.getMemberIds()), reached),
                 m.getTasks().stream().map(ProgramMapper::toDto).toList());
     }
 

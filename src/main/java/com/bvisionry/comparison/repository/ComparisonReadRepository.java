@@ -34,11 +34,11 @@ public class ComparisonReadRepository {
 
     /* ---------------------------------------------------- pair designation */
 
-    public record PairCohortRow(UUID cohortId, UUID orgId, String cohortName,
+    public record PairCohortRow(UUID cohortId, String cohortName,
                                 UUID baselinePipelineId, UUID distancePipelineId) {}
 
     private static final String PAIR_SELECT = """
-            SELECT c.id AS cohort_id, c.org_id, c.name AS cohort_name,
+            SELECT c.id AS cohort_id, c.name AS cohort_name,
                    ps.baseline_pipeline_id, ps.distance_pipeline_id
             FROM program_settings ps
             JOIN cohorts c ON c.id = ps.cohort_id
@@ -96,27 +96,30 @@ public class ComparisonReadRepository {
 
     private PairCohortRow pairRow(java.sql.ResultSet rs, int i) throws java.sql.SQLException {
         return new PairCohortRow(rs.getObject("cohort_id", UUID.class),
-                rs.getObject("org_id", UUID.class), rs.getString("cohort_name"),
+                rs.getString("cohort_name"),
                 rs.getObject("baseline_pipeline_id", UUID.class),
                 rs.getObject("distance_pipeline_id", UUID.class));
     }
 
     /* ------------------------------------------------- cohorts and tenancy */
 
-    /** The cohort constrained to the org — empty when absent or foreign → 404. */
+    /** The cohort constrained to the org's ASSIGNMENTS (spec §13) — empty when absent or foreign → 404. */
     public Optional<String> cohortNameInOrg(UUID orgId, UUID cohortId) {
-        return jdbc.query(
-                "SELECT name FROM cohorts WHERE id = :cohortId AND org_id = :orgId",
+        return jdbc.query("""
+                SELECT c.name FROM cohorts c
+                JOIN cohort_orgs cox ON cox.cohort_id = c.id AND cox.org_id = :orgId
+                WHERE c.id = :cohortId
+                """,
                 new MapSqlParameterSource("orgId", orgId).addValue("cohortId", cohortId),
                 (rs, i) -> rs.getString("name"))
                 .stream().findFirst();
     }
 
-    /** The cohort's org — for the SUPER_ADMIN recompute path (no org in the URL). */
-    public Optional<UUID> cohortOrg(UUID cohortId) {
-        return jdbc.query("SELECT org_id FROM cohorts WHERE id = :cohortId",
-                new MapSqlParameterSource("cohortId", cohortId),
-                (rs, i) -> rs.getObject("org_id", UUID.class))
+    /** The user's own org — comparisons are stamped with the MEMBER's org (spec §13). */
+    public Optional<UUID> userOrg(UUID userId) {
+        return jdbc.query("SELECT organization_id FROM users WHERE id = :userId",
+                new MapSqlParameterSource("userId", userId),
+                (rs, i) -> rs.getObject("organization_id", UUID.class))
                 .stream().findFirst();
     }
 

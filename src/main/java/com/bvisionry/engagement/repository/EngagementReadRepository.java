@@ -39,24 +39,24 @@ public class EngagementReadRepository {
 
     public record CohortRef(UUID id, String name) {}
 
-    /** The cohort, org-scoped — empty means "not your cohort" → 404. */
-    public Optional<CohortRef> cohort(UUID orgId, UUID cohortId) {
+    /** The cohort — platform-scoped (spec §13); empty means absent → 404. */
+    public Optional<CohortRef> cohort(UUID cohortId) {
         return jdbc.query("""
                 SELECT id, name FROM cohorts
-                WHERE id = :cohortId AND org_id = :orgId
+                WHERE id = :cohortId
                 """,
-                new MapSqlParameterSource("orgId", orgId).addValue("cohortId", cohortId),
+                new MapSqlParameterSource("cohortId", cohortId),
                 (rs, i) -> new CohortRef(rs.getObject("id", UUID.class), rs.getString("name")))
                 .stream().findFirst();
     }
 
-    /** The cohort's lifecycle status, org-scoped — the write-guard input (V167). */
-    public Optional<String> cohortStatus(UUID orgId, UUID cohortId) {
+    /** The cohort's lifecycle status — the write-guard input (V167). */
+    public Optional<String> cohortStatus(UUID cohortId) {
         return jdbc.query("""
                 SELECT status FROM cohorts
-                WHERE id = :cohortId AND org_id = :orgId
+                WHERE id = :cohortId
                 """,
-                new MapSqlParameterSource("orgId", orgId).addValue("cohortId", cohortId),
+                new MapSqlParameterSource("cohortId", cohortId),
                 (rs, i) -> rs.getString("status"))
                 .stream().findFirst();
     }
@@ -133,7 +133,7 @@ public class EngagementReadRepository {
      * CHANGES_REQUESTED copy is back with the member and does NOT count,
      * matching the journey.
      */
-    public Counts assignmentCounts(UUID orgId, UUID cohortId, UUID memberId) {
+    public Counts assignmentCounts(UUID cohortId, UUID memberId) {
         Counts program = jdbc.queryForObject("""
                 SELECT count(*) AS total, count(*) FILTER (WHERE %s) AS done
                 FROM program_tasks t
@@ -150,7 +150,9 @@ public class EngagementReadRepository {
                 FROM exercise_assignments ea
                 LEFT JOIN exercise_submissions es ON es.assignment_id = ea.id
                                                  AND es.user_id = :memberId
-                WHERE ea.organization_id = :orgId AND ea.user_id = :memberId
+                WHERE ea.user_id = :memberId
+                  AND ea.organization_id = (SELECT organization_id FROM users
+                                            WHERE id = :memberId)
                   AND NOT EXISTS (
                       SELECT 1 FROM cohort_members cm
                       JOIN program_modules m ON m.cohort_id = cm.cohort_id
@@ -159,7 +161,7 @@ public class EngagementReadRepository {
                         AND t.task_type = 'EXERCISE' AND t.ref_id = ea.template_id
                         AND %s)
                 """.formatted(ProgramAudience.INCLUDES_USER.formatted(":memberId")),
-                params(orgId, memberId),
+                new MapSqlParameterSource("memberId", memberId),
                 (rs, i) -> new Counts(rs.getInt("total"), rs.getInt("done")));
         return new Counts(program.total() + exercises.total(), program.done() + exercises.done());
     }
@@ -222,7 +224,7 @@ public class EngagementReadRepository {
         return jdbc.query("""
                 SELECT c.id, c.name FROM cohorts c
                 JOIN cohort_members cm ON cm.cohort_id = c.id
-                WHERE cm.user_id = :memberId AND c.org_id = :orgId
+                WHERE cm.user_id = :memberId AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                 ORDER BY c.position, c.name
                 """,
                 params(orgId, memberId),

@@ -440,31 +440,30 @@ public class TaskSpineRepository {
 
     /**
      * The task's reference exists in its owning slice (validation, review #7).
-     * A LIVE COURSE task additionally requires the course to be published;
-     * WORKSHOP is org-scoped (workshops belong to one org). LESSON has no ref.
+     * A LIVE COURSE task additionally requires the course to be published.
+     * Spec §13: authoring is platform-level, so there is no org to check here —
+     * a course some assigned org cannot SEE is handled at read time (it stops
+     * gating for that org's members and renders unavailable), and a WORKSHOP
+     * ref simply must exist (workshops stay org-scoped; members outside that
+     * org read as not-started). LESSON has no ref.
      */
     public boolean refExists(com.bvisionry.programflow.domain.ProgramTaskType type, UUID refId,
-                             UUID orgId, boolean live) {
+                             boolean live) {
         String sql = switch (type) {
             case LESSON -> null;
-            // Spec section 3: an org admin may only point a task at a course the
-            // platform has made visible to their org. The ref picker filters, but
-            // the filter is cosmetic - this is the control.
             case COURSE -> live
-                    ? "SELECT EXISTS (SELECT 1 FROM course c WHERE c.id = :id AND c.state = 'PUBLISHED' AND "
-                            + CourseVisibilityAccess.VISIBLE_TO_ORG.formatted(":orgId") + ")"
-                    : "SELECT EXISTS (SELECT 1 FROM course c WHERE c.id = :id AND "
-                            + CourseVisibilityAccess.VISIBLE_TO_ORG.formatted(":orgId") + ")";
+                    ? "SELECT EXISTS (SELECT 1 FROM course c WHERE c.id = :id AND c.state = 'PUBLISHED')"
+                    : "SELECT EXISTS (SELECT 1 FROM course c WHERE c.id = :id)";
             case EXERCISE -> "SELECT EXISTS (SELECT 1 FROM exercise_templates WHERE id = :id)";
             case ASSESSMENT -> "SELECT EXISTS (SELECT 1 FROM pipelines WHERE id = :id)";
-            case WORKSHOP -> "SELECT EXISTS (SELECT 1 FROM workshops WHERE id = :id AND org_id = :orgId)";
+            case WORKSHOP -> "SELECT EXISTS (SELECT 1 FROM workshops WHERE id = :id)";
             case SURVEY -> "SELECT EXISTS (SELECT 1 FROM surveys WHERE id = :id)";
         };
         if (sql == null) {
             return true;
         }
         return Boolean.TRUE.equals(jdbc.queryForObject(sql,
-                new MapSqlParameterSource("id", refId).addValue("orgId", orgId), Boolean.class));
+                new MapSqlParameterSource("id", refId), Boolean.class));
     }
 
     /** Any submission carries this task's milestone tag → the ref is frozen (review #7b). */

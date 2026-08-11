@@ -253,9 +253,11 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
         void aNewerDraftPairCohort_neverBecomesTheMembersAnchor() {
             UUID draft = UUID.randomUUID();
             jdbc.update("""
-                    INSERT INTO cohorts (id, org_id, name, status, created_at)
-                    VALUES (?, ?, 'Draft pair cohort', 'DRAFT', now() + interval '1 day')
-                    """, draft, orgA.getId());
+                    INSERT INTO cohorts (id, name, status, created_at)
+                    VALUES (?, 'Draft pair cohort', 'DRAFT', now() + interval '1 day')
+                    """, draft);
+            jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)",
+                    draft, orgA.getId());
             jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
                     draft, founder2.getId());
             jdbc.update("""
@@ -293,10 +295,9 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
          */
         @Test
         void equalBaselineAndDistancePipelines_areAccepted() throws Exception {
-            TestAuthentication.authenticate(
-                    saveUser("orgadmin.pair@test.invalid", UserRole.ORG_ADMIN, orgA));
-            mockMvc.perform(put("/api/organizations/" + orgA.getId()
-                            + "/cohorts/" + cohortId + "/program/settings")
+            // Spec §13: program authoring is platform-scoped, super admin only.
+            TestAuthentication.authenticateAsSuperAdmin(userRepository);
+            mockMvc.perform(put("/api/cohorts/" + cohortId + "/program/settings")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("""
                                     {"stageLabel":"Week","dripEnabled":true,"dueSoonDays":3,
@@ -327,9 +328,9 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                     """, samePairCohortId, baselinePipelineId, baselinePipelineId);
             UUID moduleId = UUID.randomUUID();
             jdbc.update("""
-                    INSERT INTO program_modules (id, org_id, cohort_id, name)
-                    VALUES (?, ?, ?, 'Distance module')
-                    """, moduleId, orgA.getId(), samePairCohortId);
+                    INSERT INTO program_modules (id, cohort_id, name)
+                    VALUES (?, ?, 'Distance module')
+                    """, moduleId, samePairCohortId);
             distanceTaskId = UUID.randomUUID();
             jdbc.update("""
                     INSERT INTO program_tasks (id, module_id, name, status, task_type, ref_id, milestone_role)
@@ -937,7 +938,8 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private UUID insertCohort(UUID orgId, String name, UUID memberId) {
         UUID id = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')", id, orgId, name);
+        jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, ?, 'LAUNCHED')", id, name);
+        jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)", id, orgId);
         jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)", id, memberId);
         return id;
     }

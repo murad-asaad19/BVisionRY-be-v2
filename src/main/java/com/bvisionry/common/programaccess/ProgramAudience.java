@@ -4,9 +4,9 @@ package com.bvisionry.common.programaccess;
  * The single SQL source of truth for "is this program module assigned to this
  * user?".
  *
- * <p>A module reaches a user when it targets everyone, or targets a team they
- * belong to, or targets them by name ({@code program_modules.assign_mode} =
- * {@code ALL} / {@code TEAMS} / {@code MEMBERS}). Two reporting surfaces count
+ * <p>A module reaches a user when it targets everyone or targets them by name
+ * ({@code program_modules.assign_mode} = {@code ALL} / {@code MEMBERS} —
+ * TEAMS died with the team model, spec §13). Two reporting surfaces count
  * completion against that audience — the coach console's per-founder module
  * progress and the ROI report's cohort completion rate — and if their
  * predicates ever diverge the two will quote different completion percentages
@@ -37,10 +37,6 @@ public final class ProgramAudience {
      */
     public static final String INCLUDES_USER = """
             (m.assign_mode = 'ALL'
-             OR (m.assign_mode = 'TEAMS' AND EXISTS (
-                   SELECT 1 FROM program_module_teams pmt
-                   JOIN team_members tm ON tm.team_id = pmt.team_id
-                   WHERE pmt.module_id = m.id AND tm.user_id = %1$s))
              OR (m.assign_mode = 'MEMBERS' AND EXISTS (
                    SELECT 1 FROM program_module_members pmm
                    WHERE pmm.module_id = m.id AND pmm.user_id = %1$s)))""";

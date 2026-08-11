@@ -52,19 +52,24 @@ public class AnnouncementReadRepository {
     public record FeedRow(UUID id, UUID cohortId, String cohortName, String authorName,
                           String body, boolean flagged, Instant createdAt) {}
 
-    /** The cohort's name, constrained to the org — empty when absent or foreign. */
+    /** The cohort's name, constrained to the org's assignments (spec §13) — empty when absent or foreign. */
     public Optional<String> cohortNameInOrg(UUID orgId, UUID cohortId) {
-        return jdbc.query("SELECT name FROM cohorts WHERE id = :cohortId AND org_id = :orgId",
+        return jdbc.query("""
+                        SELECT c.name FROM cohorts c
+                        JOIN cohort_orgs cox ON cox.cohort_id = c.id AND cox.org_id = :orgId
+                        WHERE c.id = :cohortId
+                        """,
                         new MapSqlParameterSource("orgId", orgId).addValue("cohortId", cohortId),
                         (rs, i) -> rs.getString("name"))
                 .stream().findFirst();
     }
 
-    /** Every cohort in the org — the org-admin's broadcast targets. */
+    /** Every cohort assigned to the org — the org-admin's broadcast targets. */
     public List<CohortRow> cohortsInOrg(UUID orgId) {
         return jdbc.query("""
-                        SELECT id, name FROM cohorts WHERE org_id = :orgId
-                        ORDER BY position, name
+                        SELECT c.id, c.name FROM cohorts c
+                        JOIN cohort_orgs cox ON cox.cohort_id = c.id AND cox.org_id = :orgId
+                        ORDER BY c.position, c.name
                         """,
                 new MapSqlParameterSource("orgId", orgId),
                 (rs, i) -> new CohortRow(rs.getObject("id", UUID.class), rs.getString("name")));
@@ -74,7 +79,8 @@ public class AnnouncementReadRepository {
     public List<CohortRow> cohortsGrantedToCoach(UUID orgId, UUID coachId) {
         return jdbc.query("""
                         SELECT c.id, c.name FROM cohorts c
-                        WHERE c.org_id = :orgId AND %s
+                        WHERE EXISTS (SELECT 1 FROM cohort_orgs cox
+                                      WHERE cox.cohort_id = c.id AND cox.org_id = :orgId) AND %s
                         ORDER BY c.position, c.name
                         """.formatted(CoachAccess.GRANTED_COHORT_PREDICATE.formatted("c.id")),
                 new MapSqlParameterSource("orgId", orgId).addValue("coachId", coachId),
@@ -97,7 +103,7 @@ public class AnnouncementReadRepository {
                         JOIN users u ON u.id = cm.user_id
                                     AND u.organization_id = :orgId
                                     AND u.status = 'ACTIVE'
-                        JOIN cohorts c ON c.id = cm.cohort_id AND c.org_id = :orgId
+                        JOIN cohorts c ON c.id = cm.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                                       AND c.status IN ('LAUNCHED', 'COMPLETED')
                         WHERE cm.cohort_id = :cohortId
                           AND u.id <> :authorId
@@ -124,7 +130,7 @@ public class AnnouncementReadRepository {
                             JOIN users u   ON u.id = cm.user_id
                                           AND u.organization_id = :orgId
                                           AND u.status = 'ACTIVE'
-                            JOIN cohorts c ON c.id = cm.cohort_id AND c.org_id = :orgId
+                            JOIN cohorts c ON c.id = cm.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                                           AND c.status IN ('LAUNCHED', 'COMPLETED')
                             WHERE cm.cohort_id = :cohortId AND cm.user_id = :userId)
                         """,
@@ -149,7 +155,7 @@ public class AnnouncementReadRepository {
                         SELECT a.id, c.name AS cohort_name, u.name AS author_name,
                                u.role AS author_role, a.body, a.created_at
                         FROM announcements a
-                        JOIN cohorts c ON c.id = a.cohort_id AND c.org_id = :orgId
+                        JOIN cohorts c ON c.id = a.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                                       AND c.status IN ('LAUNCHED', 'COMPLETED')
                         JOIN cohort_members cm ON cm.cohort_id = a.cohort_id
                                               AND cm.user_id = :memberId
@@ -174,7 +180,7 @@ public class AnnouncementReadRepository {
                         SELECT a.id, a.cohort_id, c.name AS cohort_name, u.name AS author_name,
                                a.body, a.flagged_at, a.created_at
                         FROM announcements a
-                        JOIN cohorts c     ON c.id = a.cohort_id AND c.org_id = :orgId
+                        JOIN cohorts c     ON c.id = a.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                         LEFT JOIN users u  ON u.id = a.author_id
                         WHERE a.org_id = :orgId AND a.cohort_id = :cohortId
                         ORDER BY a.created_at DESC

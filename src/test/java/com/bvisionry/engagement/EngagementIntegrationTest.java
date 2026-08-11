@@ -57,6 +57,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private Organization orgA;
     private Organization orgB;
+    private User superAdmin;     // SUPER_ADMIN — sessions/participation writes (spec §13)
     private User admin;          // ORG_ADMIN org A
     private User adminB;         // ORG_ADMIN org B
     private User coach;          // COACH org A, granted cohort1
@@ -71,6 +72,8 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
     void seed() {
         orgA = saveOrg("Engagement Org A");
         orgB = saveOrg("Engagement Org B");
+        superAdmin = TestAuthentication.authenticateAsSuperAdmin(userRepository);
+        TestAuthentication.clear();
         admin = saveUser("admin.a@test.invalid", UserRole.ORG_ADMIN, orgA);
         adminB = saveUser("admin.b@test.invalid", UserRole.ORG_ADMIN, orgB);
         coach = saveUser("coach.a@test.invalid", UserRole.COACH, orgA);
@@ -93,7 +96,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private String sessionsUrl(UUID cohortId) {
-        return "/api/organizations/" + orgA.getId() + "/cohorts/" + cohortId + "/sessions";
+        return "/api/cohorts/" + cohortId + "/sessions";
     }
 
     private String engagementUrl(User member) {
@@ -105,7 +108,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void createListUpdateDelete_allDated() throws Exception {
-            TestAuthentication.authenticate(admin);
+            TestAuthentication.authenticate(superAdmin);
 
             String body = mockMvc.perform(post(sessionsUrl(cohort1))
                             .contentType(MediaType.APPLICATION_JSON)
@@ -149,9 +152,8 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void foreignCohortIs404_crossCohortSessionIs404() throws Exception {
-            TestAuthentication.authenticate(admin);
-            mockMvc.perform(get("/api/organizations/" + orgA.getId() + "/cohorts/"
-                            + UUID.randomUUID() + "/sessions"))
+            TestAuthentication.authenticate(superAdmin);
+            mockMvc.perform(get("/api/cohorts/" + UUID.randomUUID() + "/sessions"))
                     .andExpect(status().isNotFound());
 
             // A session created in cohort1 is not addressable through cohort2.
@@ -166,7 +168,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void tickIsStampedIdempotent_untickRemoves() throws Exception {
-            TestAuthentication.authenticate(admin);
+            TestAuthentication.authenticate(superAdmin);
             UUID sessionId = insertSession(cohort1, "WORKSHOP", "-1 day");
 
             // Tick: a §7b-stamped presence mark naming who marked it.
@@ -179,7 +181,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(jsonPath("$.attendance[0].memberId",
                             is(founder.getId().toString())))
                     .andExpect(jsonPath("$.attendance[0].markedAt", notNullValue()))
-                    .andExpect(jsonPath("$.attendance[0].markedByName", is("admin.a")));
+                    .andExpect(jsonPath("$.attendance[0].markedByName", is("Test Super Admin")));
 
             // Re-tick: idempotent, still one mark.
             mockMvc.perform(put(sessionsUrl(cohort1) + "/" + sessionId + "/attendance/"
@@ -200,7 +202,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void nonCohortMemberCannotBeTicked() throws Exception {
-            TestAuthentication.authenticate(admin);
+            TestAuthentication.authenticate(superAdmin);
             UUID sessionId = insertSession(cohort1, "WORKSHOP", "-1 day");
             mockMvc.perform(put(sessionsUrl(cohort1) + "/" + sessionId + "/attendance/"
                             + founderEmpty.getId())
@@ -214,12 +216,14 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
     class SessionAuthz {
 
         @Test
-        void onlyOrgAdminsTouchSessions() throws Exception {
+        void onlySuperAdminsTouchSessions() throws Exception {
             UUID sessionId = insertSession(cohort1, "WORKSHOP", "-1 day");
             String tick = sessionsUrl(cohort1) + "/" + sessionId + "/attendance/"
                     + founder.getId();
 
-            // Foreign org admin: rejected at the org gate.
+            // Org admins (own or foreign): the board is platform-scoped now (spec §13).
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(sessionsUrl(cohort1))).andExpect(status().isForbidden());
             TestAuthentication.authenticate(adminB);
             mockMvc.perform(get(sessionsUrl(cohort1))).andExpect(status().isForbidden());
 
@@ -252,7 +256,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
         void oneOnOneCountsOnlyForItsExpectedFounder() throws Exception {
             jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
                     cohort1, founderTwo.getId());
-            TestAuthentication.authenticate(admin);
+            TestAuthentication.authenticate(superAdmin);
 
             // Held 1:1 for founder only, created through the API (round-trip).
             String body = mockMvc.perform(post(sessionsUrl(cohort1))
@@ -301,7 +305,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void expectedAttendeesMustBeCohortMembers() throws Exception {
-            TestAuthentication.authenticate(admin);
+            TestAuthentication.authenticate(superAdmin);
             mockMvc.perform(post(sessionsUrl(cohort1))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("""
@@ -333,7 +337,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
                     VALUES (?, ?, ?)
                     """, attended, founder.getId(), admin.getId());
 
-            TestAuthentication.authenticate(admin);
+            TestAuthentication.authenticate(superAdmin);
             mockMvc.perform(get(engagementUrl(founder)))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.cohorts", hasSize(1)))
@@ -368,7 +372,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void emptyCohortHasNoScoreNotZero() throws Exception {
-            TestAuthentication.authenticate(admin);
+            TestAuthentication.authenticate(superAdmin);
             mockMvc.perform(get(engagementUrl(founderEmpty)))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.cohorts", hasSize(1)))
@@ -404,7 +408,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(status().isForbidden());
 
             // Foreign member id under my org path → 404.
-            TestAuthentication.authenticate(admin);
+            TestAuthentication.authenticate(superAdmin);
             mockMvc.perform(get("/api/organizations/" + orgA.getId() + "/members/"
                             + UUID.randomUUID() + "/engagement"))
                     .andExpect(status().isNotFound());
@@ -422,8 +426,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
     class CohortParticipationRead {
 
         private String url(UUID cohortId) {
-            return "/api/organizations/" + orgA.getId() + "/cohorts/" + cohortId
-                    + "/participation";
+            return "/api/cohorts/" + cohortId + "/participation";
         }
 
         @Test
@@ -437,7 +440,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
                     VALUES (?, ?, ?)
                     """, attended, founder.getId(), admin.getId());
 
-            TestAuthentication.authenticate(admin);
+            TestAuthentication.authenticate(superAdmin);
             mockMvc.perform(get(url(cohort1)))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.members", hasSize(1)))
@@ -457,7 +460,9 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
         }
 
         @Test
-        void adminsOnly_andAForeignCohortIs404() throws Exception {
+        void superAdminsOnly_andAnUnknownCohortIs404() throws Exception {
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(url(cohort1))).andExpect(status().isForbidden());
             TestAuthentication.authenticate(adminB);
             mockMvc.perform(get(url(cohort1))).andExpect(status().isForbidden());
 
@@ -467,7 +472,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
             TestAuthentication.authenticate(coach);
             mockMvc.perform(get(url(cohort1))).andExpect(status().isForbidden());
 
-            TestAuthentication.authenticate(admin);
+            TestAuthentication.authenticate(superAdmin);
             mockMvc.perform(get(url(UUID.randomUUID()))).andExpect(status().isNotFound());
         }
     }
@@ -493,7 +498,8 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private UUID insertCohort(UUID orgId, String name, UUID memberId) {
         UUID id = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')", id, orgId, name);
+        jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, ?, 'LAUNCHED')", id, name);
+        jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)", id, orgId);
         jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)", id, memberId);
         return id;
     }
@@ -502,9 +508,9 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
     private UUID insertSession(UUID cohortId, String type, String offset) {
         UUID id = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO sessions (id, org_id, cohort_id, type, session_date, created_by)
-                VALUES (?, ?, ?, ?, now() + (?::interval), ?)
-                """, id, orgA.getId(), cohortId, type, offset, admin.getId());
+                INSERT INTO sessions (id, cohort_id, type, session_date, created_by)
+                VALUES (?, ?, ?, now() + (?::interval), ?)
+                """, id, cohortId, type, offset, admin.getId());
         return id;
     }
 
@@ -512,9 +518,9 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
     private void seedAssignmentsForFounder() {
         UUID moduleId = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO program_modules (id, org_id, cohort_id, name, assign_mode, lock_mode)
-                VALUES (?, ?, ?, 'Module One', 'ALL', 'UNLOCKED')
-                """, moduleId, orgA.getId(), cohort1);
+                INSERT INTO program_modules (id, cohort_id, name, assign_mode, lock_mode)
+                VALUES (?, ?, 'Module One', 'ALL', 'UNLOCKED')
+                """, moduleId, cohort1);
         UUID task1 = UUID.randomUUID();
         jdbc.update("INSERT INTO program_tasks (id, module_id, name, status) VALUES (?, ?, 'Task One', 'LIVE')",
                 task1, moduleId);

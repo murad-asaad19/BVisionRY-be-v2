@@ -439,7 +439,8 @@ class CoachWorkspaceIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private UUID insertCohort(UUID orgId, String name, UUID memberId) {
         UUID id = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')", id, orgId, name);
+        jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, ?, 'LAUNCHED')", id, name);
+        jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)", id, orgId);
         jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)", id, memberId);
         return id;
     }
@@ -454,9 +455,9 @@ class CoachWorkspaceIntegrationTest extends AbstractPostgresIntegrationTest {
     private UUID insertModule(UUID cohortId, String name, int position) {
         UUID id = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO program_modules (id, org_id, cohort_id, name, assign_mode, lock_mode, position)
-                VALUES (?, ?, ?, ?, 'ALL', 'UNLOCKED', ?)
-                """, id, orgA.getId(), cohortId, name, position);
+                INSERT INTO program_modules (id, cohort_id, name, assign_mode, lock_mode, position)
+                VALUES (?, ?, ?, 'ALL', 'UNLOCKED', ?)
+                """, id, cohortId, name, position);
         return id;
     }
 

@@ -19,27 +19,39 @@ import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.programflow.domain.Cohort;
+import com.bvisionry.programflow.domain.CohortOrgAssignment;
 import com.bvisionry.programflow.domain.CohortStatus;
 import com.bvisionry.programflow.domain.ProgramSurface;
+import com.bvisionry.programflow.dto.AssignOrgRequest;
 import com.bvisionry.programflow.dto.CohortDto;
+import com.bvisionry.programflow.dto.CohortOrgDto;
 import com.bvisionry.programflow.dto.CreateCohortRequest;
 import com.bvisionry.programflow.dto.ProgramOrgDto;
 import com.bvisionry.programflow.dto.UpdateCohortMembersRequest;
 import com.bvisionry.programflow.dto.UpdateCohortRequest;
+import com.bvisionry.programflow.dto.UpdateOrgAssignmentRequest;
+import com.bvisionry.programflow.repository.CohortOrgAssignmentRepository;
 import com.bvisionry.programflow.repository.CohortRepository;
 import com.bvisionry.programflow.repository.OrgMemberRow;
-import com.bvisionry.programflow.repository.TeamRepository;
 
 import lombok.RequiredArgsConstructor;
 
 /**
- * Admin cohort management: list, create, rename, lifecycle
- * (DRAFT → LAUNCHED → COMPLETED / ARCHIVED, spec §8), delete, enrolment.
+ * Cohort management in the platform-cohort model (spec §13): cohorts are
+ * authored by super admins and ASSIGNED to organizations, each assignment
+ * carrying the enrollment rule (all members now / selected members /
+ * auto-enroll future joiners). Lifecycle stays DRAFT → LAUNCHED →
+ * COMPLETED / ARCHIVED (spec §8).
  *
- * <p>Creating a DRAFT is free — the old creation-time rolling-window ceiling
- * is gone (spec §8: "drafts are free"). The paid act is LAUNCH, which consumes
- * calendar-period quota via {@link LaunchQuotaService} in the same
+ * <p>Quota: each assigned org pays for a launched cohort from its own
+ * billing-root plan — {@link #launch} consumes one launch per already-assigned
+ * org, {@link #assignOrg} consumes at assignment time when the cohort is
+ * already launched. Both go through {@link LaunchQuotaService} in the same
  * transaction as the append-only ledger insert.
+ *
+ * <p>Org admins keep exactly one write: {@link #setOrgMembers} over their OWN
+ * members (spec §13.8) — everything else is super-admin only at the
+ * controller.
  */
 @Service
 @RequiredArgsConstructor
@@ -50,17 +62,33 @@ public class CohortService {
     static final String ACTION_LAUNCHED = "COHORT_LAUNCHED";
     static final String ACTION_COMPLETED = "COHORT_COMPLETED";
     static final String ACTION_ARCHIVED = "COHORT_ARCHIVED";
+    static final String ACTION_ORG_ASSIGNED = "COHORT_ORG_ASSIGNED";
+    static final String ACTION_ORG_UNASSIGNED = "COHORT_ORG_UNASSIGNED";
 
     private final CohortRepository cohorts;
-    private final TeamRepository teams;
+    private final CohortOrgAssignmentRepository assignments;
     private final ApplicationEventPublisher events;
     private final LaunchQuotaService launchQuota;
     private final AuditLogger audit;
     private final CurrentUserAccessor currentUser;
 
+    /** Every platform cohort, board order (super-admin authoring console). */
     @Transactional(readOnly = true)
-    public List<CohortDto> list(UUID orgId) {
-        return cohorts.findByOrgIdOrderByPositionAsc(orgId).stream().map(CohortDto::of).toList();
+    public List<CohortDto> listAll() {
+        return cohorts.findAllByOrderByPositionAsc().stream().map(CohortDto::of).toList();
+    }
+
+    /**
+     * The cohorts assigned to an org — the participation view. Rosters are
+     * cut down to the org's OWN members (spec §13.7: an org admin never sees
+     * another org's people, not even as opaque ids).
+     */
+    @Transactional(readOnly = true)
+    public List<CohortDto> listAssigned(UUID orgId) {
+        Set<UUID> mine = orgMemberIds(orgId);
+        return cohorts.findAssigned(orgId).stream()
+                .map(c -> orgScoped(c, mine))
+                .toList();
     }
 
     /** Every sub-org with its console membership and learner / cohort / workshop counts. */
@@ -87,25 +115,17 @@ public class CohortService {
         cohorts.removeFromSurface(orgId, surface.name());
     }
 
-    /**
-     * Creates a DRAFT — free on every tier; quota is only consumed by launch.
-     * No enrolment notification here: a DRAFT is invisible to members, so the
-     * roster is told at {@link #launch} instead.
-     */
-    public CohortDto create(UUID orgId, CreateCohortRequest req) {
+    /** Creates a DRAFT — free; quota is only ever consumed per assigned org at launch. */
+    public CohortDto create(CreateCohortRequest req) {
         Cohort c = new Cohort();
-        c.setOrgId(orgId);
         c.setName(req.name());
-        c.setPosition(cohorts.findByOrgIdOrderByPositionAsc(orgId).size());
-        if (req.enrollAllMembers()) {
-            teams.findOrgMembers(orgId).forEach(m -> c.getMemberIds().add(m.getId()));
-        }
+        c.setPosition(cohorts.findAllByOrderByPositionAsc().size());
         return CohortDto.of(cohorts.save(c));
     }
 
     /** Rename only — lifecycle moves through {@link #launch}/{@link #complete}/{@link #archive}. */
-    public CohortDto update(UUID orgId, UUID cohortId, UpdateCohortRequest req) {
-        Cohort c = requireEditable(orgId, cohortId);
+    public CohortDto update(UUID cohortId, UpdateCohortRequest req) {
+        Cohort c = requireEditable(cohortId);
         c.setName(req.name());
         return CohortDto.of(c);
     }
@@ -113,40 +133,43 @@ public class CohortService {
     /* ------------------------------------------------------------ lifecycle */
 
     /**
-     * DRAFT → LAUNCHED. Consumes launch quota: the check and the append-only
-     * ledger insert happen in THIS transaction, serialized on the billing-root
-     * row lock (spec §8) — two concurrent launches can't both take the last
-     * slot. Quota exhausted → 409 with {nextAvailableDate, tier}.
+     * DRAFT → LAUNCHED. Every assigned org pays: one launch is consumed from
+     * each assignment's billing-root plan, check + append-only ledger insert
+     * in THIS transaction, serialized on the billing-root row lock (spec §8).
+     * Any org over quota → 409 and the whole launch rolls back — the admin
+     * unassigns that org or grants it a launch, then retries.
      */
-    public CohortDto launch(UUID orgId, UUID cohortId) {
-        Cohort c = require(orgId, cohortId);
+    public CohortDto launch(UUID cohortId) {
+        Cohort c = require(cohortId);
         if (c.getStatus() != CohortStatus.DRAFT) {
             throw new IllegalOperationException("Only a draft cohort can be launched — this one is "
                     + c.getStatus().name().toLowerCase() + ".");
         }
-        launchQuota.consume(orgId, cohortId);
+        for (CohortOrgAssignment a : assignments.findByCohortId(cohortId)) {
+            launchQuota.consume(a.getOrgId(), cohortId);
+        }
         c.setStatus(CohortStatus.LAUNCHED);
         c.setLaunchedAt(OffsetDateTime.now());
-        auditLifecycle(orgId, c, ACTION_LAUNCHED);
+        auditLifecycle(null, c, ACTION_LAUNCHED);
         // The moment the cohort becomes visible is the moment the roster hears
         // about it — draft-time enrolment stays silent by design.
         if (!c.getMemberIds().isEmpty()) {
             events.publishEvent(new ProgramFlowEvents.CohortEnrolled(
-                    orgId, c.getName(), List.copyOf(c.getMemberIds())));
+                    c.getName(), List.copyOf(c.getMemberIds())));
         }
         return CohortDto.of(c);
     }
 
     /** LAUNCHED → COMPLETED: read-only for members (the closing screen); never refunds quota. */
-    public CohortDto complete(UUID orgId, UUID cohortId) {
-        Cohort c = require(orgId, cohortId);
+    public CohortDto complete(UUID cohortId) {
+        Cohort c = require(cohortId);
         if (c.getStatus() != CohortStatus.LAUNCHED) {
             throw new IllegalOperationException("Only a launched cohort can be completed — this one is "
                     + c.getStatus().name().toLowerCase() + ".");
         }
         c.setStatus(CohortStatus.COMPLETED);
         c.setCompletedAt(OffsetDateTime.now());
-        auditLifecycle(orgId, c, ACTION_COMPLETED);
+        auditLifecycle(null, c, ACTION_COMPLETED);
         return CohortDto.of(c);
     }
 
@@ -155,16 +178,174 @@ public class CohortService {
      * members. A LAUNCHED cohort must be completed first — archiving is
      * shelving, not an emergency stop.
      */
-    public CohortDto archive(UUID orgId, UUID cohortId) {
-        Cohort c = require(orgId, cohortId);
+    public CohortDto archive(UUID cohortId) {
+        Cohort c = require(cohortId);
         if (c.getStatus() != CohortStatus.DRAFT && c.getStatus() != CohortStatus.COMPLETED) {
             throw new IllegalOperationException("Only a draft or completed cohort can be archived — "
                     + "this one is " + c.getStatus().name().toLowerCase() + ".");
         }
         c.setStatus(CohortStatus.ARCHIVED);
         c.setArchivedAt(OffsetDateTime.now());
-        auditLifecycle(orgId, c, ACTION_ARCHIVED);
+        auditLifecycle(null, c, ACTION_ARCHIVED);
         return CohortDto.of(c);
+    }
+
+    /** Deleting is allowed in any state; the launch ledger stands (no refund, spec §8). */
+    public void delete(UUID cohortId) {
+        cohorts.delete(require(cohortId));
+    }
+
+    /* ------------------------------------------------------ org assignment */
+
+    /** The cohort's assigned orgs with their enrollment rule and headcount. */
+    @Transactional(readOnly = true)
+    public List<CohortOrgDto> listOrgAssignments(UUID cohortId) {
+        require(cohortId);
+        return cohorts.findAssignmentRows(cohortId).stream()
+                .map(r -> new CohortOrgDto(r.getOrgId(), r.getOrgName(), r.getAutoEnroll(),
+                        r.getAssignedAt(), (int) r.getEnrolledCount()))
+                .toList();
+    }
+
+    /**
+     * Assigns an org to the cohort with its enrollment rule. On a LAUNCHED
+     * cohort the org pays its launch quota right here — participation in a
+     * running program is the metered act (spec §13.4).
+     */
+    public CohortDto assignOrg(UUID cohortId, AssignOrgRequest req) {
+        Cohort c = requireEditable(cohortId);
+        if (!cohorts.orgExists(req.orgId())) {
+            throw new ResourceNotFoundException("Organization", req.orgId().toString());
+        }
+        if (assignments.existsByCohortIdAndOrgId(cohortId, req.orgId())) {
+            throw new IllegalOperationException("This organization is already assigned to the cohort.");
+        }
+        if (c.getStatus() == CohortStatus.LAUNCHED) {
+            launchQuota.consume(req.orgId(), cohortId);
+        }
+        CohortOrgAssignment a = new CohortOrgAssignment();
+        a.setCohortId(cohortId);
+        a.setOrgId(req.orgId());
+        a.setAutoEnroll(req.autoEnroll());
+        a.setAssignedBy(currentUser.require().userId());
+        assignments.save(a);
+
+        List<UUID> enrolled = enrollForAssignment(c, req);
+        audit.log(currentUser.require().userId(), req.orgId(), ACTION_ORG_ASSIGNED,
+                ENTITY_COHORT, c.getId(), Map.of("name", c.getName()));
+        notifyEnrolled(c, enrolled);
+        return CohortDto.of(c);
+    }
+
+    /** Changes the assignment's auto-enroll rule (nothing retroactive). */
+    public CohortDto updateOrgAssignment(UUID cohortId, UUID orgId, UpdateOrgAssignmentRequest req) {
+        Cohort c = requireEditable(cohortId);
+        CohortOrgAssignment a = assignments.findByCohortIdAndOrgId(cohortId, orgId)
+                .orElseThrow(() -> new ResourceNotFoundException("Assignment", orgId.toString()));
+        a.setAutoEnroll(req.autoEnroll());
+        return CohortDto.of(c);
+    }
+
+    /**
+     * Removes the org from the cohort: assignment row plus the org's own
+     * members from the roster. Their submissions stay (history is never
+     * destroyed here); quota is never refunded (spec §8).
+     */
+    public CohortDto unassignOrg(UUID cohortId, UUID orgId) {
+        Cohort c = requireEditable(cohortId);
+        CohortOrgAssignment a = assignments.findByCohortIdAndOrgId(cohortId, orgId)
+                .orElseThrow(() -> new ResourceNotFoundException("Assignment", orgId.toString()));
+        assignments.delete(a);
+        c.getMemberIds().removeAll(orgMemberIds(orgId));
+        audit.log(currentUser.require().userId(), orgId, ACTION_ORG_UNASSIGNED,
+                ENTITY_COHORT, c.getId(), Map.of("name", c.getName()));
+        return CohortDto.of(c);
+    }
+
+    /**
+     * Auto-enroll hook: a member just joined (or moved into) {@code orgId} —
+     * enroll them in every cohort whose assignment to that org says so.
+     * DRAFT cohorts enroll silently (the roster hears at launch); COMPLETED /
+     * ARCHIVED ones are done and skip.
+     */
+    public void autoEnroll(UUID orgId, UUID userId) {
+        for (CohortOrgAssignment a : assignments.findByOrgId(orgId)) {
+            if (!a.isAutoEnroll()) {
+                continue;
+            }
+            Cohort c = cohorts.findById(a.getCohortId()).orElse(null);
+            if (c == null || c.getStatus() == CohortStatus.COMPLETED
+                    || c.getStatus() == CohortStatus.ARCHIVED) {
+                continue;
+            }
+            if (c.getMemberIds().add(userId)) {
+                notifyEnrolled(c, List.of(userId));
+            }
+        }
+    }
+
+    /* --------------------------------------------------------------- roster */
+
+    /**
+     * Replaces ONE org's slice of the roster (spec §13.8 — an org admin
+     * manages their own members only; other orgs' enrollments are untouched).
+     */
+    public CohortDto setOrgMembers(UUID orgId, UUID cohortId, UpdateCohortMembersRequest req) {
+        Cohort c = requireAssignedEditable(orgId, cohortId);
+        Set<UUID> mine = orgMemberIds(orgId);
+        if (!mine.containsAll(req.memberIds())) {
+            throw new BadRequestException("One or more learners do not belong to this organization");
+        }
+        List<UUID> added = req.memberIds().stream()
+                .filter(id -> !c.getMemberIds().contains(id))
+                .toList();
+        Set<UUID> roster = new LinkedHashSet<>(c.getMemberIds());
+        roster.removeAll(mine);
+        roster.addAll(req.memberIds());
+        c.setMemberIds(roster);
+        notifyEnrolled(c, added);
+        return orgScoped(c, mine);
+    }
+
+    /* -------------------------------------------------------------- helpers */
+
+    private List<UUID> enrollForAssignment(Cohort c, AssignOrgRequest req) {
+        Set<UUID> mine = orgMemberIds(req.orgId());
+        List<UUID> toEnroll;
+        if (req.enrollAllMembers()) {
+            toEnroll = List.copyOf(mine);
+        } else {
+            if (!mine.containsAll(req.memberIds())) {
+                throw new BadRequestException("One or more learners do not belong to this organization");
+            }
+            toEnroll = req.memberIds();
+        }
+        List<UUID> added = toEnroll.stream().filter(id -> !c.getMemberIds().contains(id)).toList();
+        c.getMemberIds().addAll(toEnroll);
+        return added;
+    }
+
+    /**
+     * Only a LAUNCHED cohort notifies newcomers — a member added to a DRAFT
+     * can't see it yet (they hear at launch with everyone else), and a
+     * COMPLETED one has nothing left to start on.
+     */
+    private void notifyEnrolled(Cohort c, List<UUID> added) {
+        if (!added.isEmpty() && c.getStatus() == CohortStatus.LAUNCHED) {
+            events.publishEvent(new ProgramFlowEvents.CohortEnrolled(c.getName(), added));
+        }
+    }
+
+    private Set<UUID> orgMemberIds(UUID orgId) {
+        return cohorts.findOrgMembers(orgId).stream()
+                .map(OrgMemberRow::getId).collect(Collectors.toSet());
+    }
+
+    /** The cohort with its roster cut to the given org's members. */
+    private static CohortDto orgScoped(Cohort c, Set<UUID> orgMemberIds) {
+        return new CohortDto(c.getId(), c.getName(), c.getPosition(), c.getStatus(),
+                c.getLaunchedAt(), c.getCompletedAt(), c.getArchivedAt(),
+                c.getMemberIds().stream().filter(orgMemberIds::contains).toList());
     }
 
     private void auditLifecycle(UUID orgId, Cohort c, String action) {
@@ -172,46 +353,39 @@ public class CohortService {
                 Map.of("name", c.getName()));
     }
 
-    /** Deleting is allowed in any state; the launch ledger stands (no refund, spec §8). */
-    public void delete(UUID orgId, UUID cohortId) {
-        cohorts.delete(require(orgId, cohortId));
-    }
+    /* --------------------------------------------------------------- guards */
 
-    /** Replaces the enrolled learner set, validating every id is an org member. */
-    public CohortDto setMembers(UUID orgId, UUID cohortId, UpdateCohortMembersRequest req) {
-        Cohort c = requireEditable(orgId, cohortId);
-        Set<UUID> orgMemberIds = teams.findOrgMembers(orgId).stream()
-                .map(OrgMemberRow::getId).collect(Collectors.toSet());
-        if (!orgMemberIds.containsAll(req.memberIds())) {
-            throw new BadRequestException("One or more learners do not belong to this organization");
-        }
-        List<UUID> added = req.memberIds().stream()
-                .filter(id -> !c.getMemberIds().contains(id))
-                .toList();
-        c.setMemberIds(new LinkedHashSet<>(req.memberIds()));
-        // Only a LAUNCHED cohort notifies newcomers — a member added to a
-        // DRAFT can't see it yet (they hear at launch with everyone else),
-        // and a COMPLETED one has nothing left to start on.
-        if (!added.isEmpty() && c.getStatus() == CohortStatus.LAUNCHED) {
-            events.publishEvent(new ProgramFlowEvents.CohortEnrolled(orgId, c.getName(), added));
-        }
-        return CohortDto.of(c);
-    }
-
-    /** The cohort, guarded to the org path (tenant isolation). */
-    Cohort require(UUID orgId, UUID cohortId) {
+    /** The cohort, by id — platform artifacts have no org path to check (spec §13). */
+    Cohort require(UUID cohortId) {
         return cohorts.findById(cohortId)
-                .filter(c -> c.getOrgId().equals(orgId))
                 .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
     }
 
     /**
-     * {@link #require} + the ARCHIVED read-only rule: members and curriculum
-     * stay editable in any non-archived state; an archived cohort refuses
-     * every mutation with a clear 409.
+     * {@link #require} + the ARCHIVED read-only rule: assignment, roster and
+     * curriculum stay editable in any non-archived state; an archived cohort
+     * refuses every mutation with a clear 409.
      */
-    Cohort requireEditable(UUID orgId, UUID cohortId) {
-        Cohort c = require(orgId, cohortId);
+    Cohort requireEditable(UUID cohortId) {
+        Cohort c = require(cohortId);
+        if (c.getStatus() == CohortStatus.ARCHIVED) {
+            throw new IllegalOperationException("This cohort is archived and read-only.");
+        }
+        return c;
+    }
+
+    /** Tenant guard for the org participation surface: the cohort must be assigned to the org. */
+    Cohort requireAssigned(UUID orgId, UUID cohortId) {
+        Cohort c = require(cohortId);
+        if (!assignments.existsByCohortIdAndOrgId(cohortId, orgId)) {
+            throw new ResourceNotFoundException("Cohort", cohortId.toString());
+        }
+        return c;
+    }
+
+    /** {@link #requireAssigned} behind the ARCHIVED read-only gate. */
+    Cohort requireAssignedEditable(UUID orgId, UUID cohortId) {
+        Cohort c = requireAssigned(orgId, cohortId);
         if (c.getStatus() == CohortStatus.ARCHIVED) {
             throw new IllegalOperationException("This cohort is archived and read-only.");
         }

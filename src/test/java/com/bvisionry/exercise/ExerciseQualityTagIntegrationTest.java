@@ -77,7 +77,9 @@ class ExerciseQualityTagIntegrationTest extends AbstractPostgresIntegrationTest 
         founder = saveUser("qt.founder@test.invalid", UserRole.MEMBER);
 
         UUID cohortId = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, 'QT Cohort', 'LAUNCHED')",
+        jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, 'QT Cohort', 'LAUNCHED')",
+                cohortId);
+        jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)",
                 cohortId, org.getId());
         jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
                 cohortId, founder.getId());

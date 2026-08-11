@@ -24,10 +24,12 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * A cohort: one program instance within an org. Owns its modules and settings
- * (both FK cohort_id), carries the enrolled learner set and the DRAFT →
- * LAUNCHED → COMPLETED / ARCHIVED lifecycle (spec §8). Soft-coupled to
- * identity by UUID, like the rest of the slice.
+ * A cohort: a platform-level program run (spec §13). Authored by super admins
+ * and ASSIGNED to organizations via {@link CohortOrgAssignment}; owns its
+ * modules and settings (both FK cohort_id), carries the enrolled learner set
+ * (accumulated across assigned orgs) and the DRAFT → LAUNCHED → COMPLETED /
+ * ARCHIVED lifecycle (spec §8). Soft-coupled to identity by UUID, like the
+ * rest of the slice.
  */
 @Entity
 @Table(name = "cohorts")
@@ -40,9 +42,6 @@ public class Cohort {
     @ColumnDefault("gen_random_uuid()")
     @Column(name = "id", nullable = false, updatable = false, insertable = false)
     private UUID id;
-
-    @Column(name = "org_id", nullable = false, updatable = false)
-    private UUID orgId;
 
     @Column(name = "name", nullable = false, length = 200)
     private String name;

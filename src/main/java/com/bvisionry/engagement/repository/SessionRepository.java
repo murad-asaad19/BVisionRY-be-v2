@@ -9,5 +9,5 @@ import com.bvisionry.engagement.domain.Session;
 
 public interface SessionRepository extends JpaRepository<Session, UUID> {
 
-    List<Session> findByOrgIdAndCohortIdOrderBySessionDateDesc(UUID orgId, UUID cohortId);
+    List<Session> findByCohortIdOrderBySessionDateDesc(UUID cohortId);
 }

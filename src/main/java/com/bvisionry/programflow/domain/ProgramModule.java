@@ -45,10 +45,7 @@ public class ProgramModule {
     @Column(name = "id", nullable = false, updatable = false, insertable = false)
     private UUID id;
 
-    @Column(name = "org_id", nullable = false)
-    private UUID orgId;
-
-    /** Owning cohort. org_id is kept alongside since audience (teams/members) is org-scoped. */
+    /** Owning cohort — the module's whole scope; audience is roster-scoped (spec §13). */
     @Column(name = "cohort_id", nullable = false)
     private UUID cohortId;
 
@@ -82,11 +79,6 @@ public class ProgramModule {
     @Enumerated(EnumType.STRING)
     @Column(name = "assign_mode", nullable = false, length = 20)
     private AudienceMode assignMode = AudienceMode.ALL;
-
-    @ElementCollection(fetch = FetchType.LAZY)
-    @CollectionTable(name = "program_module_teams", joinColumns = @JoinColumn(name = "module_id"))
-    @Column(name = "team_id", nullable = false)
-    private Set<UUID> teamIds = new LinkedHashSet<>();
 
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(name = "program_module_members", joinColumns = @JoinColumn(name = "module_id"))

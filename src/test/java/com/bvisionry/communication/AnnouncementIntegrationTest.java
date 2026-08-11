@@ -317,7 +317,9 @@ class AnnouncementIntegrationTest extends AbstractPostgresIntegrationTest {
         @Test
         void aDraftCohortsBroadcastReachesNobody_andIsAbsentFromTheMemberFeed() throws Exception {
             UUID draftCohort = UUID.randomUUID();
-            jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, 'Draft Cohort', 'DRAFT')",
+            jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, 'Draft Cohort', 'DRAFT')",
+                    draftCohort);
+            jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)",
                     draftCohort, orgA.getId());
             jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
                     draftCohort, memberIn.getId());
@@ -582,7 +584,8 @@ class AnnouncementIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private UUID insertCohort(UUID orgId, String name, UUID memberId) {
         UUID id = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')", id, orgId, name);
+        jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, ?, 'LAUNCHED')", id, name);
+        jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)", id, orgId);
         if (memberId != null) {
             jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)", id, memberId);
         }

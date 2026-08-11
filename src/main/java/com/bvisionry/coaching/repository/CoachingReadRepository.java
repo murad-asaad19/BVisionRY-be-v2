@@ -132,7 +132,7 @@ public class CoachingReadRepository {
             LEFT JOIN LATERAL (
                 SELECT string_agg(c.name, ', ' ORDER BY c.position, c.name) AS names
                 FROM cohort_members cm
-                JOIN cohorts c ON c.id = cm.cohort_id AND c.org_id = :orgId
+                JOIN cohorts c ON c.id = cm.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                 WHERE cm.user_id = u.id
                   AND %1$s
             ) cn ON true
@@ -140,7 +140,7 @@ public class CoachingReadRepository {
                 SELECT count(*)                    AS total,
                        count(*) FILTER (WHERE %4$s) AS done
                 FROM cohort_members cm
-                JOIN cohorts c          ON c.id = cm.cohort_id AND c.org_id = :orgId
+                JOIN cohorts c          ON c.id = cm.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                 JOIN program_modules m  ON m.cohort_id = c.id
                 JOIN program_tasks t    ON t.module_id = m.id AND t.status = 'LIVE'
                 WHERE cm.user_id = u.id
@@ -163,7 +163,7 @@ public class CoachingReadRepository {
             LEFT JOIN LATERAL (
                 SELECT m.name AS module_name
                 FROM cohort_members cm
-                JOIN cohorts c         ON c.id = cm.cohort_id AND c.org_id = :orgId
+                JOIN cohorts c         ON c.id = cm.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                 JOIN program_modules m ON m.cohort_id = c.id
                 WHERE cm.user_id = u.id
                   AND %1$s
@@ -341,7 +341,7 @@ public class CoachingReadRepository {
                        count(*)                    AS total,
                        count(*) FILTER (WHERE %s)  AS submitted
                 FROM cohort_members cm
-                JOIN cohorts c          ON c.id = cm.cohort_id AND c.org_id = :orgId
+                JOIN cohorts c          ON c.id = cm.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                 JOIN program_modules m  ON m.cohort_id = c.id
                 JOIN program_tasks t    ON t.module_id = m.id AND t.status = 'LIVE'
                 WHERE cm.user_id = :founderId
@@ -399,7 +399,9 @@ public class CoachingReadRepository {
     /** The cohort's name, constrained to the org — empty when absent or foreign. */
     public Optional<String> cohortNameInOrg(UUID orgId, UUID cohortId) {
         return jdbc.query("""
-                SELECT name FROM cohorts WHERE id = :cohortId AND org_id = :orgId
+                SELECT c.name FROM cohorts c
+                JOIN cohort_orgs cox ON cox.cohort_id = c.id AND cox.org_id = :orgId
+                WHERE c.id = :cohortId
                 """,
                 new MapSqlParameterSource("orgId", orgId).addValue("cohortId", cohortId),
                 (rs, i) -> rs.getString("name"))
@@ -427,7 +429,9 @@ public class CoachingReadRepository {
             return Map.of();
         }
         return jdbc.query("""
-                SELECT id, name FROM cohorts WHERE org_id = :orgId AND id IN (:ids)
+                SELECT c.id, c.name FROM cohorts c
+                JOIN cohort_orgs cox ON cox.cohort_id = c.id AND cox.org_id = :orgId
+                WHERE c.id IN (:ids)
                 """,
                 new MapSqlParameterSource("orgId", orgId).addValue("ids", cohortIds),
                 (rs, i) -> Map.entry(rs.getObject("id", UUID.class), rs.getString("name")))

@@ -43,9 +43,6 @@ public class Session {
     @Column(name = "id", nullable = false, updatable = false, insertable = false)
     private UUID id;
 
-    @Column(name = "org_id", nullable = false, updatable = false)
-    private UUID orgId;
-
     @Column(name = "cohort_id", nullable = false, updatable = false)
     private UUID cohortId;
 

@@ -18,13 +18,12 @@ import com.bvisionry.programflow.domain.ModuleLockMode;
 import com.bvisionry.programflow.domain.ProgramModule;
 import com.bvisionry.programflow.domain.ProgramTask;
 import com.bvisionry.programflow.domain.ProgramTaskStatus;
+import com.bvisionry.programflow.repository.CohortMemberRow;
 import com.bvisionry.programflow.repository.CohortRepository;
-import com.bvisionry.programflow.repository.OrgMemberRow;
 import com.bvisionry.programflow.repository.ProgramModuleRepository;
 import com.bvisionry.programflow.repository.ProgramSettingsRepository;
 import com.bvisionry.programflow.repository.TaskSpineRepository;
 import com.bvisionry.programflow.repository.ProgramTaskRepository;
-import com.bvisionry.programflow.repository.TeamRepository;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -59,7 +58,6 @@ public class ProgramNotificationJob {
     private final TaskSpineRepository spine;
     private final ProgramSettingsRepository settings;
     private final CohortRepository cohorts;
-    private final TeamRepository teams;
     private final ApplicationEventPublisher events;
 
     @Transactional
@@ -127,11 +125,9 @@ public class ProgramNotificationJob {
         if (cohort == null || cohort.getStatus() != CohortStatus.LAUNCHED) {
             return List.of();
         }
-        Set<UUID> enrolled = cohort.getMemberIds();
-        return teams.findOrgMembers(module.getOrgId()).stream()
-                .filter(member -> enrolled.contains(member.getId()))
-                .filter(member -> ProgramRules.includes(module, member.getId(), member.getTeamId()))
-                .map(OrgMemberRow::getId)
+        return cohorts.findRoster(cohort.getId()).stream()
+                .filter(member -> ProgramRules.includes(module, member.getId()))
+                .map(CohortMemberRow::getId)
                 .toList();
     }
 }

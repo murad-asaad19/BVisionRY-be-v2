@@ -59,18 +59,7 @@ class ProgramRulesTest {
         void allModeIncludesEveryone() {
             ProgramModule m = module(ModuleLockMode.UNLOCKED);
             m.setAssignMode(AudienceMode.ALL);
-            assertThat(ProgramRules.includes(m, UUID.randomUUID(), null)).isTrue();
-        }
-
-        @Test
-        void teamsModeRequiresMembershipOfASelectedTeam() {
-            ProgramModule m = module(ModuleLockMode.UNLOCKED);
-            m.setAssignMode(AudienceMode.TEAMS);
-            UUID teamId = UUID.randomUUID();
-            m.getTeamIds().add(teamId);
-            assertThat(ProgramRules.includes(m, UUID.randomUUID(), teamId)).isTrue();
-            assertThat(ProgramRules.includes(m, UUID.randomUUID(), UUID.randomUUID())).isFalse();
-            assertThat(ProgramRules.includes(m, UUID.randomUUID(), null)).isFalse();
+            assertThat(ProgramRules.includes(m, UUID.randomUUID())).isTrue();
         }
 
         @Test
@@ -79,8 +68,8 @@ class ProgramRulesTest {
             m.setAssignMode(AudienceMode.MEMBERS);
             UUID userId = UUID.randomUUID();
             m.getMemberIds().add(userId);
-            assertThat(ProgramRules.includes(m, userId, null)).isTrue();
-            assertThat(ProgramRules.includes(m, UUID.randomUUID(), null)).isFalse();
+            assertThat(ProgramRules.includes(m, userId)).isTrue();
+            assertThat(ProgramRules.includes(m, UUID.randomUUID())).isFalse();
         }
     }
 

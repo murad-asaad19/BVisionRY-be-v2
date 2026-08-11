@@ -63,8 +63,12 @@ class CohortLaunchConcurrencyIntegrationTest extends AbstractPostgresIntegration
         User admin = TestAuthentication.authenticateAsOrgAdmin(users, root);
         UUID orgId = root.getId();
 
-        UUID cohortA = cohortService.create(orgId, new CreateCohortRequest("Racer A", false)).id();
-        UUID cohortB = cohortService.create(orgId, new CreateCohortRequest("Racer B", false)).id();
+        UUID cohortA = cohortService.create(new CreateCohortRequest("Racer A")).id();
+        UUID cohortB = cohortService.create(new CreateCohortRequest("Racer B")).id();
+        cohortService.assignOrg(cohortA, new com.bvisionry.programflow.dto.AssignOrgRequest(
+                orgId, false, java.util.List.of(), false));
+        cohortService.assignOrg(cohortB, new com.bvisionry.programflow.dto.AssignOrgRequest(
+                orgId, false, java.util.List.of(), false));
 
         AtomicInteger launched = new AtomicInteger();
         AtomicInteger refused = new AtomicInteger();
@@ -92,7 +96,7 @@ class CohortLaunchConcurrencyIntegrationTest extends AbstractPostgresIntegration
             TestAuthentication.authenticate(admin);
             try {
                 start.await();
-                cohortService.launch(orgId, cohortId);
+                cohortService.launch(cohortId);
                 launched.incrementAndGet();
             } catch (LaunchQuotaExceededException e) {
                 refused.incrementAndGet();

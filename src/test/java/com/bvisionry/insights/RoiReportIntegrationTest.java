@@ -679,7 +679,8 @@ class RoiReportIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private UUID insertCohort(UUID orgId, String name) {
         UUID id = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')", id, orgId, name);
+        jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, ?, 'LAUNCHED')", id, name);
+        jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)", id, orgId);
         return id;
     }
 
@@ -758,9 +759,9 @@ class RoiReportIntegrationTest extends AbstractPostgresIntegrationTest {
     private UUID insertModule(UUID orgId, UUID cohortId, String name) {
         UUID id = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO program_modules (id, org_id, cohort_id, name, assign_mode)
-                VALUES (?, ?, ?, ?, 'ALL')
-                """, id, orgId, cohortId, name);
+                INSERT INTO program_modules (id, cohort_id, name, assign_mode)
+                VALUES (?, ?, ?, 'ALL')
+                """, id, cohortId, name);
         return id;
     }
 

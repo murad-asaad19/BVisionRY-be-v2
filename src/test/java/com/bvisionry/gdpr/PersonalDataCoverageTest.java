@@ -45,6 +45,10 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // cohort, so it outlives the author's erasure with the attribution
             // dropped, like assignments.assigned_by and join_links.created_by.
             "announcements.author_id", "announcements.flagged_by",
+            // cohort_orgs (V171): assigned_by SET NULL — the org's participation
+            // in a platform cohort outlives the assigning admin's erasure with
+            // the attribution dropped, like assignments.assigned_by.
+            "cohort_orgs.assigned_by",
             "ai_configurations.updated_by", "assignments.assigned_by", "assignments.user_id",
             "audit_logs.actor_id",
             // auto_enrolments (V151): user_id CASCADEs with the user row — the record of
@@ -151,7 +155,7 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // fact that the narrative was approved before the founder saw it.
             "shift_narratives.user_id", "shift_narratives.approved_by",
             "shift_narratives.edited_by",
-            "survey_responses.respondent_user_id", "surveys.created_by", "team_members.user_id",
+            "survey_responses.respondent_user_id", "surveys.created_by",
             "upgrade_requests.requested_by", "users.invited_by",
             "workshop_task_submissions.user_id", "workshop_team_members.user_id");
 

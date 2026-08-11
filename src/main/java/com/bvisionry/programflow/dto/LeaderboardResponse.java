@@ -13,7 +13,7 @@ public record LeaderboardResponse(
     public record Row(
             UUID userId,
             String name,
-            String teamName,
+            String orgName,
             int points,
             int streak,
             boolean me) {

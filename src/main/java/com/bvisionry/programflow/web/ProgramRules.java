@@ -27,10 +27,9 @@ final class ProgramRules {
     }
 
     /** Does this module's audience include the given member? */
-    static boolean includes(ProgramModule m, UUID userId, UUID teamId) {
+    static boolean includes(ProgramModule m, UUID userId) {
         return switch (m.getAssignMode()) {
             case ALL -> true;
-            case TEAMS -> teamId != null && m.getTeamIds().contains(teamId);
             case MEMBERS -> m.getMemberIds().contains(userId);
         };
     }

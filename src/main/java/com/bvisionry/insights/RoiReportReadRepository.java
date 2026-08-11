@@ -130,7 +130,8 @@ public class RoiReportReadRepository {
                   AND EXISTS (SELECT 1 FROM cohort_members cm
                               JOIN cohorts c ON c.id = cm.cohort_id
                               WHERE cm.user_id = s.user_id
-                                AND c.id = :cohortId AND c.org_id = :orgId)
+                                AND c.id = :cohortId
+                                AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId))
             )""";
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -150,9 +151,10 @@ public class RoiReportReadRepository {
         return jdbc.query("""
                 SELECT o.name AS org_name, c.name AS cohort_name, p.name AS pipeline_name
                 FROM cohorts c
-                JOIN organizations o ON o.id = c.org_id
+                JOIN cohort_orgs cox ON cox.cohort_id = c.id AND cox.org_id = :orgId
+                JOIN organizations o ON o.id = cox.org_id
                 JOIN pipelines p ON p.id = :pipelineId AND p.status = 'PUBLISHED'
-                WHERE c.id = :cohortId AND c.org_id = :orgId
+                WHERE c.id = :cohortId
                 """,
                 params(orgId, cohortId, pipelineId),
                 (rs, i) -> new ReportHeader(rs.getString("org_name"),
@@ -262,7 +264,8 @@ public class RoiReportReadRepository {
                        COALESCE(pr.total, 0)          AS tasks_assigned,
                        COALESCE(pr.done, 0)           AS tasks_completed
                 FROM cohort_members cm
-                JOIN cohorts c ON c.id = cm.cohort_id AND c.org_id = :orgId
+                JOIN cohorts c ON c.id = cm.cohort_id
+                               AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                 JOIN users u   ON u.id = cm.user_id AND u.organization_id = :orgId
                 LEFT JOIN summary sm ON sm.user_id = u.id
                 LEFT JOIN LATERAL (

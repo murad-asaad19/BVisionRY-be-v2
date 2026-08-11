@@ -9,11 +9,9 @@ import jakarta.validation.constraints.NotNull;
 
 public record UpdateAudienceRequest(
         @NotNull AudienceMode mode,
-        List<UUID> teamIds,
         List<UUID> memberIds) {
 
     public UpdateAudienceRequest {
-        teamIds = teamIds == null ? List.of() : teamIds;
         memberIds = memberIds == null ? List.of() : memberIds;
     }
 }

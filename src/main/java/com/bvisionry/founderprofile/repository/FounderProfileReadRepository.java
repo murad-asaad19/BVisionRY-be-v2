@@ -77,7 +77,7 @@ public class FounderProfileReadRepository {
         return jdbc.query("""
                 SELECT c.id, c.name FROM cohorts c
                 JOIN cohort_members cm ON cm.cohort_id = c.id
-                WHERE cm.user_id = :memberId AND c.org_id = :orgId
+                WHERE cm.user_id = :memberId AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                 ORDER BY c.position, c.name
                 """,
                 params(orgId, memberId),
@@ -121,7 +121,7 @@ public class FounderProfileReadRepository {
                        t.due_date, t.task_type, COALESCE(%1$s, FALSE) AS done,
                        ps.status, ps.saved_at, ps.submitted_at
                 FROM cohort_members cm
-                JOIN cohorts c         ON c.id = cm.cohort_id AND c.org_id = :orgId
+                JOIN cohorts c         ON c.id = cm.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                 JOIN program_modules m ON m.cohort_id = c.id
                 JOIN program_tasks t   ON t.module_id = m.id AND t.status = 'LIVE'
                 LEFT JOIN program_submissions ps ON ps.task_id = t.id AND ps.user_id = :memberId
@@ -316,7 +316,7 @@ public class FounderProfileReadRepository {
         return jdbc.query("""
                 SELECT a.id, c.name AS cohort_name, au.name AS author_name, a.body, a.created_at
                 FROM announcements a
-                JOIN cohorts c ON c.id = a.cohort_id AND c.org_id = :orgId
+                JOIN cohorts c ON c.id = a.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                 JOIN cohort_members cm ON cm.cohort_id = a.cohort_id AND cm.user_id = :memberId
                 LEFT JOIN users au ON au.id = a.author_id
                 WHERE a.org_id = :orgId

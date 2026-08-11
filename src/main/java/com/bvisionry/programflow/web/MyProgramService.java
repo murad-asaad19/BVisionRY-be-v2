@@ -42,14 +42,13 @@ import com.bvisionry.programflow.dto.PlayerResponse;
 import com.bvisionry.programflow.dto.ProgramSettingsDto;
 import com.bvisionry.programflow.dto.SaveAnswersResponse;
 import com.bvisionry.programflow.dto.SubmitResponse;
+import com.bvisionry.programflow.repository.CohortMemberRow;
 import com.bvisionry.programflow.repository.CohortRepository;
-import com.bvisionry.programflow.repository.OrgMemberRow;
 import com.bvisionry.programflow.repository.ProgramModuleRepository;
 import com.bvisionry.programflow.repository.ProgramSettingsRepository;
 import com.bvisionry.programflow.repository.ProgramSubmissionRepository;
 import com.bvisionry.programflow.repository.ProgramTaskRepository;
 import com.bvisionry.programflow.repository.TaskSpineRepository;
-import com.bvisionry.programflow.repository.TeamRepository;
 
 import lombok.RequiredArgsConstructor;
 
@@ -64,7 +63,6 @@ public class MyProgramService {
     private final ProgramTaskRepository tasks;
     private final ProgramSubmissionRepository submissions;
     private final ProgramSettingsRepository settings;
-    private final TeamRepository teams;
     private final TaskSpineRepository spine;
     private final com.bvisionry.common.coursevisibility.CourseVisibilityAccess courseVisibility;
     private final CurrentUserAccessor currentUser;
@@ -99,9 +97,11 @@ public class MyProgramService {
      */
     @Transactional(readOnly = true)
     public JourneyResponse journeyOfMember(UUID orgId, UUID memberId, UUID requestedCohortId) {
-        List<Cohort> enrolled = cohorts.findEnrolled(memberId).stream()
-                .filter(c -> orgId.equals(c.getOrgId()))
-                .toList();
+        // Spec §13: enrolment (the roster) is the truth — cohorts are platform
+        // artifacts, so there is no per-cohort org to filter on. The orgId is
+        // the viewed member's org and scopes their direct assignments and
+        // course visibility below.
+        List<Cohort> enrolled = cohorts.findEnrolled(memberId);
         Cohort cohort;
         if (requestedCohortId != null) {
             cohort = enrolled.stream()
@@ -122,7 +122,7 @@ public class MyProgramService {
             return new JourneyResponse(ProgramSettingsDto.defaults(), new JourneyResponse.Progress(0, 0),
                     gamification(List.of()), List.of(), null, false, 0, direct);
         }
-        Context ctx = context(userId, cohort);
+        Context ctx = context(userId, orgId, cohort);
         ProgramSettingsDto s = settingsOf(cohort.getId());
         Set<UUID> blockedCourses = blockedCourseIds(orgId, ctx.visibleModules());
 
@@ -329,8 +329,10 @@ public class MyProgramService {
             sub.setSubmittedAt(now);
             sub.setPointsAwarded(earned);
             // Admin bell: only on the first submit — revisions stay quiet.
+            // The bell goes to the SUBMITTING member's org admins (spec §13 —
+            // the cohort spans orgs; each org hears about its own people).
             eventPublisher.publishEvent(new ProgramFlowEvents.TaskSubmitted(
-                    access.ctx().cohort().getOrgId(), currentUser.require().name(), t.getName()));
+                    access.ctx().orgId(), currentUser.require().name(), t.getName()));
         }
         submissions.save(sub);
 
@@ -354,13 +356,10 @@ public class MyProgramService {
         if (cohort == null) {
             return new LeaderboardResponse(null, null, List.of());
         }
-        UUID orgId = cohort.getOrgId();
         ProgramSettingsDto s = settingsOf(cohort.getId());
-        Set<UUID> enrolled = new HashSet<>(cohort.getMemberIds());
-        List<OrgMemberRow> members = teams.findOrgMembers(orgId).stream()
-                .filter(m -> enrolled.contains(m.getId())).toList();
-        Map<UUID, String> teamNames = teams.findByOrgIdOrderByCreatedAtAsc(orgId).stream()
-                .collect(Collectors.toMap(t -> t.getId(), t -> t.getName()));
+        // Spec §13.7 accepted consequence: a cross-org cohort's leaderboard
+        // mixes the whole roster — members compete cohort-wide, labelled by org.
+        List<CohortMemberRow> members = cohorts.findRoster(cohort.getId());
 
         List<UUID> cohortTaskIds = modules.findByCohortIdOrderByPositionAsc(cohort.getId()).stream()
                 .flatMap(m -> m.getTasks().stream())
@@ -374,8 +373,7 @@ public class MyProgramService {
         List<LeaderboardResponse.Row> rows = members.stream().map(m -> {
             List<ProgramSubmission> mine = byUser.getOrDefault(m.getId(), List.of());
             GamificationDto g = gamification(mine);
-            return new LeaderboardResponse.Row(m.getId(), m.getName(),
-                    m.getTeamId() == null ? null : teamNames.get(m.getTeamId()),
+            return new LeaderboardResponse.Row(m.getId(), m.getName(), m.getOrgName(),
                     g.points(), g.streak(), m.getId().equals(userId));
         }).sorted((a, b) -> Integer.compare(b.points(), a.points())).toList();
 
@@ -434,7 +432,7 @@ public class MyProgramService {
      * task type (LESSON submitted, course completed, exercise submitted or
      * reviewed, …) — the drip lock and next-task cursor run on it.
      */
-    private record Context(UUID userId, Cohort cohort, List<ProgramModule> visibleModules,
+    private record Context(UUID userId, UUID orgId, Cohort cohort, List<ProgramModule> visibleModules,
             List<ProgramSubmission> mySubmissions, Map<UUID, ProgramSubmission> myByTask,
             Map<UUID, TypedState> typedStates, Set<UUID> doneTaskIds) {
 
@@ -443,10 +441,10 @@ public class MyProgramService {
         }
     }
 
-    private Context context(UUID userId, Cohort cohort) {
-        UUID myTeamId = resolveTeamId(cohort.getOrgId(), userId);
+    /** {@code orgId} is the MEMBER's own org (spec §13) — it scopes course visibility and slice writes. */
+    private Context context(UUID userId, UUID orgId, Cohort cohort) {
         List<ProgramModule> visible = modules.findByCohortIdOrderByPositionAsc(cohort.getId()).stream()
-                .filter(m -> ProgramRules.includes(m, userId, myTeamId))
+                .filter(m -> ProgramRules.includes(m, userId))
                 .toList();
         Set<UUID> cohortTaskIds = visible.stream()
                 .flatMap(m -> m.getTasks().stream())
@@ -475,7 +473,7 @@ public class MyProgramService {
                 done.add(taskId);
             }
         });
-        return new Context(userId, cohort, visible, mine, byTask, typedStates, done);
+        return new Context(userId, orgId, cohort, visible, mine, byTask, typedStates, done);
     }
 
     /**
@@ -593,16 +591,6 @@ public class MyProgramService {
         byUser.computeIfAbsent(userId, k -> new LinkedHashMap<>()).put(taskId, state);
     }
 
-    /** A stream findFirst() would NPE on a null team id, so use a plain loop. */
-    private UUID resolveTeamId(UUID orgId, UUID userId) {
-        for (OrgMemberRow member : teams.findOrgMembers(orgId)) {
-            if (member.getId().equals(userId)) {
-                return member.getTeamId();
-            }
-        }
-        return null;
-    }
-
     private record Access(Context ctx, ProgramTask task, ProgramModule module, int moduleIndex) {
     }
 
@@ -621,12 +609,13 @@ public class MyProgramService {
      * the cohort has completed (read-only review) — whose drip is unlocked.
      */
     private Access requireAccess(UUID taskId) {
-        UUID userId = currentUser.require().userId();
+        CurrentUser me = currentUser.require();
+        UUID userId = me.userId();
         ProgramTask t = tasks.findWithModule(taskId)
                 .filter(x -> x.getStatus() == ProgramTaskStatus.LIVE)
                 .orElseThrow(() -> new ResourceNotFoundException("Task", taskId.toString()));
         Cohort cohort = resolveCohort(userId, t.getModule().getCohortId());
-        Context ctx = context(userId, cohort);
+        Context ctx = context(userId, me.orgId(), cohort);
 
         int index = -1;
         for (int i = 0; i < ctx.visibleModules().size(); i++) {
@@ -642,7 +631,7 @@ public class MyProgramService {
             boolean dripEnabled = settingsOf(cohort.getId()).dripEnabled();
             LockState lock = ProgramRules.lockState(ctx.visibleModules(), index, dripEnabled,
                     ctx.doneTaskIds(),
-                    blockedCourseIds(cohort.getOrgId(), ctx.visibleModules()),
+                    blockedCourseIds(ctx.orgId(), ctx.visibleModules()),
                     OffsetDateTime.now());
             if (lock != LockState.UNLOCKED) {
                 throw new BadRequestException("This module hasn't unlocked yet");
@@ -670,7 +659,7 @@ public class MyProgramService {
         Access access = requireAccess(taskId);
         ProgramTask t = access.task();
         UUID userId = access.ctx().userId();
-        UUID orgId = access.ctx().cohort().getOrgId();
+        UUID orgId = access.ctx().orgId();
         UUID target = switch (t.getTaskType()) {
             case LESSON -> t.getId();
             case WORKSHOP, SURVEY -> requireRef(t);
@@ -723,7 +712,7 @@ public class MyProgramService {
         boolean dripEnabled = settingsOf(ctx.cohort().getId()).dripEnabled();
         Set<UUID> submitted = new HashSet<>(ctx.doneTaskIds());
         submitted.add(justSubmittedTaskId);
-        Set<UUID> blockedCourses = blockedCourseIds(ctx.cohort().getOrgId(), ctx.visibleModules());
+        Set<UUID> blockedCourses = blockedCourseIds(ctx.orgId(), ctx.visibleModules());
         for (int i = 0; i < ctx.visibleModules().size(); i++) {
             LockState lock = ProgramRules.lockState(ctx.visibleModules(), i, dripEnabled, submitted,
                     blockedCourses, OffsetDateTime.now());

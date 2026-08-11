@@ -43,7 +43,7 @@ public class CohortBoardReadRepository {
                             long evaluatedCount, int awaitingReview,
                             OffsetDateTime lastActivityAt, BigDecimal minPillarScore) {}
 
-    public List<TriageRow> triage(UUID orgId, Collection<UUID> userIds) {
+    public List<TriageRow> triage(Collection<UUID> userIds) {
         if (userIds.isEmpty()) {
             return List.of();
         }
@@ -65,7 +65,7 @@ public class CohortBoardReadRepository {
                        (SELECT count(*)
                           FROM exercise_assignments ea
                           JOIN exercise_submissions es ON es.assignment_id = ea.id
-                         WHERE ea.organization_id = :orgId AND ea.user_id = u.id
+                         WHERE ea.organization_id = u.organization_id AND ea.user_id = u.id
                            AND es.status = 'SUBMITTED') AS awaiting_review,
                        %s AS last_activity_at,
                        (SELECT min(pe.score_percentage)
@@ -78,7 +78,7 @@ public class CohortBoardReadRepository {
                 FROM users u
                 WHERE u.id IN (:userIds)
                 """.formatted(MemberActivity.LAST_ACTIVITY.formatted("u")),
-                new MapSqlParameterSource("orgId", orgId).addValue("userIds", userIds),
+                new MapSqlParameterSource("userIds", userIds),
                 (rs, i) -> new TriageRow(rs.getObject("id", UUID.class), rs.getString("name"),
                         rs.getBigDecimal("fri_earliest"), rs.getBigDecimal("fri_latest"),
                         rs.getLong("evaluated_count"), rs.getInt("awaiting_review"),

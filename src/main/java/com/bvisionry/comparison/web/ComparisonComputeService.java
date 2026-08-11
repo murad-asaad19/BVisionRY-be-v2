@@ -130,7 +130,7 @@ public class ComparisonComputeService {
         // from the new pillar rows, so a §7 band edit binds the §6 guardrail
         // (a pillar that is a decline NOW cannot be approved without a next step).
         narratives.restampBandsForCohort(cohortId);
-        auditLogger.log(actorId, pair.orgId(), "COMPARISON_COHORT_RECOMPUTED", "Cohort",
+        auditLogger.log(actorId, null, "COMPARISON_COHORT_RECOMPUTED", "Cohort",
                 cohortId, Map.of("recomputed", recomputed,
                         "narrativesReturnedToDraft", revertedNarratives));
         log.info("Recomputed {} comparisons for cohort {} (actor {}); {} approved narrative(s) "
@@ -163,7 +163,9 @@ public class ComparisonComputeService {
 
         FounderComparison c = new FounderComparison();
         c.setCohortId(pair.cohortId());
-        c.setOrgId(pair.orgId());
+        // The MEMBER's org, not a cohort org — a platform cohort spans orgs
+        // (spec §13) and the comparison row is what org surfaces tenant-filter on.
+        c.setOrgId(reads.userOrg(userId).orElse(null));
         c.setUserId(userId);
         c.setBaselineSubmissionId(baselineRow.id());
         c.setDistanceSubmissionId(distanceRow.id());

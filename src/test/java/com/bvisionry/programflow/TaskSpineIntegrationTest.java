@@ -109,15 +109,17 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                 """, surveyId, "Week 2 reflection", member.getId());
 
         cohortId = UUID.randomUUID();
-        jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')",
-                cohortId, org.getId(), "Cohort 1");
+        jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, ?, 'LAUNCHED')",
+                cohortId, "Cohort 1");
+        jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)",
+                cohortId, org.getId());
         jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
                 cohortId, member.getId());
         moduleId = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO program_modules (id, org_id, cohort_id, name, lock_mode)
-                VALUES (?, ?, ?, ?, 'UNLOCKED')
-                """, moduleId, org.getId(), cohortId, "Know Your Market");
+                INSERT INTO program_modules (id, cohort_id, name, lock_mode)
+                VALUES (?, ?, ?, 'UNLOCKED')
+                """, moduleId, cohortId, "Know Your Market");
 
         lessonTaskId = insertTask("Lesson", "LESSON", null, null, 0);
         courseTaskId = insertTask("Course task", "COURSE", courseId, null, 1);
@@ -218,7 +220,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
             // cohort tasks — survey included since D2 — 5 done; the member's
             // exercise assignment is covered by the cohort task, so it adds
             // nothing).
-            var counts = engagementReads.assignmentCounts(org.getId(), cohortId, member.getId());
+            var counts = engagementReads.assignmentCounts(cohortId, member.getId());
             assertThat(counts.total()).isEqualTo(7);
             assertThat(counts.done()).isEqualTo(5);
         }
@@ -345,20 +347,22 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         @Test
         void surveyOnlyModule_gatesTheNextModule_untilAnswered() {
             UUID dripCohort = UUID.randomUUID();
-            jdbc.update("INSERT INTO cohorts (id, org_id, name, status) VALUES (?, ?, ?, 'LAUNCHED')",
-                    dripCohort, org.getId(), "Drip cohort");
+            jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, ?, 'LAUNCHED')",
+                    dripCohort, "Drip cohort");
+            jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)",
+                    dripCohort, org.getId());
             jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
                     dripCohort, member.getId());
             UUID m1 = UUID.randomUUID();
             UUID m2 = UUID.randomUUID();
             jdbc.update("""
-                    INSERT INTO program_modules (id, org_id, cohort_id, name, position, lock_mode)
-                    VALUES (?, ?, ?, 'Module 1', 0, 'SEQUENTIAL')
-                    """, m1, org.getId(), dripCohort);
+                    INSERT INTO program_modules (id, cohort_id, name, position, lock_mode)
+                    VALUES (?, ?, 'Module 1', 0, 'SEQUENTIAL')
+                    """, m1, dripCohort);
             jdbc.update("""
-                    INSERT INTO program_modules (id, org_id, cohort_id, name, position, lock_mode)
-                    VALUES (?, ?, ?, 'Module 2', 1, 'SEQUENTIAL')
-                    """, m2, org.getId(), dripCohort);
+                    INSERT INTO program_modules (id, cohort_id, name, position, lock_mode)
+                    VALUES (?, ?, 'Module 2', 1, 'SEQUENTIAL')
+                    """, m2, dripCohort);
             jdbc.update("""
                     INSERT INTO program_tasks (id, module_id, name, status, task_type, ref_id)
                     VALUES (?, ?, 'Blockerless survey', 'LIVE', 'SURVEY', ?)
@@ -402,15 +406,15 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         @Test
         void aCohortGetsAtMostOneBaselineAndOneDistance() {
             // Turning the CHECKIN into the (first) DISTANCE is fine…
-            programAdminService.updateTask(org.getId(), cohortId, checkinTaskId,
+            programAdminService.updateTask(cohortId, checkinTaskId,
                     assessmentUpdate("Distance", MilestoneRole.DISTANCE));
             // …but a second DISTANCE must be rejected.
-            assertThatThrownBy(() -> programAdminService.updateTask(org.getId(), cohortId,
+            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
                     baselineTaskId, assessmentUpdate("Another distance", MilestoneRole.DISTANCE)))
                     .isInstanceOfSatisfying(FieldValidationException.class,
                             e -> assertThat(e.getFieldErrors()).containsKey("milestoneRole"));
             // Same for a second BASELINE.
-            assertThatThrownBy(() -> programAdminService.updateTask(org.getId(), cohortId,
+            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
                     checkinTaskId, assessmentUpdate("Second baseline", MilestoneRole.BASELINE)))
                     .isInstanceOfSatisfying(FieldValidationException.class,
                             e -> assertThat(e.getFieldErrors()).containsKey("milestoneRole"));
@@ -418,7 +422,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void nonLessonTasksRejectFormFields_andLiveNeedsARef() {
-            assertThatThrownBy(() -> programAdminService.updateTask(org.getId(), cohortId,
+            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
                     courseTaskId, new UpdateTaskRequest("Course task", null, ProgramTaskStatus.LIVE,
                             false, ProgramTaskType.COURSE, courseId, null,
                             List.of(new com.bvisionry.programflow.dto.FieldUpsert(null,
@@ -426,7 +430,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                                     Map.of())))))
                     .isInstanceOfSatisfying(FieldValidationException.class,
                             e -> assertThat(e.getFieldErrors()).containsKey("fields"));
-            assertThatThrownBy(() -> programAdminService.updateTask(org.getId(), cohortId,
+            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
                     courseTaskId, new UpdateTaskRequest("Course task", null, ProgramTaskStatus.LIVE,
                             false, ProgramTaskType.COURSE, null, null, List.of())))
                     .isInstanceOfSatisfying(FieldValidationException.class,
@@ -437,24 +441,24 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         void samePipelinePairDesignationIsNowAllowed_butMustMatchMilestoneTasks() {
             // The pre-spine equal-pair rejection is gone: same instrument in
             // and out is the FRI 58 → 71 story.
-            ProgramSettingsDto saved = programAdminService.updateSettings(org.getId(), cohortId,
+            ProgramSettingsDto saved = programAdminService.updateSettings(cohortId,
                     settings(pipelineId, pipelineId));
             assertThat(saved.baselinePipelineId()).isEqualTo(pipelineId);
             assertThat(saved.distancePipelineId()).isEqualTo(pipelineId);
 
             // A designation that contradicts the cohort's milestone tasks is a
             // field error (the DISTANCE milestone below references pipelineId).
-            programAdminService.updateTask(org.getId(), cohortId, checkinTaskId,
+            programAdminService.updateTask(cohortId, checkinTaskId,
                     assessmentUpdate("Distance", MilestoneRole.DISTANCE));
             UUID otherPipeline = insertPipeline("Other instrument");
-            assertThatThrownBy(() -> programAdminService.updateSettings(org.getId(), cohortId,
+            assertThatThrownBy(() -> programAdminService.updateSettings(cohortId,
                     settings(pipelineId, otherPipeline)))
                     .isInstanceOfSatisfying(FieldValidationException.class,
                             e -> assertThat(e.getFieldErrors()).containsKey("distancePipelineId"));
 
             // And the mirror: once designated, a milestone task cannot point
             // at a different pipeline.
-            assertThatThrownBy(() -> programAdminService.updateTask(org.getId(), cohortId,
+            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
                     checkinTaskId, new UpdateTaskRequest("Distance", null, ProgramTaskStatus.LIVE,
                             false, ProgramTaskType.ASSESSMENT, otherPipeline,
                             MilestoneRole.DISTANCE, List.of())))
@@ -465,7 +469,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         /** Review #7a: the ref must exist in its owning slice. */
         @Test
         void aBogusReference_isAFieldError() {
-            assertThatThrownBy(() -> programAdminService.updateTask(org.getId(), cohortId,
+            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
                     courseTaskId, new UpdateTaskRequest("Course task", null, ProgramTaskStatus.LIVE,
                             false, ProgramTaskType.COURSE, UUID.randomUUID(), null, List.of())))
                     .isInstanceOfSatisfying(FieldValidationException.class,
@@ -477,7 +481,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         void milestoneRefFreezes_onceMembersHaveAnswered() {
             myProgramService.open(baselineTaskId); // creates the tagged submission
             UUID otherPipeline = insertPipeline("Replacement instrument");
-            assertThatThrownBy(() -> programAdminService.updateTask(org.getId(), cohortId,
+            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
                     baselineTaskId, new UpdateTaskRequest("Baseline", null, ProgramTaskStatus.LIVE,
                             false, ProgramTaskType.ASSESSMENT, otherPipeline,
                             MilestoneRole.BASELINE, List.of())))
@@ -671,7 +675,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                     ea, member.getId());
             insertTaggedEvaluatedSubmission(baselineTaskId, 1, new BigDecimal("58.00"));
 
-            PulseResponse pulse = programAdminService.getPulse(org.getId(), cohortId);
+            PulseResponse pulse = programAdminService.getPulse(cohortId);
             assertThat(pulse.columns()).hasSize(7);
             PulseResponse.PulseRow row = pulse.rows().stream()
                     .filter(r -> r.userId().equals(member.getId())).findFirst().orElseThrow();

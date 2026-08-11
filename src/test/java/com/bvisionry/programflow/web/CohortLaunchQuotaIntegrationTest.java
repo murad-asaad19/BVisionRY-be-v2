@@ -81,7 +81,7 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
     void draftsAreFreeOnEveryTier_evenFree() {
         setTier(root, SubscriptionTier.FREE);
         for (int i = 0; i < 3; i++) {
-            CohortDto draft = cohortService.create(subA.getId(), req("Draft " + i));
+            CohortDto draft = cohortService.create(req("Draft " + i));
             assertThat(draft.status()).isEqualTo(CohortStatus.DRAFT);
             assertThat(draft.launchedAt()).isNull();
         }
@@ -95,7 +95,7 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
         launch(subA, "Spring 26");
 
         UUID second = draft(subA, "Summer 26");
-        assertThatThrownBy(() -> cohortService.launch(subA.getId(), second))
+        assertThatThrownBy(() -> cohortService.launch(second))
                 .isInstanceOfSatisfying(LaunchQuotaExceededException.class, ex -> {
                     assertThat(ex.getTier()).isEqualTo(SubscriptionTier.STARTER);
                     assertThat(ex.getNextAvailableDate()).isEqualTo(
@@ -109,7 +109,7 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
     void grant_thenLaunchSucceeds_andDeleteNeverRefunds() {
         UUID first = launch(subA, "Spring 26");
         UUID second = draft(subA, "Summer 26");
-        assertThatThrownBy(() -> cohortService.launch(subA.getId(), second))
+        assertThatThrownBy(() -> cohortService.launch(second))
                 .isInstanceOf(LaunchQuotaExceededException.class);
 
         TestAuthentication.authenticateAsSuperAdmin(users);
@@ -119,14 +119,14 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(afterGrant.remaining()).isEqualTo(1);
 
         TestAuthentication.authenticateAsOrgAdmin(users, subA);
-        assertThatCode(() -> cohortService.launch(subA.getId(), second))
+        assertThatCode(() -> cohortService.launch(second))
                 .doesNotThrowAnyException();
 
         // Deleting a launched cohort keeps the ledger row: still no room.
-        cohortService.delete(subA.getId(), first);
+        cohortService.delete(first);
         assertThat(ledger.countByOrgId(root.getId())).isEqualTo(2);
         UUID third = draft(subA, "Autumn 26");
-        assertThatThrownBy(() -> cohortService.launch(subA.getId(), third))
+        assertThatThrownBy(() -> cohortService.launch(third))
                 .isInstanceOf(LaunchQuotaExceededException.class);
     }
 
@@ -136,10 +136,10 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
         setTier(root, SubscriptionTier.GROWTH);
         seedLedger(root, 35);
 
-        assertThatCode(() -> cohortService.launch(subA.getId(), draft(subA, "First this month")))
+        assertThatCode(() -> cohortService.launch(draft(subA, "First this month")))
                 .doesNotThrowAnyException();
         UUID second = draft(subA, "Second this month");
-        assertThatThrownBy(() -> cohortService.launch(subA.getId(), second))
+        assertThatThrownBy(() -> cohortService.launch(second))
                 .isInstanceOfSatisfying(LaunchQuotaExceededException.class, ex ->
                         assertThat(ex.getNextAvailableDate()).isEqualTo(
                                 LaunchPeriodUnit.MONTH.nextPeriodStart(LocalDate.now(ZoneOffset.UTC))))
@@ -159,7 +159,7 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
                 + "WHERE org_id = ?", root.getId());
 
         UUID second = draft(subA, "Post-roll attempt");
-        assertThatThrownBy(() -> cohortService.launch(subA.getId(), second))
+        assertThatThrownBy(() -> cohortService.launch(second))
                 .isInstanceOfSatisfying(LaunchQuotaExceededException.class, ex -> {
                     assertThat(ex.getNextAvailableDate()).isNull(); // no date will help
                 })
@@ -171,7 +171,7 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
         setTier(root, SubscriptionTier.FREE);
         UUID cohortId = draft(subA, "Free draft");
 
-        assertThatThrownBy(() -> cohortService.launch(subA.getId(), cohortId))
+        assertThatThrownBy(() -> cohortService.launch(cohortId))
                 .isInstanceOfSatisfying(LaunchQuotaExceededException.class, ex -> {
                     assertThat(ex.getTier()).isEqualTo(SubscriptionTier.FREE);
                     assertThat(ex.getNextAvailableDate()).isNull();
@@ -184,7 +184,7 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
     void aSiblingSubOrgSharesTheRootsMeter() {
         launch(subA, "A's cohort");
         UUID inB = draft(subB, "B's cohort");
-        assertThatThrownBy(() -> cohortService.launch(subB.getId(), inB))
+        assertThatThrownBy(() -> cohortService.launch(inB))
                 .isInstanceOf(LaunchQuotaExceededException.class)
                 .hasMessageContaining("share the parent organization's plan");
     }
@@ -194,7 +194,7 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
         Organization otherRoot = saveOrg("Other Customer", SubscriptionTier.STARTER, null);
         seedLedger(otherRoot, 1);
 
-        assertThatCode(() -> cohortService.launch(subA.getId(), draft(subA, "Ours")))
+        assertThatCode(() -> cohortService.launch(draft(subA, "Ours")))
                 .doesNotThrowAnyException();
     }
 
@@ -206,7 +206,7 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
         launch(subA, "Quota spender");
         TestAuthentication.authenticateAsSuperAdmin(users);
 
-        assertThatCode(() -> cohortService.launch(subA.getId(), draft(subA, "Operator demo")))
+        assertThatCode(() -> cohortService.launch(draft(subA, "Operator demo")))
                 .doesNotThrowAnyException();
         assertThat(ledger.countByOrgId(root.getId())).isEqualTo(2);
     }
@@ -262,7 +262,7 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(history.grants().get(0).grantedByName()).isEqualTo("Test Super Admin");
 
         TestAuthentication.authenticateAsOrgAdmin(users, subA);
-        cohortService.delete(subA.getId(), cohortId);
+        cohortService.delete(cohortId);
         LaunchLedgerResponse afterDelete = quotaService.history(subA.getId());
         assertThat(afterDelete.launches()).hasSize(1);
         assertThat(afterDelete.launches().get(0).cohortName()).isNull(); // outlives the cohort
@@ -343,16 +343,20 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
     /* --------------------------------------------------------------- helpers */
 
     private static CreateCohortRequest req(String name) {
-        return new CreateCohortRequest(name, false);
+        return new CreateCohortRequest(name);
     }
 
+    /** Spec §13: create the platform draft, then assign the org (its enrollment rule empty). */
     private UUID draft(Organization org, String name) {
-        return cohortService.create(org.getId(), req(name)).id();
+        UUID id = cohortService.create(req(name)).id();
+        cohortService.assignOrg(id, new com.bvisionry.programflow.dto.AssignOrgRequest(
+                org.getId(), false, java.util.List.of(), false));
+        return id;
     }
 
     private UUID launch(Organization org, String name) {
         UUID id = draft(org, name);
-        CohortDto launched = cohortService.launch(org.getId(), id);
+        CohortDto launched = cohortService.launch(id);
         assertThat(launched.status()).isEqualTo(CohortStatus.LAUNCHED);
         assertThat(launched.launchedAt()).isNotNull();
         return id;

@@ -67,6 +67,16 @@ public class CohortService {
     static final String ACTION_ORG_ASSIGNED = "COHORT_ORG_ASSIGNED";
     static final String ACTION_ORG_UNASSIGNED = "COHORT_ORG_UNASSIGNED";
 
+    /**
+     * Enrollment is learners-only: {@link #orgMemberIds} is
+     * {@code role = 'MEMBER' AND status = 'ACTIVE'}, so a coach, instructor or
+     * admin fails this check even though they DO belong to the org — the old
+     * "do not belong to this organization" wording sent admins hunting for the
+     * wrong problem.
+     */
+    static final String NOT_ENROLLABLE =
+            "One or more of the selected people are not active learners in this organization";
+
     private final CohortRepository cohorts;
     private final CohortOrgAssignmentRepository assignments;
     private final ApplicationEventPublisher events;
@@ -319,7 +329,7 @@ public class CohortService {
         Cohort c = requireAssignedEditable(orgId, cohortId);
         Set<UUID> mine = orgMemberIds(orgId);
         if (!mine.containsAll(req.memberIds())) {
-            throw new BadRequestException("One or more learners do not belong to this organization");
+            throw new BadRequestException(NOT_ENROLLABLE);
         }
         List<UUID> added = req.memberIds().stream()
                 .filter(id -> !c.getMemberIds().contains(id))
@@ -341,7 +351,7 @@ public class CohortService {
             toEnroll = List.copyOf(mine);
         } else {
             if (!mine.containsAll(req.memberIds())) {
-                throw new BadRequestException("One or more learners do not belong to this organization");
+                throw new BadRequestException(NOT_ENROLLABLE);
             }
             toEnroll = req.memberIds();
         }

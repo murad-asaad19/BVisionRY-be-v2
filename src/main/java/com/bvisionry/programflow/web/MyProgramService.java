@@ -534,9 +534,15 @@ public class MyProgramService {
             }
             // Pre-spine visibility (review decision #6): a BASELINE milestone
             // with NO tagged submission falls back to the member's EARLIEST
-            // evaluated submission of that pipeline — mirroring the comparison
-            // slice's baseline resolution exactly, so the journey band and the
-            // report agree. CHECKIN/DISTANCE stay tag-only.
+            // evaluated UNTAGGED submission of that pipeline — mirroring the
+            // comparison slice's baseline resolution exactly, so the journey
+            // band and the report agree. CHECKIN/DISTANCE stay tag-only.
+            //
+            // The fallback only ever adopts submissions that belong to NO
+            // cohort task: since spec §13 a member can be in several cohorts
+            // sharing a pipeline, and a submission tagged to one cohort's
+            // milestone must never surface as another cohort's baseline (the
+            // query enforces program_task_id IS NULL).
             List<ProgramTask> baselineTasks = assessments.stream()
                     .filter(t -> t.getMilestoneRole()
                             == com.bvisionry.programflow.domain.MilestoneRole.BASELINE)

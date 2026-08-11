@@ -141,11 +141,21 @@ public class TaskSpineRepository {
                                       Instant submittedAt, Instant evaluatedAt, BigDecimal score) {}
 
     /**
-     * The member's EARLIEST evaluated submission per (member, pipeline) — the
-     * pre-spine visibility fallback for BASELINE milestone tasks with no
-     * tagged submission. Ordering mirrors the comparison slice's baseline
-     * resolution exactly (evaluated_at ASC NULLS LAST, created_at ASC), so
-     * the journey band and the stored comparison agree on what the baseline is.
+     * The member's EARLIEST evaluated UNTAGGED submission per (member,
+     * pipeline) — the pre-spine visibility fallback for BASELINE milestone
+     * tasks with no tagged submission. Ordering mirrors the comparison slice's
+     * baseline resolution exactly (evaluated_at ASC NULLS LAST, created_at
+     * ASC), so the journey band and the stored comparison agree on what the
+     * baseline is.
+     *
+     * <p><strong>Invariant: {@code program_task_id IS NULL} only.</strong>
+     * Since spec §13 a member can sit in several cohorts that share a pipeline,
+     * so a submission already tagged to one cohort's milestone task must never
+     * be adoptable as another cohort's baseline — without the filter, cohort
+     * A's baseline score showed up on cohort B's untouched baseline band. The
+     * fallback exists purely for submissions belonging to NO cohort task
+     * (pre-spine / directly-assigned work); anything tagged is resolved by
+     * {@link #assessmentStates} against its own task id.
      */
     public List<BaselineFallbackRow> earliestEvaluatedForPipelines(Collection<UUID> userIds,
                                                                    Collection<UUID> pipelineIds) {
@@ -161,6 +171,7 @@ public class TaskSpineRepository {
                 LEFT JOIN overall_summaries os ON os.submission_id = s.id
                 WHERE s.user_id IN (:userIds) AND a.pipeline_id IN (:pipelineIds)
                   AND s.status = 'EVALUATED'
+                  AND s.program_task_id IS NULL
                 ORDER BY s.user_id, a.pipeline_id, s.evaluated_at ASC NULLS LAST, s.created_at ASC
                 """,
                 new MapSqlParameterSource("userIds", userIds).addValue("pipelineIds", pipelineIds),
@@ -265,9 +276,12 @@ public class TaskSpineRepository {
      * submissions is tagged to a LIVE cohort task of the member's (the tag is
      * proof of representation; audience was enforced when the tag was
      * created), or (b) a BASELINE milestone task references its pipeline AND
-     * the member has an evaluated submission — the exact condition under
-     * which the journey's pre-spine baseline fallback will display it. Any
-     * other assignment on the pipeline stays listed as direct work.
+     * the member has an evaluated UNTAGGED submission — the exact condition
+     * under which the journey's pre-spine baseline fallback will display it
+     * ({@link #earliestEvaluatedForPipelines}, tagged rows excluded there too,
+     * so the two predicates stay mirrored and no assignment can fall between
+     * them and vanish from every surface). Any other assignment on the
+     * pipeline stays listed as direct work.
      */
     public List<DirectAssessmentRow> directAssessments(UUID orgId, UUID memberId) {
         return jdbc.query("""
@@ -299,7 +313,8 @@ public class TaskSpineRepository {
                         AND %s
                         AND EXISTS (SELECT 1 FROM submissions se
                                     WHERE se.assignment_id = a.id AND se.user_id = :memberId
-                                      AND se.status = 'EVALUATED'))
+                                      AND se.status = 'EVALUATED'
+                                      AND se.program_task_id IS NULL))
                 ORDER BY a.created_at DESC
                 """.formatted(ProgramAudience.INCLUDES_USER.formatted(":memberId")),
                 params(orgId, memberId),

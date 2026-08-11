@@ -604,6 +604,76 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
+    /* ------------------------------------------ same pipeline, two cohorts */
+
+    /**
+     * Spec §13: a member can sit in several cohorts whose BASELINE milestones
+     * point at the SAME pipeline. The submission's tag decides which cohort it
+     * belongs to — cohort A's evaluated baseline must never bleed onto cohort
+     * B's untouched band, because the pre-spine fallback only ever adopts
+     * submissions that belong to NO cohort task.
+     */
+    @Nested
+    class SharedPipelineAcrossCohorts {
+
+        private UUID otherCohortId;
+
+        @BeforeEach
+        void secondCohortWithTheSameBaselinePipeline() {
+            otherCohortId = UUID.randomUUID();
+            jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, ?, 'LAUNCHED')",
+                    otherCohortId, "Alpha Founders");
+            jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)",
+                    otherCohortId, org.getId());
+            jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
+                    otherCohortId, member.getId());
+            UUID otherModuleId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO program_modules (id, cohort_id, name, position, lock_mode)
+                    VALUES (?, ?, 'Intake', 0, 'UNLOCKED')
+                    """, otherModuleId, otherCohortId);
+            jdbc.update("""
+                    INSERT INTO program_tasks (id, module_id, name, status, position,
+                                               task_type, ref_id, milestone_role)
+                    VALUES (?, ?, 'Baseline', 'LIVE', 0, 'ASSESSMENT', ?, 'BASELINE')
+                    """, UUID.randomUUID(), otherModuleId, pipelineId);
+        }
+
+        /** The bug: cohort A's tagged baseline showed up on cohort B's band. */
+        @Test
+        void aTaggedBaselineStaysInTheCohortItWasTakenIn() {
+            insertTaggedEvaluatedSubmission(baselineTaskId, 1, new BigDecimal("68.00"));
+
+            JourneyTask taken = myProgramService.journey(cohortId)
+                    .modules().get(0).tasks().get(3);
+            assertThat(taken.state()).isEqualTo(JourneyTaskState.EVALUATED);
+            assertThat(taken.score()).isEqualByComparingTo("68.00");
+
+            JourneyTask untouched = myProgramService.journey(otherCohortId)
+                    .modules().get(0).tasks().get(0);
+            assertThat(untouched.state()).isEqualTo(JourneyTaskState.NOT_STARTED);
+            assertThat(untouched.score()).isNull();
+        }
+
+        /**
+         * …and the case the fallback exists for still works: a submission
+         * tagged to NO cohort task belongs to the member, not to a cohort, so
+         * every untouched baseline on that pipeline adopts it.
+         */
+        @Test
+        void anUntaggedEvaluatedSubmission_isStillAdoptedByEveryUntouchedBaseline() {
+            insertTaggedEvaluatedSubmission(null, 30, new BigDecimal("52.00"));
+
+            List<JourneyTask> baselines = List.of(
+                    myProgramService.journey(cohortId).modules().get(0).tasks().get(3),
+                    myProgramService.journey(otherCohortId).modules().get(0).tasks().get(0));
+            assertThat(baselines).allSatisfy(b -> {
+                assertThat(b.state()).isEqualTo(JourneyTaskState.EVALUATED);
+                assertThat(b.score()).isEqualByComparingTo("52.00");
+            });
+        }
+    }
+
     /* -------------------------------------------------- member survey route */
 
     @Nested

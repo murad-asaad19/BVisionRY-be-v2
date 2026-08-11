@@ -43,10 +43,18 @@ import jakarta.validation.Valid;
 /**
  * Admin workshop management for an org: workshop lifecycle, the exercise
  * pipeline builder, and analytics.
+ *
+ * <p><b>SUPER_ADMIN only, deliberately.</b> Workshops are authored and run by
+ * the platform, never by the customer: an ORG_ADMIN gets no authoring or
+ * detail access here at all. They still see their members' workshop PROGRESS —
+ * cohort Pulse, the member profile Work tab and participation all read the
+ * spine/profile repositories directly, not this console API — and an org admin
+ * who is themselves assigned to a workshop plays it through
+ * {@link MyWorkshopController}, which stays {@code isAuthenticated()}.
  */
 @RestController
 @RequestMapping(path = "/api/organizations/{orgId}/workshops", produces = MediaType.APPLICATION_JSON_VALUE)
-@PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId))")
+@PreAuthorize("hasAuthority('SUPER_ADMIN')")
 @Tag(name = "Workshops (admin)", description = "Workshop lifecycle, exercise builder, analytics.")
 public class WorkshopAdminController {
 
@@ -193,17 +201,13 @@ public class WorkshopAdminController {
      * maskable). {@code showNames=true} is SUPER_ADMIN-only
      * ({@link ExportNameGuard}).
      *
-     * <p><b>This is a document-hygiene control, NOT an anonymity boundary, and
-     * the distinction is load-bearing.</b> The same in-org ORG_ADMIN this gate
-     * refuses can assemble byte-equivalent content from unguarded JSON siblings
-     * on THIS controller: {@code GET /{workshopId}/analytics} returns
-     * {@code userId} + {@code userName} for every completion, and
-     * {@code GET /{workshopId}/members/{userId}/answers} returns that member's
-     * {@code userName} and full recap — the very call
-     * {@code WorkshopAnswersExportService} makes, minus the masking. What this
-     * guard buys is that a NAMED FILE is not produced and circulated, not that
-     * the admin cannot learn the names. Do not write anything here implying the
-     * roster is protected.
+     * <p>The whole controller is now SUPER_ADMIN-only, so this guard no longer
+     * separates two roles — it is kept as defence in depth (the masking default
+     * still applies, and the guard survives if the class gate is ever widened
+     * again). It never was an anonymity boundary: the JSON siblings on this
+     * controller ({@code /analytics}, {@code /members/{userId}/answers}) carry
+     * the same names unmasked. Do not write anything here implying the roster is
+     * protected.
      */
     @GetMapping("/{workshopId}/answers/pdf")
     public ResponseEntity<byte[]> answersPdf(

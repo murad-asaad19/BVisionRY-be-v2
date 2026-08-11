@@ -28,6 +28,7 @@ import java.util.Map;
 import static com.bvisionry.testsupport.TestAuthentication.authenticate;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * Pins {@link MyWorkshopService}'s access boundary and the load-bearing play
@@ -43,6 +44,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *       server-side and merges retries; QUESTION answers freeze once
  *       completed; a member can never write to a LEAD task's shared
  *       submission; FINISHED workshops reject all mutations.</li>
+ *   <li>Standalone: a workshop needs no cohort — an org with zero cohorts can
+ *       own, assign and run one end to end ({@code workshopRunsWithoutAnyCohort}).</li>
  * </ul>
  *
  * <p>Fixture: one team (lead + member) playing one exercise with the standard
@@ -63,6 +66,7 @@ class MyWorkshopPlayIntegrationTest extends AbstractPostgresIntegrationTest {
     @Autowired private WorkshopExerciseRepository exercises;
     @Autowired private WorkshopExerciseTaskRepository tasks;
     @Autowired private WorkshopExerciseRunRepository runs;
+    @Autowired private org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     @AfterEach
     void clearAuth() {
@@ -207,6 +211,53 @@ class MyWorkshopPlayIntegrationTest extends AbstractPostgresIntegrationTest {
                 new SubmitWeightsRequest(Map.of("c1", 100))))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("not your task");
+    }
+
+    // ------------------------------------------------------------ standalone
+
+    /**
+     * A workshop is a standalone product surface: an org with NO cohort at all
+     * can own one, assign members to its teams and run it end to end. Cohort
+     * curriculum may REFERENCE a workshop (a WORKSHOP program task), never the
+     * reverse — so nothing on the participant path (list → play → complete) may
+     * ever reach for a cohort. The zero-cohort assertion is the premise, not
+     * decoration: without it this reads as one more play test and would stay
+     * green if a cohort lookup crept in behind a fixture that seeds one.
+     */
+    @Test
+    void workshopRunsWithoutAnyCohort() {
+        Fixture f = fixture(WorkshopStatus.ACTIVE);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM cohorts WHERE org_id = ?",
+                Integer.class, f.org().getId()))
+                .as("premise: the org owning this workshop has no cohort")
+                .isZero();
+
+        // The assigned lead sees it in their list…
+        authenticate(f.lead());
+        assertThat(service.myWorkshops())
+                .extracting(MyWorkshopDto::id, MyWorkshopDto::teamName, MyWorkshopDto::lead)
+                .containsExactly(tuple(f.workshop().getId(), "Team 1", true));
+
+        // …and plays the whole lead pipeline through to the share.
+        assertThat(service.play(f.workshop().getId()).view()).isEqualTo("TASK");
+        service.start(f.workshop().getId(), f.sort().getId());
+        service.submitSort(f.workshop().getId(), f.sort().getId(),
+                new SubmitSortRequest(Map.of("c1", "left", "c2", "right")));
+        service.start(f.workshop().getId(), f.weight().getId());
+        service.submitWeights(f.workshop().getId(), f.weight().getId(),
+                new SubmitWeightsRequest(Map.of("c1", 70)));
+        service.start(f.workshop().getId(), f.top().getId());
+        service.completeTop(f.workshop().getId(), f.top().getId());
+        assertThat(sharedAt(f)).as("the last LEAD task shared the run").isNotNull();
+
+        // The assigned member finishes their side — still no cohort anywhere.
+        authenticate(f.member());
+        assertThat(service.myWorkshops()).extracting(MyWorkshopDto::id)
+                .containsExactly(f.workshop().getId());
+        service.start(f.workshop().getId(), f.question().getId());
+        service.respond(f.workshop().getId(), f.question().getId(),
+                new RespondRequest(List.of(new RespondRequest.Answer("c1", "Because"))));
+        assertThat(service.play(f.workshop().getId()).view()).isEqualTo("MEMBER_DONE");
     }
 
     // ------------------------------------------------------------ fixtures

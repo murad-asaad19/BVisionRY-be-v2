@@ -48,7 +48,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <h2>Why the assertions read the document, not a mock</h2>
  *
- * There are FOUR independent name-resolution paths behind these eight handlers —
+ * There are FOUR independent name-resolution paths behind these export handlers —
  * {@code MemberDisplayNameResolver}, {@code MemberIdentityFactory},
  * {@code OrgInsight{Excel,Pdf}Service}'s own private {@code resolveMemberNames},
  * and {@code WorkshopAnswersExportService} — so a {@code verify(service).x(...,
@@ -164,7 +164,8 @@ class ExportNameAuthorityIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     // ------------------------------------------------------------------
-    // 1. An in-org ORG_ADMIN asking for names is refused on all eight routes
+    // 1. An in-org ORG_ADMIN asking for names is refused on every route they can
+    //    still reach (the workshop export they can no longer reach at all).
     // ------------------------------------------------------------------
 
     @Test
@@ -215,9 +216,25 @@ class ExportNameAuthorityIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(cellText(ok(perMember("excel")))).doesNotContain(FOUNDER);
     }
 
+    /**
+     * The workshop console is SUPER_ADMIN-only (product ruling: an org admin
+     * gets no workshop authoring or detail access at all), so its answers
+     * export is refused to an org admin outright — flag or no flag. The masking
+     * default is asserted below on the SUPER_ADMIN, who is the only caller that
+     * can reach {@code WorkshopAnswersExportService} at all.
+     */
     @Test
-    void workshopAnswersExportMasksTheFounderForAnOrgAdmin() throws Exception {
+    void workshopAnswersExportIsForbiddenToAnOrgAdminEntirely() throws Exception {
         TestAuthentication.authenticate(orgAdmin);
+        for (String format : new String[] {"pdf", "excel"}) {
+            mockMvc.perform(get(workshopAnswers(format))).andExpect(status().isForbidden());
+            mockMvc.perform(get(withNames(workshopAnswers(format)))).andExpect(status().isForbidden());
+        }
+    }
+
+    @Test
+    void workshopAnswersExportMasksTheFounderByDefault() throws Exception {
+        TestAuthentication.authenticate(superAdmin);
         assertThat(pdfText(ok(workshopAnswers("pdf")))).doesNotContain(FOUNDER).contains("Member 1");
         // The workbook is covered for authority only — see the class javadoc.
         ok(workshopAnswers("excel"));
@@ -320,12 +337,17 @@ class ExportNameAuthorityIntegrationTest extends AbstractPostgresIntegrationTest
 
     // ------------------------------------------------------------- routes
 
+    /**
+     * The org-scoped exports an ORG_ADMIN can still reach. The workshop answers
+     * export is deliberately NOT here: that console is SUPER_ADMIN-only now, so
+     * an org admin is refused the document itself, not just the flag — see
+     * {@code workshopAnswersExportIsForbiddenToAnOrgAdminEntirely}.
+     */
     private List<String> orgScopedExports() {
         return List.of(
                 orgInsight("pdf"), orgInsight("excel"),
                 teamInsight("pdf"), teamInsight("excel"),
-                perMember("pdf"), perMember("excel"),
-                workshopAnswers("pdf"), workshopAnswers("excel"));
+                perMember("pdf"), perMember("excel"));
     }
 
     private String orgInsight(String format) {

@@ -100,7 +100,8 @@ public interface CohortRepository extends JpaRepository<Cohort, UUID> {
 
     /** The cohort's org assignments with names and per-org headcounts (assign panel). */
     @Query(value = """
-            SELECT co.org_id AS orgId, o.name AS orgName, co.auto_enroll AS autoEnroll,
+            SELECT co.org_id AS orgId, o.name AS orgName, p.name AS parentName,
+                   co.auto_enroll AS autoEnroll,
                    co.assigned_at AS assignedAt,
                    (SELECT count(*) FROM cohort_members cm
                      JOIN users u ON u.id = cm.user_id
@@ -108,8 +109,9 @@ public interface CohortRepository extends JpaRepository<Cohort, UUID> {
                       AND u.organization_id = co.org_id) AS enrolledCount
             FROM cohort_orgs co
             JOIN organizations o ON o.id = co.org_id
+            LEFT JOIN organizations p ON p.id = o.parent_organization_id
             WHERE co.cohort_id = :cohortId
-            ORDER BY o.name
+            ORDER BY p.name NULLS FIRST, o.name
             """, nativeQuery = true)
     List<CohortOrgRow> findAssignmentRows(@Param("cohortId") UUID cohortId);
 

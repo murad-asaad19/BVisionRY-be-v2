@@ -202,8 +202,8 @@ public class CohortService {
     public List<CohortOrgDto> listOrgAssignments(UUID cohortId) {
         require(cohortId);
         return cohorts.findAssignmentRows(cohortId).stream()
-                .map(r -> new CohortOrgDto(r.getOrgId(), r.getOrgName(), r.getAutoEnroll(),
-                        r.getAssignedAt(), (int) r.getEnrolledCount()))
+                .map(r -> new CohortOrgDto(r.getOrgId(), r.getOrgName(), r.getParentName(),
+                        r.getAutoEnroll(), r.getAssignedAt(), (int) r.getEnrolledCount()))
                 .toList();
     }
 

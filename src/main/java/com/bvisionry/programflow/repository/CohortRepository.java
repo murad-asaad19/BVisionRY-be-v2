@@ -94,6 +94,21 @@ public interface CohortRepository extends JpaRepository<Cohort, UUID> {
             """, nativeQuery = true)
     List<OrgProgramRow> findOrgProgramRows();
 
+    /**
+     * Every cohort→org assignment as (cohortId, org display name), one row per
+     * pair, so the platform switcher can disambiguate two same-named cohorts
+     * in a single read (spec §13 — names are no longer unique per org).
+     */
+    @Query(value = """
+            SELECT co.cohort_id AS cohortId,
+                   CASE WHEN p.name IS NULL THEN o.name ELSE p.name || ' → ' || o.name END AS orgName
+            FROM cohort_orgs co
+            JOIN organizations o ON o.id = co.org_id
+            LEFT JOIN organizations p ON p.id = o.parent_organization_id
+            ORDER BY p.name NULLS FIRST, o.name
+            """, nativeQuery = true)
+    List<CohortOrgNameRow> findAllOrgNames();
+
     /** Soft-coupled org existence check (programflow may not import the organization feature). */
     @Query(value = "SELECT EXISTS (SELECT 1 FROM organizations WHERE id = :orgId)", nativeQuery = true)
     boolean orgExists(@Param("orgId") UUID orgId);

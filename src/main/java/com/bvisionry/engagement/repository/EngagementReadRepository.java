@@ -88,16 +88,33 @@ public class EngagementReadRepository {
 
     /** The cohort's members at read time — the expected attendees (spec §4). */
     public List<RosterRow> roster(UUID cohortId) {
+        return roster(cohortId, null);
+    }
+
+    /**
+     * {@link #roster(UUID)}, optionally cut to one org's own members — the org
+     * console never sees another org's people (spec §13.7).
+     */
+    public List<RosterRow> roster(UUID cohortId, UUID orgId) {
         return jdbc.query("""
                 SELECT u.id, u.name, u.email
                 FROM cohort_members cm
                 JOIN users u ON u.id = cm.user_id AND u.role = 'MEMBER'
                 WHERE cm.cohort_id = :cohortId
+                  AND (CAST(:orgId AS uuid) IS NULL OR u.organization_id = CAST(:orgId AS uuid))
                 ORDER BY u.name, u.email
                 """,
-                new MapSqlParameterSource("cohortId", cohortId),
+                new MapSqlParameterSource("cohortId", cohortId).addValue("orgId", orgId),
                 (rs, i) -> new RosterRow(rs.getObject("id", UUID.class), rs.getString("name"),
                         rs.getString("email")));
+    }
+
+    /** Spec §13.7 tenant guard: is the platform cohort assigned to this org? */
+    public boolean assignedToOrg(UUID cohortId, UUID orgId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM cohort_orgs WHERE cohort_id = :cohortId AND org_id = :orgId)",
+                new MapSqlParameterSource("cohortId", cohortId).addValue("orgId", orgId),
+                Boolean.class));
     }
 
     public record MarkerName(UUID markedBy, String name) {}

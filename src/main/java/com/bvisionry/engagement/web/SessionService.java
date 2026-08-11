@@ -30,9 +30,10 @@ import com.bvisionry.engagement.repository.SessionRepository;
 import lombok.RequiredArgsConstructor;
 
 /**
- * Session CRUD + roll call for the cohort board Sessions tab (spec §4).
- * Org-admin writes only — attendance is entered here by admins; coaches read
- * engagement through the founder profile. Every tick is §7b-stamped.
+ * Session CRUD + roll call for the Sessions tab (spec §4). Org-scoped since
+ * §13.7: every roster read and every roll-call tick is bounded to the org's
+ * OWN members, so one org can never see or mark another's founders. Coaches
+ * read engagement through the founder profile. Every tick is §7b-stamped.
  */
 @Service
 @RequiredArgsConstructor
@@ -44,9 +45,9 @@ public class SessionService {
     private final EngagementReadRepository reads;
 
     @Transactional(readOnly = true)
-    public CohortSessionsResponse list(UUID cohortId) {
-        requireCohort(cohortId);
-        List<RosterMember> roster = reads.roster(cohortId).stream()
+    public CohortSessionsResponse list(UUID cohortId, UUID orgId) {
+        requireAssignedCohort(cohortId, orgId);
+        List<RosterMember> roster = reads.roster(cohortId, orgId).stream()
                 .map(r -> new RosterMember(r.id(), r.name(), r.email()))
                 .toList();
         List<Session> all = sessions.findByCohortIdOrderBySessionDateDesc(cohortId);
@@ -60,30 +61,30 @@ public class SessionService {
                 .toList());
     }
 
-    public SessionDto create(UUID cohortId, UpsertSessionRequest req, UUID actorId) {
-        requireEditableCohort(cohortId);
+    public SessionDto create(UUID cohortId, UUID orgId, UpsertSessionRequest req, UUID actorId) {
+        requireEditableCohort(cohortId, orgId);
         Session s = new Session();
         s.setCohortId(cohortId);
         s.setCreatedBy(actorId);
-        apply(s, cohortId, req);
+        apply(s, cohortId, orgId, req);
         return toDto(sessions.save(s), List.of(), Map.of());
     }
 
-    public SessionDto update(UUID cohortId, UUID sessionId, UpsertSessionRequest req) {
-        requireEditableCohort(cohortId);
+    public SessionDto update(UUID cohortId, UUID orgId, UUID sessionId, UpsertSessionRequest req) {
+        requireEditableCohort(cohortId, orgId);
         Session s = requireSession(cohortId, sessionId);
-        apply(s, cohortId, req);
+        apply(s, cohortId, orgId, req);
         return withAttendance(s);
     }
 
-    /** Shared upsert body, incl. the expected-attendee narrowing (all must be cohort members). */
-    private void apply(Session s, UUID cohortId, UpsertSessionRequest req) {
+    /** Shared upsert body; expected attendees must be the ORG's own cohort members (§13.7). */
+    private void apply(Session s, UUID cohortId, UUID orgId, UpsertSessionRequest req) {
         s.setType(req.type());
         s.setTitle(blankToNull(req.title()));
         s.setSessionDate(req.sessionDate().atOffset(ZoneOffset.UTC));
         List<UUID> expected = req.expectedMemberIds() == null ? List.of() : req.expectedMemberIds();
         if (!expected.isEmpty()) {
-            Set<UUID> roster = reads.roster(cohortId).stream()
+            Set<UUID> roster = reads.roster(cohortId, orgId).stream()
                     .map(EngagementReadRepository.RosterRow::id)
                     .collect(Collectors.toSet());
             if (!roster.containsAll(expected)) {
@@ -94,8 +95,8 @@ public class SessionService {
         s.setExpectedMemberIds(new LinkedHashSet<>(expected));
     }
 
-    public void delete(UUID cohortId, UUID sessionId) {
-        requireEditableCohort(cohortId);
+    public void delete(UUID cohortId, UUID orgId, UUID sessionId) {
+        requireEditableCohort(cohortId, orgId);
         sessions.delete(requireSession(cohortId, sessionId));
     }
 
@@ -103,11 +104,15 @@ public class SessionService {
      * The roll-call tick/untick. Present = a §7b-stamped presence row;
      * re-ticking keeps the original stamp (idempotent); untick deletes the row.
      */
-    public SessionDto setAttendance(UUID cohortId, UUID sessionId, UUID memberId,
+    public SessionDto setAttendance(UUID cohortId, UUID orgId, UUID sessionId, UUID memberId,
                                     boolean present, UUID actorId) {
-        requireEditableCohort(cohortId);
+        requireEditableCohort(cohortId, orgId);
         Session s = requireSession(cohortId, sessionId);
-        if (!reads.isCohortMember(cohortId, memberId)) {
+        // Own members only — the org path must never be a door to another
+        // org's founders (§13.7).
+        boolean mine = reads.roster(cohortId, orgId).stream()
+                .anyMatch(r -> r.id().equals(memberId));
+        if (!mine) {
             throw new BadRequestException("This member is not enrolled in the cohort");
         }
         SessionAttendance.Key key = new SessionAttendance.Key(sessionId, memberId);
@@ -134,7 +139,8 @@ public class SessionService {
      * cohort is DRAFT/LAUNCHED/COMPLETED (a late roll-call tidy-up on a
      * completed cohort is legitimate); ARCHIVED refuses every mutation.
      */
-    private void requireEditableCohort(UUID cohortId) {
+    private void requireEditableCohort(UUID cohortId, UUID orgId) {
+        requireAssignedCohort(cohortId, orgId);
         String status = reads.cohortStatus(cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
         if ("ARCHIVED".equals(status)) {
@@ -142,10 +148,11 @@ public class SessionService {
         }
     }
 
-    /** The cohort must exist (spec §13: platform-scoped, super-admin only). */
-    private void requireCohort(UUID cohortId) {
-        reads.cohort(cohortId)
-                .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
+    /** Tenant guard (§13.7): the cohort must exist AND be assigned to this org. */
+    private void requireAssignedCohort(UUID cohortId, UUID orgId) {
+        if (reads.cohort(cohortId).isEmpty() || !reads.assignedToOrg(cohortId, orgId)) {
+            throw new ResourceNotFoundException("Cohort", cohortId.toString());
+        }
     }
 
     /** The session, guarded to the cohort path — 404 otherwise. */

@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.bvisionry.programflow.dto.AssignOrgRequest;
 import com.bvisionry.programflow.dto.CohortDto;
 import com.bvisionry.programflow.dto.CohortOrgDto;
+import com.bvisionry.programflow.dto.CohortRosterEntryDto;
 import com.bvisionry.programflow.dto.CreateCohortRequest;
 import com.bvisionry.programflow.dto.UpdateCohortRequest;
 import com.bvisionry.programflow.dto.UpdateOrgAssignmentRequest;
@@ -89,6 +90,12 @@ public class CohortController {
     @PostMapping("/{cohortId}/archive")
     public CohortDto archive(@PathVariable UUID cohortId) {
         return service.archive(cohortId);
+    }
+
+    /** The roster as names — what the audience picker needs. No progress (§13.7). */
+    @GetMapping("/{cohortId}/members")
+    public List<CohortRosterEntryDto> roster(@PathVariable UUID cohortId) {
+        return service.roster(cohortId);
     }
 
     @GetMapping("/{cohortId}/orgs")

@@ -82,13 +82,23 @@ public class EngagementService {
      * join in Java, not to cache the score.
      */
     public CohortParticipationResponse cohortParticipation(UUID cohortId) {
-        if (reads.cohort(cohortId).isEmpty()) {
+        return cohortParticipation(cohortId, null);
+    }
+
+    /**
+     * {@link #cohortParticipation(UUID)} cut to one org's own members — the
+     * org console's Pulse (spec §13.7). A cohort the org is not assigned to is
+     * a 404, not an empty list.
+     */
+    public CohortParticipationResponse cohortParticipation(UUID cohortId, UUID orgId) {
+        if (reads.cohort(cohortId).isEmpty()
+                || (orgId != null && !reads.assignedToOrg(cohortId, orgId))) {
             throw new ResourceNotFoundException("Cohort", cohortId.toString());
         }
         List<ParticipationFormula.Category> categories = currentCategories();
         List<ScoringBands.Band> bands = currentBands();
 
-        List<MemberParticipation> members = reads.roster(cohortId).stream()
+        List<MemberParticipation> members = reads.roster(cohortId, orgId).stream()
                 .map(row -> new MemberParticipation(row.id(), row.name(),
                         participation(cohortId, row.id(), categories, bands)))
                 .toList();

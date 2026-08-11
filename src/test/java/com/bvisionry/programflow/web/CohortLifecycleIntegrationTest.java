@@ -141,8 +141,8 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // Admin reads keep working in any state (spec: "Pulse/matrix work for any state").
         assertThatCode(() -> adminService.getBoard(cohortId)).doesNotThrowAnyException();
-        assertThatCode(() -> adminService.getPulse(cohortId)).doesNotThrowAnyException();
-        assertThatCode(() -> adminService.getMatrix(cohortId)).doesNotThrowAnyException();
+        assertThatCode(() -> adminService.getPulse(cohortId, null)).doesNotThrowAnyException();
+        assertThatCode(() -> adminService.getMatrix(cohortId, null)).doesNotThrowAnyException();
     }
 
     @Test
@@ -183,17 +183,58 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
                 .as("an ALL-audience module reaches the roster, not the org").isEqualTo(1);
         assertThat(adminService.getBoard(cohortId).stats().members())
                 .as("board stats tile = enrolled founders").isEqualTo(1);
-        assertThat(adminService.getPulse(cohortId).rows())
+        assertThat(adminService.getPulse(cohortId, null).rows())
                 .extracting(com.bvisionry.programflow.dto.PulseResponse.PulseRow::userId)
                 .containsExactly(member.getId());
-        assertThat(adminService.getMatrix(cohortId).rows())
+        assertThat(adminService.getMatrix(cohortId, null).rows())
                 .extracting(com.bvisionry.programflow.dto.CohortMatrixResponse.FounderRow::userId)
                 .containsExactly(member.getId());
 
         cohortService.setOrgMembers(org.getId(), cohortId, new UpdateCohortMembersRequest(List.of()));
         assertThat(adminService.getBoard(cohortId).stats().members()).isZero();
-        assertThat(adminService.getPulse(cohortId).rows())
+        assertThat(adminService.getPulse(cohortId, null).rows())
                 .as("nobody enrolled → nothing to score, not the org roster").isEmpty();
+    }
+
+    /**
+     * Spec §13.7: the org console's progress views are the org's OWN slice of
+     * a cross-org roster — never another org's people — and a cohort the org
+     * is not assigned to is a 404, not an empty matrix.
+     */
+    @Test
+    void orgScopedMatrixAndPulse_showOnlyThatOrgsMembers() {
+        Organization other = new Organization();
+        other.setName("Lifecycle Org B");
+        other.setSubscriptionTier(SubscriptionTier.FOUNDER_SUCCESS);
+        other.setActive(true);
+        other = orgs.saveAndFlush(other);
+        User theirs = new User();
+        theirs.setEmail("member.b@lifecycle.invalid");
+        theirs.setName("Other Org Member");
+        theirs.setRole(com.bvisionry.common.enums.UserRole.MEMBER);
+        theirs.setStatus(com.bvisionry.common.enums.UserStatus.ACTIVE);
+        theirs.setOrganization(other);
+        users.saveAndFlush(theirs);
+        TestAuthentication.authenticate(admin);
+
+        cohortService.assignOrg(cohortId, new com.bvisionry.programflow.dto.AssignOrgRequest(
+                other.getId(), true, List.of(), false));
+
+        assertThat(adminService.getMatrix(cohortId, null).rows())
+                .as("platform view spans the whole roster").hasSize(2);
+        assertThat(adminService.getMatrix(cohortId, org.getId()).rows())
+                .extracting(com.bvisionry.programflow.dto.CohortMatrixResponse.FounderRow::userId)
+                .containsExactly(member.getId());
+        assertThat(adminService.getPulse(cohortId, other.getId()).rows())
+                .extracting(com.bvisionry.programflow.dto.PulseResponse.PulseRow::userId)
+                .containsExactly(theirs.getId());
+
+        Organization stranger = new Organization();
+        stranger.setName("Not Assigned");
+        stranger.setActive(true);
+        UUID strangerId = orgs.saveAndFlush(stranger).getId();
+        assertThatThrownBy(() -> adminService.getMatrix(cohortId, strangerId))
+                .isInstanceOf(com.bvisionry.common.exception.ResourceNotFoundException.class);
     }
 
     /* ------------------------------------------------ notification timing */
@@ -266,8 +307,8 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
                 com.bvisionry.engagement.domain.SessionType.WORKSHOP, "Retro",
                 java.time.Instant.now(), List.of());
         UUID sessionId = sessionService
-                .create(cohortId, req, admin.getId()).id();
-        sessionService.setAttendance(cohortId, sessionId, member.getId(),
+                .create(cohortId, org.getId(), req, admin.getId()).id();
+        sessionService.setAttendance(cohortId, org.getId(), sessionId, member.getId(),
                 true, admin.getId());
 
         cohortService.archive(cohortId);
@@ -275,11 +316,12 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
         // change so it is visible inside this test transaction (in production
         // the archive committed long before).
         entityManager.flush();
-        assertThatThrownBy(() -> sessionService.create(cohortId, req, admin.getId()))
+        assertThatThrownBy(() -> sessionService.create(cohortId, org.getId(), req,
+                admin.getId()))
                 .isInstanceOf(IllegalOperationException.class)
                 .hasMessageContaining("archived");
-        assertThatThrownBy(() -> sessionService.setAttendance(cohortId, sessionId,
-                member.getId(), false, admin.getId()))
+        assertThatThrownBy(() -> sessionService.setAttendance(cohortId, org.getId(),
+                sessionId, member.getId(), false, admin.getId()))
                 .isInstanceOf(IllegalOperationException.class);
     }
 

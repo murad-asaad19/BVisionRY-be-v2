@@ -421,9 +421,14 @@ public class ProgramAdminService {
 
     // ------------------------------------------------------------------ pulse
 
+    /**
+     * Who is falling behind. {@code orgId} scopes the rows to that org's own
+     * members (spec §13.7 — the org console's participation view); {@code null}
+     * is the whole cross-org roster.
+     */
     @Transactional(readOnly = true)
-    public PulseResponse getPulse(UUID cohortId) {
-        List<CohortMemberRow> founders = cohortFounders(cohortId);
+    public PulseResponse getPulse(UUID cohortId, UUID orgId) {
+        List<CohortMemberRow> founders = cohortFounders(cohortId, orgId);
         List<ProgramModule> mods = modules.findByCohortIdOrderByPositionAsc(cohortId);
         List<PulseColumn> columns = new ArrayList<>();
         List<UUID> taskIds = new ArrayList<>();
@@ -507,14 +512,15 @@ public class ProgramAdminService {
     private static final int IDLE_DAYS = 7;
 
     /**
-     * The cohort board's Founders tab (spec §2.3): the progress matrix over the
-     * enrolled founders. Works for a cohort in any lifecycle state — admins may
-     * inspect drafts and archives.
+     * The progress matrix over the enrolled founders (spec §2.3). Works for a
+     * cohort in any lifecycle state — admins may inspect drafts and archives.
+     * {@code orgId} scopes the rows to that org's own members (spec §13.7);
+     * {@code null} is the whole cross-org roster.
      */
     @Transactional(readOnly = true)
-    public CohortMatrixResponse getMatrix(UUID cohortId) {
+    public CohortMatrixResponse getMatrix(UUID cohortId, UUID orgId) {
         List<ProgramModule> mods = modules.findByCohortIdOrderByPositionAsc(cohortId);
-        List<CohortMemberRow> founders = cohortFounders(cohortId);
+        List<CohortMemberRow> founders = cohortFounders(cohortId, orgId);
         List<UUID> founderIds = founders.stream().map(CohortMemberRow::getId).toList();
 
         List<ModuleColumn> moduleColumns = mods.stream()
@@ -700,8 +706,19 @@ public class ProgramAdminService {
      * still owns the existence check.
      */
     private List<CohortMemberRow> cohortFounders(UUID cohortId) {
-        cohortService.require(cohortId);
-        return cohorts.findRoster(cohortId);
+        return cohortFounders(cohortId, null);
+    }
+
+    /** {@link #cohortFounders(UUID)} cut to one org's own members when {@code orgId} is set. */
+    private List<CohortMemberRow> cohortFounders(UUID cohortId, UUID orgId) {
+        if (orgId == null) {
+            cohortService.require(cohortId);
+            return cohorts.findRoster(cohortId);
+        }
+        cohortService.requireAssigned(orgId, cohortId);
+        return cohorts.findRoster(cohortId).stream()
+                .filter(m -> orgId.equals(m.getOrgId()))
+                .toList();
     }
 
     private int reached(ProgramModule m, List<CohortMemberRow> members) {

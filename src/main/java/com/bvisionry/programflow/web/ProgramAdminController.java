@@ -44,8 +44,10 @@ import jakarta.validation.Valid;
  *   <li>PUT  …/cohorts/{cohortId}/program/modules/{moduleId}/audience — assign</li>
  *   <li>POST …/cohorts/{cohortId}/program/modules/{moduleId}/tasks — create task</li>
  *   <li>PUT  …/cohorts/{cohortId}/program/tasks/{taskId}         — save task builder</li>
- *   <li>GET  …/cohorts/{cohortId}/program/pulse                  — cohort matrix</li>
  * </ul>
+ *
+ * <p>Deliberately build-only: founder progress (matrix, pulse) is org data and
+ * lives on the org participation surface ({@link OrgCohortController}).
  */
 @RestController
 @RequestMapping(path = "/api/cohorts/{cohortId}/program",
@@ -140,17 +142,6 @@ public class ProgramAdminController {
             @PathVariable UUID taskId,
             @Valid @RequestBody MoveTaskRequest req) {
         return service.moveTask(cohortId, taskId, req);
-    }
-
-    @GetMapping("/pulse")
-    public PulseResponse getPulse(@PathVariable UUID cohortId) {
-        return service.getPulse(cohortId);
-    }
-
-    /** Founders progress matrix — the cohort board's first tab (spec §2.3). */
-    @GetMapping("/matrix")
-    public com.bvisionry.programflow.dto.CohortMatrixResponse getMatrix(@PathVariable UUID cohortId) {
-        return service.getMatrix(cohortId);
     }
 
     /** AI composer — SSE: {@code status}* then {@code draft} (ModuleDraft JSON) or {@code error}. */

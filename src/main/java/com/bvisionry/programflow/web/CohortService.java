@@ -25,12 +25,14 @@ import com.bvisionry.programflow.domain.ProgramSurface;
 import com.bvisionry.programflow.dto.AssignOrgRequest;
 import com.bvisionry.programflow.dto.CohortDto;
 import com.bvisionry.programflow.dto.CohortOrgDto;
+import com.bvisionry.programflow.dto.CohortRosterEntryDto;
 import com.bvisionry.programflow.dto.CreateCohortRequest;
 import com.bvisionry.programflow.dto.ProgramOrgDto;
 import com.bvisionry.programflow.dto.UpdateCohortMembersRequest;
 import com.bvisionry.programflow.dto.UpdateCohortRequest;
 import com.bvisionry.programflow.dto.UpdateOrgAssignmentRequest;
 import com.bvisionry.programflow.repository.CohortOrgAssignmentRepository;
+import com.bvisionry.programflow.repository.CohortOrgNameRow;
 import com.bvisionry.programflow.repository.CohortRepository;
 import com.bvisionry.programflow.repository.OrgMemberRow;
 
@@ -72,10 +74,19 @@ public class CohortService {
     private final AuditLogger audit;
     private final CurrentUserAccessor currentUser;
 
-    /** Every platform cohort, board order (super-admin authoring console). */
+    /**
+     * Every platform cohort, board order (super-admin authoring console), each
+     * labelled with the orgs it is assigned to — two cohorts may share a name
+     * since §13, and the switcher is the only place to tell them apart.
+     */
     @Transactional(readOnly = true)
     public List<CohortDto> listAll() {
-        return cohorts.findAllByOrderByPositionAsc().stream().map(CohortDto::of).toList();
+        Map<UUID, List<String>> orgNames = cohorts.findAllOrgNames().stream()
+                .collect(Collectors.groupingBy(CohortOrgNameRow::getCohortId,
+                        Collectors.mapping(CohortOrgNameRow::getOrgName, Collectors.toList())));
+        return cohorts.findAllByOrderByPositionAsc().stream()
+                .map(c -> CohortDto.of(c, orgNames.getOrDefault(c.getId(), List.of())))
+                .toList();
     }
 
     /**
@@ -88,6 +99,20 @@ public class CohortService {
         Set<UUID> mine = orgMemberIds(orgId);
         return cohorts.findAssigned(orgId).stream()
                 .map(c -> orgScoped(c, mine))
+                .toList();
+    }
+
+    /**
+     * The cohort's roster with names and orgs — what the builder needs to pick
+     * a module audience (spec §13). Names only; progress lives on the org
+     * console (§13.7).
+     */
+    @Transactional(readOnly = true)
+    public List<CohortRosterEntryDto> roster(UUID cohortId) {
+        require(cohortId);
+        return cohorts.findRoster(cohortId).stream()
+                .map(r -> new CohortRosterEntryDto(r.getId(), r.getName(), r.getEmail(),
+                        r.getOrgId(), r.getOrgName()))
                 .toList();
     }
 
@@ -343,9 +368,11 @@ public class CohortService {
 
     /** The cohort with its roster cut to the given org's members. */
     private static CohortDto orgScoped(Cohort c, Set<UUID> orgMemberIds) {
+        // orgNames stays empty here: the org console already knows whose page it is.
         return new CohortDto(c.getId(), c.getName(), c.getPosition(), c.getStatus(),
                 c.getLaunchedAt(), c.getCompletedAt(), c.getArchivedAt(),
-                c.getMemberIds().stream().filter(orgMemberIds::contains).toList());
+                c.getMemberIds().stream().filter(orgMemberIds::contains).toList(),
+                List.of());
     }
 
     private void auditLifecycle(UUID orgId, Cohort c, String action) {

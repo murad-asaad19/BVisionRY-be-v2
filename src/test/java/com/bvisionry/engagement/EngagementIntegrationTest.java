@@ -95,8 +95,13 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
         TestAuthentication.clear();
     }
 
+    /** Org-scoped since §13.7 — a roster and its roll call are founder data. */
     private String sessionsUrl(UUID cohortId) {
-        return "/api/cohorts/" + cohortId + "/sessions";
+        return sessionsUrl(orgA.getId(), cohortId);
+    }
+
+    private String sessionsUrl(UUID orgId, UUID cohortId) {
+        return "/api/organizations/" + orgId + "/cohorts/" + cohortId + "/sessions";
     }
 
     private String engagementUrl(User member) {
@@ -153,7 +158,7 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
         @Test
         void foreignCohortIs404_crossCohortSessionIs404() throws Exception {
             TestAuthentication.authenticate(superAdmin);
-            mockMvc.perform(get("/api/cohorts/" + UUID.randomUUID() + "/sessions"))
+            mockMvc.perform(get(sessionsUrl(UUID.randomUUID())))
                     .andExpect(status().isNotFound());
 
             // A session created in cohort1 is not addressable through cohort2.
@@ -216,16 +221,19 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
     class SessionAuthz {
 
         @Test
-        void onlySuperAdminsTouchSessions() throws Exception {
+        void onlyAdminsOfTheOrgTouchSessions() throws Exception {
             UUID sessionId = insertSession(cohort1, "WORKSHOP", "-1 day");
             String tick = sessionsUrl(cohort1) + "/" + sessionId + "/attendance/"
                     + founder.getId();
 
-            // Org admins (own or foreign): the board is platform-scoped now (spec §13).
+            // The org's own admin runs their own roll call (spec §13.7)…
             TestAuthentication.authenticate(admin);
-            mockMvc.perform(get(sessionsUrl(cohort1))).andExpect(status().isForbidden());
+            mockMvc.perform(get(sessionsUrl(cohort1))).andExpect(status().isOk());
+            // …another org's admin cannot, through either org's path.
             TestAuthentication.authenticate(adminB);
             mockMvc.perform(get(sessionsUrl(cohort1))).andExpect(status().isForbidden());
+            mockMvc.perform(get(sessionsUrl(orgB.getId(), cohort1)))
+                    .andExpect(status().isNotFound());
 
             // Coach: read-only via the founder profile — NO session access at all.
             TestAuthentication.authenticate(coach);
@@ -425,8 +433,13 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
     @Nested
     class CohortParticipationRead {
 
+        /** Org-scoped since §13.7 — participation is founder progress, i.e. org data. */
         private String url(UUID cohortId) {
-            return "/api/cohorts/" + cohortId + "/participation";
+            return url(orgA.getId(), cohortId);
+        }
+
+        private String url(UUID orgId, UUID cohortId) {
+            return "/api/organizations/" + orgId + "/cohorts/" + cohortId + "/participation";
         }
 
         @Test
@@ -460,11 +473,15 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
         }
 
         @Test
-        void superAdminsOnly_andAnUnknownCohortIs404() throws Exception {
+        void adminsOfTheOrgOnly_andAnUnassignedCohortIs404() throws Exception {
+            // The org's own admin reads their own slice (spec §13.7).
             TestAuthentication.authenticate(admin);
-            mockMvc.perform(get(url(cohort1))).andExpect(status().isForbidden());
+            mockMvc.perform(get(url(cohort1))).andExpect(status().isOk());
+            // Another org's admin cannot — not even through org A's path.
             TestAuthentication.authenticate(adminB);
             mockMvc.perform(get(url(cohort1))).andExpect(status().isForbidden());
+            // …nor by pointing their OWN org at a cohort that is not assigned to it.
+            mockMvc.perform(get(url(orgB.getId(), cohort1))).andExpect(status().isNotFound());
 
             // Participation is never member-facing (spec §4), not even the coach door.
             TestAuthentication.authenticate(founder);

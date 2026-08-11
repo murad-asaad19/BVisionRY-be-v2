@@ -675,7 +675,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                     ea, member.getId());
             insertTaggedEvaluatedSubmission(baselineTaskId, 1, new BigDecimal("58.00"));
 
-            PulseResponse pulse = programAdminService.getPulse(cohortId);
+            PulseResponse pulse = programAdminService.getPulse(cohortId, null);
             assertThat(pulse.columns()).hasSize(7);
             PulseResponse.PulseRow row = pulse.rows().stream()
                     .filter(r -> r.userId().equals(member.getId())).findFirst().orElseThrow();

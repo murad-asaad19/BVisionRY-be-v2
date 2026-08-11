@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.bvisionry.programflow.dto.CohortDto;
+import com.bvisionry.programflow.dto.CohortMatrixResponse;
+import com.bvisionry.programflow.dto.PulseResponse;
 import com.bvisionry.programflow.dto.UpdateCohortMembersRequest;
 
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -26,6 +28,8 @@ import jakarta.validation.Valid;
  *
  * <ul>
  *   <li>GET /api/organizations/{orgId}/cohorts                    — assigned cohorts (own members only)</li>
+ *   <li>GET /api/organizations/{orgId}/cohorts/{cohortId}/matrix  — founder progress, own members</li>
+ *   <li>GET /api/organizations/{orgId}/cohorts/{cohortId}/pulse   — who is falling behind, own members</li>
  *   <li>PUT /api/organizations/{orgId}/cohorts/{cohortId}/members — replace the org's roster slice</li>
  * </ul>
  */
@@ -36,14 +40,28 @@ import jakarta.validation.Valid;
 public class OrgCohortController {
 
     private final CohortService service;
+    private final ProgramAdminService programs;
 
-    public OrgCohortController(CohortService service) {
+    public OrgCohortController(CohortService service, ProgramAdminService programs) {
         this.service = service;
+        this.programs = programs;
     }
 
     @GetMapping
     public List<CohortDto> list(@PathVariable UUID orgId) {
         return service.listAssigned(orgId);
+    }
+
+    /** Founder progress matrix, rows cut to this org's own members. */
+    @GetMapping("/{cohortId}/matrix")
+    public CohortMatrixResponse matrix(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
+        return programs.getMatrix(cohortId, orgId);
+    }
+
+    /** Task-by-task pulse, rows cut to this org's own members. */
+    @GetMapping("/{cohortId}/pulse")
+    public PulseResponse pulse(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
+        return programs.getPulse(cohortId, orgId);
     }
 
     @PutMapping("/{cohortId}/members")

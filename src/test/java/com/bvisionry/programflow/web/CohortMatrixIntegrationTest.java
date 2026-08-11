@@ -148,7 +148,7 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void matrix_columnsCellsTriageAndAttentionFlags() {
-        CohortMatrixResponse matrix = adminService.getMatrix(cohortId);
+        CohortMatrixResponse matrix = adminService.getMatrix(cohortId, null);
 
         // Columns: three modules (pillar chip on the first), two milestone
         // columns in board order (baseline, then the mid-program check-in).
@@ -207,7 +207,7 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
      */
     @Test
     void brandNewFounderIsNotIdle() {
-        FounderRow d = row(adminService.getMatrix(cohortId), founderD);
+        FounderRow d = row(adminService.getMatrix(cohortId, null), founderD);
 
         assertThat(d.lastSeenAt()).isNull();
         assertThat(d.attentionFlags())

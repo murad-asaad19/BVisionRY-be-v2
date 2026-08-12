@@ -245,9 +245,9 @@ class ProgramRulesTest {
 
         @Test
         void liveNonLessonNeedsARef_draftDoesNot() {
-            assertThat(ProgramRules.taskTypeFieldErrors(ProgramTaskType.WORKSHOP, null, null,
+            assertThat(ProgramRules.taskTypeFieldErrors(ProgramTaskType.SURVEY, null, null,
                     ProgramTaskStatus.LIVE, 0)).containsKey("refId");
-            assertThat(ProgramRules.taskTypeFieldErrors(ProgramTaskType.WORKSHOP, null, null,
+            assertThat(ProgramRules.taskTypeFieldErrors(ProgramTaskType.SURVEY, null, null,
                     ProgramTaskStatus.DRAFT, 0)).isEmpty();
         }
 

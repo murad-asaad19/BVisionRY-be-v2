@@ -57,8 +57,6 @@ class FounderProfileServiceTest {
     void doneCohortTasksReportTheirTypesDoneWord() {
         assertThat(FounderProfileService.programStatus(task("COURSE", true, null)))
                 .isEqualTo("COMPLETED");
-        assertThat(FounderProfileService.programStatus(task("WORKSHOP", true, null)))
-                .isEqualTo("COMPLETED");
         assertThat(FounderProfileService.programStatus(task("EXERCISE", true, null)))
                 .isEqualTo("SUBMITTED");
         assertThat(FounderProfileService.programStatus(task("SURVEY", true, null)))

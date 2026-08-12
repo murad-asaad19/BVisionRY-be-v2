@@ -76,6 +76,7 @@ class CoachWorkspaceIntegrationTest extends AbstractPostgresIntegrationTest {
     private UUID assignmentF1;   // template T1 · SUBMITTED 10 days ago, never reviewed
     private UUID assignmentF2;   // template T1 · SUBMITTED 12 days ago; the loop test recycles it
     private UUID moduleOne;
+    private UUID exerciseTaskId; // cohort1's EXERCISE task — f1's assignment carries its tag
 
     @BeforeEach
     void seed() {
@@ -123,7 +124,7 @@ class CoachWorkspaceIntegrationTest extends AbstractPostgresIntegrationTest {
         moduleOne = insertModule(cohort1, "Module One", 0);
         UUID moduleTwo = insertModule(cohort1, "Module Two", 1);
         UUID lessonDone = insertTask(moduleOne, "Lesson One", "LESSON", null);
-        insertTask(moduleOne, "Exercise Task", "EXERCISE", templateT1());
+        exerciseTaskId = insertTask(moduleOne, "Exercise Task", "EXERCISE", templateT1());
         insertTask(moduleTwo, "Lesson Two", "LESSON", null);
         jdbc.update("""
                 INSERT INTO program_submissions (task_id, user_id, status, submitted_at)
@@ -171,8 +172,11 @@ class CoachWorkspaceIntegrationTest extends AbstractPostgresIntegrationTest {
         templateT2 = insertTemplate("Pricing Sheet");
 
         // f1: SUBMITTED 10 days ago, never reviewed → queue row 2, awaiting_review 1.
+        // Tagged to cohort1's EXERCISE task (V173) — this IS that task's copy.
         assignmentF1 = insertExercise(templateT1(), f1.getId(), "SUBMITTED",
                 "now() - interval '10 days'");
+        jdbc.update("UPDATE exercise_assignments SET program_task_id = ? WHERE id = ?",
+                exerciseTaskId, assignmentF1);
         // f1 also holds a CHANGES_REQUESTED copy — back with the member, so it is
         // in NO queue and no awaiting count. Stamped the way requestChanges does.
         UUID changesRequested = insertExercise(templateT2, f1.getId(), "CHANGES_REQUESTED",
@@ -371,10 +375,11 @@ class CoachWorkspaceIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void aChangesRequestedExerciseDoesNotCount() throws Exception {
-            // Point the EXERCISE task at the template whose copy came back to
-            // the member — the member's side is NOT done.
-            jdbc.update("UPDATE program_tasks SET ref_id = ? WHERE name = 'Exercise Task'",
-                    templateT2);
+            // Send the task's own copy back to the member — their side is NOT done.
+            jdbc.update("""
+                    UPDATE exercise_submissions SET status = 'CHANGES_REQUESTED'
+                    WHERE assignment_id = ?
+                    """, assignmentF1);
             TestAuthentication.authenticate(coach);
             mockMvc.perform(get("/api/v1/coach/founders/" + f1.getId()))
                     .andExpect(jsonPath("$.modules[0].submittedTasks", is(1)));

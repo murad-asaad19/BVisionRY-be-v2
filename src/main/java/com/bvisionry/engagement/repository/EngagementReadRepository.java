@@ -137,11 +137,11 @@ public class EngagementReadRepository {
      * Assignments denominator/numerator for one founder × cohort: LIVE
      * program tasks of THIS cohort whose module audience includes the member
      * — done-state per TASK TYPE from the owning slice (typed task spine) —
-     * plus direct exercise assignments targeting them. A direct exercise
-     * assignment whose template a cohort EXERCISE task already covers is
-     * excluded (it IS the cohort task's state, not extra direct work).
-     * Direct assignments are org-level, so they still count in each cohort's
-     * assignments row for a multi-cohort member.
+     * plus direct exercise assignments targeting them. An assignment TAGGED to
+     * a LIVE cohort task (V173) is excluded: it IS that task's state, already
+     * counted in the program half, not extra direct work. Direct assignments
+     * are org-level, so they still count in each cohort's assignments row for a
+     * multi-cohort member.
      *
      * <p>Done-semantics source of truth: {@code programflow.web.ProgramRules}
      * via the shared {@link TaskCompletion#DONE_FOR_USER} fragment (the same
@@ -171,13 +171,12 @@ public class EngagementReadRepository {
                   AND ea.organization_id = (SELECT organization_id FROM users
                                             WHERE id = :memberId)
                   AND NOT EXISTS (
-                      SELECT 1 FROM cohort_members cm
-                      JOIN program_modules m ON m.cohort_id = cm.cohort_id
-                      JOIN program_tasks t ON t.module_id = m.id
-                      WHERE cm.user_id = :memberId AND t.status = 'LIVE'
-                        AND t.task_type = 'EXERCISE' AND t.ref_id = ea.template_id
-                        AND %s)
-                """.formatted(ProgramAudience.INCLUDES_USER.formatted(":memberId")),
+                      SELECT 1 FROM program_tasks t
+                      JOIN program_modules m ON m.id = t.module_id
+                      JOIN cohort_members cm ON cm.cohort_id = m.cohort_id
+                                            AND cm.user_id = :memberId
+                      WHERE t.id = ea.program_task_id AND t.status = 'LIVE')
+                """,
                 new MapSqlParameterSource("memberId", memberId),
                 (rs, i) -> new Counts(rs.getInt("total"), rs.getInt("done")));
         return new Counts(program.total() + exercises.total(), program.done() + exercises.done());

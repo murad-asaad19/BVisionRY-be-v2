@@ -99,7 +99,7 @@ public class FounderProfileService {
             return t.status();
         }
         return switch (t.taskType()) {
-            case "COURSE", "WORKSHOP" -> "COMPLETED";
+            case "COURSE" -> "COMPLETED";
             default -> "SUBMITTED";
         };
     }

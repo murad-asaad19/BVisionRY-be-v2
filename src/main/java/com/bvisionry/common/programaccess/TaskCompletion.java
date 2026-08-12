@@ -9,8 +9,13 @@ package com.bvisionry.common.programaccess;
  * mappings). The member's side of the work is done: LESSON = SUBMITTED program
  * submission, COURSE = COMPLETED enrollment, EXERCISE = SUBMITTED or REVIEWED
  * (a CHANGES_REQUESTED copy is back with the member and does NOT count),
- * ASSESSMENT = tagged submission submitted, WORKSHOP = any workshop task
- * completed, SURVEY = a response exists.
+ * ASSESSMENT = tagged submission submitted, SURVEY = a tagged response exists.
+ *
+ * <p><strong>Everything but COURSE keys on {@code t.id}</strong> (V173): the
+ * owning slice's row carries the {@code program_task_id} that spawned it, so
+ * two cohorts pointing at one template/pipeline/survey each track their own
+ * progress. COURSE is the deliberate exception — a course is per member, one
+ * global enrollment, shared by every task that references it.
  *
  * <p>Four surfaces count completion against this rule — the engagement
  * record's assignments row, the coach console's roster/module progress, the
@@ -44,21 +49,15 @@ public final class TaskCompletion {
                 WHEN 'EXERCISE' THEN EXISTS (
                     SELECT 1 FROM exercise_assignments dea
                     JOIN exercise_submissions des ON des.assignment_id = dea.id
-                    WHERE dea.user_id = %1$s AND dea.template_id = t.ref_id
+                    WHERE dea.program_task_id = t.id AND dea.user_id = %1$s
                       AND des.status IN ('SUBMITTED', 'REVIEWED'))
                 WHEN 'ASSESSMENT' THEN EXISTS (
                     SELECT 1 FROM submissions dsu
                     WHERE dsu.program_task_id = t.id AND dsu.user_id = %1$s
                       AND dsu.submitted_at IS NOT NULL)
-                WHEN 'WORKSHOP' THEN EXISTS (
-                    SELECT 1 FROM workshop_task_submissions dwts
-                    JOIN workshop_exercise_tasks dwet ON dwet.id = dwts.task_id
-                    JOIN workshop_exercises dwe ON dwe.id = dwet.exercise_id
-                    WHERE dwe.workshop_id = t.ref_id AND dwts.user_id = %1$s
-                      AND dwts.completed_at IS NOT NULL)
                 WHEN 'SURVEY' THEN EXISTS (
                     SELECT 1 FROM survey_responses dsr
-                    WHERE dsr.survey_id = t.ref_id
+                    WHERE dsr.program_task_id = t.id
                       AND dsr.respondent_user_id = %1$s)
             END)""";
 }

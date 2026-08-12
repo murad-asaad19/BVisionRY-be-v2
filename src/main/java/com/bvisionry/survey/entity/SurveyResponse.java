@@ -87,6 +87,17 @@ public class SurveyResponse extends BaseEntity {
     @Column(name = "workshop_id")
     private UUID workshopId;
 
+    /**
+     * The cohort program task this response answers, set for
+     * {@link ResponseSource#PROGRAM_TASK} submissions (V173). A plain id, no
+     * FK — the cross-slice convention {@link #workshopId} and
+     * {@code submissions.program_task_id} already follow. It is what makes two
+     * cohorts sharing one survey track their own completion; null for every
+     * other flow, which is why those never complete cohort work.
+     */
+    @Column(name = "program_task_id")
+    private UUID programTaskId;
+
     @Column(name = "ip_hash", length = 64)
     private String ipHash;
 

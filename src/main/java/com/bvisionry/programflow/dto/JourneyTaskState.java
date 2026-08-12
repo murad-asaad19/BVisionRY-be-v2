@@ -9,7 +9,7 @@ package com.bvisionry.programflow.dto;
  *   <li>COURSE: NOT_STARTED / IN_PROGRESS (+progressPct) / DONE</li>
  *   <li>EXERCISE: NOT_STARTED / IN_PROGRESS / SUBMITTED / CHANGES_REQUESTED / REVIEWED</li>
  *   <li>ASSESSMENT: NOT_STARTED / IN_PROGRESS / SUBMITTED / EVALUATED (+score)</li>
- *   <li>WORKSHOP, SURVEY: NOT_STARTED / DONE</li>
+ *   <li>SURVEY: NOT_STARTED / DONE</li>
  * </ul>
  */
 public enum JourneyTaskState {

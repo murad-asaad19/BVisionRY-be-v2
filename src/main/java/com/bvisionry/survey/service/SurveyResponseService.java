@@ -604,6 +604,7 @@ public class SurveyResponseService {
             }
             case ResponseContext.ProgramTask p -> {
                 response.setSource(ResponseSource.PROGRAM_TASK);
+                response.setProgramTaskId(p.taskId());
                 response.setRespondentUserId(p.userId());
                 response.setRespondentEmail(normalize(p.email()));
                 response.setRespondentName(normalize(p.name()));

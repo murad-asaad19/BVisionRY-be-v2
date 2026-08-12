@@ -218,9 +218,9 @@ class MyWorkshopPlayIntegrationTest extends AbstractPostgresIntegrationTest {
     /**
      * A workshop is a standalone product surface: an org with NO cohort at all
      * can own one, assign members to its teams and run it end to end. Cohort
-     * curriculum may REFERENCE a workshop (a WORKSHOP program task), never the
-     * reverse — so nothing on the participant path (list → play → complete) may
-     * ever reach for a cohort. The zero-cohort assertion is the premise, not
+     * curriculum cannot reference a workshop at all — so nothing on the
+     * participant path (list → play → complete) may ever reach for a cohort.
+     * The zero-cohort assertion is the premise, not
      * decoration: without it this reads as one more play test and would stay
      * green if a cohort lookup crept in behind a fixture that seeds one.
      */

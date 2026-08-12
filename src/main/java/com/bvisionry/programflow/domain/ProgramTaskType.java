@@ -15,8 +15,6 @@ public enum ProgramTaskType {
     EXERCISE,
     /** References a pipeline; member state = the submission tagged to this task. */
     ASSESSMENT,
-    /** References a workshop; done = a completed workshop task submission. */
-    WORKSHOP,
     /** References a survey; done = a survey response by the member. */
     SURVEY;
 

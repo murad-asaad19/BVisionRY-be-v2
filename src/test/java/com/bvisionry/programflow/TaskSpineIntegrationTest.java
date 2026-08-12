@@ -71,9 +71,6 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
     private UUID pipelineId;
     private UUID courseId;
     private UUID coveredTemplateId;
-    private UUID workshopId;
-    private UUID workshopTeamId;
-    private UUID workshopTaskRefId; // workshop_exercise_tasks row
     private UUID surveyId;
 
     private UUID lessonTaskId;
@@ -81,7 +78,6 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
     private UUID exerciseTaskId;
     private UUID baselineTaskId;
     private UUID checkinTaskId;
-    private UUID workshopTaskId;
     private UUID surveyTaskId;
 
     @BeforeEach
@@ -92,16 +88,6 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         pipelineId = insertPipeline("Founder Mindset");
         courseId = insertCourse("Pricing Foundations");
         coveredTemplateId = insertTemplate("Competitor Analysis");
-        workshopId = insertWorkshop("Pressure Cards");
-        workshopTeamId = insert("INSERT INTO workshop_teams (id, workshop_id, name) VALUES (?, ?, ?)",
-                workshopId, "Team A");
-        UUID workshopExerciseId = insert(
-                "INSERT INTO workshop_exercises (id, workshop_id, title) VALUES (?, ?, ?)",
-                workshopId, "Warm-up");
-        workshopTaskRefId = insert("""
-                INSERT INTO workshop_exercise_tasks (id, exercise_id, task_type, assignee, title)
-                VALUES (?, ?, 'QUESTION', 'MEMBER', ?)
-                """, workshopExerciseId, "Q1");
         surveyId = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO surveys (id, name, status, created_by)
@@ -126,8 +112,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         exerciseTaskId = insertTask("Exercise task", "EXERCISE", coveredTemplateId, null, 2);
         baselineTaskId = insertTask("Baseline check-in", "ASSESSMENT", pipelineId, "BASELINE", 3);
         checkinTaskId = insertTask("Mid check-in", "ASSESSMENT", pipelineId, "CHECKIN", 4);
-        workshopTaskId = insertTask("Workshop task", "WORKSHOP", workshopId, null, 5);
-        surveyTaskId = insertTask("Survey task", "SURVEY", surveyId, null, 6);
+        surveyTaskId = insertTask("Survey task", "SURVEY", surveyId, null, 5);
 
         TestAuthentication.authenticate(member);
     }
@@ -146,14 +131,14 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         void freshMember_everyTypedTaskIsNotStarted() {
             JourneyResponse journey = myProgramService.journey(cohortId);
             List<JourneyTask> rows = journey.modules().get(0).tasks();
-            assertThat(rows).hasSize(7);
+            assertThat(rows).hasSize(6);
             assertThat(rows).allSatisfy(t ->
                     assertThat(t.state()).isEqualTo(JourneyTaskState.NOT_STARTED));
             assertThat(rows.get(3).milestoneRole()).isEqualTo(MilestoneRole.BASELINE);
             assertThat(rows.get(4).milestoneRole()).isEqualTo(MilestoneRole.CHECKIN);
-            // 7: every typed task counts since D2 shipped the member survey
+            // 6: every typed task counts since D2 shipped the member survey
             // route (completableInApp() is true for all types now).
-            assertThat(journey.progress().total()).isEqualTo(7);
+            assertThat(journey.progress().total()).isEqualTo(6);
             assertThat(journey.progress().done()).isZero();
             // §11: the journey hero shows cohort size.
             assertThat(journey.memberCount()).isEqualTo(1);
@@ -166,8 +151,8 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                     INSERT INTO enrollment (user_id, course_id, status, progress_pct)
                     VALUES (?, ?, 'ACTIVE', 40)
                     """, member.getId(), courseId);
-            // EXERCISE submitted.
-            UUID ea = insertExerciseAssignment(coveredTemplateId, member.getId());
+            // EXERCISE submitted — the copy this cohort task owns (V173 tag).
+            UUID ea = insertExerciseAssignment(coveredTemplateId, member.getId(), exerciseTaskId);
             jdbc.update("""
                     INSERT INTO exercise_submissions (assignment_id, user_id, status, submitted_at)
                     VALUES (?, ?, 'SUBMITTED', now())
@@ -176,15 +161,8 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
             // distinguishable purely by their program_task_id tags.
             insertTaggedEvaluatedSubmission(baselineTaskId, 40, new BigDecimal("58.00"));
             insertTaggedEvaluatedSubmission(checkinTaskId, 5, new BigDecimal("64.00"));
-            // WORKSHOP + SURVEY participation.
-            jdbc.update("""
-                    INSERT INTO workshop_task_submissions (task_id, team_id, user_id, completed_at)
-                    VALUES (?, ?, ?, now())
-                    """, workshopTaskRefId, workshopTeamId, member.getId());
-            jdbc.update("""
-                    INSERT INTO survey_responses (survey_id, source, respondent_user_id)
-                    VALUES (?, 'PUBLIC_LINK', ?)
-                    """, surveyId, member.getId());
+            // SURVEY participation, tagged to this cohort's task.
+            insertSurveyResponse(surveyId, member.getId(), surveyTaskId);
 
             JourneyResponse journey = myProgramService.journey(cohortId);
             List<JourneyTask> rows = journey.modules().get(0).tasks();
@@ -206,23 +184,22 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(checkin.scoreBefore()).isEqualByComparingTo("58.00");
 
             assertThat(rows.get(5).state()).isEqualTo(JourneyTaskState.DONE);
-            assertThat(rows.get(6).state()).isEqualTo(JourneyTaskState.DONE);
 
             // Progress counts every typed done-state; the lesson and the
             // in-progress course don't count. The answered SURVEY counts on
             // both sides since D2 (member survey route shipped).
-            assertThat(journey.progress().done()).isEqualTo(5);
-            assertThat(journey.progress().total()).isEqualTo(7);
+            assertThat(journey.progress().done()).isEqualTo(4);
+            assertThat(journey.progress().total()).isEqualTo(6);
             // Gamification points stay LESSON-only this phase.
             assertThat(journey.gamification().points()).isZero();
 
-            // Engagement assignments formula agrees with the spine (7 counted
-            // cohort tasks — survey included since D2 — 5 done; the member's
-            // exercise assignment is covered by the cohort task, so it adds
+            // Engagement assignments formula agrees with the spine (6 counted
+            // cohort tasks — survey included since D2 — 4 done; the member's
+            // exercise assignment is TAGGED to the cohort task, so it adds
             // nothing).
             var counts = engagementReads.assignmentCounts(cohortId, member.getId());
-            assertThat(counts.total()).isEqualTo(7);
-            assertThat(counts.done()).isEqualTo(5);
+            assertThat(counts.total()).isEqualTo(6);
+            assertThat(counts.done()).isEqualTo(4);
         }
     }
 
@@ -284,9 +261,8 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         }
 
         @Test
-        void lessonAndWorkshopOpen_justPointAtTheirTargets() {
+        void lessonAndSurveyOpen_justPointAtTheirTargets() {
             assertThat(myProgramService.open(lessonTaskId).targetId()).isEqualTo(lessonTaskId);
-            assertThat(myProgramService.open(workshopTaskId).targetId()).isEqualTo(workshopId);
             assertThat(myProgramService.open(surveyTaskId).targetId()).isEqualTo(surveyId);
         }
 
@@ -363,10 +339,11 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                     INSERT INTO program_modules (id, cohort_id, name, position, lock_mode)
                     VALUES (?, ?, 'Module 2', 1, 'SEQUENTIAL')
                     """, m2, dripCohort);
+            UUID dripSurveyTask = UUID.randomUUID();
             jdbc.update("""
                     INSERT INTO program_tasks (id, module_id, name, status, task_type, ref_id)
                     VALUES (?, ?, 'Blockerless survey', 'LIVE', 'SURVEY', ?)
-                    """, UUID.randomUUID(), m1, surveyId);
+                    """, dripSurveyTask, m1, surveyId);
             UUID lesson = UUID.randomUUID();
             jdbc.update("""
                     INSERT INTO program_tasks (id, module_id, name, status, task_type)
@@ -386,10 +363,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(locked.progress().total()).isEqualTo(2);
 
             // A survey response (the D2 member route's row shape) unlocks it.
-            jdbc.update("""
-                    INSERT INTO survey_responses (survey_id, source, respondent_user_id)
-                    VALUES (?, 'PROGRAM_TASK', ?)
-                    """, surveyId, member.getId());
+            insertSurveyResponse(surveyId, member.getId(), dripSurveyTask);
             JourneyResponse unlocked = myProgramService.journey(dripCohort);
             assertThat(unlocked.modules().get(1).lockState())
                     .isEqualTo(JourneyResponse.LockState.UNLOCKED);
@@ -507,11 +481,12 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void cohortCoveredWorkIsExcluded_trulyDirectWorkAppears() {
-            // Covered: exercise assignment for the cohort task's template,
+            // Covered: exercise assignment TAGGED to the cohort task (V173),
             // enrollment in the cohort task's course, and an assessment
             // assignment REPRESENTED by a milestone tag (opening the baseline
             // task creates the assignment + tagged submission).
-            UUID coveredEa = insertExerciseAssignment(coveredTemplateId, member.getId());
+            UUID coveredEa = insertExerciseAssignment(
+                    coveredTemplateId, member.getId(), exerciseTaskId);
             jdbc.update("""
                     INSERT INTO exercise_submissions (assignment_id, user_id)
                     VALUES (?, ?)
@@ -604,22 +579,26 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
-    /* ------------------------------------------ same pipeline, two cohorts */
+    /* ------------------------------------------ shared refs, two cohorts */
 
     /**
-     * Spec §13: a member can sit in several cohorts whose BASELINE milestones
-     * point at the SAME pipeline. The submission's tag decides which cohort it
-     * belongs to — cohort A's evaluated baseline must never bleed onto cohort
-     * B's untouched band, because the pre-spine fallback only ever adopts
-     * submissions that belong to NO cohort task.
+     * Spec §13: a member can sit in several cohorts whose tasks point at the
+     * SAME pipeline, exercise template or survey. The tag on the owning slice's
+     * row decides which cohort the work belongs to — cohort A's progress must
+     * never bleed onto cohort B's untouched tasks.
      */
     @Nested
-    class SharedPipelineAcrossCohorts {
+    class SharedRefsAcrossCohorts {
 
         private UUID otherCohortId;
+        private UUID otherExerciseTaskId;
+        private UUID otherSurveyTaskId;
+
+        @Autowired private com.bvisionry.survey.service.ProgramTaskSurveyService surveyResponses;
+        @Autowired private jakarta.persistence.EntityManager em;
 
         @BeforeEach
-        void secondCohortWithTheSameBaselinePipeline() {
+        void secondCohortSharingEveryRef() {
             otherCohortId = UUID.randomUUID();
             jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, ?, 'LAUNCHED')",
                     otherCohortId, "Alpha Founders");
@@ -637,6 +616,62 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                                                task_type, ref_id, milestone_role)
                     VALUES (?, ?, 'Baseline', 'LIVE', 0, 'ASSESSMENT', ?, 'BASELINE')
                     """, UUID.randomUUID(), otherModuleId, pipelineId);
+            otherExerciseTaskId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO program_tasks (id, module_id, name, status, position,
+                                               task_type, ref_id)
+                    VALUES (?, ?, 'Exercise task', 'LIVE', 1, 'EXERCISE', ?)
+                    """, otherExerciseTaskId, otherModuleId, coveredTemplateId);
+            otherSurveyTaskId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO program_tasks (id, module_id, name, status, position,
+                                               task_type, ref_id)
+                    VALUES (?, ?, 'Survey task', 'LIVE', 2, 'SURVEY', ?)
+                    """, otherSurveyTaskId, otherModuleId, surveyId);
+        }
+
+        /**
+         * The reported bug: a member completed the exercise and the survey in
+         * "QA Full Cycle" and "Alpha Founders" immediately showed both as done,
+         * because state was keyed on (member, template) / (member, survey). It
+         * is keyed on the task tag now (V173), so each cohort owns its own copy.
+         */
+        @Test
+        void exerciseAndSurveyDoneInOneCohort_leaveTheOtherCohortUntouched() {
+            // Do the work in cohort 1, through the same routes a member uses.
+            UUID submissionId = myProgramService.open(exerciseTaskId).targetId();
+            jdbc.update("""
+                    UPDATE exercise_submissions SET status = 'SUBMITTED', submitted_at = now()
+                    WHERE id = ?
+                    """, submissionId);
+            surveyResponses.submitForProgramTask(surveyTaskId, member.getId(),
+                    new com.bvisionry.survey.dto.SurveySubmitRequest(null, null, List.of()),
+                    "it-agent");
+            em.flush();
+
+            List<JourneyTask> done = myProgramService.journey(cohortId).modules().get(0).tasks();
+            assertThat(done.get(2).state()).isEqualTo(JourneyTaskState.SUBMITTED);
+            assertThat(done.get(5).state()).isEqualTo(JourneyTaskState.DONE);
+
+            List<JourneyTask> untouched =
+                    myProgramService.journey(otherCohortId).modules().get(0).tasks();
+            assertThat(untouched.get(1).state()).isEqualTo(JourneyTaskState.NOT_STARTED);
+            assertThat(untouched.get(2).state()).isEqualTo(JourneyTaskState.NOT_STARTED);
+
+            // …and the admin surface agrees (the founders matrix reads the
+            // same spine).
+            PulseResponse pulse = programAdminService.getPulse(otherCohortId, null);
+            PulseResponse.PulseRow row = pulse.rows().stream()
+                    .filter(r -> r.userId().equals(member.getId())).findFirst().orElseThrow();
+            assertThat(row.cells().get(1)).isEqualTo(CellState.NOT_STARTED);
+            assertThat(row.cells().get(2)).isEqualTo(CellState.NOT_STARTED);
+
+            // The other cohort's task is still takeable: its own assignment and
+            // its own survey answer, neither blocked by the first cohort's.
+            assertThat(myProgramService.open(otherExerciseTaskId).targetId())
+                    .isNotEqualTo(submissionId);
+            assertThat(surveyResponses.getForProgramTask(otherSurveyTaskId, member.getId()).id())
+                    .isEqualTo(surveyId);
         }
 
         /** The bug: cohort A's tagged baseline showed up on cohort B's band. */
@@ -701,13 +736,13 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                     String.class, result.responseId());
             assertThat(source).isEqualTo("PROGRAM_TASK");
 
-            // …which IS the completion: journey DONE and counted (7/7 sides).
+            // …which IS the completion: journey DONE and counted (6/6 sides).
             JourneyResponse journey = myProgramService.journey(cohortId);
-            JourneyTask surveyRow = journey.modules().get(0).tasks().get(6);
+            JourneyTask surveyRow = journey.modules().get(0).tasks().get(5);
             assertThat(surveyRow.state()).isEqualTo(JourneyTaskState.DONE);
             assertThat(surveyRow.completedAt()).isNotNull();
             assertThat(journey.progress().done()).isEqualTo(1);
-            assertThat(journey.progress().total()).isEqualTo(7);
+            assertThat(journey.progress().total()).isEqualTo(6);
 
             // Second take → 409-shaped duplicate, on GET and POST alike.
             assertThatThrownBy(() ->
@@ -740,13 +775,13 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                     INSERT INTO enrollment (user_id, course_id, status, progress_pct, completed_at)
                     VALUES (?, ?, 'COMPLETED', 100, now())
                     """, member.getId(), courseId);
-            UUID ea = insertExerciseAssignment(coveredTemplateId, member.getId());
+            UUID ea = insertExerciseAssignment(coveredTemplateId, member.getId(), exerciseTaskId);
             jdbc.update("INSERT INTO exercise_submissions (assignment_id, user_id) VALUES (?, ?)",
                     ea, member.getId());
             insertTaggedEvaluatedSubmission(baselineTaskId, 1, new BigDecimal("58.00"));
 
             PulseResponse pulse = programAdminService.getPulse(cohortId, null);
-            assertThat(pulse.columns()).hasSize(7);
+            assertThat(pulse.columns()).hasSize(6);
             PulseResponse.PulseRow row = pulse.rows().stream()
                     .filter(r -> r.userId().equals(member.getId())).findFirst().orElseThrow();
             // Column order mirrors board order (see seed()).
@@ -755,10 +790,9 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(row.cells().get(2)).isEqualTo(CellState.IN_DRAFT);     // in-progress exercise
             assertThat(row.cells().get(3)).isEqualTo(CellState.SUBMITTED);    // evaluated baseline
             assertThat(row.cells().get(4)).isEqualTo(CellState.NOT_STARTED);  // untouched check-in
-            assertThat(row.cells().get(5)).isEqualTo(CellState.NOT_STARTED);  // workshop
-            assertThat(row.cells().get(6)).isEqualTo(CellState.NOT_STARTED);  // survey
-            // Denominator is 7: the survey counts since D2 (member route shipped).
-            assertThat(row.completionPct()).isEqualTo(Math.round(2 * 100f / 7));
+            assertThat(row.cells().get(5)).isEqualTo(CellState.NOT_STARTED);  // survey
+            // Denominator is 6: the survey counts since D2 (member route shipped).
+            assertThat(row.completionPct()).isEqualTo(Math.round(2 * 100f / 6));
         }
     }
 
@@ -804,13 +838,6 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         return id;
     }
 
-    private UUID insertWorkshop(String name) {
-        UUID id = UUID.randomUUID();
-        jdbc.update("INSERT INTO workshops (id, org_id, name) VALUES (?, ?, ?)",
-                id, org.getId(), name);
-        return id;
-    }
-
     private UUID insert(String sql, Object... argsAfterId) {
         UUID id = UUID.randomUUID();
         Object[] args = new Object[argsAfterId.length + 1];
@@ -830,13 +857,28 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         return id;
     }
 
+    /** A DIRECT (untagged) exercise assignment — nobody's cohort task owns it. */
     private UUID insertExerciseAssignment(UUID templateId, UUID userId) {
+        return insertExerciseAssignment(templateId, userId, null);
+    }
+
+    /** An assignment tagged to a cohort EXERCISE task, as {@code open()} writes it (V173). */
+    private UUID insertExerciseAssignment(UUID templateId, UUID userId, UUID taskId) {
         UUID id = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO exercise_assignments (id, template_id, organization_id, user_id, assigned_by)
-                VALUES (?, ?, ?, ?, ?)
-                """, id, templateId, org.getId(), userId, userId);
+                INSERT INTO exercise_assignments (id, template_id, organization_id, user_id,
+                                                  assigned_by, program_task_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, id, templateId, org.getId(), userId, userId, taskId);
         return id;
+    }
+
+    /** A PROGRAM_TASK survey response tagged to a cohort SURVEY task (V173). */
+    private void insertSurveyResponse(UUID surveyRef, UUID userId, UUID taskId) {
+        jdbc.update("""
+                INSERT INTO survey_responses (survey_id, source, respondent_user_id, program_task_id)
+                VALUES (?, 'PROGRAM_TASK', ?, ?)
+                """, surveyRef, userId, taskId);
     }
 
     /** An EVALUATED submission tagged to a milestone task, with its overall score. */

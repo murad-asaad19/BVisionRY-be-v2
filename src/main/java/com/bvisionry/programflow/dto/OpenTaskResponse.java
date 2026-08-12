@@ -11,8 +11,8 @@ import com.bvisionry.programflow.domain.ProgramTaskType;
  * {@code targetId} per type: LESSON → the task id (existing player); COURSE →
  * the course id (enrollment ensured); EXERCISE → the member's exercise
  * submission id (assignment ensured); ASSESSMENT → the member's submission id
- * tagged to this task (assignment + tagged submission ensured); WORKSHOP /
- * SURVEY → the ref id (nothing to create).
+ * tagged to this task (assignment + tagged submission ensured); SURVEY →
+ * the ref id (nothing to create).
  */
 public record OpenTaskResponse(
         UUID taskId,

@@ -110,7 +110,7 @@ public class FounderProfileReadRepository {
      * them, each with the shared per-type DONE verdict.
      *
      * <p>{@code ps.status} only ever exists for LESSON tasks, so a status read
-     * off it alone left every COURSE/EXERCISE/SURVEY/ASSESSMENT/WORKSHOP task
+     * off it alone left every COURSE/EXERCISE/SURVEY/ASSESSMENT task
      * stuck on "To do" even after the member finished it. {@code done} is the
      * one done-semantics authority ({@link TaskCompletion#DONE_FOR_USER}) the
      * journey, the pulse and the matrix already answer to.

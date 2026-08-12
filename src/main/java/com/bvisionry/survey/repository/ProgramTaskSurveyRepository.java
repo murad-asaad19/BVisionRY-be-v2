@@ -59,17 +59,19 @@ public class ProgramTaskSurveyRepository {
     }
 
     /**
-     * True once this member has ANY response to the survey — the same key the
-     * journey's done-detection uses ({@code TaskSpineRepository
-     * .surveyParticipation}), so the 409 gate and the DONE state agree.
+     * True once this member has answered THIS task — the same key the journey's
+     * done-detection uses since V173 ({@code TaskSpineRepository
+     * .surveyParticipation}), so the 409 gate and the DONE state agree. A
+     * response to the same survey taken elsewhere (public link, another
+     * cohort's task) does not count: that cohort's work is that cohort's.
      */
-    public boolean hasResponse(UUID surveyId, UUID userId) {
+    public boolean hasResponse(UUID taskId, UUID userId) {
         Boolean exists = jdbc.queryForObject("""
                 SELECT EXISTS (
                     SELECT 1 FROM survey_responses
-                    WHERE survey_id = :surveyId AND respondent_user_id = :userId)
+                    WHERE program_task_id = :taskId AND respondent_user_id = :userId)
                 """,
-                new MapSqlParameterSource("surveyId", surveyId).addValue("userId", userId),
+                new MapSqlParameterSource("taskId", taskId).addValue("userId", userId),
                 Boolean.class);
         return Boolean.TRUE.equals(exists);
     }

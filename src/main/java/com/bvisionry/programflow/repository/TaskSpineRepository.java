@@ -78,31 +78,32 @@ public class TaskSpineRepository {
                         instant(rs, "completed_at")));
     }
 
-    public record ExerciseStateRow(UUID userId, UUID templateId, UUID submissionId, String status,
+    public record ExerciseStateRow(UUID userId, UUID taskId, UUID submissionId, String status,
                                    Instant submittedAt, Instant reviewedAt) {}
 
     /**
-     * Exercise submission state per (member, template) for EXERCISE task rows.
-     * One submission per member assignment (DB-unique), newest assignment wins
-     * should a member somehow hold the template in two orgs.
+     * The member's exercise assignment TAGGED to each EXERCISE task (V173), and
+     * its working copy. Keyed by TASK id, not by template: two cohorts may hand
+     * out the same template, and each owns its own copy of the work — doing it
+     * in one must not mark the other done. One assignment per (member, task)
+     * and one submission per assignment, both DB-unique, so this is at most one
+     * row per pair.
      */
     public List<ExerciseStateRow> exerciseStates(Collection<UUID> userIds,
-                                                 Collection<UUID> templateIds) {
-        if (userIds.isEmpty() || templateIds.isEmpty()) {
+                                                 Collection<UUID> taskIds) {
+        if (userIds.isEmpty() || taskIds.isEmpty()) {
             return List.of();
         }
         return jdbc.query("""
-                SELECT DISTINCT ON (ea.user_id, ea.template_id)
-                       ea.user_id, ea.template_id, es.id AS submission_id, es.status,
+                SELECT ea.user_id, ea.program_task_id, es.id AS submission_id, es.status,
                        es.submitted_at, es.reviewed_at
                 FROM exercise_assignments ea
                 JOIN exercise_submissions es ON es.assignment_id = ea.id
-                WHERE ea.user_id IN (:userIds) AND ea.template_id IN (:templateIds)
-                ORDER BY ea.user_id, ea.template_id, ea.created_at DESC
+                WHERE ea.user_id IN (:userIds) AND ea.program_task_id IN (:taskIds)
                 """,
-                new MapSqlParameterSource("userIds", userIds).addValue("templateIds", templateIds),
+                new MapSqlParameterSource("userIds", userIds).addValue("taskIds", taskIds),
                 (rs, i) -> new ExerciseStateRow(rs.getObject("user_id", UUID.class),
-                        rs.getObject("template_id", UUID.class),
+                        rs.getObject("program_task_id", UUID.class),
                         rs.getObject("submission_id", UUID.class), rs.getString("status"),
                         instant(rs, "submitted_at"), instant(rs, "reviewed_at")));
     }
@@ -182,47 +183,34 @@ public class TaskSpineRepository {
                         rs.getBigDecimal("score")));
     }
 
-    public record ParticipationRow(UUID userId, UUID refId, Instant completedAt) {}
+    public record ParticipationRow(UUID userId, UUID taskId, Instant completedAt) {}
 
-    /** Members who completed at least one task of each workshop (WORKSHOP done-state). */
-    public List<ParticipationRow> workshopParticipation(Collection<UUID> userIds,
-                                                        Collection<UUID> workshopIds) {
-        if (userIds.isEmpty() || workshopIds.isEmpty()) {
-            return List.of();
-        }
-        return jdbc.query("""
-                SELECT wts.user_id, we.workshop_id AS ref_id, max(wts.completed_at) AS completed_at
-                FROM workshop_task_submissions wts
-                JOIN workshop_exercise_tasks wet ON wet.id = wts.task_id
-                JOIN workshop_exercises we ON we.id = wet.exercise_id
-                WHERE wts.user_id IN (:userIds) AND we.workshop_id IN (:workshopIds)
-                  AND wts.completed_at IS NOT NULL
-                GROUP BY wts.user_id, we.workshop_id
-                """,
-                new MapSqlParameterSource("userIds", userIds).addValue("workshopIds", workshopIds),
-                this::participationRow);
-    }
-
-    /** Members who responded to each survey (SURVEY done-state). */
+    /**
+     * Members who answered each SURVEY task's survey (SURVEY done-state), keyed
+     * by TASK id (V173) for the same reason as {@link #exerciseStates}: two
+     * cohorts may point at one survey and each must be answered on its own.
+     * Only the in-app program-task route tags a response, so a public-link or
+     * post-assessment answer to the same survey no longer completes cohort work.
+     */
     public List<ParticipationRow> surveyParticipation(Collection<UUID> userIds,
-                                                      Collection<UUID> surveyIds) {
-        if (userIds.isEmpty() || surveyIds.isEmpty()) {
+                                                      Collection<UUID> taskIds) {
+        if (userIds.isEmpty() || taskIds.isEmpty()) {
             return List.of();
         }
         return jdbc.query("""
-                SELECT sr.respondent_user_id AS user_id, sr.survey_id AS ref_id,
+                SELECT sr.respondent_user_id AS user_id, sr.program_task_id AS task_id,
                        max(sr.submitted_at) AS completed_at
                 FROM survey_responses sr
-                WHERE sr.respondent_user_id IN (:userIds) AND sr.survey_id IN (:surveyIds)
-                GROUP BY sr.respondent_user_id, sr.survey_id
+                WHERE sr.respondent_user_id IN (:userIds) AND sr.program_task_id IN (:taskIds)
+                GROUP BY sr.respondent_user_id, sr.program_task_id
                 """,
-                new MapSqlParameterSource("userIds", userIds).addValue("surveyIds", surveyIds),
+                new MapSqlParameterSource("userIds", userIds).addValue("taskIds", taskIds),
                 this::participationRow);
     }
 
     private ParticipationRow participationRow(ResultSet rs, int i) throws SQLException {
         return new ParticipationRow(rs.getObject("user_id", UUID.class),
-                rs.getObject("ref_id", UUID.class), instant(rs, "completed_at"));
+                rs.getObject("task_id", UUID.class), instant(rs, "completed_at"));
     }
 
     /* ---------------------------------------------------- direct assignments */
@@ -230,7 +218,11 @@ public class TaskSpineRepository {
     /**
      * Refs already represented by a LIVE cohort task of {@code taskType} that
      * reaches this member (audience-checked) — direct-assignment rows for
-     * these refs are cohort work, not "direct" (spec §2.1 exclusion).
+     * these refs are cohort work, not "direct" (spec §2.1 exclusion). COURSE
+     * only since V173: a course is per member, so the one enrollment row is
+     * shared between the journey and the direct list and has to be matched by
+     * ref. Exercises and assessments carry a task TAG instead — see
+     * {@link #COVERED_BY_TAGGED_TASK}.
      */
     private static final String COVERED_BY_COHORT_TASK = """
             EXISTS (SELECT 1
@@ -241,10 +233,34 @@ public class TaskSpineRepository {
                       AND t.task_type = %s AND t.ref_id = %s
                       AND """ + ProgramAudience.INCLUDES_USER.formatted(":memberId") + ")";
 
+    /**
+     * The row tagged by {@code %s} (an assignment's or submission's
+     * {@code program_task_id}) belongs to a LIVE cohort task of this member's —
+     * so the cohort surface owns it and the direct list must not repeat it.
+     * The tag is proof of representation: audience was enforced when it was
+     * created. False for an untagged row, and false again once the task is
+     * gone or no longer LIVE, so nothing is ever orphaned out of both surfaces.
+     */
+    private static final String COVERED_BY_TAGGED_TASK = """
+            EXISTS (SELECT 1
+                    FROM program_tasks t
+                    JOIN program_modules m ON m.id = t.module_id
+                    JOIN cohort_members cm ON cm.cohort_id = m.cohort_id
+                                          AND cm.user_id = :memberId
+                    WHERE t.id = %s AND t.status = 'LIVE')""";
+
     public record DirectExerciseRow(UUID assignmentId, UUID templateId, String title,
                                     UUID submissionId, String status, Instant deadline,
                                     Instant assignedAt, Instant submittedAt, Instant reviewedAt) {}
 
+    /**
+     * The member's exercise assignments that no cohort task owns. Since V173 an
+     * exercise opened from a cohort task gets its OWN assignment, tagged with
+     * that task, so "covered" is the tag — not a template match. That is what
+     * makes a directly-assigned exercise appear exactly once: it keeps its
+     * untagged row here even when a cohort task happens to hand out the same
+     * template, and the cohort task tracks its own copy.
+     */
     public List<DirectExerciseRow> directExercises(UUID orgId, UUID memberId) {
         return jdbc.query("""
                 SELECT ea.id, ea.template_id, et.name AS title, es.id AS submission_id, es.status,
@@ -255,7 +271,7 @@ public class TaskSpineRepository {
                 WHERE ea.organization_id = :orgId AND ea.user_id = :memberId
                   AND NOT %s
                 ORDER BY ea.created_at DESC
-                """.formatted(COVERED_BY_COHORT_TASK.formatted("'EXERCISE'", "ea.template_id")),
+                """.formatted(COVERED_BY_TAGGED_TASK.formatted("ea.program_task_id")),
                 params(orgId, memberId),
                 (rs, i) -> new DirectExerciseRow(rs.getObject("id", UUID.class),
                         rs.getObject("template_id", UUID.class), rs.getString("title"),
@@ -298,11 +314,8 @@ public class TaskSpineRepository {
                 WHERE a.organization_id = :orgId AND a.user_id = :memberId
                   AND NOT EXISTS (
                       SELECT 1 FROM submissions st
-                      JOIN program_tasks t ON t.id = st.program_task_id AND t.status = 'LIVE'
-                      JOIN program_modules m ON m.id = t.module_id
-                      JOIN cohort_members cm ON cm.cohort_id = m.cohort_id
-                                            AND cm.user_id = :memberId
-                      WHERE st.assignment_id = a.id AND st.user_id = :memberId)
+                      WHERE st.assignment_id = a.id AND st.user_id = :memberId
+                        AND %2$s)
                   AND NOT EXISTS (
                       SELECT 1 FROM cohort_members cm
                       JOIN program_modules m ON m.cohort_id = cm.cohort_id
@@ -310,13 +323,14 @@ public class TaskSpineRepository {
                       WHERE cm.user_id = :memberId AND t.status = 'LIVE'
                         AND t.task_type = 'ASSESSMENT' AND t.milestone_role = 'BASELINE'
                         AND t.ref_id = a.pipeline_id
-                        AND %s
+                        AND %1$s
                         AND EXISTS (SELECT 1 FROM submissions se
                                     WHERE se.assignment_id = a.id AND se.user_id = :memberId
                                       AND se.status = 'EVALUATED'
                                       AND se.program_task_id IS NULL))
                 ORDER BY a.created_at DESC
-                """.formatted(ProgramAudience.INCLUDES_USER.formatted(":memberId")),
+                """.formatted(ProgramAudience.INCLUDES_USER.formatted(":memberId"),
+                        COVERED_BY_TAGGED_TASK.formatted("st.program_task_id")),
                 params(orgId, memberId),
                 (rs, i) -> new DirectAssessmentRow(rs.getObject("id", UUID.class),
                         rs.getObject("pipeline_id", UUID.class), rs.getString("title"),
@@ -458,9 +472,7 @@ public class TaskSpineRepository {
      * A LIVE COURSE task additionally requires the course to be published.
      * Spec §13: authoring is platform-level, so there is no org to check here —
      * a course some assigned org cannot SEE is handled at read time (it stops
-     * gating for that org's members and renders unavailable), and a WORKSHOP
-     * ref simply must exist (workshops stay org-scoped; members outside that
-     * org read as not-started). LESSON has no ref.
+     * gating for that org's members and renders unavailable). LESSON has no ref.
      */
     public boolean refExists(com.bvisionry.programflow.domain.ProgramTaskType type, UUID refId,
                              boolean live) {
@@ -471,7 +483,6 @@ public class TaskSpineRepository {
                     : "SELECT EXISTS (SELECT 1 FROM course c WHERE c.id = :id)";
             case EXERCISE -> "SELECT EXISTS (SELECT 1 FROM exercise_templates WHERE id = :id)";
             case ASSESSMENT -> "SELECT EXISTS (SELECT 1 FROM pipelines WHERE id = :id)";
-            case WORKSHOP -> "SELECT EXISTS (SELECT 1 FROM workshops WHERE id = :id)";
             case SURVEY -> "SELECT EXISTS (SELECT 1 FROM surveys WHERE id = :id)";
         };
         if (sql == null) {
@@ -538,37 +549,44 @@ public class TaskSpineRepository {
                 """, params);
     }
 
-    /** The member's exercise submission for the template within the org, if any. */
-    public Optional<UUID> findExerciseSubmissionId(UUID orgId, UUID templateId, UUID userId) {
+    /** The member's exercise submission tagged to this cohort task, if any. */
+    public Optional<UUID> findExerciseSubmissionId(UUID userId, UUID taskId) {
         return jdbc.query("""
                 SELECT es.id
                 FROM exercise_assignments ea
                 JOIN exercise_submissions es ON es.assignment_id = ea.id
-                WHERE ea.organization_id = :orgId AND ea.template_id = :templateId
-                  AND ea.user_id = :userId
+                WHERE ea.user_id = :userId AND ea.program_task_id = :taskId
                 """,
-                exerciseParams(orgId, templateId, userId),
+                new MapSqlParameterSource("userId", userId).addValue("taskId", taskId),
                 (rs, i) -> rs.getObject("id", UUID.class))
                 .stream().findFirst();
     }
 
     /**
-     * Ensures the member's exercise assignment + working-copy submission exist
-     * (assigned_by = the member: they opened the cohort task themselves) and
-     * seeds the template's starter rows exactly like
+     * Ensures the member's exercise assignment + working-copy submission for
+     * THIS cohort task exist (assigned_by = the member: they opened the task
+     * themselves) and seeds the template's starter rows exactly like
      * {@code ExerciseAssignmentService.createAssignmentForMember} does.
+     *
+     * <p>The assignment carries the task tag (V173), so a second cohort handing
+     * out the same template gets its own copy of the work. Race-safe like the
+     * other ensure-writes: uq_exercise_assignments_program_task_user turns the
+     * double-open loser into a no-op and the re-select returns the winner's row.
      */
-    public UUID ensureExerciseSubmission(UUID orgId, UUID templateId, UUID userId) {
+    public UUID ensureExerciseSubmission(UUID orgId, UUID templateId, UUID userId, UUID taskId) {
+        MapSqlParameterSource params = exerciseParams(orgId, templateId, userId)
+                .addValue("taskId", taskId);
         jdbc.update("""
-                INSERT INTO exercise_assignments (template_id, organization_id, user_id, assigned_by)
-                VALUES (:templateId, :orgId, :userId, :userId)
-                ON CONFLICT (organization_id, template_id, user_id) WHERE user_id IS NOT NULL
+                INSERT INTO exercise_assignments (template_id, organization_id, user_id,
+                                                  assigned_by, program_task_id)
+                VALUES (:templateId, :orgId, :userId, :userId, :taskId)
+                ON CONFLICT (program_task_id, user_id) WHERE program_task_id IS NOT NULL
                 DO NOTHING
-                """, exerciseParams(orgId, templateId, userId));
+                """, params);
         UUID assignmentId = jdbc.queryForObject("""
                 SELECT id FROM exercise_assignments
-                WHERE organization_id = :orgId AND template_id = :templateId AND user_id = :userId
-                """, exerciseParams(orgId, templateId, userId), UUID.class);
+                WHERE user_id = :userId AND program_task_id = :taskId
+                """, params, UUID.class);
 
         int created = jdbc.update("""
                 INSERT INTO exercise_submissions (assignment_id, user_id)

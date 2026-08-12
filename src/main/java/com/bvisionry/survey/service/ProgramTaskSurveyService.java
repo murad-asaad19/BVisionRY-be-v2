@@ -24,7 +24,8 @@ import lombok.RequiredArgsConstructor;
 /**
  * SURVEY journey tasks (redesign spec §2.1, phase D2): the member takes the
  * task's paired survey in-app, and the response IS the completion — the
- * journey's done-detection keys on (survey, member).
+ * journey's done-detection keys on (task, member) since V173, so two cohorts
+ * sharing one survey each get their own answer.
  *
  * <p>A separate service (not more methods on {@link SurveyResponseService})
  * on purpose: the architecture freeze pins that class's constructor signature
@@ -46,16 +47,16 @@ public class ProgramTaskSurveyService {
      * availability contract as the workshop flows: 404 when the caller isn't
      * in the task's cohort/audience, the task isn't LIVE, or no survey is
      * paired — all indistinguishable so neither existence nor membership
-     * leaks; 410 when the survey is closed; 409 once this member has
-     * responded (any source — the journey's done-detection keys on
-     * (survey, member) alone, so the gate must agree with it).
+     * leaks; 410 when the survey is closed; 409 once this member has answered
+     * THIS task — the journey's done-detection keys on (task, member) since
+     * V173, so the gate must agree with it.
      */
     @Transactional(readOnly = true)
     public MemberSurveyDto getForProgramTask(UUID taskId, UUID currentUserId) {
         ProgramTaskSurveyRepository.ProgramTaskSurveyRow row =
                 resolveEnrolledTask(taskId, currentUserId);
         Survey survey = resolvePublishedSurvey(row.surveyId());
-        if (programTasks.hasResponse(survey.getId(), currentUserId)) {
+        if (programTasks.hasResponse(taskId, currentUserId)) {
             throw new DuplicateResourceException(
                     "Survey response already submitted for this task");
         }
@@ -82,7 +83,7 @@ public class ProgramTaskSurveyService {
         }
         Survey survey = resolvePublishedSurvey(row.surveyId());
 
-        if (programTasks.hasResponse(survey.getId(), currentUserId)) {
+        if (programTasks.hasResponse(taskId, currentUserId)) {
             throw new DuplicateResourceException(
                     "Survey response already submitted for this task");
         }
@@ -97,7 +98,7 @@ public class ProgramTaskSurveyService {
                     survey,
                     request.answers(),
                     new ResponseContext.ProgramTask(
-                            currentUserId, identity.email(), identity.name()),
+                            taskId, currentUserId, identity.email(), identity.name()),
                     userAgent);
         } catch (DataIntegrityViolationException e) {
             // ux_survey_responses_program_task_user is the real race gate.

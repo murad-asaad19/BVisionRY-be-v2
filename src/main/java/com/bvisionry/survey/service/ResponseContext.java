@@ -21,8 +21,9 @@ import java.util.UUID;
  *       bound to a workshop by id; identity comes from the resolved
  *       {@link User}, same as {@link Member}.</li>
  *   <li>{@link ProgramTask} — authenticated SURVEY journey task (redesign
- *       spec §2.1, phase D2); keyed on (survey, member) only, matching the
- *       journey's done-detection. Carries plain identity values, not the
+ *       spec §2.1, phase D2); keyed on (task, member) since V173, matching the
+ *       journey's done-detection, so two cohorts sharing a survey each get
+ *       their own answer. Carries plain identity values, not the
  *       {@code auth} entity — the architecture ratchet forbids NEW
  *       cross-feature type dependencies.</li>
  * </ul>
@@ -42,5 +43,6 @@ public sealed interface ResponseContext
 
     record WorkshopIntro(UUID workshopId, User user) implements ResponseContext {}
 
-    record ProgramTask(UUID userId, String email, String name) implements ResponseContext {}
+    record ProgramTask(UUID taskId, UUID userId, String email, String name)
+            implements ResponseContext {}
 }

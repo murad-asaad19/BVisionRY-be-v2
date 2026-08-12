@@ -416,7 +416,7 @@ public class MyProgramService {
     /**
      * A non-LESSON task's member state read from its owning slice (course
      * enrollment / exercise submission / tagged assessment submission /
-     * workshop or survey participation).
+     * survey participation).
      */
     record TypedState(JourneyTaskState state, Integer progressPct,
             java.math.BigDecimal score, java.time.Instant submittedAt,
@@ -512,21 +512,22 @@ public class MyProgramService {
                         taskId -> put(byUser, r.userId(), taskId, ts));
             }
         }
+        // EXERCISE — keyed by TASK id (the assignment tag, V173), not by
+        // template: two cohorts handing out the same exercise each own their
+        // own copy of the work.
         List<ProgramTask> exercises = byType.getOrDefault(ProgramTaskType.EXERCISE, List.of());
         if (!exercises.isEmpty()) {
-            for (var r : spine.exerciseStates(userIds, refs(exercises))) {
-                TypedState ts = new TypedState(ProgramRules.exerciseState(r.status()),
-                        null, null, r.submittedAt(), r.reviewedAt());
-                forTasksWithRef(exercises, r.templateId(),
-                        taskId -> put(byUser, r.userId(), taskId, ts));
+            for (var r : spine.exerciseStates(userIds, taskIds(exercises))) {
+                put(byUser, r.userId(), r.taskId(),
+                        new TypedState(ProgramRules.exerciseState(r.status()),
+                                null, null, r.submittedAt(), r.reviewedAt()));
             }
         }
         // ASSESSMENT — keyed by TASK id (the submission tag), not by ref:
         // same-pipeline milestones stay distinguishable.
         List<ProgramTask> assessments = byType.getOrDefault(ProgramTaskType.ASSESSMENT, List.of());
         if (!assessments.isEmpty()) {
-            var taskIds = assessments.stream().map(ProgramTask::getId).toList();
-            for (var r : spine.assessmentStates(userIds, taskIds)) {
+            for (var r : spine.assessmentStates(userIds, taskIds(assessments))) {
                 put(byUser, r.userId(), r.taskId(), new TypedState(
                         ProgramRules.assessmentState(r.status()), null,
                         "EVALUATED".equals(r.status()) ? r.score() : null,
@@ -558,22 +559,12 @@ public class MyProgramService {
                 }
             }
         }
-        List<ProgramTask> workshops = byType.getOrDefault(ProgramTaskType.WORKSHOP, List.of());
-        if (!workshops.isEmpty()) {
-            for (var r : spine.workshopParticipation(userIds, refs(workshops))) {
-                TypedState ts = new TypedState(JourneyTaskState.DONE, null, null,
-                        null, r.completedAt());
-                forTasksWithRef(workshops, r.refId(),
-                        taskId -> put(byUser, r.userId(), taskId, ts));
-            }
-        }
+        // SURVEY — keyed by TASK id (the response tag, V173), same reason.
         List<ProgramTask> surveys = byType.getOrDefault(ProgramTaskType.SURVEY, List.of());
         if (!surveys.isEmpty()) {
-            for (var r : spine.surveyParticipation(userIds, refs(surveys))) {
-                TypedState ts = new TypedState(JourneyTaskState.DONE, null, null,
-                        r.completedAt(), r.completedAt());
-                forTasksWithRef(surveys, r.refId(),
-                        taskId -> put(byUser, r.userId(), taskId, ts));
+            for (var r : spine.surveyParticipation(userIds, taskIds(surveys))) {
+                put(byUser, r.userId(), r.taskId(), new TypedState(JourneyTaskState.DONE,
+                        null, null, r.completedAt(), r.completedAt()));
             }
         }
         return byUser;
@@ -583,6 +574,15 @@ public class MyProgramService {
         return tasks.stream().map(ProgramTask::getRefId).distinct().toList();
     }
 
+    private static List<UUID> taskIds(List<ProgramTask> tasks) {
+        return tasks.stream().map(ProgramTask::getId).toList();
+    }
+
+    /**
+     * COURSE only: enrollment is one global row per (member, course) — the
+     * operator's ruling that a course is per member — so several tasks may
+     * share one state. Every other type resolves by its own task id.
+     */
     private static void forTasksWithRef(List<ProgramTask> tasks, UUID refId,
             java.util.function.Consumer<UUID> taskIdConsumer) {
         for (ProgramTask t : tasks) {
@@ -668,7 +668,7 @@ public class MyProgramService {
         UUID orgId = access.ctx().orgId();
         UUID target = switch (t.getTaskType()) {
             case LESSON -> t.getId();
-            case WORKSHOP, SURVEY -> requireRef(t);
+            case SURVEY -> requireRef(t);
             case COURSE -> {
                 // Spec §3 downgrade policy: no NEW content opens for a course the
                 // org can no longer see. The journey row already says so; this is
@@ -683,10 +683,11 @@ public class MyProgramService {
                 }
                 yield t.getRefId();
             }
-            case EXERCISE -> spine.findExerciseSubmissionId(orgId, requireRef(t), userId)
+            case EXERCISE -> spine.findExerciseSubmissionId(userId, t.getId())
                     .orElseGet(() -> {
                         requireNotFinished(access);
-                        return spine.ensureExerciseSubmission(orgId, t.getRefId(), userId);
+                        return spine.ensureExerciseSubmission(orgId, requireRef(t), userId,
+                                t.getId());
                     });
             case ASSESSMENT -> spine.findTaggedSubmissionId(userId, t.getId())
                     .orElseGet(() -> {

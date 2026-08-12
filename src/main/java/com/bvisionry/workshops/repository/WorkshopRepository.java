@@ -15,23 +15,6 @@ public interface WorkshopRepository extends JpaRepository<Workshop, UUID> {
 
     List<Workshop> findByOrgIdOrderByPositionAscCreatedAtAsc(UUID orgId);
 
-    /** Every workshop with its org's name — the platform ref picker (spec §13). */
-    interface WorkshopRefRow {
-        UUID getId();
-
-        String getName();
-
-        String getOrgName();
-    }
-
-    @org.springframework.data.jpa.repository.Query(value = """
-            SELECT w.id AS id, w.name AS name, o.name AS orgName
-            FROM workshops w
-            JOIN organizations o ON o.id = w.org_id
-            ORDER BY o.name, w.position, w.name
-            """, nativeQuery = true)
-    List<WorkshopRefRow> findAllRefs();
-
     boolean existsByOrgIdAndNameIgnoreCase(UUID orgId, String name);
 
     @Query("SELECT coalesce(max(w.position), -1) + 1 FROM Workshop w WHERE w.orgId = :orgId")

@@ -23,8 +23,8 @@ import java.util.UUID;
  * Authenticated survey endpoints for SURVEY journey tasks (redesign spec §2.1,
  * phase D2): the member takes the task's paired survey in-app, and the
  * response IS the completion — the journey's done-detection keys on
- * (survey, member). The caller must be enrolled in the task's cohort and in
- * its module's audience; one submission per member per survey. Lives in the
+ * (task, member). The caller must be enrolled in the task's cohort and in
+ * its module's audience; one submission per member per TASK. Lives in the
  * survey slice so it can reuse the shared response-persistence + validation,
  * mirroring {@link MemberWorkshopSurveyController}.
  */

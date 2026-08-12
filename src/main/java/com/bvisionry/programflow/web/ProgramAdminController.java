@@ -22,8 +22,10 @@ import com.bvisionry.programflow.dto.CreateModuleRequest;
 import com.bvisionry.programflow.dto.ModuleDraft;
 import com.bvisionry.programflow.dto.ModuleDto;
 import com.bvisionry.programflow.dto.MoveTaskRequest;
+import com.bvisionry.programflow.dto.ProgramCheckpointDto;
 import com.bvisionry.programflow.dto.ProgramSettingsDto;
 import com.bvisionry.programflow.dto.PulseResponse;
+import com.bvisionry.programflow.dto.RevertCheckpointRequest;
 import com.bvisionry.programflow.dto.TaskDto;
 import com.bvisionry.programflow.dto.UpdateAudienceRequest;
 import com.bvisionry.programflow.dto.UpdateModuleRequest;
@@ -44,6 +46,9 @@ import jakarta.validation.Valid;
  *   <li>PUT  …/cohorts/{cohortId}/program/modules/{moduleId}/audience — assign</li>
  *   <li>POST …/cohorts/{cohortId}/program/modules/{moduleId}/tasks — create task</li>
  *   <li>PUT  …/cohorts/{cohortId}/program/tasks/{taskId}         — save task builder</li>
+ *   <li>POST …/cohorts/{cohortId}/program/checkpoint             — open the board (snapshot)</li>
+ *   <li>GET  …/cohorts/{cohortId}/program/checkpoint             — the caller's snapshot, if any</li>
+ *   <li>POST …/cohorts/{cohortId}/program/checkpoint/revert      — restore the board to it</li>
  * </ul>
  *
  * <p>Deliberately build-only: founder progress (matrix, pulse) is org data and
@@ -58,10 +63,13 @@ public class ProgramAdminController {
 
     private final ProgramAdminService service;
     private final ProgramAiService aiService;
+    private final ProgramCheckpointService checkpoints;
 
-    public ProgramAdminController(ProgramAdminService service, ProgramAiService aiService) {
+    public ProgramAdminController(ProgramAdminService service, ProgramAiService aiService,
+            ProgramCheckpointService checkpoints) {
         this.service = service;
         this.aiService = aiService;
+        this.checkpoints = checkpoints;
     }
 
     @GetMapping
@@ -142,6 +150,37 @@ public class ProgramAdminController {
             @PathVariable UUID taskId,
             @Valid @RequestBody MoveTaskRequest req) {
         return service.moveTask(cohortId, taskId, req);
+    }
+
+    /* ------------------------------------------------------------ checkpoint */
+
+    /**
+     * Opens an editing session: snapshots the curriculum as this admin's
+     * checkpoint, replacing any earlier one. Deliberately NOT wired into
+     * {@link #getBoard} — see {@link ProgramCheckpointService} for why a
+     * read-triggered capture would quietly disarm Revert.
+     */
+    @PostMapping("/checkpoint")
+    public ProgramCheckpointDto captureCheckpoint(@PathVariable UUID cohortId) {
+        return checkpoints.capture(cohortId);
+    }
+
+    /** The caller's checkpoint, or 204 when they have none. */
+    @GetMapping("/checkpoint")
+    public org.springframework.http.ResponseEntity<ProgramCheckpointDto> getCheckpoint(
+            @PathVariable UUID cohortId) {
+        return checkpoints.find(cohortId)
+                .map(org.springframework.http.ResponseEntity::ok)
+                .orElseGet(() -> org.springframework.http.ResponseEntity.noContent().build());
+    }
+
+    /** Throws away this editing session: restores the curriculum to the checkpoint. */
+    @PostMapping("/checkpoint/revert")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void revertToCheckpoint(
+            @PathVariable UUID cohortId,
+            @RequestBody RevertCheckpointRequest req) {
+        checkpoints.revert(cohortId, req.force());
     }
 
     /** AI composer — SSE: {@code status}* then {@code draft} (ModuleDraft JSON) or {@code error}. */

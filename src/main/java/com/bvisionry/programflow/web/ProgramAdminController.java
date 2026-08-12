@@ -26,6 +26,7 @@ import com.bvisionry.programflow.dto.ProgramCheckpointDto;
 import com.bvisionry.programflow.dto.ProgramSettingsDto;
 import com.bvisionry.programflow.dto.PulseResponse;
 import com.bvisionry.programflow.dto.RevertCheckpointRequest;
+import com.bvisionry.programflow.dto.SaveBoardRequest;
 import com.bvisionry.programflow.dto.TaskDto;
 import com.bvisionry.programflow.dto.UpdateAudienceRequest;
 import com.bvisionry.programflow.dto.UpdateModuleRequest;
@@ -40,6 +41,7 @@ import jakarta.validation.Valid;
  *
  * <ul>
  *   <li>GET  …/cohorts/{cohortId}/program                        — full board</li>
+ *   <li>PUT  …/cohorts/{cohortId}/program/board                  — save the whole board</li>
  *   <li>PUT  …/cohorts/{cohortId}/program/settings               — tweakables</li>
  *   <li>POST …/cohorts/{cohortId}/program/modules                — create module</li>
  *   <li>PUT  …/cohorts/{cohortId}/program/modules/{moduleId}     — update module</li>
@@ -75,6 +77,20 @@ public class ProgramAdminController {
     @GetMapping
     public BoardResponse getBoard(@PathVariable UUID cohortId) {
         return service.getBoard(cohortId);
+    }
+
+    /**
+     * The Curriculum builder's Save. The builder holds every edit locally, so
+     * this is the ONE write of an editing session: the payload replaces the
+     * cohort's curriculum wholesale (last write wins — see
+     * {@link ProgramAdminService#saveBoard}). Answers 409 when it would delete
+     * member work; repeat with {@code force} to go ahead.
+     */
+    @PutMapping("/board")
+    public BoardResponse saveBoard(
+            @PathVariable UUID cohortId,
+            @Valid @RequestBody SaveBoardRequest req) {
+        return service.saveBoard(cohortId, req);
     }
 
     @PutMapping("/settings")

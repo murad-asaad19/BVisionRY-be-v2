@@ -119,7 +119,7 @@ public class ProgramCheckpointService {
         List<BoardRestoreRepository.DoomedTask> atRisk =
                 restore.memberWorkAtRisk(cohortId, snapshot.taskIds());
         if (!force && !atRisk.isEmpty()) {
-            throw new IllegalOperationException(memberWorkMessage(atRisk));
+            throw new IllegalOperationException(memberWorkMessage("Reverting", "Revert", atRisk));
         }
 
         // The restore is raw SQL (it must insert rows under their original
@@ -142,13 +142,19 @@ public class ProgramCheckpointService {
 
     /* ------------------------------------------------------------- helpers */
 
-    static String memberWorkMessage(List<BoardRestoreRepository.DoomedTask> atRisk) {
-        return "Reverting would delete member work on "
+    /**
+     * "Reverting would delete member work on “Pitch” (2 members). Revert anyway
+     * to discard it." — shared with the Curriculum builder's whole-board save,
+     * which faces the identical choice under a different verb.
+     */
+    static String memberWorkMessage(String gerund, String action,
+            List<BoardRestoreRepository.DoomedTask> atRisk) {
+        return gerund + " would delete member work on "
                 + atRisk.stream()
                         .map(t -> "“" + t.taskName() + "” (" + t.memberCount()
                                 + (t.memberCount() == 1 ? " member" : " members") + ")")
                         .collect(Collectors.joining(", "))
-                + ". Revert anyway to discard it.";
+                + ". " + action + " anyway to discard it.";
     }
 
     private BoardSnapshot snapshotOf(UUID cohortId) {

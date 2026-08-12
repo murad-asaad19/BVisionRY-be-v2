@@ -17,7 +17,10 @@ import com.bvisionry.programflow.domain.BoardSnapshot.TaskSnap;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Restores a cohort's curriculum to a {@link BoardSnapshot}, in raw SQL.
+ * Makes a cohort's curriculum equal a {@link BoardSnapshot}, in raw SQL. ONE
+ * reconciliation engine for both writers that need it: the checkpoint revert
+ * (snapshot = the board as it was opened) and the Curriculum builder's Save
+ * (snapshot = the board as the admin edited it locally).
  *
  * <p><strong>Why not JPA.</strong> A revert has to RE-CREATE rows deleted since
  * the checkpoint <em>under their original ids</em> — that is what re-attaches
@@ -91,6 +94,33 @@ public class BoardRestoreRepository {
                 new MapSqlParameterSource("cohortId", cohortId)
                         .addValue("keptTaskIds", withSentinel(keptTaskIds)),
                 (rs, i) -> new DoomedTask(rs.getString("task_name"), rs.getLong("member_count")));
+    }
+
+    /**
+     * The payload ids that already exist under a DIFFERENT cohort. Every write
+     * here upserts BY ID, so without this guard an admin could pull another
+     * cohort's module, task or field into theirs by naming its id.
+     */
+    public List<UUID> foreignIds(UUID cohortId, Collection<UUID> moduleIds,
+            Collection<UUID> taskIds, Collection<UUID> fieldIds) {
+        return jdbc.query("""
+                SELECT m.id FROM program_modules m
+                 WHERE m.id IN (:moduleIds) AND m.cohort_id <> :cohortId
+                UNION ALL
+                SELECT t.id FROM program_tasks t
+                  JOIN program_modules m ON m.id = t.module_id
+                 WHERE t.id IN (:taskIds) AND m.cohort_id <> :cohortId
+                UNION ALL
+                SELECT f.id FROM program_task_fields f
+                  JOIN program_tasks t ON t.id = f.task_id
+                  JOIN program_modules m ON m.id = t.module_id
+                 WHERE f.id IN (:fieldIds) AND m.cohort_id <> :cohortId
+                """,
+                new MapSqlParameterSource("cohortId", cohortId)
+                        .addValue("moduleIds", withSentinel(moduleIds))
+                        .addValue("taskIds", withSentinel(taskIds))
+                        .addValue("fieldIds", withSentinel(fieldIds)),
+                (rs, i) -> rs.getObject(1, UUID.class));
     }
 
     /* -------------------------------------------------------------- the restore */

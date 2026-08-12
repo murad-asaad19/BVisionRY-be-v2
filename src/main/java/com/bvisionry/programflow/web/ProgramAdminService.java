@@ -1,6 +1,7 @@
 package com.bvisionry.programflow.web;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -8,6 +9,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import org.springframework.context.ApplicationEventPublisher;
@@ -17,8 +19,12 @@ import org.springframework.transaction.annotation.Transactional;
 import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.FieldValidationException;
+import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.programflow.domain.AudienceMode;
+import com.bvisionry.programflow.domain.BoardSnapshot;
+import com.bvisionry.programflow.domain.Cohort;
+import com.bvisionry.programflow.domain.CohortStatus;
 import com.bvisionry.programflow.domain.FieldType;
 import com.bvisionry.programflow.domain.MilestoneRole;
 import com.bvisionry.programflow.domain.ProgramModule;
@@ -47,10 +53,12 @@ import com.bvisionry.programflow.dto.PulseResponse;
 import com.bvisionry.programflow.dto.PulseResponse.CellState;
 import com.bvisionry.programflow.dto.PulseResponse.PulseColumn;
 import com.bvisionry.programflow.dto.PulseResponse.PulseRow;
+import com.bvisionry.programflow.dto.SaveBoardRequest;
 import com.bvisionry.programflow.dto.TaskDto;
 import com.bvisionry.programflow.dto.UpdateAudienceRequest;
 import com.bvisionry.programflow.dto.UpdateModuleRequest;
 import com.bvisionry.programflow.dto.UpdateTaskRequest;
+import com.bvisionry.programflow.repository.BoardRestoreRepository;
 import com.bvisionry.programflow.repository.CohortBoardReadRepository;
 import com.bvisionry.programflow.repository.CohortMemberRow;
 import com.bvisionry.programflow.repository.CohortRepository;
@@ -59,6 +67,7 @@ import com.bvisionry.programflow.repository.ProgramSettingsRepository;
 import com.bvisionry.programflow.repository.ProgramSubmissionRepository;
 import com.bvisionry.programflow.repository.ProgramTaskRepository;
 
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 
 /** Admin (program director) operations: board, modules, tasks, pulse, settings. Spec §13: platform-scoped. */
@@ -76,6 +85,8 @@ public class ProgramAdminService {
     private final MyProgramService myProgramService;
     private final com.bvisionry.programflow.repository.TaskSpineRepository spine;
     private final CohortBoardReadRepository boardReads;
+    private final BoardRestoreRepository restore;
+    private final EntityManager entityManager;
     private final ApplicationEventPublisher events;
 
     // ------------------------------------------------------------------ board
@@ -92,6 +103,176 @@ public class ProgramAdminService {
                 ProgramMapper.toDto(settings.findById(cohortId).orElse(null)),
                 moduleDtos,
                 new BoardResponse.BoardStats(mods.size(), taskCount, members.size()));
+    }
+
+    /**
+     * The Curriculum builder's Save: applies the WHOLE board in one write.
+     * Modules, audiences, tasks and fields are upserted by their (possibly
+     * client-minted) ids, anything the payload does not hold is deleted, and
+     * positions are re-derived from list order — through the very
+     * {@link BoardRestoreRepository} the checkpoint revert uses, so there is one
+     * reconciliation engine rather than two that can drift apart.
+     *
+     * <p><strong>Whole-board LAST WRITE WINS.</strong> The payload is the new
+     * truth for the entire cohort, so two admins editing the same cohort at the
+     * same time clobber each other — where the old per-entity writes merged (one
+     * could rename a module while the other edited a task). That is the accepted
+     * cost of "nothing is written until you press Save"; there is deliberately
+     * no lock or version check, the builder being a single-director surface.
+     *
+     * @param req the board as the builder holds it; {@code force} confirms
+     *     deleting tasks members have already worked on — without it such a save
+     *     is refused with a 409 naming exactly what would be lost.
+     */
+    public BoardResponse saveBoard(UUID cohortId, SaveBoardRequest req) {
+        Cohort cohort = cohortService.requireEditable(cohortId);
+        List<ProgramModule> current = modules.findByCohortIdOrderByPositionAsc(cohortId);
+        List<CohortMemberRow> roster = cohorts.findRoster(cohortId);
+
+        BoardSnapshot snapshot = toSnapshot(req);
+        requireOwnIds(cohortId, snapshot);
+        validateBoard(cohortId, req, current, roster);
+
+        List<BoardRestoreRepository.DoomedTask> atRisk =
+                restore.memberWorkAtRisk(cohortId, snapshot.taskIds());
+        if (!req.force() && !atRisk.isEmpty()) {
+            throw new IllegalOperationException(
+                    ProgramCheckpointService.memberWorkMessage("Saving", "Save", atRisk));
+        }
+        List<ProgramFlowEvents.ModuleAssigned> assignments =
+                audienceNotifications(cohort, req, current, roster);
+
+        // The write is raw SQL (it inserts rows under chosen ids), so flush
+        // first and clear after — exactly as ProgramCheckpointService.revert.
+        entityManager.flush();
+        restore.restore(cohortId, snapshot);
+        entityManager.clear();
+
+        assignments.forEach(events::publishEvent);
+        return getBoard(cohortId);
+    }
+
+    /** The submitted board as the snapshot the restore speaks; new fields get an id here. */
+    private static BoardSnapshot toSnapshot(SaveBoardRequest req) {
+        return new BoardSnapshot(req.modules().stream()
+                .map(m -> new BoardSnapshot.ModuleSnap(m.id(), m.name(), m.summary(),
+                        blankToNull(m.pillarLabel()), m.lockMode(), m.unlockAt(), m.assignMode(),
+                        List.copyOf(m.memberIds()),
+                        m.tasks().stream()
+                                .map(t -> new BoardSnapshot.TaskSnap(t.id(), t.name(), t.taskType(),
+                                        t.refId(), t.milestoneRole(), t.dueDate(), t.status(),
+                                        t.aiDraft(), fieldSnaps(t.fields())))
+                                .toList()))
+                .toList());
+    }
+
+    private static List<BoardSnapshot.FieldSnap> fieldSnaps(List<FieldUpsert> fields) {
+        return fields.stream()
+                .map(f -> new BoardSnapshot.FieldSnap(
+                        f.id() == null ? UUID.randomUUID() : f.id(),
+                        f.type(), f.type().answerable() && f.required(),
+                        new LinkedHashMap<>(f.config())))
+                .toList();
+    }
+
+    /**
+     * Every id the payload claims must be free or already this cohort's. The
+     * restore upserts BY ID, so an id owned by another cohort would silently
+     * move that row here, and the same id twice would silently drop a row.
+     */
+    private void requireOwnIds(UUID cohortId, BoardSnapshot snapshot) {
+        List<UUID> moduleIds = snapshot.moduleIds();
+        List<UUID> taskIds = snapshot.taskIds();
+        List<UUID> fieldIds = snapshot.fieldIds();
+        if (Set.copyOf(moduleIds).size() != moduleIds.size()
+                || Set.copyOf(taskIds).size() != taskIds.size()
+                || Set.copyOf(fieldIds).size() != fieldIds.size()) {
+            throw new BadRequestException("This board carries the same id twice.");
+        }
+        List<UUID> foreign = restore.foreignIds(cohortId, moduleIds, taskIds, fieldIds);
+        if (!foreign.isEmpty()) {
+            throw new BadRequestException("This board references "
+                    + foreign.size() + " id(s) that belong to another cohort.");
+        }
+    }
+
+    /**
+     * Re-applies to the batch every rule a single-task save enforces, so "save
+     * the whole board" cannot become a hole in the typed spine. The cohort-level
+     * milestone pair is read across the SUBMITTED board rather than the DB —
+     * after this write the payload IS the cohort, so moving the BASELINE role
+     * from one task to another in one save is legal while two BASELINEs in one
+     * payload are not.
+     *
+     * <p>Rejections name the offending task: on a forty-task board a bare
+     * "pick what this references" is unactionable, which is why this throws a
+     * composed message instead of the single-task save's per-field 400.
+     */
+    private void validateBoard(UUID cohortId, SaveBoardRequest req,
+            List<ProgramModule> current, List<CohortMemberRow> roster) {
+        Map<UUID, ProgramTask> existing = current.stream()
+                .flatMap(m -> m.getTasks().stream())
+                .collect(Collectors.toMap(ProgramTask::getId, Function.identity()));
+        Set<UUID> rosterIds = roster.stream().map(CohortMemberRow::getId)
+                .collect(Collectors.toSet());
+        Map<MilestoneRole, UUID> milestones = new EnumMap<>(MilestoneRole.class);
+
+        for (SaveBoardRequest.ModuleUpsert m : req.modules()) {
+            if (m.assignMode() == AudienceMode.MEMBERS && !rosterIds.containsAll(m.memberIds())) {
+                throw new BadRequestException("One or more members are not enrolled in this cohort");
+            }
+            for (SaveBoardRequest.TaskUpsert t : m.tasks()) {
+                Map<String, String> errors = taskSpineErrors(existing.get(t.id()), t.taskType(),
+                        t.refId(), t.milestoneRole(), t.status(), t.fields().size());
+                if (errors.isEmpty()) {
+                    boolean taken = (t.milestoneRole() == MilestoneRole.BASELINE
+                                    || t.milestoneRole() == MilestoneRole.DISTANCE)
+                            && milestones.putIfAbsent(t.milestoneRole(), t.id()) != null;
+                    errors.putAll(milestoneErrors(cohortId, t.milestoneRole(), t.refId(), taken));
+                }
+                if (!errors.isEmpty()) {
+                    throw new BadRequestException("“" + t.name() + "” — "
+                            + String.join(" ", errors.values()));
+                }
+            }
+        }
+    }
+
+    /**
+     * "New module assigned" for the members a saved audience newly reaches —
+     * {@link #updateAudience}'s notification, preserved for the batch save.
+     * Only an EXISTING module can notify: one created by this save has no
+     * "before", exactly as {@link #createModule} never notified either.
+     */
+    private List<ProgramFlowEvents.ModuleAssigned> audienceNotifications(Cohort cohort,
+            SaveBoardRequest req, List<ProgramModule> current, List<CohortMemberRow> roster) {
+        // A DRAFT's modules are invisible to members and a COMPLETED cohort is
+        // read-only for them — same gate as the per-module write.
+        if (cohort.getStatus() != CohortStatus.LAUNCHED) {
+            return List.of();
+        }
+        Map<UUID, ProgramModule> before = current.stream()
+                .collect(Collectors.toMap(ProgramModule::getId, Function.identity()));
+        List<ProgramFlowEvents.ModuleAssigned> assignments = new ArrayList<>();
+        for (SaveBoardRequest.ModuleUpsert m : req.modules()) {
+            ProgramModule was = before.get(m.id());
+            if (was == null) {
+                continue;
+            }
+            Predicate<UUID> reachedNow = m.assignMode() == AudienceMode.ALL
+                    ? id -> true
+                    : Set.copyOf(m.memberIds())::contains;
+            List<UUID> newlyAssigned = roster.stream()
+                    .map(CohortMemberRow::getId)
+                    .filter(reachedNow)
+                    .filter(id -> !ProgramRules.includes(was, id))
+                    .toList();
+            if (!newlyAssigned.isEmpty()) {
+                assignments.add(new ProgramFlowEvents.ModuleAssigned(
+                        m.name(), cohort.getName(), newlyAssigned));
+            }
+        }
+        return assignments;
     }
 
     public ProgramSettingsDto updateSettings(UUID cohortId, ProgramSettingsDto req) {
@@ -264,14 +445,38 @@ public class ProgramAdminService {
     }
 
     /**
-     * Typed-spine rules (spec §1/§5): the per-task structural rules from
-     * {@link ProgramRules#taskTypeFieldErrors}, plus the cohort-level ones —
-     * at most ONE BASELINE and ONE DISTANCE milestone per cohort, and a
-     * BASELINE/DISTANCE task's pipeline must match the designated pair when
-     * one is designated. (Task moves stay within the cohort by construction,
-     * so create/update cover every mutation that could break these.)
+     * Typed-spine rules (spec §1/§5) for ONE task save: the shared per-task
+     * rules plus the cohort-level milestone pair, whose "already taken" side is
+     * read from the DB — every other task of this cohort keeps its role across
+     * this write. (Task moves stay within the cohort by construction, so
+     * create/update cover every mutation that could break these.)
      */
     private void validateSpine(UUID cohortId, ProgramTask t, ProgramTaskType type,
+            UUID refId, MilestoneRole role,
+            com.bvisionry.programflow.domain.ProgramTaskStatus status, int fieldCount) {
+        Map<String, String> errors =
+                taskSpineErrors(t, type, refId, role, status, fieldCount);
+        if (errors.isEmpty()) {
+            boolean taken = (role == MilestoneRole.BASELINE || role == MilestoneRole.DISTANCE)
+                    && tasks.findByCohortAndMilestoneRole(cohortId, role).stream()
+                            .anyMatch(other -> !other.getId().equals(t.getId()));
+            errors.putAll(milestoneErrors(cohortId, role, refId, taken));
+        }
+        if (!errors.isEmpty()) {
+            throw new FieldValidationException(errors);
+        }
+    }
+
+    /**
+     * The per-task half of the spine rules — structure
+     * ({@link ProgramRules#taskTypeFieldErrors}), the referenced object's
+     * existence, and a milestone's frozen instrument. Shared by the single-task
+     * save and the whole-board save; the milestone PAIR rules are not here
+     * because each caller reads "already taken" from a different place.
+     *
+     * @param existing the task as stored, or {@code null} when the save creates it
+     */
+    private Map<String, String> taskSpineErrors(ProgramTask existing, ProgramTaskType type,
             UUID refId, MilestoneRole role,
             com.bvisionry.programflow.domain.ProgramTaskStatus status, int fieldCount) {
         Map<String, String> errors = new LinkedHashMap<>(
@@ -287,31 +492,42 @@ public class ProgramAdminService {
         }
         // Once members have answered a milestone, its instrument is frozen —
         // re-pointing the ref would orphan their tagged submissions (review #7b).
-        if (errors.isEmpty() && t.getTaskType() == ProgramTaskType.ASSESSMENT
-                && t.getRefId() != null && !t.getRefId().equals(refId)
-                && spine.hasTaggedSubmissions(t.getId())) {
+        if (errors.isEmpty() && existing != null
+                && existing.getTaskType() == ProgramTaskType.ASSESSMENT
+                && existing.getRefId() != null && !existing.getRefId().equals(refId)
+                && spine.hasTaggedSubmissions(existing.getId())) {
             errors.put("refId", "Members have already answered this milestone — "
                     + "its assessment pipeline can no longer change.");
         }
-        if (errors.isEmpty() && (role == MilestoneRole.BASELINE || role == MilestoneRole.DISTANCE)) {
-            boolean taken = tasks.findByCohortAndMilestoneRole(cohortId, role).stream()
-                    .anyMatch(other -> !other.getId().equals(t.getId()));
-            if (taken) {
-                errors.put("milestoneRole", "This cohort already has a "
-                        + role.name().toLowerCase() + " milestone task.");
-            }
-            UUID designated = settings.findById(cohortId)
-                    .map(s -> role == MilestoneRole.BASELINE
-                            ? s.getBaselinePipelineId() : s.getDistancePipelineId())
-                    .orElse(null);
-            if (designated != null && refId != null && !designated.equals(refId)) {
-                errors.put("refId", "The cohort's designated " + role.name().toLowerCase()
-                        + " assessment is a different pipeline.");
-            }
+        return errors;
+    }
+
+    /**
+     * The cohort-level milestone rules (spec §5): at most ONE BASELINE and ONE
+     * DISTANCE per cohort, and a BASELINE/DISTANCE task's pipeline must match
+     * the designated pair when one is designated.
+     *
+     * @param taken another task of this cohort already holds {@code role}
+     */
+    private Map<String, String> milestoneErrors(UUID cohortId, MilestoneRole role, UUID refId,
+            boolean taken) {
+        Map<String, String> errors = new LinkedHashMap<>();
+        if (role != MilestoneRole.BASELINE && role != MilestoneRole.DISTANCE) {
+            return errors;
         }
-        if (!errors.isEmpty()) {
-            throw new FieldValidationException(errors);
+        if (taken) {
+            errors.put("milestoneRole", "This cohort already has a "
+                    + role.name().toLowerCase() + " milestone task.");
         }
+        UUID designated = settings.findById(cohortId)
+                .map(s -> role == MilestoneRole.BASELINE
+                        ? s.getBaselinePipelineId() : s.getDistancePipelineId())
+                .orElse(null);
+        if (designated != null && refId != null && !designated.equals(refId)) {
+            errors.put("refId", "The cohort's designated " + role.name().toLowerCase()
+                    + " assessment is a different pipeline.");
+        }
+        return errors;
     }
 
     /** Deletes the task with its fields/submissions (orphan removal + DB cascades). */

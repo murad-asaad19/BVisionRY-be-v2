@@ -13,8 +13,10 @@ import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
@@ -44,20 +46,14 @@ import com.bvisionry.programflow.dto.CohortMatrixResponse.MilestoneCell;
 import com.bvisionry.programflow.dto.CohortMatrixResponse.MilestoneColumn;
 import com.bvisionry.programflow.dto.CohortMatrixResponse.ModuleCell;
 import com.bvisionry.programflow.dto.CohortMatrixResponse.ModuleColumn;
-import com.bvisionry.programflow.dto.CreateModuleRequest;
 import com.bvisionry.programflow.dto.FieldUpsert;
 import com.bvisionry.programflow.dto.ModuleDto;
-import com.bvisionry.programflow.dto.MoveTaskRequest;
 import com.bvisionry.programflow.dto.ProgramSettingsDto;
 import com.bvisionry.programflow.dto.PulseResponse;
 import com.bvisionry.programflow.dto.PulseResponse.CellState;
 import com.bvisionry.programflow.dto.PulseResponse.PulseColumn;
 import com.bvisionry.programflow.dto.PulseResponse.PulseRow;
 import com.bvisionry.programflow.dto.SaveBoardRequest;
-import com.bvisionry.programflow.dto.TaskDto;
-import com.bvisionry.programflow.dto.UpdateAudienceRequest;
-import com.bvisionry.programflow.dto.UpdateModuleRequest;
-import com.bvisionry.programflow.dto.UpdateTaskRequest;
 import com.bvisionry.programflow.repository.BoardRestoreRepository;
 import com.bvisionry.programflow.repository.CohortBoardReadRepository;
 import com.bvisionry.programflow.repository.CohortMemberRow;
@@ -93,6 +89,7 @@ public class ProgramAdminService {
 
     @Transactional(readOnly = true)
     public BoardResponse getBoard(UUID cohortId) {
+        Cohort cohort = cohortService.require(cohortId);
         List<CohortMemberRow> members = cohortFounders(cohortId);
         List<ProgramModule> mods = modules.findByCohortIdOrderByPositionAsc(cohortId);
         List<ModuleDto> moduleDtos = mods.stream()
@@ -102,23 +99,23 @@ public class ProgramAdminService {
         return new BoardResponse(
                 ProgramMapper.toDto(settings.findById(cohortId).orElse(null)),
                 moduleDtos,
+                cohort.getBoardVersion(),
                 new BoardResponse.BoardStats(mods.size(), taskCount, members.size()));
     }
 
     /**
-     * The Curriculum builder's Save: applies the WHOLE board in one write.
-     * Modules, audiences, tasks and fields are upserted by their (possibly
-     * client-minted) ids, anything the payload does not hold is deleted, and
-     * positions are re-derived from list order — through the very
-     * {@link BoardRestoreRepository} the checkpoint revert uses, so there is one
-     * reconciliation engine rather than two that can drift apart.
+     * The Curriculum builder's Save, and the ONLY writer of a cohort's modules,
+     * tasks and fields. Applies the WHOLE board in one write: everything is
+     * upserted by its (possibly client-minted) id, anything the payload does not
+     * hold is deleted, and positions are re-derived from list order.
      *
-     * <p><strong>Whole-board LAST WRITE WINS.</strong> The payload is the new
-     * truth for the entire cohort, so two admins editing the same cohort at the
-     * same time clobber each other — where the old per-entity writes merged (one
-     * could rename a module while the other edited a task). That is the accepted
-     * cost of "nothing is written until you press Save"; there is deliberately
-     * no lock or version check, the builder being a single-director surface.
+     * <p><strong>The payload is complete, so a stale one is destructive.</strong>
+     * Whatever another admin added since this board was read is simply absent
+     * from it — and absent means delete. So the save is conditional on
+     * {@link SaveBoardRequest#expectedVersion()}: a mismatch is refused with a
+     * 412 and the admin reloads. Being the single writer is what makes that
+     * version trustworthy; there is no second endpoint that can move the board
+     * without moving the version with it.
      *
      * @param req the board as the builder holds it; {@code force} confirms
      *     deleting tasks members have already worked on — without it such a save
@@ -126,6 +123,11 @@ public class ProgramAdminService {
      */
     public BoardResponse saveBoard(UUID cohortId, SaveBoardRequest req) {
         Cohort cohort = cohortService.requireEditable(cohortId);
+        if (cohort.getBoardVersion() != req.expectedVersion()) {
+            throw new ResponseStatusException(HttpStatus.PRECONDITION_FAILED,
+                    "Someone else saved this board while you were editing it. "
+                            + "Reload to pick up their changes — saving now would delete them.");
+        }
         List<ProgramModule> current = modules.findByCohortIdOrderByPositionAsc(cohortId);
         List<CohortMemberRow> roster = cohorts.findRoster(cohortId);
 
@@ -136,20 +138,35 @@ public class ProgramAdminService {
         List<BoardRestoreRepository.DoomedTask> atRisk =
                 restore.memberWorkAtRisk(cohortId, snapshot.taskIds());
         if (!req.force() && !atRisk.isEmpty()) {
-            throw new IllegalOperationException(
-                    ProgramCheckpointService.memberWorkMessage("Saving", "Save", atRisk));
+            throw new IllegalOperationException(memberWorkMessage(atRisk));
         }
         List<ProgramFlowEvents.ModuleAssigned> assignments =
                 audienceNotifications(cohort, req, current, roster);
 
         // The write is raw SQL (it inserts rows under chosen ids), so flush
-        // first and clear after — exactly as ProgramCheckpointService.revert.
+        // first — which also lands the version bump — and clear after, so
+        // nothing keeps serving the pre-save first-level cache.
+        cohort.setBoardVersion(cohort.getBoardVersion() + 1);
         entityManager.flush();
         restore.restore(cohortId, snapshot);
         entityManager.clear();
 
         assignments.forEach(events::publishEvent);
         return getBoard(cohortId);
+    }
+
+    /**
+     * "Saving would delete member work on “Pitch” (2 members). Save anyway to
+     * discard it." — the 409 names what is at stake rather than asking the admin
+     * to guess which of forty cards someone has already answered.
+     */
+    private static String memberWorkMessage(List<BoardRestoreRepository.DoomedTask> atRisk) {
+        return "Saving would delete member work on "
+                + atRisk.stream()
+                        .map(t -> "“" + t.taskName() + "” (" + t.memberCount()
+                                + (t.memberCount() == 1 ? " member" : " members") + ")")
+                        .collect(Collectors.joining(", "))
+                + ". Save anyway to discard it.";
     }
 
     /** The submitted board as the snapshot the restore speaks; new fields get an id here. */
@@ -323,157 +340,12 @@ public class ProgramAdminService {
                 : java.util.Optional.empty();
     }
 
-    // ---------------------------------------------------------------- modules
-
-    public ModuleDto createModule(UUID cohortId, CreateModuleRequest req) {
-        cohortService.requireEditable(cohortId);
-        ProgramModule m = new ProgramModule();
-        m.setCohortId(cohortId);
-        m.setName(req.name());
-        m.setSummary(req.summary());
-        m.setPillarLabel(blankToNull(req.pillarLabel()));
-        m.setPosition(nextPosition(modules.findByCohortIdOrderByPositionAsc(cohortId).stream()
-                .map(ProgramModule::getPosition).toList()));
-        return ProgramMapper.toDto(modules.save(m), reached(m, cohortFounders(cohortId)));
-    }
-
-    public ModuleDto updateModule(UUID cohortId, UUID moduleId, UpdateModuleRequest req) {
-        ProgramModule m = requireEditableModule(cohortId, moduleId);
-        m.setName(req.name());
-        m.setSummary(req.summary());
-        m.setPillarLabel(blankToNull(req.pillarLabel()));
-        m.setLockMode(req.lockMode());
-        m.setUnlockAt(req.unlockAt());
-        return ProgramMapper.toDto(m, reached(m, cohortFounders(cohortId)));
-    }
-
-    public AudienceDto updateAudience(UUID cohortId, UUID moduleId, UpdateAudienceRequest req) {
-        ProgramModule m = requireEditableModule(cohortId, moduleId);
-        List<CohortMemberRow> roster = cohortFounders(cohortId);
-
-        if (req.mode() == AudienceMode.MEMBERS) {
-            var rosterIds = roster.stream().map(CohortMemberRow::getId).collect(Collectors.toSet());
-            if (!rosterIds.containsAll(req.memberIds())) {
-                throw new BadRequestException("One or more members are not enrolled in this cohort");
-            }
-        }
-
-        var includedBefore = roster.stream()
-                .filter(member -> ProgramRules.includes(m, member.getId()))
-                .map(CohortMemberRow::getId)
-                .collect(Collectors.toSet());
-
-        m.setAssignMode(req.mode());
-        m.setMemberIds(new LinkedHashSet<>(req.memberIds()));
-
-        // "New module assigned" for learners the audience newly reaches — only
-        // while the cohort is LAUNCHED: a DRAFT's module is invisible to
-        // members and a COMPLETED cohort is read-only for them.
-        var cohort = cohortService.require(cohortId);
-        List<UUID> newlyAssigned = roster.stream()
-                .filter(member -> !includedBefore.contains(member.getId()))
-                .filter(member -> ProgramRules.includes(m, member.getId()))
-                .map(CohortMemberRow::getId)
-                .toList();
-        if (!newlyAssigned.isEmpty()
-                && cohort.getStatus() == com.bvisionry.programflow.domain.CohortStatus.LAUNCHED) {
-            events.publishEvent(new ProgramFlowEvents.ModuleAssigned(
-                    m.getName(), cohort.getName(), newlyAssigned));
-        }
-
-        return new AudienceDto(m.getAssignMode(),
-                List.copyOf(m.getMemberIds()), reached(m, roster));
-    }
-
-    /** Deletes the module with its tasks/fields/submissions (DB cascades). */
-    public void deleteModule(UUID cohortId, UUID moduleId) {
-        ProgramModule m = requireEditableModule(cohortId, moduleId);
-        modules.delete(m);
-        // Compact positions so createModule's size-based position stays unique.
-        int position = 0;
-        for (ProgramModule other : modules.findByCohortIdOrderByPositionAsc(cohortId)) {
-            if (!other.getId().equals(moduleId)) {
-                other.setPosition(position++);
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------ tasks
-
-    public TaskDto createTask(UUID cohortId, UUID moduleId, ProgramTaskType taskType) {
-        ProgramModule m = requireEditableModule(cohortId, moduleId);
-        ProgramTaskType type = taskType == null ? ProgramTaskType.LESSON : taskType;
-        ProgramTask t = new ProgramTask();
-        t.setModule(m);
-        t.setTaskType(type);
-        t.setName("Untitled " + type.name().toLowerCase() + " task");
-        t.setPosition(nextPosition(m.getTasks().stream().map(ProgramTask::getPosition).toList()));
-        if (type == ProgramTaskType.LESSON) {
-            ProgramTaskField intro = new ProgramTaskField();
-            intro.setTask(t);
-            intro.setFieldType(FieldType.INSTRUCTIONS);
-            intro.setRequired(false);
-            intro.setPosition(0);
-            intro.setConfig(new LinkedHashMap<>(Map.of("text", "Describe what the founder needs to do.")));
-            t.getFields().add(intro);
-        } else if (type == ProgramTaskType.ASSESSMENT) {
-            // A valid default (check-ins are the common case); the builder can
-            // switch to BASELINE/DISTANCE, which uniqueness-validates on save.
-            t.setMilestoneRole(MilestoneRole.CHECKIN);
-        }
-        m.getTasks().add(t);
-        return ProgramMapper.toDto(tasks.save(t));
-    }
-
-    public TaskDto updateTask(UUID cohortId, UUID taskId, UpdateTaskRequest req) {
-        cohortService.requireEditable(cohortId);
-        ProgramTask t = requireTask(cohortId, taskId);
-        // Additive contract: a request without taskType (pre-spine builder)
-        // leaves the whole type/ref/milestone trio untouched.
-        ProgramTaskType type = req.taskType() == null ? t.getTaskType() : req.taskType();
-        UUID refId = req.taskType() == null ? t.getRefId() : req.refId();
-        MilestoneRole role = req.taskType() == null ? t.getMilestoneRole() : req.milestoneRole();
-        validateSpine(cohortId, t, type, refId, role, req.status(), req.fields().size());
-        t.setTaskType(type);
-        t.setRefId(refId);
-        t.setMilestoneRole(role);
-        t.setName(req.name());
-        t.setDueDate(req.dueDate());
-        t.setStatus(req.status());
-        t.setAiDraft(req.aiDraft());
-        reconcileFields(t, req.fields());
-        return ProgramMapper.toDto(t);
-    }
-
-    /**
-     * Typed-spine rules (spec §1/§5) for ONE task save: the shared per-task
-     * rules plus the cohort-level milestone pair, whose "already taken" side is
-     * read from the DB — every other task of this cohort keeps its role across
-     * this write. (Task moves stay within the cohort by construction, so
-     * create/update cover every mutation that could break these.)
-     */
-    private void validateSpine(UUID cohortId, ProgramTask t, ProgramTaskType type,
-            UUID refId, MilestoneRole role,
-            com.bvisionry.programflow.domain.ProgramTaskStatus status, int fieldCount) {
-        Map<String, String> errors =
-                taskSpineErrors(t, type, refId, role, status, fieldCount);
-        if (errors.isEmpty()) {
-            boolean taken = (role == MilestoneRole.BASELINE || role == MilestoneRole.DISTANCE)
-                    && tasks.findByCohortAndMilestoneRole(cohortId, role).stream()
-                            .anyMatch(other -> !other.getId().equals(t.getId()));
-            errors.putAll(milestoneErrors(cohortId, role, refId, taken));
-        }
-        if (!errors.isEmpty()) {
-            throw new FieldValidationException(errors);
-        }
-    }
-
     /**
      * The per-task half of the spine rules — structure
      * ({@link ProgramRules#taskTypeFieldErrors}), the referenced object's
-     * existence, and a milestone's frozen instrument. Shared by the single-task
-     * save and the whole-board save; the milestone PAIR rules are not here
-     * because each caller reads "already taken" from a different place.
+     * existence, and a milestone's frozen instrument. The milestone PAIR rules
+     * are not here: they are cohort-level and read across the whole submitted
+     * board, which is a different question from "is this task well formed".
      *
      * @param existing the task as stored, or {@code null} when the save creates it
      */
@@ -529,111 +401,6 @@ public class ProgramAdminService {
                     + " assessment is a different pipeline.");
         }
         return errors;
-    }
-
-    /** Deletes the task with its fields/submissions (orphan removal + DB cascades). */
-    public void deleteTask(UUID cohortId, UUID taskId) {
-        cohortService.requireEditable(cohortId);
-        ProgramTask t = requireTask(cohortId, taskId);
-        ProgramModule m = t.getModule();
-        m.getTasks().remove(t);
-        int position = 0;
-        for (ProgramTask remaining : m.getTasks()) {
-            remaining.setPosition(position++);
-        }
-    }
-
-    /**
-     * Board drag-and-drop: moves the task to {@code req.moduleId()} at
-     * {@code req.position()} (same module = reorder) and compacts positions on
-     * both sides. Only the owning side ({@code task.module} + positions) is
-     * written — removing from the source collection would orphan-delete the task.
-     */
-    public TaskDto moveTask(UUID cohortId, UUID taskId, MoveTaskRequest req) {
-        cohortService.requireEditable(cohortId);
-        ProgramTask t = requireTask(cohortId, taskId);
-        ProgramModule source = t.getModule();
-        ProgramModule target = requireModule(cohortId, req.moduleId());
-
-        if (!source.getId().equals(target.getId())) {
-            int position = 0;
-            for (ProgramTask remaining : source.getTasks()) {
-                if (!remaining.getId().equals(taskId)) {
-                    remaining.setPosition(position++);
-                }
-            }
-        }
-
-        List<ProgramTask> reordered = target.getTasks().stream()
-                .filter(x -> !x.getId().equals(taskId))
-                .collect(Collectors.toCollection(ArrayList::new));
-        reordered.add(Math.min(req.position(), reordered.size()), t);
-        t.setModule(target);
-        int position = 0;
-        for (ProgramTask task : reordered) {
-            task.setPosition(position++);
-        }
-        return ProgramMapper.toDto(t);
-    }
-
-    /**
-     * Replaces the task's field list with the submitted one, keeping the
-     * managed entities for ids that survive so learner answers (keyed by field
-     * id) stay attached across edits.
-     */
-    private void reconcileFields(ProgramTask t, List<FieldUpsert> upserts) {
-        var keptIds = upserts.stream().map(FieldUpsert::id).filter(java.util.Objects::nonNull)
-                .collect(Collectors.toSet());
-        t.getFields().removeIf(f -> !keptIds.contains(f.getId()));
-        Map<UUID, ProgramTaskField> byId = t.getFields().stream()
-                .collect(Collectors.toMap(ProgramTaskField::getId, Function.identity()));
-
-        int position = 0;
-        for (FieldUpsert fu : upserts) {
-            ProgramTaskField f = fu.id() == null ? null : byId.get(fu.id());
-            if (f == null) {
-                f = new ProgramTaskField();
-                f.setTask(t);
-                t.getFields().add(f);
-            }
-            f.setFieldType(fu.type());
-            f.setRequired(fu.type().answerable() && fu.required());
-            f.setPosition(position++);
-            f.setConfig(new LinkedHashMap<>(fu.config()));
-        }
-    }
-
-    /** "Add to board": persists an AI-composed draft as a module of AI-draft tasks. */
-    public ModuleDto addDraftModule(UUID cohortId, com.bvisionry.programflow.dto.ModuleDraft draft) {
-        cohortService.requireEditable(cohortId);
-        ProgramModule m = new ProgramModule();
-        m.setCohortId(cohortId);
-        m.setName(draft.name());
-        m.setSummary(draft.summary());
-        m.setPosition(modules.findByCohortIdOrderByPositionAsc(cohortId).size());
-
-        int taskPosition = 0;
-        for (var draftTask : draft.tasks()) {
-            ProgramTask t = new ProgramTask();
-            t.setModule(m);
-            t.setName(draftTask.name());
-            t.setDueDate(draftTask.dueDate());
-            t.setAiDraft(true);
-            t.setPosition(taskPosition++);
-            int fieldPosition = 0;
-            for (var draftField : draftTask.fields()) {
-                ProgramTaskField f = new ProgramTaskField();
-                f.setTask(t);
-                f.setFieldType(draftField.type());
-                f.setRequired(draftField.type().answerable() && draftField.required());
-                f.setPosition(fieldPosition++);
-                f.setConfig(new LinkedHashMap<>(draftField.config()));
-                t.getFields().add(f);
-            }
-            m.getTasks().add(t);
-        }
-        m = modules.save(m);
-        return ProgramMapper.toDto(m, reached(m, cohortFounders(cohortId)));
     }
 
     // ------------------------------------------------------------------ pulse
@@ -944,36 +711,7 @@ public class ProgramAdminService {
                 .count();
     }
 
-    /** {@link #requireModule} behind the cohort's ARCHIVED read-only gate. */
-    private ProgramModule requireEditableModule(UUID cohortId, UUID moduleId) {
-        cohortService.requireEditable(cohortId);
-        return requireModule(cohortId, moduleId);
-    }
-
     private static String blankToNull(String v) {
         return v == null || v.isBlank() ? null : v.trim();
-    }
-
-    /**
-     * The next free position: one past the highest, NOT the collection size.
-     * Size collides the moment the sequence has a gap — and gaps are reachable
-     * (historic deletes left two live modules on 1,2,3 and 1,5), so a
-     * size-derived position would silently duplicate an existing one and make
-     * board order depend on insertion order.
-     */
-    private static int nextPosition(List<Integer> taken) {
-        return taken.stream().mapToInt(Integer::intValue).max().orElse(-1) + 1;
-    }
-
-    private ProgramModule requireModule(UUID cohortId, UUID moduleId) {
-        return modules.findById(moduleId)
-                .filter(m -> m.getCohortId().equals(cohortId))
-                .orElseThrow(() -> new ResourceNotFoundException("Module", moduleId.toString()));
-    }
-
-    private ProgramTask requireTask(UUID cohortId, UUID taskId) {
-        return tasks.findWithModule(taskId)
-                .filter(t -> t.getModule().getCohortId().equals(cohortId))
-                .orElseThrow(() -> new ResourceNotFoundException("Task", taskId.toString()));
     }
 }

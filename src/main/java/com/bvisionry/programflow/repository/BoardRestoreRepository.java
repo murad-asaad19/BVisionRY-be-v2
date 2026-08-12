@@ -17,15 +17,15 @@ import com.bvisionry.programflow.domain.BoardSnapshot.TaskSnap;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Makes a cohort's curriculum equal a {@link BoardSnapshot}, in raw SQL. ONE
- * reconciliation engine for both writers that need it: the checkpoint revert
- * (snapshot = the board as it was opened) and the Curriculum builder's Save
- * (snapshot = the board as the admin edited it locally).
+ * Makes a cohort's curriculum equal a {@link BoardSnapshot}, in raw SQL — the
+ * engine behind the Curriculum builder's whole-board Save, where the snapshot is
+ * the board as the admin edited it locally.
  *
- * <p><strong>Why not JPA.</strong> A revert has to RE-CREATE rows deleted since
- * the checkpoint <em>under their original ids</em> — that is what re-attaches
- * the member work which points at a task by bare uuid with no FK
- * ({@code submissions.program_task_id}, {@code exercise_assignments.program_task_id},
+ * <p><strong>Why not JPA.</strong> The write has to create rows <em>under ids
+ * the browser minted</em>, and to re-create a row it was handed by id — that is
+ * what keeps member work attached, since it points at a task by bare uuid with
+ * no FK ({@code submissions.program_task_id},
+ * {@code exercise_assignments.program_task_id},
  * {@code survey_responses.program_task_id}). Every program-flow entity declares
  * its id {@code insertable = false} with a {@code gen_random_uuid()} default, so
  * JPA structurally cannot insert one with a chosen id. Rather than a hybrid that
@@ -33,9 +33,9 @@ import tools.jackson.databind.ObjectMapper;
  * SQL sequence — the same stance as {@link TaskSpineRepository}.
  *
  * <p><strong>Order is the correctness.</strong> Modules and tasks are upserted
- * BEFORE anything is deleted, so a task that was dragged into a module created
- * after the checkpoint is moved home first and never gets caught by that
- * module's {@code ON DELETE CASCADE} — which would have taken its
+ * BEFORE anything is deleted, so a task the admin dragged into a module the same
+ * payload creates is moved home first and never gets caught by the old module's
+ * {@code ON DELETE CASCADE} — which would have taken its
  * {@code program_submissions} with it.
  */
 @Repository
@@ -58,11 +58,11 @@ public class BoardRestoreRepository {
 
     /* ------------------------------------------------------- member-work probe */
 
-    /** A task a revert would delete, and how many members have work against it. */
+    /** A task this write would delete, and how many members have work against it. */
     public record DoomedTask(String taskName, long memberCount) {}
 
     /**
-     * The tasks this revert would DELETE (cohort tasks the snapshot does not
+     * The tasks this write would DELETE (cohort tasks the snapshot does not
      * hold) that carry member work, with the number of distinct members behind
      * it. Every place work can hang off a task is counted: the LESSON
      * submission table plus the three bare-uuid tags — assessment
@@ -241,7 +241,7 @@ public class BoardRestoreRepository {
                 """, batch);
     }
 
-    /** Tasks added since the checkpoint — cascades their fields and submissions. */
+    /** Tasks the payload dropped — cascades their fields and submissions. */
     private void deleteTasksNotIn(UUID cohortId, Collection<UUID> keptTaskIds) {
         jdbc.update("""
                 DELETE FROM program_tasks t
@@ -253,7 +253,7 @@ public class BoardRestoreRepository {
                         .addValue("keptTaskIds", withSentinel(keptTaskIds)));
     }
 
-    /** Modules added since — empty by now, every snapshot task was moved home first. */
+    /** Modules the payload dropped — empty by now, every kept task moved home first. */
     private void deleteModulesNotIn(UUID cohortId, Collection<UUID> keptModuleIds) {
         jdbc.update("""
                 DELETE FROM program_modules
@@ -276,8 +276,8 @@ public class BoardRestoreRepository {
 
     /**
      * Audience is a set, so it is replaced wholesale. The insert selects from
-     * {@code users} so a member deleted since the checkpoint is simply dropped
-     * instead of failing the whole revert on the FK.
+     * {@code users} so a member erased since the board was read is simply
+     * dropped instead of failing the whole save on the FK.
      */
     private void replaceAudiences(BoardSnapshot snapshot) {
         List<UUID> moduleIds = snapshot.moduleIds();

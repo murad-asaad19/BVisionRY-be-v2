@@ -7,19 +7,16 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * The checkpoint payload: everything the board's admin endpoints can mutate
- * (update-module, audience, create/update/delete/move task, fields), in board
- * order — positions are implied by list order and re-derived on revert, so a
- * restored board never carries a gap that {@code ProgramAdminService.createTask}
- * / {@code createModule} (both size-based) would collide with.
+ * A cohort's whole curriculum as one value — modules, audience, tasks, fields —
+ * in board order, with positions implied by list order and re-derived on write.
+ * This is what {@code BoardRestoreRepository} reconciles the DB against, and
+ * what {@code SaveBoardRequest} is translated into.
  *
  * <p>Program settings are NOT here: the settings sheet has its own explicit
- * Save and is not part of the board's revert scope. Neither are the send-once
- * notification stamps ({@code unlock_notified_at} / {@code due_reminder_sent_at})
- * — a surviving row keeps its stamp untouched, and a row RE-CREATED by a revert
- * starts fresh, which is the honest reading of "this row was deleted".
- *
- * <p>Serialized to jsonb via Jackson; never exposed over the API.
+ * Save and its own scope. Neither are the send-once notification stamps
+ * ({@code unlock_notified_at} / {@code due_reminder_sent_at}) — a row that
+ * survives a save keeps its stamp untouched, and one the save re-creates under a
+ * remembered id starts fresh, which is the honest reading of "this was deleted".
  */
 public record BoardSnapshot(List<ModuleSnap> modules) {
 

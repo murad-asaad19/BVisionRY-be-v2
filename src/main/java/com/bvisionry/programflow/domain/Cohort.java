@@ -68,6 +68,20 @@ public class Cohort {
     @Column(name = "user_id", nullable = false)
     private Set<UUID> memberIds = new LinkedHashSet<>();
 
+    /**
+     * Optimistic concurrency for the curriculum (V175). Bumped by the ONE
+     * writer of modules/tasks/fields — the Curriculum builder's whole-board Save
+     * — and echoed on every board read, so a Save built against a stale board is
+     * refused instead of deleting whatever the other admin added meanwhile.
+     *
+     * <p>Not a JPA {@code @Version}: this tracks the BOARD, and the board lives
+     * in other tables entirely. Hibernate would bump it on any cohort-row write
+     * (a rename, a launch) and leave it untouched when a module changed, which
+     * is exactly backwards.
+     */
+    @Column(name = "board_version", nullable = false)
+    private long boardVersion;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 

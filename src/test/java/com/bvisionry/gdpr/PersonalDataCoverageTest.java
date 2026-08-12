@@ -132,16 +132,6 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             "password_reset_tokens.user_id", "pillar_evaluation_history.archived_by_admin_id",
             "pipeline_auto_assignments.created_by", "pipeline_auto_assignments.updated_by",
             "pipelines.created_by", "platform_settings.updated_by", "program_module_members.user_id",
-            // program_board_checkpoints (V174): created_by CASCADEs with the
-            // user row — a checkpoint is one admin's transient authoring scratch
-            // (the cohort curriculum as they found it), so it dies with them.
-            // NOT exported: it is data about a CURRICULUM, and its payload
-            // carries other members' audience ids, which an export owed to its
-            // owner must not hand out (same reason account_activity is stripped).
-            // A member erased mid-session simply falls out of any audience a
-            // later revert restores — BoardRestoreRepository re-inserts audience
-            // rows through a users lookup, so an erased id is dropped.
-            "program_board_checkpoints.created_by",
             "program_submissions.user_id", "public_assessment_links.created_by",
             "push_subscriptions.user_id", "quiz_attempt.user_id", "refresh_tokens.user_id",
             "submission_pillar_unlocks.unlocked_by_admin_id", "submissions.user_id",

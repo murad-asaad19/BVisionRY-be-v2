@@ -26,10 +26,16 @@ import jakarta.validation.constraints.Size;
  * than a create-then-reference dance. An id the server has never seen is
  * created under it; an id belonging to a DIFFERENT cohort is rejected.
  *
- * <p>{@code position} is not sent: it is re-derived from list order, the same
- * rule the checkpoint restore uses, so a saved board never carries a gap.
+ * <p>{@code position} is not sent: it is re-derived from list order, so a saved
+ * board never carries a gap.
  */
 public record SaveBoardRequest(
+        /**
+         * The {@link BoardResponse#version()} this board was built on. Since the
+         * payload is COMPLETE, a save against a stale board deletes everything
+         * another admin added meanwhile — so a mismatch is a 412, not a merge.
+         */
+        @NotNull Long expectedVersion,
         /** Confirms deleting tasks members have already worked on — see the 409. */
         boolean force,
         @NotNull @Valid List<ModuleUpsert> modules) {

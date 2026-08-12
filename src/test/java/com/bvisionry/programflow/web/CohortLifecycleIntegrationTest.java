@@ -10,13 +10,17 @@ import com.bvisionry.programflow.domain.AudienceMode;
 import com.bvisionry.organization.OrganizationRepository;
 import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.programflow.domain.CohortStatus;
+import com.bvisionry.programflow.domain.ModuleLockMode;
+import com.bvisionry.programflow.dto.BoardResponse;
 import com.bvisionry.programflow.dto.CohortDto;
 import com.bvisionry.programflow.dto.CreateCohortRequest;
-import com.bvisionry.programflow.dto.CreateModuleRequest;
-import com.bvisionry.programflow.dto.UpdateAudienceRequest;
+import com.bvisionry.programflow.dto.ModuleDto;
+import com.bvisionry.programflow.dto.SaveBoardRequest;
+import com.bvisionry.programflow.dto.SaveBoardRequest.ModuleUpsert;
 import com.bvisionry.programflow.dto.UpdateCohortMembersRequest;
 import com.bvisionry.programflow.dto.UpdateCohortRequest;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
+import com.bvisionry.testsupport.BoardPayloads;
 import com.bvisionry.testsupport.EnabledIfDockerAvailable;
 import com.bvisionry.testsupport.TestAuthentication;
 import org.junit.jupiter.api.AfterEach;
@@ -135,8 +139,7 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThatThrownBy(() -> cohortService.setOrgMembers(org.getId(), cohortId,
                 new UpdateCohortMembersRequest(List.of())))
                 .isInstanceOf(IllegalOperationException.class);
-        assertThatThrownBy(() -> adminService.createModule(cohortId,
-                new CreateModuleRequest("Week 1", null, null)))
+        assertThatThrownBy(() -> addModule("Week 1", null))
                 .isInstanceOf(IllegalOperationException.class);
 
         // Admin reads keep working in any state (spec: "Pulse/matrix work for any state").
@@ -150,12 +153,43 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
         cohortService.launch(cohortId);
         cohortService.complete(cohortId);
 
-        assertThatCode(() -> adminService.createModule(cohortId,
-                new CreateModuleRequest("Retro module", null, "Mindset")))
+        assertThatCode(() -> addModule("Retro module", "Mindset"))
                 .doesNotThrowAnyException();
         assertThatCode(() -> cohortService.setOrgMembers(org.getId(), cohortId,
                 new UpdateCohortMembersRequest(List.of(member.getId()))))
                 .doesNotThrowAnyException();
+    }
+
+    /* ------------------------------------------------- board writes (§13.10) */
+
+    /**
+     * The console's "add a module": since §13.10 the builder holds the board
+     * locally and the ONLY write is the whole-board Save, so every curriculum
+     * change here is expressed as one.
+     */
+    private UUID addModule(String name, String pillarLabel) {
+        BoardResponse board = adminService.getBoard(cohortId);
+        UUID id = UUID.randomUUID();
+        adminService.saveBoard(cohortId, BoardPayloads.of(board,
+                java.util.stream.Stream.concat(BoardPayloads.modulesOf(board).stream(),
+                        java.util.stream.Stream.of(new ModuleUpsert(id, name, null, pillarLabel,
+                                ModuleLockMode.SEQUENTIAL, null, AudienceMode.ALL,
+                                List.of(), List.of())))
+                        .toList()));
+        return id;
+    }
+
+    /** Re-saves the board with one module's audience narrowed to {@code memberIds}. */
+    private void setAudience(UUID moduleId, List<UUID> memberIds) {
+        BoardResponse board = adminService.getBoard(cohortId);
+        adminService.saveBoard(cohortId, BoardPayloads.of(board, board.modules().stream()
+                .map(m -> m.id().equals(moduleId)
+                        ? new ModuleUpsert(m.id(), m.name(), m.summary(), m.pillarLabel(),
+                                m.lockMode(), m.unlockAt(), AudienceMode.MEMBERS, memberIds,
+                                m.tasks().stream().map(BoardPayloads::asUpsert).toList())
+                        : BoardPayloads.asUpsert(m,
+                                m.tasks().stream().map(BoardPayloads::asUpsert).toList()))
+                .toList()));
     }
 
     /* ------------------------------------------------------- roster scoping */
@@ -178,8 +212,9 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
         users.saveAndFlush(outsider);
         TestAuthentication.authenticate(admin);
 
-        assertThat(adminService.createModule(cohortId,
-                new CreateModuleRequest("Week 1", null, null)).audience().reached())
+        addModule("Week 1", null);
+        assertThat(adminService.getBoard(cohortId).modules()).singleElement()
+                .extracting(m -> m.audience().reached())
                 .as("an ALL-audience module reaches the roster, not the org").isEqualTo(1);
         assertThat(adminService.getBoard(cohortId).stats().members())
                 .as("board stats tile = enrolled founders").isEqualTo(1);
@@ -257,13 +292,10 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
         member2.setOrganization(org);
         member2 = users.saveAndFlush(member2);
         TestAuthentication.authenticate(admin);
-        UUID moduleId = adminService.createModule(cohortId,
-                new CreateModuleRequest("Week 1", null, null)).id();
+        UUID moduleId = addModule("Week 1", null);
         // Narrow to nobody, then include the member — would notify if launched.
-        adminService.updateAudience(cohortId, moduleId,
-                new UpdateAudienceRequest(AudienceMode.MEMBERS, List.of()));
-        adminService.updateAudience(cohortId, moduleId,
-                new UpdateAudienceRequest(AudienceMode.MEMBERS, List.of(member.getId())));
+        setAudience(moduleId, List.of());
+        setAudience(moduleId, List.of(member.getId()));
 
         assertThat(applicationEvents.stream(ProgramFlowEvents.CohortEnrolled.class))
                 .as("draft create + roster stay silent").isEmpty();
@@ -285,10 +317,8 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(afterAdd.get(1).userIds()).containsExactly(member2.getId());
 
         // Post-launch audience change notifies too.
-        adminService.updateAudience(cohortId, moduleId,
-                new UpdateAudienceRequest(AudienceMode.MEMBERS, List.of()));
-        adminService.updateAudience(cohortId, moduleId,
-                new UpdateAudienceRequest(AudienceMode.MEMBERS, List.of(member.getId())));
+        setAudience(moduleId, List.of());
+        setAudience(moduleId, List.of(member.getId()));
         assertThat(applicationEvents.stream(ProgramFlowEvents.ModuleAssigned.class)).hasSize(1);
     }
 

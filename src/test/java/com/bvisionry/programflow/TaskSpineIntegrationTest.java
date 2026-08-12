@@ -4,6 +4,7 @@ import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.FieldValidationException;
 import com.bvisionry.engagement.repository.EngagementReadRepository;
 import com.bvisionry.organization.OrganizationRepository;
@@ -19,10 +20,11 @@ import com.bvisionry.programflow.dto.OpenTaskResponse;
 import com.bvisionry.programflow.dto.ProgramSettingsDto;
 import com.bvisionry.programflow.dto.PulseResponse;
 import com.bvisionry.programflow.dto.PulseResponse.CellState;
-import com.bvisionry.programflow.dto.UpdateTaskRequest;
+import com.bvisionry.programflow.dto.SaveBoardRequest.TaskUpsert;
 import com.bvisionry.programflow.web.MyProgramService;
 import com.bvisionry.programflow.web.ProgramAdminService;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
+import com.bvisionry.testsupport.BoardPayloads;
 import com.bvisionry.testsupport.EnabledIfDockerAvailable;
 import com.bvisionry.testsupport.TestAuthentication;
 import org.junit.jupiter.api.AfterEach;
@@ -374,41 +376,50 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /* ------------------------------------------------------------ validation */
 
+    /**
+     * The typed-spine rules as the builder now meets them: one whole-board Save
+     * (§13.10), rejected with the offending task NAMED rather than a per-field
+     * 400 — on a forty-card board "pick what this references" is unactionable.
+     */
     @Nested
     class MilestoneValidation {
 
         @Test
         void aCohortGetsAtMostOneBaselineAndOneDistance() {
             // Turning the CHECKIN into the (first) DISTANCE is fine…
-            programAdminService.updateTask(cohortId, checkinTaskId,
-                    assessmentUpdate("Distance", MilestoneRole.DISTANCE));
-            // …but a second DISTANCE must be rejected.
-            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
-                    baselineTaskId, assessmentUpdate("Another distance", MilestoneRole.DISTANCE)))
-                    .isInstanceOfSatisfying(FieldValidationException.class,
-                            e -> assertThat(e.getFieldErrors()).containsKey("milestoneRole"));
+            saveTask(checkinTaskId, assessment("Distance", pipelineId, MilestoneRole.DISTANCE));
+            // …but a second DISTANCE must be rejected. (Which of the two the
+            // message names is board order, not edit order — the payload has no
+            // notion of "the one just retyped"; ProgramBoardSaveIntegrationTest
+            // pins the naming.)
+            assertThatThrownBy(() -> saveTask(baselineTaskId,
+                    assessment("Another distance", pipelineId, MilestoneRole.DISTANCE)))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("already has a distance milestone");
             // Same for a second BASELINE.
-            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
-                    checkinTaskId, assessmentUpdate("Second baseline", MilestoneRole.BASELINE)))
-                    .isInstanceOfSatisfying(FieldValidationException.class,
-                            e -> assertThat(e.getFieldErrors()).containsKey("milestoneRole"));
+            assertThatThrownBy(() -> saveTask(checkinTaskId,
+                    assessment("Second baseline", pipelineId, MilestoneRole.BASELINE)))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("already has a baseline milestone");
         }
 
         @Test
         void nonLessonTasksRejectFormFields_andLiveNeedsARef() {
-            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
-                    courseTaskId, new UpdateTaskRequest("Course task", null, ProgramTaskStatus.LIVE,
+            assertThatThrownBy(() -> saveTask(courseTaskId,
+                    t -> new TaskUpsert(t.id(), "Course task", null, ProgramTaskStatus.LIVE,
                             false, ProgramTaskType.COURSE, courseId, null,
                             List.of(new com.bvisionry.programflow.dto.FieldUpsert(null,
                                     com.bvisionry.programflow.domain.FieldType.SHORT, false,
                                     Map.of())))))
-                    .isInstanceOfSatisfying(FieldValidationException.class,
-                            e -> assertThat(e.getFieldErrors()).containsKey("fields"));
-            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
-                    courseTaskId, new UpdateTaskRequest("Course task", null, ProgramTaskStatus.LIVE,
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("Course task")
+                    .hasMessageContaining("form fields");
+            assertThatThrownBy(() -> saveTask(courseTaskId,
+                    t -> new TaskUpsert(t.id(), "Course task", null, ProgramTaskStatus.LIVE,
                             false, ProgramTaskType.COURSE, null, null, List.of())))
-                    .isInstanceOfSatisfying(FieldValidationException.class,
-                            e -> assertThat(e.getFieldErrors()).containsKey("refId"));
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("Course task")
+                    .hasMessageContaining("before publishing it");
         }
 
         @Test
@@ -422,8 +433,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
 
             // A designation that contradicts the cohort's milestone tasks is a
             // field error (the DISTANCE milestone below references pipelineId).
-            programAdminService.updateTask(cohortId, checkinTaskId,
-                    assessmentUpdate("Distance", MilestoneRole.DISTANCE));
+            saveTask(checkinTaskId, assessment("Distance", pipelineId, MilestoneRole.DISTANCE));
             UUID otherPipeline = insertPipeline("Other instrument");
             assertThatThrownBy(() -> programAdminService.updateSettings(cohortId,
                     settings(pipelineId, otherPipeline)))
@@ -432,22 +442,20 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
 
             // And the mirror: once designated, a milestone task cannot point
             // at a different pipeline.
-            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
-                    checkinTaskId, new UpdateTaskRequest("Distance", null, ProgramTaskStatus.LIVE,
-                            false, ProgramTaskType.ASSESSMENT, otherPipeline,
-                            MilestoneRole.DISTANCE, List.of())))
-                    .isInstanceOfSatisfying(FieldValidationException.class,
-                            e -> assertThat(e.getFieldErrors()).containsKey("refId"));
+            assertThatThrownBy(() -> saveTask(checkinTaskId,
+                    assessment("Distance", otherPipeline, MilestoneRole.DISTANCE)))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("designated distance assessment is a different pipeline");
         }
 
         /** Review #7a: the ref must exist in its owning slice. */
         @Test
-        void aBogusReference_isAFieldError() {
-            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
-                    courseTaskId, new UpdateTaskRequest("Course task", null, ProgramTaskStatus.LIVE,
+        void aBogusReference_isRejected() {
+            assertThatThrownBy(() -> saveTask(courseTaskId,
+                    t -> new TaskUpsert(t.id(), "Course task", null, ProgramTaskStatus.LIVE,
                             false, ProgramTaskType.COURSE, UUID.randomUUID(), null, List.of())))
-                    .isInstanceOfSatisfying(FieldValidationException.class,
-                            e -> assertThat(e.getFieldErrors().get("refId")).contains("not found"));
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("not found");
         }
 
         /** Review #7b: once a milestone has tagged submissions, its ref is frozen. */
@@ -455,18 +463,22 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         void milestoneRefFreezes_onceMembersHaveAnswered() {
             myProgramService.open(baselineTaskId); // creates the tagged submission
             UUID otherPipeline = insertPipeline("Replacement instrument");
-            assertThatThrownBy(() -> programAdminService.updateTask(cohortId,
-                    baselineTaskId, new UpdateTaskRequest("Baseline", null, ProgramTaskStatus.LIVE,
-                            false, ProgramTaskType.ASSESSMENT, otherPipeline,
-                            MilestoneRole.BASELINE, List.of())))
-                    .isInstanceOfSatisfying(FieldValidationException.class,
-                            e -> assertThat(e.getFieldErrors().get("refId"))
-                                    .contains("no longer change"));
+            assertThatThrownBy(() -> saveTask(baselineTaskId,
+                    assessment("Baseline", otherPipeline, MilestoneRole.BASELINE)))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("no longer change");
         }
 
-        private UpdateTaskRequest assessmentUpdate(String name, MilestoneRole role) {
-            return new UpdateTaskRequest(name, null, ProgramTaskStatus.LIVE, false,
-                    ProgramTaskType.ASSESSMENT, pipelineId, role, List.of());
+        /** The builder's one write, carrying a single retyped task. */
+        private void saveTask(UUID taskId, java.util.function.UnaryOperator<TaskUpsert> edit) {
+            programAdminService.saveBoard(cohortId,
+                    BoardPayloads.edit(programAdminService.getBoard(cohortId), taskId, edit));
+        }
+
+        private java.util.function.UnaryOperator<TaskUpsert> assessment(String name, UUID refId,
+                MilestoneRole role) {
+            return t -> new TaskUpsert(t.id(), name, null, ProgramTaskStatus.LIVE, false,
+                    ProgramTaskType.ASSESSMENT, refId, role, List.of());
         }
 
         private ProgramSettingsDto settings(UUID baseline, UUID distance) {
@@ -822,9 +834,15 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         return id;
     }
 
+    /**
+     * PUBLISHED because the cohort tasks below are LIVE, and the spine forbids a
+     * live COURSE task pointing at an unpublished course — a whole-board save
+     * validates every card, so the seed has to be a board that is legal to save.
+     */
     private UUID insertCourse(String title) {
         UUID id = UUID.randomUUID();
-        jdbc.update("INSERT INTO course (id, org_id, slug, title) VALUES (?, ?, ?, ?)",
+        jdbc.update("INSERT INTO course (id, org_id, slug, title, state) "
+                        + "VALUES (?, ?, ?, ?, 'PUBLISHED')",
                 id, org.getId(), title.toLowerCase().replace(' ', '-') + "-" + id, title);
         return id;
     }

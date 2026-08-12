@@ -9,9 +9,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
@@ -30,7 +32,6 @@ import com.bvisionry.programflow.domain.ProgramTaskType;
 import com.bvisionry.programflow.dto.AssignOrgRequest;
 import com.bvisionry.programflow.dto.BoardResponse;
 import com.bvisionry.programflow.dto.CreateCohortRequest;
-import com.bvisionry.programflow.dto.CreateModuleRequest;
 import com.bvisionry.programflow.dto.FieldDto;
 import com.bvisionry.programflow.dto.FieldUpsert;
 import com.bvisionry.programflow.dto.ModuleDto;
@@ -39,9 +40,9 @@ import com.bvisionry.programflow.dto.SaveBoardRequest.ModuleUpsert;
 import com.bvisionry.programflow.dto.SaveBoardRequest.TaskUpsert;
 import com.bvisionry.programflow.dto.TaskDto;
 import com.bvisionry.programflow.dto.UpdateCohortMembersRequest;
-import com.bvisionry.programflow.dto.UpdateTaskRequest;
 import com.bvisionry.programflow.repository.ProgramSubmissionRepository;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
+import com.bvisionry.testsupport.BoardPayloads;
 import com.bvisionry.testsupport.EnabledIfDockerAvailable;
 import com.bvisionry.testsupport.TestAuthentication;
 
@@ -52,9 +53,10 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The Curriculum builder's whole-board Save: one write that creates, updates,
- * moves and deletes at once, still holding every typed-spine rule the
- * single-task save holds, and still refusing to bin member work unasked.
+ * The Curriculum builder's whole-board Save — since §13.10 the ONLY writer of a
+ * cohort's curriculum. One call creates, updates, moves and deletes at once,
+ * holds every typed-spine rule, refuses to bin member work unasked, and refuses
+ * outright when the board moved underneath the admin.
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -90,16 +92,16 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
         cohortService.setOrgMembers(org.getId(), cohortId,
                 new UpdateCohortMembersRequest(List.of(member.getId())));
 
-        moduleId = adminService.createModule(cohortId,
-                new CreateModuleRequest("Week 1", "Kick-off", "Mindset")).id();
-        keptTaskId = adminService.createTask(cohortId, moduleId, null).id();
-        doomedTaskId = adminService.createTask(cohortId, moduleId, null).id();
-        adminService.updateTask(cohortId, keptTaskId,
-                new UpdateTaskRequest("Kept task", null, ProgramTaskStatus.LIVE, false,
-                        null, null, null, List.of()));
-        adminService.updateTask(cohortId, doomedTaskId,
-                new UpdateTaskRequest("Doomed task", null, ProgramTaskStatus.LIVE, false,
-                        null, null, null, List.of()));
+        // The first save of a new cohort: ids minted here, exactly as the
+        // browser mints them for a module or task the admin just dropped in.
+        moduleId = UUID.randomUUID();
+        keptTaskId = UUID.randomUUID();
+        doomedTaskId = UUID.randomUUID();
+        adminService.saveBoard(cohortId, new SaveBoardRequest(0L, false, List.of(
+                new ModuleUpsert(moduleId, "Week 1", "Kick-off", "Mindset",
+                        ModuleLockMode.SEQUENTIAL, null, AudienceMode.ALL, List.of(), List.of(
+                                task(keptTaskId, "Kept task", ProgramTaskStatus.LIVE),
+                                task(doomedTaskId, "Doomed task", ProgramTaskStatus.LIVE))))));
     }
 
     @AfterEach
@@ -114,20 +116,6 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
         entityManager.flush();
         entityManager.clear();
         return adminService.getBoard(cohortId);
-    }
-
-    /** The web app's move: the board it was handed, echoed back as a save payload. */
-    private static ModuleUpsert asUpsert(ModuleDto m, List<TaskUpsert> tasks) {
-        return new ModuleUpsert(m.id(), m.name(), m.summary(), m.pillarLabel(),
-                m.lockMode(), m.unlockAt(), m.audience().mode(), m.audience().memberIds(), tasks);
-    }
-
-    private static TaskUpsert asUpsert(TaskDto t) {
-        return new TaskUpsert(t.id(), t.name(), t.dueDate(), t.status(), t.aiDraft(),
-                t.taskType(), t.refId(), t.milestoneRole(),
-                t.fields().stream()
-                        .map(f -> new FieldUpsert(f.id(), f.type(), f.required(), f.config()))
-                        .toList());
     }
 
     private static TaskUpsert task(UUID id, String name, ProgramTaskStatus status) {
@@ -145,21 +133,35 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
                 .filter(t -> t.id().equals(taskId)).findFirst().orElseThrow();
     }
 
+    private void workOn(UUID taskId) {
+        ProgramSubmission work = new ProgramSubmission();
+        work.setTaskId(taskId);
+        work.setUserId(member.getId());
+        submissions.saveAndFlush(work);
+    }
+
     /* ---------------------------------------------------------- the one write */
 
     /**
      * One Save doing everything an editing session does: rename a module,
      * retarget its audience, delete a task, MOVE another into a module created
      * by the same payload, and add a task with a browser-minted field id.
+     *
+     * <p>The moved task carries member work, which is the ordering guarantee:
+     * upserts run before deletes, so it is re-parented before its old module is
+     * dropped and never falls through that module's ON DELETE CASCADE.
      */
     @Test
     void save_appliesCreatesUpdatesMovesAndDeletesInOneCall() {
-        ModuleDto existing = adminService.getBoard(cohortId).modules().get(0);
+        workOn(keptTaskId);
+        BoardResponse before = adminService.getBoard(cohortId);
+        ModuleDto existing = before.modules().get(0);
         UUID newModuleId = UUID.randomUUID();
         UUID newTaskId = UUID.randomUUID();
         UUID newFieldId = UUID.randomUUID();
 
-        BoardResponse after = adminService.saveBoard(cohortId, new SaveBoardRequest(false, List.of(
+        BoardResponse after = adminService.saveBoard(cohortId,
+                new SaveBoardRequest(before.version(), true, List.of(
                 // Week 1 renamed, narrowed to one member, emptied: one task moved
                 // out and the other dropped entirely.
                 new ModuleUpsert(existing.id(), "Week 1 (renamed)", "New summary", "Growth",
@@ -176,6 +178,8 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(after.modules()).extracting(ModuleDto::id)
                 .containsExactly(existing.id(), newModuleId);
         assertThat(after.stats().tasks()).isEqualTo(2);
+        assertThat(after.version()).as("a save moves the board version on")
+                .isEqualTo(before.version() + 1);
 
         ModuleDto week1 = board().modules().get(0);
         assertThat(week1.name()).isEqualTo("Week 1 (renamed)");
@@ -193,18 +197,20 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(week2.tasks().get(0).name()).isEqualTo("Kept task, moved");
         assertThat(week2.tasks().get(1).fields()).extracting(FieldDto::id)
                 .containsExactly(newFieldId);
+        assertThat(submissions.findByTaskIdIn(List.of(keptTaskId)))
+                .as("the moved task kept its member work through its old module's delete")
+                .hasSize(1);
     }
 
     /** A field with no id is still ours to create — the drawer's "add a field" path. */
     @Test
     void save_generatesIdsForFieldsThatArriveWithoutOne() {
         BoardResponse before = adminService.getBoard(cohortId);
-        adminService.saveBoard(cohortId, new SaveBoardRequest(false, List.of(
-                asUpsert(before.modules().get(0), List.of(
-                        new TaskUpsert(keptTaskId, "Kept task", null, ProgramTaskStatus.LIVE,
-                                false, ProgramTaskType.LESSON, null, null,
-                                List.of(new FieldUpsert(null, FieldType.LONG, true,
-                                        Map.of("question", "Why?")))))))));
+        adminService.saveBoard(cohortId, BoardPayloads.edit(before, keptTaskId,
+                t -> new TaskUpsert(t.id(), t.name(), t.dueDate(), t.status(), t.aiDraft(),
+                        t.taskType(), t.refId(), t.milestoneRole(),
+                        List.of(new FieldUpsert(null, FieldType.LONG, true,
+                                Map.of("question", "Why?"))))));
 
         assertThat(taskOf(board(), keptTaskId).fields()).singleElement()
                 .satisfies(f -> {
@@ -213,22 +219,54 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
                 });
     }
 
+    /* ---------------------------------------------------------- stale version */
+
+    /**
+     * The payload is a COMPLETE board, so a save built on a board someone else
+     * has since changed does not merge — it deletes their work. Refused with a
+     * 412; the builder reloads.
+     */
+    @Test
+    void save_refusesABoardBuiltOnAStaleVersion() {
+        BoardResponse stale = adminService.getBoard(cohortId);
+
+        // Another admin adds a module and saves first.
+        adminService.saveBoard(cohortId, BoardPayloads.of(board(),
+                List.of(module(UUID.randomUUID(), "Theirs", List.of()))));
+
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId, BoardPayloads.echo(stale)))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        e -> assertThat(e.getStatusCode()).isEqualTo(HttpStatus.PRECONDITION_FAILED))
+                .hasMessageContaining("Someone else saved this board");
+        assertThat(board().modules()).extracting(ModuleDto::name)
+                .as("the refusal left the other admin's board alone").containsExactly("Theirs");
+    }
+
+    /** Re-reading picks the new version up, and the same edits then save cleanly. */
+    @Test
+    void save_succeedsOnceTheBoardIsReloaded() {
+        adminService.saveBoard(cohortId, BoardPayloads.echo(adminService.getBoard(cohortId)));
+
+        assertThatCode(() -> adminService.saveBoard(cohortId, BoardPayloads.edit(board(),
+                keptTaskId, t -> task(t.id(), "Renamed at last", t.status()))))
+                .doesNotThrowAnyException();
+        assertThat(taskOf(board(), keptTaskId).name()).isEqualTo("Renamed at last");
+    }
+
     /* ------------------------------------------------------------ member work */
 
     @Test
     void save_refusesToDestroyMemberWork_untilForced() {
-        ProgramSubmission work = new ProgramSubmission();
-        work.setTaskId(doomedTaskId);
-        work.setUserId(member.getId());
-        submissions.saveAndFlush(work);
+        workOn(doomedTaskId);
 
-        ModuleDto existing = adminService.getBoard(cohortId).modules().get(0);
+        BoardResponse before = adminService.getBoard(cohortId);
+        ModuleDto existing = before.modules().get(0);
         // The doomed task is simply absent from the payload — a delete.
-        List<ModuleUpsert> withoutDoomed = List.of(asUpsert(existing,
-                List.of(asUpsert(existing.tasks().get(0)))));
+        List<ModuleUpsert> withoutDoomed = List.of(BoardPayloads.asUpsert(existing,
+                List.of(BoardPayloads.asUpsert(existing.tasks().get(0)))));
 
-        assertThatThrownBy(() ->
-                adminService.saveBoard(cohortId, new SaveBoardRequest(false, withoutDoomed)))
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId,
+                new SaveBoardRequest(before.version(), false, withoutDoomed)))
                 .isInstanceOf(IllegalOperationException.class)
                 .hasMessageContaining("Doomed task")
                 .hasMessageContaining("1 member")
@@ -236,7 +274,10 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(board().modules().get(0).tasks())
                 .as("the refusal changed nothing").hasSize(2);
 
-        adminService.saveBoard(cohortId, new SaveBoardRequest(true, withoutDoomed));
+        // The refusal wrote nothing, so the version the admin holds is still
+        // current — "Save anyway" is the same payload with force set.
+        adminService.saveBoard(cohortId,
+                new SaveBoardRequest(before.version(), true, withoutDoomed));
         assertThat(board().modules().get(0).tasks()).extracting(TaskDto::id)
                 .containsExactly(keptTaskId);
         assertThat(submissions.findByTaskIdIn(List.of(doomedTaskId))).isEmpty();
@@ -246,10 +287,9 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void save_rejectsATaskTheTypedSpineForbids() {
-        ModuleDto existing = adminService.getBoard(cohortId).modules().get(0);
-        SaveBoardRequest req = new SaveBoardRequest(false, List.of(asUpsert(existing, List.of(
-                new TaskUpsert(keptTaskId, "Unlinked course", null, ProgramTaskStatus.LIVE, false,
-                        ProgramTaskType.COURSE, null, null, List.of())))));
+        SaveBoardRequest req = BoardPayloads.edit(adminService.getBoard(cohortId), keptTaskId,
+                t -> new TaskUpsert(t.id(), "Unlinked course", null, ProgramTaskStatus.LIVE, false,
+                        ProgramTaskType.COURSE, null, null, List.of()));
 
         assertThatThrownBy(() -> adminService.saveBoard(cohortId, req))
                 .isInstanceOf(BadRequestException.class)
@@ -261,10 +301,11 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void save_rejectsTwoBaselineMilestonesInOnePayload() {
-        ModuleDto existing = adminService.getBoard(cohortId).modules().get(0);
-        SaveBoardRequest req = new SaveBoardRequest(false, List.of(asUpsert(existing, List.of(
-                assessment(keptTaskId, "First baseline", MilestoneRole.BASELINE),
-                assessment(doomedTaskId, "Second baseline", MilestoneRole.BASELINE)))));
+        BoardResponse before = adminService.getBoard(cohortId);
+        SaveBoardRequest req = BoardPayloads.of(before,
+                List.of(BoardPayloads.asUpsert(before.modules().get(0), List.of(
+                        assessment(keptTaskId, "First baseline", MilestoneRole.BASELINE),
+                        assessment(doomedTaskId, "Second baseline", MilestoneRole.BASELINE)))));
 
         assertThatThrownBy(() -> adminService.saveBoard(cohortId, req))
                 .isInstanceOf(BadRequestException.class)
@@ -279,14 +320,15 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
      */
     @Test
     void save_allowsHandingAMilestoneRoleToAnotherTaskInOneCall() {
-        ModuleDto existing = adminService.getBoard(cohortId).modules().get(0);
-        adminService.saveBoard(cohortId, new SaveBoardRequest(false, List.of(asUpsert(existing,
-                List.of(assessment(keptTaskId, "Baseline", MilestoneRole.BASELINE),
-                        asUpsert(existing.tasks().get(1)))))));
+        BoardResponse before = adminService.getBoard(cohortId);
+        adminService.saveBoard(cohortId, BoardPayloads.of(before,
+                List.of(BoardPayloads.asUpsert(before.modules().get(0), List.of(
+                        assessment(keptTaskId, "Baseline", MilestoneRole.BASELINE),
+                        BoardPayloads.asUpsert(before.modules().get(0).tasks().get(1)))))));
 
-        ModuleDto saved = board().modules().get(0);
-        assertThatCode(() -> adminService.saveBoard(cohortId, new SaveBoardRequest(false,
-                List.of(asUpsert(saved, List.of(
+        BoardResponse saved = board();
+        assertThatCode(() -> adminService.saveBoard(cohortId, BoardPayloads.of(saved,
+                List.of(BoardPayloads.asUpsert(saved.modules().get(0), List.of(
                         assessment(keptTaskId, "Now a check-in", MilestoneRole.CHECKIN),
                         assessment(doomedTaskId, "Now the baseline", MilestoneRole.BASELINE)))))))
                 .doesNotThrowAnyException();
@@ -307,10 +349,12 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void save_refusesAnIdThatBelongsToAnotherCohort() {
         UUID otherCohortId = cohortService.create(new CreateCohortRequest("Someone else")).id();
-        UUID otherModuleId = adminService.createModule(otherCohortId,
-                new CreateModuleRequest("Not yours", null, null)).id();
+        UUID otherModuleId = UUID.randomUUID();
+        adminService.saveBoard(otherCohortId, new SaveBoardRequest(0L, false,
+                List.of(module(otherModuleId, "Not yours", List.of()))));
 
-        assertThatThrownBy(() -> adminService.saveBoard(cohortId, new SaveBoardRequest(false,
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId, BoardPayloads.of(
+                adminService.getBoard(cohortId),
                 List.of(module(otherModuleId, "Mine now", List.of())))))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("another cohort");
@@ -320,7 +364,8 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void save_refusesTheSameIdTwice() {
-        assertThatThrownBy(() -> adminService.saveBoard(cohortId, new SaveBoardRequest(false,
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId, BoardPayloads.of(
+                adminService.getBoard(cohortId),
                 List.of(module(moduleId, "Once", List.of()),
                         module(moduleId, "Twice", List.of())))))
                 .isInstanceOf(BadRequestException.class)
@@ -330,8 +375,21 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
     /** The empty board: a curriculum can be cleared, and NOT IN () must not blow up. */
     @Test
     void save_toAnEmptyBoard_clearsTheCurriculum() {
-        adminService.saveBoard(cohortId, new SaveBoardRequest(false, List.of()));
+        adminService.saveBoard(cohortId, BoardPayloads.of(adminService.getBoard(cohortId),
+                List.of()));
         assertThat(board().modules()).isEmpty();
         assertThat(board().stats().tasks()).isZero();
+    }
+
+    /* ---------------------------------------------------------------- archived */
+
+    @Test
+    void save_refusesOnAnArchivedCohort() {
+        BoardResponse before = adminService.getBoard(cohortId);
+        cohortService.archive(cohortId);
+
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId, BoardPayloads.echo(before)))
+                .isInstanceOf(IllegalOperationException.class)
+                .hasMessageContaining("archived");
     }
 }

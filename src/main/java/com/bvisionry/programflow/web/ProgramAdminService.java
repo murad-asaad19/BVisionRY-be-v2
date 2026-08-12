@@ -332,7 +332,8 @@ public class ProgramAdminService {
         m.setName(req.name());
         m.setSummary(req.summary());
         m.setPillarLabel(blankToNull(req.pillarLabel()));
-        m.setPosition(modules.findByCohortIdOrderByPositionAsc(cohortId).size());
+        m.setPosition(nextPosition(modules.findByCohortIdOrderByPositionAsc(cohortId).stream()
+                .map(ProgramModule::getPosition).toList()));
         return ProgramMapper.toDto(modules.save(m), reached(m, cohortFounders(cohortId)));
     }
 
@@ -406,7 +407,7 @@ public class ProgramAdminService {
         t.setModule(m);
         t.setTaskType(type);
         t.setName("Untitled " + type.name().toLowerCase() + " task");
-        t.setPosition(m.getTasks().size());
+        t.setPosition(nextPosition(m.getTasks().stream().map(ProgramTask::getPosition).toList()));
         if (type == ProgramTaskType.LESSON) {
             ProgramTaskField intro = new ProgramTaskField();
             intro.setTask(t);
@@ -951,6 +952,17 @@ public class ProgramAdminService {
 
     private static String blankToNull(String v) {
         return v == null || v.isBlank() ? null : v.trim();
+    }
+
+    /**
+     * The next free position: one past the highest, NOT the collection size.
+     * Size collides the moment the sequence has a gap — and gaps are reachable
+     * (historic deletes left two live modules on 1,2,3 and 1,5), so a
+     * size-derived position would silently duplicate an existing one and make
+     * board order depend on insertion order.
+     */
+    private static int nextPosition(List<Integer> taken) {
+        return taken.stream().mapToInt(Integer::intValue).max().orElse(-1) + 1;
     }
 
     private ProgramModule requireModule(UUID cohortId, UUID moduleId) {

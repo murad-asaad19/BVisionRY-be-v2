@@ -2,7 +2,9 @@ package com.bvisionry.programflow.repository;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -62,14 +64,18 @@ public class BoardRestoreRepository {
     public record DoomedTask(String taskName, long memberCount) {}
 
     /**
-     * The tasks this write would DELETE (cohort tasks the snapshot does not
-     * hold) that carry member work, with the number of distinct members behind
-     * it. Every place work can hang off a task is counted: the LESSON
-     * submission table plus the three bare-uuid tags — assessment
-     * ({@code submissions}, V164), exercise assignment and survey response
-     * (both V173).
+     * The tasks this write would DESTROY MEMBER WORK ON, with the number of
+     * distinct members behind it: tasks the snapshot does not hold (a delete),
+     * plus kept tasks the snapshot RETYPES — {@code task_type} decides how
+     * completion is judged and which fields survive, so turning a LESSON with
+     * submissions into a COURSE drops its fields and silently reverts every
+     * member's progress, exactly as deleting it would. Both take the same 409
+     * and the same {@code force}. Every place work can hang off a task is
+     * counted: the LESSON submission table plus the three bare-uuid tags —
+     * assessment ({@code submissions}, V164), exercise assignment and survey
+     * response (both V173).
      */
-    public List<DoomedTask> memberWorkAtRisk(UUID cohortId, Collection<UUID> keptTaskIds) {
+    public List<DoomedTask> memberWorkAtRisk(UUID cohortId, BoardSnapshot snapshot) {
         return jdbc.query("""
                 SELECT t.name AS task_name, w.member_count
                 FROM program_tasks t
@@ -87,13 +93,37 @@ public class BoardRestoreRepository {
                            WHERE sr.program_task_id = t.id) x
                 ) w
                 WHERE m.cohort_id = :cohortId
-                  AND t.id NOT IN (:keptTaskIds)
+                  AND (t.id NOT IN (:keptTaskIds) OR t.id IN (:retypedIds))
                   AND w.member_count > 0
                 ORDER BY t.name
                 """,
                 new MapSqlParameterSource("cohortId", cohortId)
-                        .addValue("keptTaskIds", withSentinel(keptTaskIds)),
+                        .addValue("keptTaskIds", withSentinel(snapshot.taskIds()))
+                        .addValue("retypedIds", withSentinel(retypedTaskIds(snapshot))),
                 (rs, i) -> new DoomedTask(rs.getString("task_name"), rs.getLong("member_count")));
+    }
+
+    /**
+     * The snapshot tasks whose stored {@code task_type} differs from the
+     * incoming one. A snapshot id with no stored row is a create, not a
+     * retype, and simply doesn't come back from the query.
+     */
+    private List<UUID> retypedTaskIds(BoardSnapshot snapshot) {
+        Map<UUID, String> incoming = new HashMap<>();
+        for (ModuleSnap m : snapshot.modules()) {
+            for (TaskSnap t : m.tasks()) {
+                incoming.put(t.id(), t.taskType().name());
+            }
+        }
+        return jdbc.query("""
+                SELECT id, task_type FROM program_tasks WHERE id IN (:ids)
+                """,
+                new MapSqlParameterSource("ids", withSentinel(incoming.keySet())),
+                (rs, i) -> Map.entry(rs.getObject("id", UUID.class), rs.getString("task_type")))
+                .stream()
+                .filter(e -> !e.getValue().equals(incoming.get(e.getKey())))
+                .map(Map.Entry::getKey)
+                .toList();
     }
 
     /**

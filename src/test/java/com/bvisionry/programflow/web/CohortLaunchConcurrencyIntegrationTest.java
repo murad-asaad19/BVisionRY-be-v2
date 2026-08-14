@@ -3,6 +3,7 @@ package com.bvisionry.programflow.web;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.SubscriptionTier;
+import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.LaunchQuotaExceededException;
 import com.bvisionry.organization.OrganizationRepository;
 import com.bvisionry.organization.entity.Organization;
@@ -87,6 +88,65 @@ class CohortLaunchConcurrencyIntegrationTest extends AbstractPostgresIntegration
         assertThat(launched.get()).as("exactly one launch wins").isEqualTo(1);
         assertThat(refused.get()).as("the other gets the quota 409").isEqualTo(1);
         assertThat(ledger.countByOrgId(orgId)).as("one ledger row, never two").isEqualTo(1);
+    }
+
+    /**
+     * The double-click: two threads launch the SAME cohort. On an unlimited
+     * tier the quota verdict never refuses, so only the cohort's own row lock
+     * (and V181's UNIQUE ledger backstop) stands between a granted-or-unmetered
+     * family and a double charge plus a doubled enrollment notification. The
+     * loser must land on the ordinary "only a draft can be launched" 409 with
+     * exactly one ledger row behind it.
+     */
+    @Test
+    void twoConcurrentLaunchesOfTheSameCohort_chargeAndNotifyOnce() throws Exception {
+        Organization root = new Organization();
+        root.setName("Double-click Root " + UUID.randomUUID());
+        root.setSubscriptionTier(SubscriptionTier.FOUNDER_SUCCESS);
+        root.setActive(true);
+        root = orgs.saveAndFlush(root);
+        User admin = TestAuthentication.authenticateAsOrgAdmin(users, root);
+        UUID orgId = root.getId();
+
+        UUID cohortId = cohortService.create(new CreateCohortRequest("Double-click")).id();
+        cohortService.assignOrg(cohortId, new com.bvisionry.programflow.dto.AssignOrgRequest(
+                orgId, false, java.util.List.of(), false));
+
+        AtomicInteger launched = new AtomicInteger();
+        AtomicInteger alreadyLaunched = new AtomicInteger();
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> a = pool.submit(doubleClicker(admin, cohortId, start, launched, alreadyLaunched));
+            Future<?> b = pool.submit(doubleClicker(admin, cohortId, start, launched, alreadyLaunched));
+            start.countDown();
+            a.get(30, TimeUnit.SECONDS);
+            b.get(30, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(launched.get()).as("exactly one launch wins").isEqualTo(1);
+        assertThat(alreadyLaunched.get()).as("the other sees an already-launched cohort").isEqualTo(1);
+        assertThat(ledger.countByOrgId(orgId)).as("one ledger row, never two").isEqualTo(1);
+    }
+
+    private Runnable doubleClicker(User admin, UUID cohortId, CountDownLatch start,
+            AtomicInteger launched, AtomicInteger alreadyLaunched) {
+        return () -> {
+            TestAuthentication.authenticate(admin);
+            try {
+                start.await();
+                cohortService.launch(cohortId);
+                launched.incrementAndGet();
+            } catch (IllegalOperationException e) {
+                alreadyLaunched.incrementAndGet();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                SecurityContextHolder.clearContext();
+            }
+        };
     }
 
     private Runnable racer(User admin, UUID orgId, UUID cohortId, CountDownLatch start,

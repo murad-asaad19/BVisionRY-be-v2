@@ -291,10 +291,17 @@ public class MyProgramService {
                 .filter(c -> c.getId().equals(t.getModule().getCohortId()))
                 .findFirst()
                 .orElseThrow(() -> new ResourceNotFoundException("Task", taskId.toString()));
-        List<ProgramModule> mods = modules.findByCohortIdOrderByPositionAsc(cohort.getId());
+        // Stage number over the modules VISIBLE TO THIS MEMBER, exactly as
+        // player() does via ctx.visibleModules() (ProgramRules.includes) — an
+        // earlier module the member's audience excludes is not their Week N, and
+        // counting all modules drifts this staff view's "Week N" from what the
+        // member sees for the same task.
+        List<ProgramModule> visible = modules.findByCohortIdOrderByPositionAsc(cohort.getId()).stream()
+                .filter(m -> ProgramRules.includes(m, memberId))
+                .toList();
         int index = 0;
-        for (int i = 0; i < mods.size(); i++) {
-            if (mods.get(i).getId().equals(t.getModule().getId())) {
+        for (int i = 0; i < visible.size(); i++) {
+            if (visible.get(i).getId().equals(t.getModule().getId())) {
                 index = i;
                 break;
             }
@@ -303,7 +310,7 @@ public class MyProgramService {
         ProgramSettingsDto s = settingsOf(cohort.getId());
         return new PlayerResponse(
                 t.getId(), t.getName(), t.getDueDate(),
-                t.getModule().getId(), t.getModule().getName(), stageNumber(mods, index),
+                t.getModule().getId(), t.getModule().getName(), stageNumber(visible, index),
                 s.stageLabel(), s.dueSoonDays(),
                 t.getFields().stream().map(ProgramMapper::toDto).toList(),
                 sub == null ? Map.of() : sub.getAnswers(),
@@ -746,13 +753,35 @@ public class MyProgramService {
                 }
                 yield t.getRefId();
             }
-            case EXERCISE -> spine.findExerciseSubmissionId(userId, t.getId(), requireRef(t))
-                    .orElseGet(() -> {
-                        requireNotFinished(access);
-                        return spine.ensureExerciseSubmission(orgId, requireRef(t), userId,
-                                t.getId());
-                    });
+            case EXERCISE -> {
+                UUID existing = t.getRefId() == null ? null
+                        : spine.findExerciseSubmissionId(userId, t.getId(), t.getRefId()).orElse(null);
+                if (existing != null) {
+                    yield existing;
+                }
+                // No submission for the CURRENT template (re-pointed, or the
+                // template is gone). A finished cohort is read-only: we cannot
+                // reconcile, so surface the member's existing work rather than an
+                // error. Active cohorts still reconcile via ensureExerciseSubmission.
+                if (access.ctx().finished()) {
+                    yield spine.findAnyExerciseSubmissionId(userId, t.getId())
+                            .orElseThrow(() -> new BadRequestException(
+                                    "This cohort has finished — it is read-only now."));
+                }
+                yield spine.ensureExerciseSubmission(orgId, requireRef(t), userId, t.getId());
+            }
+            // A cohort assessment REFERENCES the member's assessment history
+            // rather than duplicating it: if they already sat this instrument —
+            // before the cohort existed, or straight from their own assessment
+            // list — that sitting IS the milestone. Only someone who has never
+            // sat it gets a fresh one. Adopting claims the sitting with the tag
+            // so every later read resolves it the same way without re-deriving.
             case ASSESSMENT -> spine.findTaggedSubmissionId(userId, t.getId())
+                    .or(() -> spine.adoptableSubmissionId(userId, t.getId())
+                            .map(adopted -> {
+                                spine.tagSubmission(adopted, t.getId());
+                                return adopted;
+                            }))
                     .orElseGet(() -> {
                         requireNotFinished(access);
                         return spine.createTaggedSubmission(orgId, requireRef(t), userId, t.getId());

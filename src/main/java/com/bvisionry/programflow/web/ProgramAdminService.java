@@ -20,7 +20,6 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
-import com.bvisionry.common.exception.FieldValidationException;
 import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.programflow.domain.AudienceMode;
@@ -118,11 +117,17 @@ public class ProgramAdminService {
      * without moving the version with it.
      *
      * @param req the board as the builder holds it; {@code force} confirms
-     *     deleting tasks members have already worked on — without it such a save
-     *     is refused with a 409 naming exactly what would be lost.
+     *     deleting — or retyping, which reverts progress just the same — tasks
+     *     members have already worked on; without it such a save is refused
+     *     with a 409 naming exactly what would be lost.
      */
     public BoardResponse saveBoard(UUID cohortId, SaveBoardRequest req) {
         Cohort cohort = cohortService.requireEditable(cohortId);
+        // Fast-fail on an obviously stale payload, BEFORE the expensive validation
+        // + restore — but this value check is not atomic on its own (board_version
+        // is a plain column), so it is only the optimisation; the authoritative
+        // guard is the conditional bump at the end. A rejected save must not move
+        // the version, which is exactly why the bump sits after validation, not here.
         if (cohort.getBoardVersion() != req.expectedVersion()) {
             throw new ResponseStatusException(HttpStatus.PRECONDITION_FAILED,
                     "Someone else saved this board while you were editing it. "
@@ -133,23 +138,33 @@ public class ProgramAdminService {
 
         BoardSnapshot snapshot = toSnapshot(req);
         requireOwnIds(cohortId, snapshot);
-        validateBoard(cohortId, req, current, roster);
+        validateBoard(req, current, roster);
 
         List<BoardRestoreRepository.DoomedTask> atRisk =
-                restore.memberWorkAtRisk(cohortId, snapshot.taskIds());
+                restore.memberWorkAtRisk(cohortId, snapshot);
         if (!req.force() && !atRisk.isEmpty()) {
             throw new IllegalOperationException(memberWorkMessage(atRisk));
         }
         List<ProgramFlowEvents.ModuleAssigned> assignments =
                 audienceNotifications(cohort, req, current, roster);
 
-        // The write is raw SQL (it inserts rows under chosen ids), so flush
-        // first — which also lands the version bump — and clear after, so
-        // nothing keeps serving the pre-save first-level cache.
-        cohort.setBoardVersion(cohort.getBoardVersion() + 1);
-        entityManager.flush();
+        // Optimistic concurrency, ATOMIC and positioned after validation so a
+        // rejected save never moves the version: bump only if it STILL equals what
+        // the editor read. A concurrent save that slipped in since the read above
+        // makes this match 0 rows and 412s (the loser) instead of both clobbering —
+        // which the plain value check alone (board_version is not @Version) allows.
+        // The bump lands with the raw-SQL restore in this one transaction.
+        if (cohorts.bumpBoardVersionIfMatches(cohortId, req.expectedVersion()) == 0) {
+            throw new ResponseStatusException(HttpStatus.PRECONDITION_FAILED,
+                    "Someone else saved this board while you were editing it. "
+                            + "Reload to pick up their changes — saving now would delete them.");
+        }
         restore.restore(cohortId, snapshot);
         entityManager.clear();
+        // The curriculum IS the designation (spec §5) — re-derive AFTER the
+        // clear, or the milestone tasks would be read back out of a first-level
+        // cache the raw-SQL restore never touched.
+        syncMilestonePair(cohortId);
 
         assignments.forEach(events::publishEvent);
         return getBoard(cohortId);
@@ -235,8 +250,12 @@ public class ProgramAdminService {
      */
     private static boolean isTaskPlaceholderName(String name, ProgramTaskType type) {
         String trimmed = name == null ? "" : name.trim();
+        // Locale.ROOT: type.name() is an ASCII enum constant, but a Turkish
+        // default locale lower-cases "EXERCISE" to "exercıse" (dotless ı), so the
+        // expected literal would stop matching the builder's own seeded name.
         return trimmed.equalsIgnoreCase("Untitled task")
-                || trimmed.equalsIgnoreCase("Untitled " + type.name().toLowerCase() + " task");
+                || trimmed.equalsIgnoreCase(
+                        "Untitled " + type.name().toLowerCase(java.util.Locale.ROOT) + " task");
     }
 
     /**
@@ -251,7 +270,7 @@ public class ProgramAdminService {
      * "pick what this references" is unactionable, which is why this throws a
      * composed message instead of the single-task save's per-field 400.
      */
-    private void validateBoard(UUID cohortId, SaveBoardRequest req,
+    private void validateBoard(SaveBoardRequest req,
             List<ProgramModule> current, List<CohortMemberRow> roster) {
         Map<UUID, ProgramTask> existing = current.stream()
                 .flatMap(m -> m.getTasks().stream())
@@ -261,7 +280,7 @@ public class ProgramAdminService {
         Map<MilestoneRole, UUID> milestones = new EnumMap<>(MilestoneRole.class);
 
         for (SaveBoardRequest.ModuleUpsert m : req.modules()) {
-            if (MODULE_PLACEHOLDER_NAME.equals(blankToNull(m.name()))) {
+            if (MODULE_PLACEHOLDER_NAME.equalsIgnoreCase(blankToNull(m.name()))) {
                 throw new BadRequestException("“" + MODULE_PLACEHOLDER_NAME + "” is the builder's "
                         + "placeholder, not a name — rename that module before saving, or members "
                         + "will see it on their journey.");
@@ -277,11 +296,16 @@ public class ProgramAdminService {
                 }
                 Map<String, String> errors = taskSpineErrors(existing.get(t.id()), t.taskType(),
                         t.refId(), t.milestoneRole(), t.status(), t.fields().size());
-                if (errors.isEmpty()) {
-                    boolean taken = (t.milestoneRole() == MilestoneRole.BASELINE
-                                    || t.milestoneRole() == MilestoneRole.DISTANCE)
-                            && milestones.putIfAbsent(t.milestoneRole(), t.id()) != null;
-                    errors.putAll(milestoneErrors(cohortId, t.milestoneRole(), t.refId(), taken));
+                // Spec §5: at most ONE BASELINE and ONE DISTANCE per cohort —
+                // the pair the distance comparison is computed on, so a second
+                // one would make "the" baseline ambiguous.
+                if (errors.isEmpty()
+                        && (t.milestoneRole() == MilestoneRole.BASELINE
+                                || t.milestoneRole() == MilestoneRole.DISTANCE)
+                        && milestones.putIfAbsent(t.milestoneRole(), t.id()) != null) {
+                    errors.put("milestoneRole", "This cohort already has a "
+                            + t.milestoneRole().name().toLowerCase(java.util.Locale.ROOT)
+                            + " milestone task.");
                 }
                 if (!errors.isEmpty()) {
                     throw new BadRequestException("“" + t.name() + "” — "
@@ -340,40 +364,61 @@ public class ProgramAdminService {
         s.setDueSoonDays(req.dueSoonDays());
         s.setEndLabel(req.endLabel());
         s.setEndAt(req.endAt());
-        // Same-instrument (retake) pairs are allowed since the typed task
-        // spine: the DISTANCE milestone task's submission tag — not "latest
-        // evaluated" — identifies the distance submission, so an equal pair
-        // can no longer self-compare.
-        Map<String, String> errors = new LinkedHashMap<>();
-        milestonePipelineSyncError(cohortId, MilestoneRole.BASELINE, req.baselinePipelineId())
-                .ifPresent(msg -> errors.put("baselinePipelineId", msg));
-        milestonePipelineSyncError(cohortId, MilestoneRole.DISTANCE, req.distancePipelineId())
-                .ifPresent(msg -> errors.put("distancePipelineId", msg));
-        if (!errors.isEmpty()) {
-            throw new FieldValidationException(errors);
-        }
-        s.setBaselinePipelineId(req.baselinePipelineId());
-        s.setDistancePipelineId(req.distancePipelineId());
+        // The pair is CURRICULUM-DERIVED (see syncMilestonePair), so the
+        // request's two pipeline ids are ignored — this endpoint is pacing, and
+        // leaving the columns alone is what keeps it from being a second writer
+        // that could desync them. Not re-derived here either: a cohort
+        // designated before the milestone tasks existed still resolves its
+        // sides by the evaluated-submission fallback, and quietly nulling that
+        // because someone edited the due-soon threshold is data loss with no
+        // signal. Such a cohort converges on its next board save, with the
+        // Settings card naming the milestone it is missing.
         return ProgramMapper.toDto(settings.save(s));
     }
 
     /**
-     * The designated pipeline and the cohort's milestone task must agree
-     * (spec §5): a BASELINE/DISTANCE milestone task referencing pipeline X
-     * while the designation says Y would tag submissions the comparison
-     * could never resolve.
+     * Makes the stored pair equal what the curriculum says (spec §5): the
+     * BASELINE milestone task's pipeline is the baseline, the DISTANCE
+     * milestone task's is the distance. There is no separate designation any
+     * more — the milestone tasks ARE it, so the two can no longer disagree.
+     *
+     * <p>The columns stay because everything downstream reads them
+     * ({@code ComparisonReadRepository.designatedPair} and friends, the cohort
+     * header chip); only the way they are filled changed. The board save is
+     * their ONLY writer — which is what makes them incapable of disagreeing
+     * with the curriculum they came from.
      */
-    private java.util.Optional<String> milestonePipelineSyncError(UUID cohortId,
-            MilestoneRole role, UUID designatedPipelineId) {
-        if (designatedPipelineId == null) {
-            return java.util.Optional.empty();
+    private void syncMilestonePair(UUID cohortId) {
+        UUID baseline = milestonePipeline(cohortId, MilestoneRole.BASELINE);
+        UUID distance = milestonePipeline(cohortId, MilestoneRole.DISTANCE);
+        ProgramSettings s = settings.findById(cohortId).orElse(null);
+        // No row and no milestones: absence already reads as "no pair" (see
+        // ProgramMapper.toDto), so don't create a row of defaults to say it twice.
+        if (s == null && baseline == null && distance == null) {
+            return;
         }
-        boolean mismatch = tasks.findByCohortAndMilestoneRole(cohortId, role).stream()
-                .anyMatch(t -> t.getRefId() != null && !t.getRefId().equals(designatedPipelineId));
-        return mismatch
-                ? java.util.Optional.of("The cohort's " + role.name().toLowerCase()
-                        + " milestone task references a different pipeline.")
-                : java.util.Optional.empty();
+        if (s == null) {
+            s = new ProgramSettings();
+            s.setCohortId(cohortId);
+        }
+        s.setBaselinePipelineId(baseline);
+        s.setDistancePipelineId(distance);
+        settings.save(s);
+    }
+
+    /**
+     * The pipeline behind the cohort's milestone task of this role, or null
+     * when there is none (an undesignated side — no report is coming). Any
+     * publish status counts, matching the comparison's own milestone lookup: a
+     * draft milestone still names the instrument, and a milestone unpublished
+     * after members answered it must still resolve.
+     */
+    private UUID milestonePipeline(UUID cohortId, MilestoneRole role) {
+        return tasks.findByCohortAndMilestoneRole(cohortId, role).stream()
+                .map(ProgramTask::getRefId)
+                .filter(java.util.Objects::nonNull)
+                .findFirst()
+                .orElse(null);
     }
 
     /**
@@ -411,34 +456,6 @@ public class ProgramAdminService {
         return errors;
     }
 
-    /**
-     * The cohort-level milestone rules (spec §5): at most ONE BASELINE and ONE
-     * DISTANCE per cohort, and a BASELINE/DISTANCE task's pipeline must match
-     * the designated pair when one is designated.
-     *
-     * @param taken another task of this cohort already holds {@code role}
-     */
-    private Map<String, String> milestoneErrors(UUID cohortId, MilestoneRole role, UUID refId,
-            boolean taken) {
-        Map<String, String> errors = new LinkedHashMap<>();
-        if (role != MilestoneRole.BASELINE && role != MilestoneRole.DISTANCE) {
-            return errors;
-        }
-        if (taken) {
-            errors.put("milestoneRole", "This cohort already has a "
-                    + role.name().toLowerCase() + " milestone task.");
-        }
-        UUID designated = settings.findById(cohortId)
-                .map(s -> role == MilestoneRole.BASELINE
-                        ? s.getBaselinePipelineId() : s.getDistancePipelineId())
-                .orElse(null);
-        if (designated != null && refId != null && !designated.equals(refId)) {
-            errors.put("refId", "The cohort's designated " + role.name().toLowerCase()
-                    + " assessment is a different pipeline.");
-        }
-        return errors;
-    }
-
     // ------------------------------------------------------------------ pulse
 
     /**
@@ -453,6 +470,7 @@ public class ProgramAdminService {
         List<PulseColumn> columns = new ArrayList<>();
         List<UUID> taskIds = new ArrayList<>();
         List<ProgramModule> columnModules = new ArrayList<>();
+        List<ProgramTask> columnTasks = new ArrayList<>();
         for (int mi = 0; mi < mods.size(); mi++) {
             List<ProgramTask> live = ProgramRules.liveTasks(mods.get(mi));
             for (int ti = 0; ti < live.size(); ti++) {
@@ -461,6 +479,7 @@ public class ProgramAdminService {
                         mods.get(mi).getName(), task.getName(), task.getDueDate()));
                 taskIds.add(task.getId());
                 columnModules.add(mods.get(mi));
+                columnTasks.add(task);
             }
         }
 
@@ -480,10 +499,18 @@ public class ProgramAdminService {
         Map<UUID, ProgramTaskType> taskTypes = mods.stream()
                 .flatMap(m -> m.getTasks().stream())
                 .collect(Collectors.toMap(ProgramTask::getId, ProgramTask::getTaskType));
+        // Spec §3/§13: a COURSE the member's org can no longer open gates nothing
+        // and counts nowhere — the same rule the matrix applies. One batched read
+        // per distinct org on a cross-org roster.
+        Map<UUID, Set<UUID>> blockedByOrg = founders.stream()
+                .map(CohortMemberRow::getOrgId).distinct()
+                .collect(Collectors.toMap(Function.identity(),
+                        org -> myProgramService.blockedCourseIds(org, mods)));
 
         List<PulseRow> rows = founders.stream().map(member -> {
             Map<UUID, ProgramSubmission> mine = byUserThenTask.getOrDefault(member.getId(), Map.of());
             Map<UUID, JourneyTaskState> myTyped = typedByUser.getOrDefault(member.getId(), Map.of());
+            Set<UUID> blockedCourses = blockedByOrg.getOrDefault(member.getOrgId(), Set.of());
             List<CellState> cells = new ArrayList<>(taskIds.size());
             int assigned = 0;
             long done = 0;
@@ -507,8 +534,11 @@ public class ProgramAdminService {
                     state = cellOf(myTyped.get(taskId));
                 }
                 // A task that does not GATE renders a cell but counts in neither
-                // side of the completion percentage (ProgramRules.gates).
-                if (type.completableInApp()) {
+                // side of the completion percentage — including a COURSE the
+                // member's org can no longer open (ProgramRules.gates), exactly as
+                // the matrix excludes it. completableInApp() alone counted a blocked
+                // course as forever-incomplete and diverged from the matrix.
+                if (ProgramRules.gates(columnTasks.get(i), blockedCourses)) {
                     assigned++;
                     if (state == CellState.SUBMITTED) {
                         done++;

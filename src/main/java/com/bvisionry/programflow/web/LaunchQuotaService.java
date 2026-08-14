@@ -5,20 +5,22 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.bvisionry.common.audit.AuditLogger;
 import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.common.enums.SubscriptionTier.LaunchQuota;
+import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.LaunchQuotaExceededException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.security.CurrentUserAccessor;
-import com.bvisionry.common.security.PremiumFeatureGuard;
 import com.bvisionry.programflow.domain.CohortLaunchGrant;
 import com.bvisionry.programflow.domain.CohortLaunchLedgerEntry;
 import com.bvisionry.programflow.dto.CohortPlanUsageResponse;
@@ -56,7 +58,6 @@ public class LaunchQuotaService {
     private final CohortLaunchLedgerRepository ledger;
     private final CohortLaunchGrantRepository grants;
     private final CohortBoardReadRepository boardReads;
-    private final PremiumFeatureGuard entitlements;
     private final CurrentUserAccessor currentUser;
     private final AuditLogger audit;
 
@@ -64,30 +65,77 @@ public class LaunchQuotaService {
 
     /**
      * The quota half of a launch: MUST run inside the launch transaction
-     * (spec §8 — check + ledger insert atomically). Locks the billing root
-     * row first so two concurrent launches serialize; the loser re-reads the
-     * committed ledger and gets the 409. SUPER_ADMIN bypasses the refusal
-     * (operator escape hatch, same rule as every entitlement gate) but the
-     * launch is still ledgered — a launched cohort is a launched cohort, and
-     * the operator can grant-extra-launch to give the room back.
+     * (spec §8 — check + ledger insert atomically). The paying unit is the
+     * BILLING FAMILY, so the assigned orgs are collapsed to their DISTINCT
+     * billing roots BEFORE anything is consumed — a cohort assigned to two
+     * sub-orgs of one family is one participation and one charge, not a
+     * double-charge that exhausts the shared meter against itself. Roots are
+     * charged in sorted order so two multi-family launches can never take
+     * their row locks in opposite order and deadlock.
+     *
+     * <p>The ceiling binds against each TARGET FAMILY's plan tier regardless of
+     * WHO clicks Launch — cohorts are launched by SUPER_ADMIN on an org's
+     * behalf, and §8 is "each assigned org pays". There is deliberately no
+     * silent operator bypass: the escape hatch is the audited
+     * {@link #grantExtraLaunch}, which raises the allowance ({@code verdict}:
+     * perPeriod + grantsInPeriod) so the next launch clears — a logged grant,
+     * not an invisible override. Unlimited tiers ({@code remaining == null})
+     * are never blocked.
      */
-    void consume(UUID orgId, UUID cohortId) {
-        UUID root = ledger.billingRootOf(orgId);
-        if (root == null) {
-            throw new ResourceNotFoundException("Organization", orgId.toString());
-        }
+    void consumeForLaunch(Collection<UUID> assignedOrgIds, UUID cohortId) {
+        assignedOrgIds.stream()
+                .map(this::requireRoot)
+                .distinct()
+                .sorted()
+                .forEach(root -> chargeRoot(root, cohortId));
+    }
+
+    /**
+     * The assignment-time charge ({@code CohortService.assignOrg} on a
+     * LAUNCHED cohort): the org's family pays UNLESS it already paid for this
+     * cohort — adding a second sub-org of a family that launched with a
+     * sibling is joining a participation the family already bought, not a new
+     * one. The exists-check runs under the billing-root lock, so two racing
+     * assignments of siblings serialize and the second sees the first's row.
+     */
+    void consumeUnlessCharged(UUID orgId, UUID cohortId) {
+        UUID root = requireRoot(orgId);
         ledger.lockBillingRoot(root);
-        if (entitlements.governingTier(orgId).isPresent()) {
-            Verdict v = verdict(root);
-            if (v.remaining() != null && v.remaining() <= 0) {
-                throw new LaunchQuotaExceededException(refusal(v), v.nextAvailableDate(), v.tier());
-            }
+        // ponytail: linear scan of the family's ledger (small — quota-bounded);
+        // switch to an exists query if a family's history ever gets long.
+        boolean charged = ledger.ledgerRows(root).stream()
+                .anyMatch(r -> cohortId.equals(r.getCohortId()));
+        if (!charged) {
+            chargeRootLocked(root, cohortId);
+        }
+    }
+
+    /** Lock the root, then verdict + insert — the §8 atomic pair for one family. */
+    private void chargeRoot(UUID root, UUID cohortId) {
+        ledger.lockBillingRoot(root);
+        chargeRootLocked(root, cohortId);
+    }
+
+    /** The check + append, on an already-locked root. */
+    private void chargeRootLocked(UUID root, UUID cohortId) {
+        Verdict v = verdict(root);
+        if (v.remaining() != null && v.remaining() <= 0) {
+            throw new LaunchQuotaExceededException(refusal(v), v.nextAvailableDate(), v.tier());
         }
         CohortLaunchLedgerEntry entry = new CohortLaunchLedgerEntry();
         entry.setOrgId(root);
         entry.setCohortId(cohortId);
         entry.setLaunchedBy(currentUser.require().userId());
-        ledger.save(entry);
+        try {
+            // Flushed HERE so V181's UNIQUE (org_id, cohort_id) surfaces as a
+            // clean 409 in this method, not a 500 at commit. The row locks
+            // above make the constraint unreachable through today's paths —
+            // it is the database's backstop for any path that forgets them.
+            ledger.saveAndFlush(entry);
+        } catch (DataIntegrityViolationException e) {
+            throw new IllegalOperationException(
+                    "This cohort has already been launched for this organization.");
+        }
     }
 
     private static String refusal(Verdict v) {

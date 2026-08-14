@@ -283,6 +283,43 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(submissions.findByTaskIdIn(List.of(doomedTaskId))).isEmpty();
     }
 
+    /**
+     * Retyping is deleting in disguise: {@code task_type} decides how a
+     * member's completion is judged and which fields survive the save, so a
+     * LESSON with submissions turned COURSE silently reverts everyone's
+     * progress even though the task id survives. Same guard as a deletion —
+     * refused without force, the 409 naming the task and its members.
+     */
+    @Test
+    void save_refusesToRetypeATaskWithMemberWork_untilForced() {
+        workOn(keptTaskId);
+
+        // A same-type edit needs no force — the guard fires on the retype,
+        // not on the mere existence of work.
+        adminService.saveBoard(cohortId, BoardPayloads.edit(board(), keptTaskId,
+                t -> task(t.id(), "Still a lesson", t.status())));
+
+        SaveBoardRequest retype = BoardPayloads.edit(board(), keptTaskId,
+                t -> new TaskUpsert(t.id(), "Now a course", null, ProgramTaskStatus.DRAFT,
+                        false, ProgramTaskType.COURSE, null, null, List.of()));
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId, retype))
+                .isInstanceOf(IllegalOperationException.class)
+                .hasMessageContaining("Still a lesson")
+                .hasMessageContaining("1 member")
+                .hasMessageContaining("Save anyway");
+        assertThat(taskOf(board(), keptTaskId).taskType())
+                .as("the refusal changed nothing").isEqualTo(ProgramTaskType.LESSON);
+
+        // The refusal wrote nothing, so "Save anyway" is the same payload
+        // with force set — and the retype then applies.
+        adminService.saveBoard(cohortId,
+                new SaveBoardRequest(retype.expectedVersion(), true, retype.modules()));
+        assertThat(taskOf(board(), keptTaskId).taskType()).isEqualTo(ProgramTaskType.COURSE);
+        assertThat(submissions.findByTaskIdIn(List.of(keptTaskId)))
+                .as("a forced retype keeps the rows; it is the MEANING that reverts")
+                .hasSize(1);
+    }
+
     /* -------------------------------------------------------- spine validation */
 
     @Test

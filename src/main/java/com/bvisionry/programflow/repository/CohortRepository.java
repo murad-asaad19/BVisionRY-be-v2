@@ -58,6 +58,19 @@ public interface CohortRepository extends JpaRepository<Cohort, UUID> {
     List<OrgMemberRow> findOrgMembers(@Param("orgId") UUID orgId);
 
     /**
+     * Whether the user is an enrollable member of the org — the single-id form of
+     * {@link #findOrgMembers}'s predicate (active MEMBER), so the auto-enroll hook
+     * can test one id without materialising the whole roster. Keep this WHERE in
+     * sync with {@code findOrgMembers}.
+     */
+    @Query(value = """
+            SELECT EXISTS (SELECT 1 FROM users u
+                           WHERE u.id = :userId AND u.organization_id = :orgId
+                             AND u.status = 'ACTIVE' AND u.role = 'MEMBER')
+            """, nativeQuery = true)
+    boolean isActiveOrgMember(@Param("orgId") UUID orgId, @Param("userId") UUID userId);
+
+    /**
      * The cohort's roster with each founder's org: active enrolled members,
      * the single source every cohort-board count reads (board stats, module
      * "reached", pulse, matrix). Spec §13: a roster may span orgs.
@@ -134,6 +147,22 @@ public interface CohortRepository extends JpaRepository<Cohort, UUID> {
     /** Soft-coupled org existence check (programflow may not import the organization feature). */
     @Query(value = "SELECT EXISTS (SELECT 1 FROM organizations WHERE id = :orgId)", nativeQuery = true)
     boolean orgExists(@Param("orgId") UUID orgId);
+
+    /**
+     * Atomically bump the board version IFF it still equals {@code expectedVersion};
+     * returns the row count (1 = won, 0 = someone else saved first). board_version
+     * is a plain column, not {@code @Version}, so a read-then-write guard is not
+     * atomic — two concurrent saves could both pass a value check and both clobber.
+     * This conditional UPDATE serializes them on the row. {@code clearAutomatically}
+     * detaches the now-stale managed cohort so it cannot overwrite the bump on flush.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query(value = """
+            UPDATE cohorts SET board_version = board_version + 1
+            WHERE id = :cohortId AND board_version = :expectedVersion
+            """, nativeQuery = true)
+    int bumpBoardVersionIfMatches(@Param("cohortId") UUID cohortId,
+                                  @Param("expectedVersion") long expectedVersion);
 
     /** The cohort's org assignments with names and per-org headcounts (assign panel). */
     @Query(value = """

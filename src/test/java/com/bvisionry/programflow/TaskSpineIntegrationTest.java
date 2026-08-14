@@ -5,7 +5,6 @@ import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.exception.BadRequestException;
-import com.bvisionry.common.exception.FieldValidationException;
 import com.bvisionry.engagement.repository.EngagementReadRepository;
 import com.bvisionry.organization.OrganizationRepository;
 import com.bvisionry.organization.entity.Organization;
@@ -202,6 +201,149 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
             var counts = engagementReads.assignmentCounts(cohortId, member.getId());
             assertThat(counts.total()).isEqualTo(6);
             assertThat(counts.done()).isEqualTo(4);
+        }
+    }
+
+    /* ------------------------------------------------- referencing, not copying */
+
+    /**
+     * A cohort assessment REFERENCES the member's assessment history. Building a
+     * cohort around an instrument people have already sat must not ask them to
+     * sit it again — the second sitting would be a second set of scores for the
+     * same instrument, and the growth report would then be measuring the wrong
+     * pair.
+     */
+    @Nested
+    class AdoptsExistingSittings {
+
+        /** An evaluated sitting of `pipelineId` that no cohort task has claimed. */
+        private UUID priorSitting(String evaluatedAt) {
+            UUID assignmentId = jdbc.queryForObject("""
+                    INSERT INTO assignments (pipeline_id, organization_id, user_id)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT (organization_id, pipeline_id, user_id)
+                            WHERE user_id IS NOT NULL
+                        DO UPDATE SET updated_at = now()
+                    RETURNING id
+                    """, UUID.class, pipelineId, org.getId(), member.getId());
+            UUID id = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO submissions (id, assignment_id, user_id, status,
+                                             submitted_at, evaluated_at)
+                    VALUES (?, ?, ?, 'EVALUATED', ?::timestamptz, ?::timestamptz)
+                    """, id, assignmentId, member.getId(), evaluatedAt, evaluatedAt);
+            return id;
+        }
+
+        @Test
+        void baselineAdoptsTheSittingTheMemberAlreadyTook_ratherThanMintingASecond() {
+            UUID existing = priorSitting("2026-05-04T09:00:00Z");
+
+            assertThat(myProgramService.open(baselineTaskId).targetId()).isEqualTo(existing);
+            // and it is CLAIMED, so every later read resolves the same sitting
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM submissions WHERE user_id = ? AND program_task_id = ?",
+                    Integer.class, member.getId(), baselineTaskId)).isEqualTo(1);
+        }
+
+        /** Intake semantics: the reading the programme is measured FROM. */
+        @Test
+        void baselineTakesTheEarliestSitting_soARetakeNeverMovesIt() {
+            UUID earliest = priorSitting("2026-05-04T09:00:00Z");
+            priorSitting("2026-06-20T09:00:00Z");
+
+            assertThat(myProgramService.open(baselineTaskId).targetId()).isEqualTo(earliest);
+        }
+
+        /**
+         * A trajectory reading is a point in time INSIDE the programme, so
+         * borrowing an outside sitting for it would invent a data point.
+         */
+        @Test
+        void checkInAdoptsNothing_evenOnTheSameInstrument() {
+            UUID existing = priorSitting("2026-05-04T09:00:00Z");
+
+            assertThat(myProgramService.open(checkinTaskId).targetId()).isNotEqualTo(existing);
+        }
+
+        @Test
+        void aMemberWhoNeverSatItStillGetsAFreshSitting() {
+            UUID target = myProgramService.open(baselineTaskId).targetId();
+
+            assertThat(target).isNotNull();
+            assertThat(jdbc.queryForObject(
+                    "SELECT status FROM submissions WHERE id = ?", String.class, target))
+                    .isEqualTo("IN_PROGRESS");
+        }
+
+        /** Opening twice must not adopt once and then create. */
+        @Test
+        void adoptionIsIdempotent() {
+            UUID existing = priorSitting("2026-05-04T09:00:00Z");
+
+            assertThat(myProgramService.open(baselineTaskId).targetId()).isEqualTo(existing);
+            assertThat(myProgramService.open(baselineTaskId).targetId()).isEqualTo(existing);
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM submissions WHERE user_id = ?",
+                    Integer.class, member.getId())).isEqualTo(1);
+        }
+
+        /**
+         * The DONE_FOR_USER surfaces (cohort board, coach roster, ROI report,
+         * engagement record, due reminders) answer the shared
+         * {@code TaskCompletion} fragment — it must adopt exactly as the
+         * journey does, or the board reports "outstanding" about a task the
+         * journey shows done. And a tagged sitting — even an unfinished one —
+         * outranks adoption, because that is what the journey resolves.
+         */
+        @Test
+        void doneForUserSurfacesAdoptLikeTheJourney_baselineYesCheckinNo() {
+            UUID adoptable = priorSitting("2026-05-04T09:00:00Z");
+
+            assertThat(spineRepo.usersDoneWithTask(baselineTaskId))
+                    .containsExactly(member.getId());
+            assertThat(spineRepo.usersDoneWithTask(checkinTaskId)).isEmpty();
+
+            // Once ANY submission is tagged to the task, adoption stops: the
+            // journey resolves the tagged (unfinished) sitting, so done must too.
+            jdbc.update("""
+                    INSERT INTO submissions (id, assignment_id, user_id, status, program_task_id)
+                    VALUES (?, (SELECT assignment_id FROM submissions WHERE id = ?), ?,
+                            'IN_PROGRESS', ?)
+                    """, UUID.randomUUID(), adoptable, member.getId(), baselineTaskId);
+            assertThat(spineRepo.usersDoneWithTask(baselineTaskId)).isEmpty();
+        }
+
+        /** …and DISTANCE never claims the sitting BASELINE would take. */
+        @Test
+        void doneForUserDistanceAdoptsOnlyAPostLaunchSittingThatIsNotTheBaselines() {
+            jdbc.update("UPDATE cohorts SET launched_at = '2026-06-01T00:00:00Z'::timestamptz"
+                    + " WHERE id = ?", cohortId);
+            jdbc.update("UPDATE program_tasks SET milestone_role = 'DISTANCE' WHERE id = ?",
+                    checkinTaskId);
+
+            // One post-launch sitting: it is the pipeline's earliest — BASELINE's.
+            priorSitting("2026-06-10T09:00:00Z");
+            assertThat(spineRepo.usersDoneWithTask(baselineTaskId))
+                    .containsExactly(member.getId());
+            assertThat(spineRepo.usersDoneWithTask(checkinTaskId)).isEmpty();
+
+            // A second, later sitting is free for DISTANCE to adopt.
+            priorSitting("2026-07-01T09:00:00Z");
+            assertThat(spineRepo.usersDoneWithTask(checkinTaskId))
+                    .containsExactly(member.getId());
+        }
+
+        /** The journey must say "done" BEFORE the member opens anything. */
+        @Test
+        void theJourneyShowsAnAdoptedSittingWithoutTheMemberOpeningIt() {
+            priorSitting("2026-05-04T09:00:00Z");
+
+            var states = spineRepo.assessmentStates(
+                    java.util.List.of(member.getId()), java.util.List.of(baselineTaskId));
+
+            assertThat(states).singleElement()
+                    .satisfies(row -> assertThat(row.status()).isEqualTo("EVALUATED"));
         }
     }
 
@@ -474,32 +616,6 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                     .hasMessageContaining("before publishing it");
         }
 
-        @Test
-        void samePipelinePairDesignationIsNowAllowed_butMustMatchMilestoneTasks() {
-            // The pre-spine equal-pair rejection is gone: same instrument in
-            // and out is the FRI 58 → 71 story.
-            ProgramSettingsDto saved = programAdminService.updateSettings(cohortId,
-                    settings(pipelineId, pipelineId));
-            assertThat(saved.baselinePipelineId()).isEqualTo(pipelineId);
-            assertThat(saved.distancePipelineId()).isEqualTo(pipelineId);
-
-            // A designation that contradicts the cohort's milestone tasks is a
-            // field error (the DISTANCE milestone below references pipelineId).
-            saveTask(checkinTaskId, assessment("Distance", pipelineId, MilestoneRole.DISTANCE));
-            UUID otherPipeline = insertPipeline("Other instrument");
-            assertThatThrownBy(() -> programAdminService.updateSettings(cohortId,
-                    settings(pipelineId, otherPipeline)))
-                    .isInstanceOfSatisfying(FieldValidationException.class,
-                            e -> assertThat(e.getFieldErrors()).containsKey("distancePipelineId"));
-
-            // And the mirror: once designated, a milestone task cannot point
-            // at a different pipeline.
-            assertThatThrownBy(() -> saveTask(checkinTaskId,
-                    assessment("Distance", otherPipeline, MilestoneRole.DISTANCE)))
-                    .isInstanceOf(BadRequestException.class)
-                    .hasMessageContaining("designated distance assessment is a different pipeline");
-        }
-
         /** Review #7a: the ref must exist in its owning slice. */
         @Test
         void aBogusReference_isRejected() {
@@ -532,9 +648,129 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
             return t -> new TaskUpsert(t.id(), name, null, ProgramTaskStatus.LIVE, false,
                     ProgramTaskType.ASSESSMENT, refId, role, List.of());
         }
+    }
 
-        private ProgramSettingsDto settings(UUID baseline, UUID distance) {
-            return new ProgramSettingsDto("Week", true, 3, null, null, baseline, distance);
+    /* ------------------------------------------------------ the derived pair */
+
+    /**
+     * The distance pair is no longer designated: it IS the cohort's BASELINE
+     * and DISTANCE milestone tasks (spec §5). The admin picks the instrument
+     * once, on the Curriculum tab, and every board save re-derives
+     * {@code program_settings} from it — which is what the whole comparison
+     * slice reads.
+     */
+    @Nested
+    class DerivedDistancePair {
+
+        /** The seeded board carries a BASELINE milestone and no settings row at all. */
+        @Test
+        void aBoardSaveDerivesThePairFromTheMilestoneTasks() {
+            assertThat(pair()).containsExactly(null, null);
+
+            save(BoardPayloads.echo(programAdminService.getBoard(cohortId)));
+
+            // Baseline from the seeded milestone; distance stays undesignated
+            // because the cohort has no DISTANCE milestone — the comparison
+            // reads that as "no report is coming".
+            assertThat(pair()).containsExactly(pipelineId, null);
+        }
+
+        @Test
+        void theSameInstrumentMayPlayBothRoles() {
+            // The FRI 58 → 71 story: one instrument in and out. The DISTANCE
+            // milestone task's submission tag is what keeps an equal pair from
+            // self-comparing (ComparisonComputeService.resolveSides).
+            saveTask(checkinTaskId, assessment("Distance", pipelineId, MilestoneRole.DISTANCE));
+            assertThat(pair()).containsExactly(pipelineId, pipelineId);
+        }
+
+        @Test
+        void repointingAMilestoneMovesThePairWithIt() {
+            UUID otherPipeline = insertPipeline("Other instrument");
+            saveTask(checkinTaskId, assessment("Distance", otherPipeline, MilestoneRole.DISTANCE));
+            assertThat(pair()).containsExactly(pipelineId, otherPipeline);
+
+            // Re-pointing is a plain curriculum edit now — the designation
+            // follows rather than rejecting the save for contradicting itself.
+            saveTask(checkinTaskId, assessment("Distance", pipelineId, MilestoneRole.DISTANCE));
+            assertThat(pair()).containsExactly(pipelineId, pipelineId);
+        }
+
+        @Test
+        void deletingTheMilestoneTaskClearsThatSide() {
+            saveTask(checkinTaskId, assessment("Distance", pipelineId, MilestoneRole.DISTANCE));
+            assertThat(pair()).containsExactly(pipelineId, pipelineId);
+
+            saveWithoutTask(baselineTaskId);
+            assertThat(pair()).containsExactly(null, pipelineId);
+        }
+
+        /** Dropping the role (a milestone demoted to a plain assessment) clears it too. */
+        @Test
+        void droppingTheRoleClearsThatSide() {
+            saveTask(baselineTaskId, t -> new TaskUpsert(t.id(), "Just an assessment", null,
+                    ProgramTaskStatus.LIVE, false, ProgramTaskType.ASSESSMENT, pipelineId,
+                    MilestoneRole.CHECKIN, List.of()));
+            assertThat(pair()).containsExactly(null, null);
+        }
+
+        /** The settings PUT is pacing only — it cannot designate anything. */
+        @Test
+        void theSettingsPutIgnoresThePipelineIdsItIsHanded() {
+            UUID otherPipeline = insertPipeline("Wishful instrument");
+            ProgramSettingsDto saved = programAdminService.updateSettings(cohortId,
+                    new ProgramSettingsDto("Sprint", false, 7, "Demo day", null,
+                            otherPipeline, otherPipeline));
+
+            assertThat(saved.stageLabel()).isEqualTo("Sprint");
+            assertThat(saved.dueSoonDays()).isEqualTo(7);
+            assertThat(saved.baselinePipelineId()).isNull();
+            assertThat(saved.distancePipelineId()).isNull();
+
+            // The board save is the only writer of the pair — and it leaves the
+            // pacing this PUT just stored alone.
+            save(BoardPayloads.echo(programAdminService.getBoard(cohortId)));
+            assertThat(pair()).containsExactly(pipelineId, null);
+            assertThat(programAdminService.getBoard(cohortId).settings().stageLabel())
+                    .isEqualTo("Sprint");
+        }
+
+        /** The pair as the comparison slice reads it — straight from the table. */
+        private UUID[] pair() {
+            return jdbc.query("""
+                    SELECT baseline_pipeline_id, distance_pipeline_id
+                    FROM program_settings WHERE cohort_id = ?
+                    """,
+                    (rs, i) -> new UUID[] {rs.getObject(1, UUID.class),
+                            rs.getObject(2, UUID.class)},
+                    cohortId)
+                    .stream().findFirst().orElse(new UUID[] {null, null});
+        }
+
+        private void save(com.bvisionry.programflow.dto.SaveBoardRequest req) {
+            programAdminService.saveBoard(cohortId, req);
+        }
+
+        private void saveTask(UUID taskId, java.util.function.UnaryOperator<TaskUpsert> edit) {
+            save(BoardPayloads.edit(programAdminService.getBoard(cohortId), taskId, edit));
+        }
+
+        private java.util.function.UnaryOperator<TaskUpsert> assessment(String name, UUID refId,
+                MilestoneRole role) {
+            return t -> new TaskUpsert(t.id(), name, null, ProgramTaskStatus.LIVE, false,
+                    ProgramTaskType.ASSESSMENT, refId, role, List.of());
+        }
+
+        /** The whole board minus one task — the builder's delete. */
+        private void saveWithoutTask(UUID taskId) {
+            var board = programAdminService.getBoard(cohortId);
+            save(new com.bvisionry.programflow.dto.SaveBoardRequest(board.version(), true,
+                    board.modules().stream()
+                            .map(m -> BoardPayloads.asUpsert(m, m.tasks().stream()
+                                    .filter(t -> !t.id().equals(taskId))
+                                    .map(BoardPayloads::asUpsert)
+                                    .toList()))
+                            .toList()));
         }
     }
 

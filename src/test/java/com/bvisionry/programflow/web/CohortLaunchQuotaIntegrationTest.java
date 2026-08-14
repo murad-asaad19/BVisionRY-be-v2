@@ -3,6 +3,7 @@ package com.bvisionry.programflow.web;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.common.enums.SubscriptionTier.LaunchPeriodUnit;
+import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.LaunchQuotaExceededException;
 import com.bvisionry.organization.OrganizationRepository;
 import com.bvisionry.organization.entity.Organization;
@@ -189,6 +190,45 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
                 .hasMessageContaining("share the parent organization's plan");
     }
 
+    /**
+     * One family, two assigned sub-orgs, ONE launch: the paying unit is the
+     * billing family, so the launch collapses the assignments to distinct
+     * billing roots and charges each once. Starter allows exactly 1/quarter —
+     * the old per-assignment charge exhausted the shared meter against itself
+     * and refused this very launch.
+     */
+    @Test
+    void aCrossOrgCohortWithinOneFamily_chargesTheFamilyOnce() {
+        UUID cohortId = draft(subA, "Family-wide");
+        assign(subB, cohortId);
+
+        CohortDto launched = cohortService.launch(cohortId);
+        assertThat(launched.status()).isEqualTo(CohortStatus.LAUNCHED);
+        assertThat(ledger.countByOrgId(root.getId()))
+                .as("one charge per billing family per launch").isEqualTo(1);
+    }
+
+    /** Joining a launched cohort the family already paid for is free — no second charge. */
+    @Test
+    void assigningASiblingSubOrgToALaunchedCohort_doesNotChargeTheFamilyAgain() {
+        UUID cohortId = launch(subA, "Already paid");
+
+        assertThatCode(() -> assign(subB, cohortId))
+                .as("the meter is spent, but THIS cohort is already the family's")
+                .doesNotThrowAnyException();
+        assertThat(ledger.countByOrgId(root.getId())).isEqualTo(1);
+    }
+
+    /** …but a family that has NOT paid for the cohort still pays at assignment time. */
+    @Test
+    void assigningANewFamilyToALaunchedCohort_stillPays() {
+        UUID cohortId = launch(subA, "Metered for newcomers");
+        Organization freeloader = saveOrg("Free Family", SubscriptionTier.FREE, null);
+
+        assertThatThrownBy(() -> assign(freeloader, cohortId))
+                .isInstanceOf(LaunchQuotaExceededException.class);
+    }
+
     @Test
     void anUnrelatedFamilysLaunchesDoNotCount() {
         Organization otherRoot = saveOrg("Other Customer", SubscriptionTier.STARTER, null);
@@ -198,17 +238,35 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
                 .doesNotThrowAnyException();
     }
 
+    /* ----------------------------------------------- launch idempotency */
+
+    /** The double-click, replayed: the second launch is the plain 409, never a second charge. */
+    @Test
+    void launchingTheSameCohortTwice_secondIsRefused_oneLedgerRow() {
+        UUID cohortId = launch(subA, "Once only");
+
+        assertThatThrownBy(() -> cohortService.launch(cohortId))
+                .isInstanceOf(IllegalOperationException.class)
+                .hasMessageContaining("launched");
+        assertThat(ledger.countByOrgId(root.getId())).isEqualTo(1);
+    }
+
     /* -------------------------------------------------- super admin path */
 
-    /** Bypasses the refusal but is still ledgered — a launched cohort is a launched cohort. */
+    /**
+     * The ceiling binds against the ORG regardless of who launches (§8: "each
+     * assigned org pays") — a SUPER_ADMIN launching for an over-quota org is
+     * refused, not waved through. Their escape hatch is the audited grant (see
+     * {@link #grant_thenLaunchSucceeds_andDeleteNeverRefunds}), not a silent bypass.
+     */
     @Test
-    void superAdmin_bypassesTheRefusal_butStillWritesTheLedger() {
+    void superAdmin_isStillBoundByTheOrgsQuota() {
         launch(subA, "Quota spender");
         TestAuthentication.authenticateAsSuperAdmin(users);
 
-        assertThatCode(() -> cohortService.launch(draft(subA, "Operator demo")))
-                .doesNotThrowAnyException();
-        assertThat(ledger.countByOrgId(root.getId())).isEqualTo(2);
+        assertThatThrownBy(() -> cohortService.launch(draft(subA, "Operator demo")))
+                .isInstanceOf(LaunchQuotaExceededException.class);
+        assertThat(ledger.countByOrgId(root.getId())).isEqualTo(1);
     }
 
     /* -------------------------------------------------------- usage read */
@@ -349,9 +407,13 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
     /** Spec §13: create the platform draft, then assign the org (its enrollment rule empty). */
     private UUID draft(Organization org, String name) {
         UUID id = cohortService.create(req(name)).id();
-        cohortService.assignOrg(id, new com.bvisionry.programflow.dto.AssignOrgRequest(
-                org.getId(), false, java.util.List.of(), false));
+        assign(org, id);
         return id;
+    }
+
+    private void assign(Organization org, UUID cohortId) {
+        cohortService.assignOrg(cohortId, new com.bvisionry.programflow.dto.AssignOrgRequest(
+                org.getId(), false, java.util.List.of(), false));
     }
 
     private UUID launch(Organization org, String name) {

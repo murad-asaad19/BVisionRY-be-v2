@@ -37,6 +37,8 @@ import com.bvisionry.programflow.repository.CohortProgressRow;
 import com.bvisionry.programflow.repository.CohortRepository;
 import com.bvisionry.programflow.repository.OrgMemberRow;
 
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 
 /**
@@ -46,11 +48,12 @@ import lombok.RequiredArgsConstructor;
  * auto-enroll future joiners). Lifecycle stays DRAFT → LAUNCHED →
  * COMPLETED / ARCHIVED (spec §8).
  *
- * <p>Quota: each assigned org pays for a launched cohort from its own
- * billing-root plan — {@link #launch} consumes one launch per already-assigned
- * org, {@link #assignOrg} consumes at assignment time when the cohort is
- * already launched. Both go through {@link LaunchQuotaService} in the same
- * transaction as the append-only ledger insert.
+ * <p>Quota: each assigned BILLING FAMILY pays for a launched cohort from its
+ * root plan, once — {@link #launch} consumes one launch per distinct billing
+ * root across the assignments, {@link #assignOrg} consumes at assignment time
+ * when the cohort is already launched and the family has not paid for it yet.
+ * Both go through {@link LaunchQuotaService} in the same transaction as the
+ * append-only ledger insert.
  *
  * <p>Org admins keep exactly one write: {@link #setOrgMembers} over their OWN
  * members (spec §13.8) — everything else is super-admin only at the
@@ -84,6 +87,7 @@ public class CohortService {
     private final LaunchQuotaService launchQuota;
     private final AuditLogger audit;
     private final CurrentUserAccessor currentUser;
+    private final EntityManager entityManager;
 
     /**
      * Every platform cohort, board order (super-admin authoring console), each
@@ -175,21 +179,33 @@ public class CohortService {
     /* ------------------------------------------------------------ lifecycle */
 
     /**
-     * DRAFT → LAUNCHED. Every assigned org pays: one launch is consumed from
-     * each assignment's billing-root plan, check + append-only ledger insert
-     * in THIS transaction, serialized on the billing-root row lock (spec §8).
-     * Any org over quota → 409 and the whole launch rolls back — the admin
-     * unassigns that org or grants it a launch, then retries.
+     * DRAFT → LAUNCHED. Every assigned billing family pays ONCE: the
+     * assignments are collapsed to their distinct billing roots and one launch
+     * is consumed per root, check + append-only ledger insert in THIS
+     * transaction, serialized on the billing-root row lock (spec §8). Any
+     * family over quota → 409 and the whole launch rolls back — the admin
+     * unassigns that family's orgs or grants it a launch, then retries.
      */
     public CohortDto launch(UUID cohortId) {
-        Cohort c = require(cohortId);
+        // DRAFT → LAUNCHED is a read-then-decide, so the read takes the
+        // cohort's row lock: a double-clicked Launch serializes here and the
+        // loser reads the committed LAUNCHED status into the ordinary 409
+        // below, instead of charging the family again and re-notifying the
+        // roster. (V181's UNIQUE on the ledger backstops the charge at the
+        // database even for a path without this lock.)
+        Cohort c = entityManager.find(Cohort.class, cohortId, LockModeType.PESSIMISTIC_WRITE);
+        if (c == null) {
+            throw new ResourceNotFoundException("Cohort", cohortId.toString());
+        }
         if (c.getStatus() != CohortStatus.DRAFT) {
             throw new IllegalOperationException("Only a draft cohort can be launched — this one is "
                     + c.getStatus().name().toLowerCase() + ".");
         }
-        for (CohortOrgAssignment a : assignments.findByCohortId(cohortId)) {
-            launchQuota.consume(a.getOrgId(), cohortId);
-        }
+        launchQuota.consumeForLaunch(
+                assignments.findByCohortId(cohortId).stream()
+                        .map(CohortOrgAssignment::getOrgId)
+                        .toList(),
+                cohortId);
         c.setStatus(CohortStatus.LAUNCHED);
         c.setLaunchedAt(OffsetDateTime.now());
         auditLifecycle(null, c, ACTION_LAUNCHED);
@@ -251,8 +267,10 @@ public class CohortService {
 
     /**
      * Assigns an org to the cohort with its enrollment rule. On a LAUNCHED
-     * cohort the org pays its launch quota right here — participation in a
-     * running program is the metered act (spec §13.4).
+     * cohort the org's billing family pays its launch quota right here —
+     * participation in a running program is the metered act (spec §13.4) —
+     * UNLESS the family already paid for this cohort through a sibling
+     * sub-org: joining an already-bought participation is free.
      */
     public CohortDto assignOrg(UUID cohortId, AssignOrgRequest req) {
         Cohort c = requireEditable(cohortId);
@@ -263,7 +281,7 @@ public class CohortService {
             throw new IllegalOperationException("This organization is already assigned to the cohort.");
         }
         if (c.getStatus() == CohortStatus.LAUNCHED) {
-            launchQuota.consume(req.orgId(), cohortId);
+            launchQuota.consumeUnlessCharged(req.orgId(), cohortId);
         }
         CohortOrgAssignment a = new CohortOrgAssignment();
         a.setCohortId(cohortId);
@@ -313,8 +331,10 @@ public class CohortService {
      * <p>Learners-only, the same rule {@link #setOrgMembers} and
      * {@link #enrollForAssignment} enforce ({@link #NOT_ENROLLABLE}). The check
      * lives HERE, on the one entry point both auto-enroll listeners call, and
-     * reuses {@link #orgMemberIds} so "enrollable" keeps a single definition
-     * instead of a third copy. It deliberately does NOT filter the event's
+     * tests the one id via {@link CohortRepository#isActiveOrgMember} — the
+     * single-id form of the same active-MEMBER predicate — rather than
+     * materialising the whole org roster to check one member. It deliberately
+     * does NOT filter the event's
      * {@code userType}: that is the member-type code (FOUNDER / LEADER / …),
      * not the role, so a COACH invited to staff the program looks exactly like
      * a founder there. Skipping silently rather than throwing is the right
@@ -326,7 +346,7 @@ public class CohortService {
      * {@code removeAll(mine)} — mine being MEMBERs only — could never clear it.
      */
     public void autoEnroll(UUID orgId, UUID userId) {
-        if (!orgMemberIds(orgId).contains(userId)) {
+        if (!cohorts.isActiveOrgMember(orgId, userId)) {
             return;
         }
         for (CohortOrgAssignment a : assignments.findByOrgId(orgId)) {

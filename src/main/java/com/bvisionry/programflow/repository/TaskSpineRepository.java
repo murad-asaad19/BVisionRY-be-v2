@@ -112,9 +112,33 @@ public class TaskSpineRepository {
                                      Instant submittedAt, Instant evaluatedAt, BigDecimal score) {}
 
     /**
-     * The member's submission TAGGED to each ASSESSMENT task (same-pipeline
-     * correctness: the tag, not the pipeline, identifies the milestone),
-     * newest per (member, task), with the evaluated overall score.
+     * A cohort assessment REFERENCES the member's own assessment history — it
+     * never asks for a second sitting of an instrument they have already sat.
+     *
+     * <p>So a milestone resolves to the TAGGED submission when there is one
+     * (the tag, not the pipeline, identifies the milestone — that is what makes
+     * a same-instrument pair resolvable), and otherwise ADOPTS a sitting the
+     * member took outside this cohort:
+     * <ul>
+     *   <li>BASELINE adopts their EARLIEST evaluated sitting of the referenced
+     *       pipeline, whenever it happened. Intake semantics: the reading the
+     *       programme is measured from predates the programme, which is the
+     *       ordinary case for a cohort built around an assessment people have
+     *       already taken. Retakes never move it.</li>
+     *   <li>DISTANCE adopts the earliest evaluated sitting AFTER the cohort
+     *       launched, and never the sitting BASELINE would take. Both halves
+     *       matter: without the launch floor a pre-programme sitting could be
+     *       reported as the "after"; without the exclusion a same-instrument
+     *       pair could satisfy both roles from one sitting and report a delta
+     *       of zero against itself.</li>
+     *   <li>CHECK-IN adopts nothing. A trajectory reading is a point in time
+     *       inside the programme, so borrowing an outside sitting for it would
+     *       invent a data point on the curve.</li>
+     * </ul>
+     * Adoption is resolved on READ, not written: the journey must show the task
+     * done before the member ever opens it, and a read has no business writing.
+     * {@code adoptableSubmissionId} applies the identical rule on the open path,
+     * where the tag IS written — so the two can never disagree.
      */
     public List<AssessmentStateRow> assessmentStates(Collection<UUID> userIds,
                                                      Collection<UUID> taskIds) {
@@ -122,20 +146,94 @@ public class TaskSpineRepository {
             return List.of();
         }
         return jdbc.query("""
-                SELECT DISTINCT ON (s.user_id, s.program_task_id)
-                       s.user_id, s.program_task_id, s.id AS submission_id, s.status,
-                       s.submitted_at, s.evaluated_at, os.overall_score_percentage AS score
-                FROM submissions s
-                LEFT JOIN overall_summaries os ON os.submission_id = s.id
-                WHERE s.user_id IN (:userIds) AND s.program_task_id IN (:taskIds)
-                ORDER BY s.user_id, s.program_task_id, s.created_at DESC
-                """,
+                WITH tagged AS (
+                    SELECT DISTINCT ON (s.user_id, s.program_task_id)
+                           s.user_id, s.program_task_id AS task_id, s.id AS submission_id,
+                           s.status, s.submitted_at, s.evaluated_at
+                    FROM submissions s
+                    WHERE s.user_id IN (:userIds) AND s.program_task_id IN (:taskIds)
+                    ORDER BY s.user_id, s.program_task_id, s.created_at DESC
+                ),
+                adopted AS (
+                    SELECT DISTINCT ON (c.user_id, c.task_id)
+                           c.user_id, c.task_id, c.submission_id,
+                           c.status, c.submitted_at, c.evaluated_at
+                    FROM (%s) c
+                    WHERE NOT EXISTS (SELECT 1 FROM tagged tg
+                                       WHERE tg.user_id = c.user_id AND tg.task_id = c.task_id)
+                    ORDER BY c.user_id, c.task_id, c.evaluated_at
+                )
+                SELECT r.user_id, r.task_id, r.submission_id, r.status,
+                       r.submitted_at, r.evaluated_at,
+                       os.overall_score_percentage AS score
+                FROM (SELECT * FROM tagged UNION ALL SELECT * FROM adopted) r
+                LEFT JOIN overall_summaries os ON os.submission_id = r.submission_id
+                """.formatted(ADOPTABLE_SITTINGS),
                 new MapSqlParameterSource("userIds", userIds).addValue("taskIds", taskIds),
                 (rs, i) -> new AssessmentStateRow(rs.getObject("user_id", UUID.class),
-                        rs.getObject("program_task_id", UUID.class),
+                        rs.getObject("task_id", UUID.class),
                         rs.getObject("submission_id", UUID.class), rs.getString("status"),
                         instant(rs, "submitted_at"), instant(rs, "evaluated_at"),
                         rs.getBigDecimal("score")));
+    }
+
+    /**
+     * Every sitting a milestone task could adopt, by the rule documented on
+     * {@link #assessmentStates}. Written once and shared by the read and the
+     * open path; callers narrow it to the earliest per (member, task).
+     *
+     * <p>{@code program_task_id IS NULL} does the heavy lifting: a sitting that
+     * some task has already claimed is nobody else's to take, so the moment
+     * BASELINE tags one, DISTANCE stops seeing it.
+     */
+    private static final String ADOPTABLE_SITTINGS = """
+            SELECT s.user_id, t.id AS task_id, s.id AS submission_id,
+                   s.status, s.submitted_at, s.evaluated_at
+            FROM submissions s
+            JOIN assignments a ON a.id = s.assignment_id
+            JOIN program_tasks t ON t.ref_id = a.pipeline_id
+                 AND t.task_type = 'ASSESSMENT'
+                 AND t.milestone_role IN ('BASELINE', 'DISTANCE')
+            JOIN program_modules m ON m.id = t.module_id
+            JOIN cohorts co ON co.id = m.cohort_id
+            JOIN cohort_members cm ON cm.cohort_id = co.id AND cm.user_id = s.user_id
+            WHERE s.user_id IN (:userIds) AND t.id IN (:taskIds)
+              AND s.status = 'EVALUATED'
+              AND s.program_task_id IS NULL
+              AND (t.milestone_role = 'BASELINE'
+                   OR (co.launched_at IS NOT NULL
+                       AND s.evaluated_at > co.launched_at
+                       AND s.id <> (SELECT e.id
+                                    FROM submissions e
+                                    JOIN assignments ea ON ea.id = e.assignment_id
+                                    WHERE e.user_id = s.user_id
+                                      AND ea.pipeline_id = a.pipeline_id
+                                      AND e.status = 'EVALUATED'
+                                    ORDER BY e.evaluated_at, e.created_at
+                                    LIMIT 1)))
+            """;
+
+    /**
+     * The sitting this milestone task should adopt for the member, or empty when
+     * there is none to adopt and a fresh one has to be taken. Same rule as the
+     * journey read — see {@link #assessmentStates}.
+     */
+    public Optional<UUID> adoptableSubmissionId(UUID userId, UUID taskId) {
+        return jdbc.query("SELECT submission_id FROM (%s) c ORDER BY c.evaluated_at LIMIT 1"
+                        .formatted(ADOPTABLE_SITTINGS),
+                new MapSqlParameterSource("userIds", List.of(userId))
+                        .addValue("taskIds", List.of(taskId)),
+                (rs, i) -> rs.getObject("submission_id", UUID.class))
+                .stream().findFirst();
+    }
+
+    /** Claims an adopted sitting for the milestone, so every later read agrees. */
+    public void tagSubmission(UUID submissionId, UUID taskId) {
+        jdbc.update("""
+                UPDATE submissions SET program_task_id = :taskId
+                 WHERE id = :submissionId AND program_task_id IS NULL
+                """,
+                new MapSqlParameterSource("submissionId", submissionId).addValue("taskId", taskId));
     }
 
     public record BaselineFallbackRow(UUID userId, UUID pipelineId, UUID submissionId,
@@ -570,6 +668,27 @@ public class TaskSpineRepository {
                 new MapSqlParameterSource("userId", userId)
                         .addValue("taskId", taskId)
                         .addValue("templateId", templateId),
+                (rs, i) -> rs.getObject("id", UUID.class))
+                .stream().findFirst();
+    }
+
+    /**
+     * The member's exercise submission for this cohort task, regardless of which
+     * template it was created against. Used ONLY for read-only review on a
+     * FINISHED cohort: there {@link #ensureExerciseSubmission} cannot run to
+     * reconcile a re-pointed (or template-deleted) task, so showing the member's
+     * actual work beats erroring. On an active cohort the template-keyed lookup
+     * above stays authoritative. (program_task_id, user_id) is unique, so this
+     * returns the single row if one exists.
+     */
+    public Optional<UUID> findAnyExerciseSubmissionId(UUID userId, UUID taskId) {
+        return jdbc.query("""
+                SELECT es.id
+                FROM exercise_assignments ea
+                JOIN exercise_submissions es ON es.assignment_id = ea.id
+                WHERE ea.user_id = :userId AND ea.program_task_id = :taskId
+                """,
+                new MapSqlParameterSource("userId", userId).addValue("taskId", taskId),
                 (rs, i) -> rs.getObject("id", UUID.class))
                 .stream().findFirst();
     }

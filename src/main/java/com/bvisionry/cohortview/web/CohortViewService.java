@@ -16,6 +16,8 @@ import com.bvisionry.cohortview.dto.CohortOverviewResponse;
 import com.bvisionry.cohortview.dto.CohortOverviewResponse.CohortActivityItem;
 import com.bvisionry.cohortview.dto.CohortOverviewResponse.CohortCoach;
 import com.bvisionry.cohortview.dto.CohortOverviewResponse.Milestone;
+import com.bvisionry.cohortview.dto.CohortMemberReadinessResponse;
+import com.bvisionry.cohortview.dto.CohortMemberReadinessResponse.ReadinessPillar;
 import com.bvisionry.cohortview.dto.CohortRosterResponse;
 import com.bvisionry.cohortview.dto.CohortRosterResponse.CohortRosterMember;
 import com.bvisionry.cohortview.dto.CourseProgressDetailResponse;
@@ -103,6 +105,28 @@ public class CohortViewService {
                         r.friLatest(), r.friDelta(), r.progressDone(), r.progressTotal(),
                         r.overdueCount(), r.awaitingReview(), r.lastActivityAt()))
                 .toList());
+    }
+
+    /**
+     * The member-in-cohort readiness card + pillar table: this cohort's own
+     * instruments only (see {@code CohortInstruments}). No sitting on them is
+     * an all-null 200, not a 404 — "not measured yet" is an answer the screen
+     * renders as an em dash.
+     */
+    public CohortMemberReadinessResponse memberReadiness(UUID orgId, UUID cohortId, UUID memberId) {
+        reads.cohort(orgId, cohortId)
+                .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
+        if (!reads.isOrgMember(orgId, memberId)) {
+            throw new ResourceNotFoundException("Member", memberId.toString());
+        }
+        return reads.readiness(cohortId, memberId)
+                .map(r -> new CohortMemberReadinessResponse(r.friLatest(), r.friDelta(),
+                        r.evaluatedAt(),
+                        reads.pillarScores(r.submissionId()).stream()
+                                .map(p -> new ReadinessPillar(p.pillarName(), p.scorePercentage(),
+                                        p.maturityLabel(), r.evaluatedAt()))
+                                .toList()))
+                .orElseGet(() -> new CohortMemberReadinessResponse(null, null, null, List.of()));
     }
 
     /**

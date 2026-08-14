@@ -75,6 +75,8 @@ class CohortViewIntegrationTest extends AbstractPostgresIntegrationTest {
     private UUID moduleTwo;
     private UUID courseId;
     private UUID lessonOne;
+    private UUID cohortPipeline;   // referenced by a LIVE ASSESSMENT task → a cohort instrument
+    private UUID latestSitting;    // a1's newest evaluated sitting on it (66.50)
 
     @BeforeEach
     void seed() {
@@ -255,8 +257,8 @@ class CohortViewIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(jsonPath("$.cohortId", is(cohort.toString())))
                     .andExpect(jsonPath("$.name", is("Growth Cohort")))
                     .andExpect(jsonPath("$.status", is("LAUNCHED")))
-                    // 3 LIVE tasks across both modules — the DRAFT is not one of them.
-                    .andExpect(jsonPath("$.taskCount", is(3)))
+                    // 4 LIVE tasks across both modules — the DRAFT is not one of them.
+                    .andExpect(jsonPath("$.taskCount", is(4)))
                     // Board order is program_modules.position, NOT insertion order
                     // (Module Two's row was written first on purpose).
                     .andExpect(jsonPath("$.modules", hasSize(2)))
@@ -273,7 +275,7 @@ class CohortViewIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(jsonPath("$.modules[0].unlockAt", nullValue()))
                     .andExpect(jsonPath("$.modules[0].audienceMode", is("ALL")))
                     // tasks in t.position within the module
-                    .andExpect(jsonPath("$.modules[0].tasks", hasSize(2)))
+                    .andExpect(jsonPath("$.modules[0].tasks", hasSize(3)))
                     .andExpect(jsonPath("$.modules[0].tasks[0].name", is("Baseline Check")))
                     .andExpect(jsonPath("$.modules[0].tasks[0].position", is(0)))
                     .andExpect(jsonPath("$.modules[0].tasks[0].taskType", is("LESSON")))
@@ -345,8 +347,8 @@ class CohortViewIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.modules[*].tasks[*].name",
                             not(hasItem("Draft Task"))))
-                    .andExpect(jsonPath("$.modules[0].tasks", hasSize(2)))
-                    .andExpect(jsonPath("$.taskCount", is(3)));
+                    .andExpect(jsonPath("$.modules[0].tasks", hasSize(3)))
+                    .andExpect(jsonPath("$.taskCount", is(4)));
         }
 
         @Test
@@ -383,19 +385,20 @@ class CohortViewIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.members", hasSize(2)))
                     .andExpect(jsonPath("$.members[*].name", not(hasItem("founder.b1"))))
-                    // a1: 3 audience tasks (both modules), baseline done, 1 overdue
+                    // a1: 4 audience tasks (both modules), baseline done, 1 overdue.
+                    // FRI is the cohort-instrument sittings: 54.25 → 66.50, Δ +12.25.
                     .andExpect(jsonPath("$.members[0].name", is("founder.a1")))
                     .andExpect(jsonPath("$.members[0].memberType", is("LEADER")))
-                    .andExpect(jsonPath("$.members[0].progressTotal", is(3)))
+                    .andExpect(jsonPath("$.members[0].progressTotal", is(4)))
                     .andExpect(jsonPath("$.members[0].progressDone", is(1)))
                     .andExpect(jsonPath("$.members[0].overdueCount", is(1)))
                     .andExpect(jsonPath("$.members[0].friLatest", is(66.50)))
                     .andExpect(jsonPath("$.members[0].friDelta", is(12.25)))
                     .andExpect(jsonPath("$.members[0].lastActivityAt",
                             org.hamcrest.Matchers.notNullValue()))
-                    // a2: outside the targeted module, so only 2 tasks — and no scores
+                    // a2: outside the targeted module, so only 3 tasks — and no scores
                     .andExpect(jsonPath("$.members[1].name", is("founder.a2")))
-                    .andExpect(jsonPath("$.members[1].progressTotal", is(2)))
+                    .andExpect(jsonPath("$.members[1].progressTotal", is(3)))
                     .andExpect(jsonPath("$.members[1].progressDone", is(0)))
                     .andExpect(jsonPath("$.members[1].friLatest", nullValue()))
                     .andExpect(jsonPath("$.members[1].friDelta", nullValue()));
@@ -405,6 +408,38 @@ class CohortViewIntegrationTest extends AbstractPostgresIntegrationTest {
         void aCohortThisOrgDoesNotRunIsAbsent() throws Exception {
             TestAuthentication.authenticate(admin);
             mockMvc.perform(get(roster(orgA, otherCohort))).andExpect(status().isNotFound());
+        }
+
+        /**
+         * THE instrument restriction (operator decision 2026-08): readiness on
+         * cohort surfaces comes only from the cohort's own assessment
+         * instruments. a1's newest evaluated sitting is a 24 on an unrelated
+         * scan — the FRI cell must keep quoting the cohort instrument's 66.50
+         * and its +12.25, not the scan.
+         */
+        @Test
+        void friIgnoresANewerSittingOnAnUnrelatedInstrument() throws Exception {
+            seedUnrelatedSitting(founderA1, "24.00");
+
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(roster(orgA, cohort)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.members[0].name", is("founder.a1")))
+                    .andExpect(jsonPath("$.members[0].friLatest", is(66.50)))
+                    .andExpect(jsonPath("$.members[0].friDelta", is(12.25)));
+        }
+
+        /** A member whose ONLY sitting is on an unrelated instrument reads null, not that score. */
+        @Test
+        void friIsNullWithoutAnySittingOnTheCohortsInstruments() throws Exception {
+            seedUnrelatedSitting(founderA2, "88.00");
+
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(roster(orgA, cohort)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.members[1].name", is("founder.a2")))
+                    .andExpect(jsonPath("$.members[1].friLatest", nullValue()))
+                    .andExpect(jsonPath("$.members[1].friDelta", nullValue()));
         }
 
         /**
@@ -443,6 +478,65 @@ class CohortViewIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(jsonPath("$.members[0].awaitingReview", is(1)))
                     .andExpect(jsonPath("$.members[1].name", is("founder.a2")))
                     .andExpect(jsonPath("$.members[1].awaitingReview", is(0)));
+        }
+    }
+
+    /* ------------------------------------------------------ member readiness */
+
+    /**
+     * The member-in-cohort readiness card + Growth-tab pillar table: this
+     * cohort's own instruments only, same restriction the roster's FRI cell
+     * carries.
+     */
+    @Nested
+    class MemberReadiness {
+
+        @Test
+        void readsTheLatestCohortInstrumentSittingWithItsPillars() throws Exception {
+            // Pillars on the cohort-instrument sitting…
+            UUID pillarId = UUID.randomUUID();
+            jdbc.update("INSERT INTO pillars (id, pipeline_id, name, display_order) VALUES (?, ?, 'Mindset', 0)",
+                    pillarId, cohortPipeline);
+            jdbc.update("""
+                    INSERT INTO pillar_evaluations (submission_id, pillar_id, score_percentage, maturity_label)
+                    VALUES (?, ?, 41.00, 'Emerging')
+                    """, latestSitting, pillarId);
+            // …and a newer unrelated sitting that must not leak into the table.
+            seedUnrelatedSitting(founderA1, "24.00");
+
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(readiness(orgA, cohort, founderA1)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.friLatest", is(66.50)))
+                    .andExpect(jsonPath("$.friDelta", is(12.25)))
+                    .andExpect(jsonPath("$.evaluatedAt", notNullValue()))
+                    .andExpect(jsonPath("$.pillarScores", hasSize(1)))
+                    .andExpect(jsonPath("$.pillarScores[0].pillarName", is("Mindset")))
+                    .andExpect(jsonPath("$.pillarScores[0].scorePercentage", is(41.00)))
+                    .andExpect(jsonPath("$.pillarScores[0].maturityLabel", is("Emerging")));
+        }
+
+        /** No sitting on the cohort's instruments → all-null 200, not the global latest. */
+        @Test
+        void aMemberWithoutACohortInstrumentSittingReadsNull() throws Exception {
+            seedUnrelatedSitting(founderA2, "88.00");
+
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(readiness(orgA, cohort, founderA2)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.friLatest", nullValue()))
+                    .andExpect(jsonPath("$.friDelta", nullValue()))
+                    .andExpect(jsonPath("$.evaluatedAt", nullValue()))
+                    .andExpect(jsonPath("$.pillarScores", hasSize(0)));
+        }
+
+        @Test
+        void foreignMemberAndForeignCohortAreAbsent() throws Exception {
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(readiness(orgA, cohort, founderB1)))
+                    .andExpect(status().isNotFound());
+            mockMvc.perform(get(readiness(orgA, otherCohort, founderA1)))
+                    .andExpect(status().isNotFound());
         }
     }
 
@@ -587,6 +681,11 @@ class CohortViewIntegrationTest extends AbstractPostgresIntegrationTest {
         return "/api/organizations/" + org.getId() + "/cohorts/" + cohortId + "/roster";
     }
 
+    private String readiness(Organization org, UUID cohortId, User member) {
+        return "/api/organizations/" + org.getId() + "/cohorts/" + cohortId + "/members/"
+                + member.getId() + "/readiness";
+    }
+
     private String progress(Organization org, User member, UUID course) {
         return "/api/organizations/" + org.getId() + "/members/" + member.getId() + "/courses/"
                 + course + "/progress";
@@ -691,19 +790,31 @@ class CohortViewIntegrationTest extends AbstractPostgresIntegrationTest {
                 sessionId, founderA1.getId());
     }
 
-    /** a1's evaluated overall (66.50) and this cohort's stored comparison (+12.25). */
+    /**
+     * a1's two evaluated sittings (54.25 → 66.50) on the cohort's OWN
+     * instrument: 'Founder Mindset' is referenced by a LIVE ASSESSMENT task of
+     * this cohort, which is what makes it a cohort instrument — the FRI cells
+     * on cohort surfaces read ONLY sittings on such instruments, delta latest
+     * minus previous (+12.25). The stored V161 comparison is seeded too; the
+     * roster no longer reads it, and the two must agree in this fixture so
+     * either source failing shows up.
+     */
     private void seedScores() {
-        UUID pipelineId = UUID.randomUUID();
+        cohortPipeline = UUID.randomUUID();
         jdbc.update("INSERT INTO pipelines (id, name, status) VALUES (?, 'Founder Mindset', 'PUBLISHED')",
-                pipelineId);
+                cohortPipeline);
+        jdbc.update("""
+                INSERT INTO program_tasks (module_id, name, status, position, task_type, ref_id)
+                VALUES (?, 'Mindset Scan', 'LIVE', 3, 'ASSESSMENT', ?)
+                """, moduleOne, cohortPipeline);
         UUID assignmentId = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO assignments (id, pipeline_id, organization_id, user_id, assigned_by)
                 VALUES (?, ?, ?, ?, ?)
-                """, assignmentId, pipelineId, orgA.getId(), founderA1.getId(), admin.getId());
+                """, assignmentId, cohortPipeline, orgA.getId(), founderA1.getId(), admin.getId());
 
         UUID baseline = UUID.randomUUID();
-        UUID distance = UUID.randomUUID();
+        latestSitting = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO submissions (id, assignment_id, user_id, status, submitted_at, evaluated_at)
                 VALUES (?, ?, ?, 'EVALUATED', now() - interval '30 days', now() - interval '30 days')
@@ -711,16 +822,40 @@ class CohortViewIntegrationTest extends AbstractPostgresIntegrationTest {
         jdbc.update("""
                 INSERT INTO submissions (id, assignment_id, user_id, status, submitted_at, evaluated_at)
                 VALUES (?, ?, ?, 'EVALUATED', now(), now())
-                """, distance, assignmentId, founderA1.getId());
+                """, latestSitting, assignmentId, founderA1.getId());
         jdbc.update("INSERT INTO overall_summaries (submission_id, overall_score_percentage) VALUES (?, 54.25)",
                 baseline);
         jdbc.update("INSERT INTO overall_summaries (submission_id, overall_score_percentage) VALUES (?, 66.50)",
-                distance);
+                latestSitting);
         jdbc.update("""
                 INSERT INTO founder_comparisons (cohort_id, org_id, user_id, baseline_submission_id,
                                                  distance_submission_id, overall_delta, computed_at)
                 VALUES (?, ?, ?, ?, ?, 12.25, now())
-                """, cohort, orgA.getId(), founderA1.getId(), baseline, distance);
+                """, cohort, orgA.getId(), founderA1.getId(), baseline, latestSitting);
+    }
+
+    /**
+     * A newer EVALUATED sitting for {@code member} on a fresh, UNRELATED
+     * instrument — no cohort task references it, so no cohort surface may
+     * quote it. This is the exact shape of the bug being pinned: a founder
+     * with baseline 66.50 must not show an unrelated scan's 24.
+     */
+    private void seedUnrelatedSitting(User member, String score) {
+        UUID scanPipeline = UUID.randomUUID();
+        jdbc.update("INSERT INTO pipelines (id, name, status) VALUES (?, 'Magic Number Scan', 'PUBLISHED')",
+                scanPipeline);
+        UUID scanAssignment = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO assignments (id, pipeline_id, organization_id, user_id, assigned_by)
+                VALUES (?, ?, ?, ?, ?)
+                """, scanAssignment, scanPipeline, orgA.getId(), member.getId(), admin.getId());
+        UUID scanSitting = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO submissions (id, assignment_id, user_id, status, submitted_at, evaluated_at)
+                VALUES (?, ?, ?, 'EVALUATED', now() + interval '1 hour', now() + interval '1 hour')
+                """, scanSitting, scanAssignment, member.getId());
+        jdbc.update("INSERT INTO overall_summaries (submission_id, overall_score_percentage) VALUES (?, ?::numeric)",
+                scanSitting, score);
     }
 
     /** One two-lesson course; a1 enrolled with the first lesson ticked, a2 not enrolled. */

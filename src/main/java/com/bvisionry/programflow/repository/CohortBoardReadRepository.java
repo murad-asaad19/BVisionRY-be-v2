@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import com.bvisionry.common.programaccess.CohortInstruments;
 import com.bvisionry.common.programaccess.MemberActivity;
 
 /**
@@ -32,56 +33,56 @@ public class CohortBoardReadRepository {
     /* ------------------------------------------------------- matrix triage */
 
     /**
-     * The matrix row-end per founder: FRI ends (earliest/latest evaluated
-     * overall score — the founder-profile trajectory rule), open items
+     * The matrix row-end per founder: FRI latest/previous evaluated overall
+     * ON THE COHORT'S OWN INSTRUMENTS ({@link CohortInstruments} — an
+     * unrelated instrument's sitting must never stand in for this cohort's
+     * readiness; delta is latest minus the previous such sitting), open items
      * (exercise submissions awaiting review), last activity, and the lowest
-     * pillar score of the LATEST evaluated submission (the needs-attention
-     * "pillar under threshold" input). Scalar subqueries per founder — a
-     * cohort is tens of rows.
+     * pillar score of that same latest sitting (the needs-attention "pillar
+     * under threshold" input). Scalar subqueries per founder — a cohort is
+     * tens of rows.
      */
-    public record TriageRow(UUID userId, String name, BigDecimal friEarliest, BigDecimal friLatest,
-                            long evaluatedCount, int awaitingReview,
+    public record TriageRow(UUID userId, String name, BigDecimal friPrevious, BigDecimal friLatest,
+                            int awaitingReview,
                             OffsetDateTime lastActivityAt, BigDecimal minPillarScore) {}
 
-    public List<TriageRow> triage(Collection<UUID> userIds) {
+    public List<TriageRow> triage(UUID cohortId, Collection<UUID> userIds) {
         if (userIds.isEmpty()) {
             return List.of();
         }
+        String onInstrument = CohortInstruments.ON_COHORT_INSTRUMENT.formatted("s", ":cohortId");
         return jdbc.query("""
                 SELECT u.id, u.name,
                        (SELECT os.overall_score_percentage
                           FROM submissions s JOIN overall_summaries os ON os.submission_id = s.id
-                         WHERE s.user_id = u.id AND s.status = 'EVALUATED'
-                         ORDER BY s.evaluated_at ASC NULLS LAST, s.created_at ASC
-                         LIMIT 1) AS fri_earliest,
+                         WHERE s.user_id = u.id AND s.status = 'EVALUATED' AND %2$s
+                         ORDER BY s.evaluated_at DESC NULLS LAST, s.created_at DESC
+                         OFFSET 1 LIMIT 1) AS fri_previous,
                        (SELECT os.overall_score_percentage
                           FROM submissions s JOIN overall_summaries os ON os.submission_id = s.id
-                         WHERE s.user_id = u.id AND s.status = 'EVALUATED'
+                         WHERE s.user_id = u.id AND s.status = 'EVALUATED' AND %2$s
                          ORDER BY s.evaluated_at DESC NULLS LAST, s.created_at DESC
                          LIMIT 1) AS fri_latest,
-                       (SELECT count(*)
-                          FROM submissions s JOIN overall_summaries os ON os.submission_id = s.id
-                         WHERE s.user_id = u.id AND s.status = 'EVALUATED') AS evaluated_count,
                        (SELECT count(*)
                           FROM exercise_assignments ea
                           JOIN exercise_submissions es ON es.assignment_id = ea.id
                          WHERE ea.organization_id = u.organization_id AND ea.user_id = u.id
                            AND es.status = 'SUBMITTED') AS awaiting_review,
-                       %s AS last_activity_at,
+                       %1$s AS last_activity_at,
                        (SELECT min(pe.score_percentage)
                           FROM pillar_evaluations pe
                          WHERE pe.submission_id =
-                               (SELECT s2.id FROM submissions s2
-                                 WHERE s2.user_id = u.id AND s2.status = 'EVALUATED'
-                                 ORDER BY s2.evaluated_at DESC NULLS LAST, s2.created_at DESC
+                               (SELECT s.id FROM submissions s
+                                 WHERE s.user_id = u.id AND s.status = 'EVALUATED' AND %2$s
+                                 ORDER BY s.evaluated_at DESC NULLS LAST, s.created_at DESC
                                  LIMIT 1)) AS min_pillar_score
                 FROM users u
                 WHERE u.id IN (:userIds)
-                """.formatted(MemberActivity.LAST_ACTIVITY.formatted("u")),
-                new MapSqlParameterSource("userIds", userIds),
+                """.formatted(MemberActivity.LAST_ACTIVITY.formatted("u"), onInstrument),
+                new MapSqlParameterSource("userIds", userIds).addValue("cohortId", cohortId),
                 (rs, i) -> new TriageRow(rs.getObject("id", UUID.class), rs.getString("name"),
-                        rs.getBigDecimal("fri_earliest"), rs.getBigDecimal("fri_latest"),
-                        rs.getLong("evaluated_count"), rs.getInt("awaiting_review"),
+                        rs.getBigDecimal("fri_previous"), rs.getBigDecimal("fri_latest"),
+                        rs.getInt("awaiting_review"),
                         rs.getObject("last_activity_at", OffsetDateTime.class),
                         rs.getBigDecimal("min_pillar_score")));
     }

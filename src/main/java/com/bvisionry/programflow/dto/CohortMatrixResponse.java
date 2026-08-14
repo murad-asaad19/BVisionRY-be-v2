@@ -41,7 +41,9 @@ public record CohortMatrixResponse(
             String orgName,
             List<ModuleCell> moduleCells,
             List<MilestoneCell> milestoneCells,
+            /** Latest evaluated overall on the COHORT'S OWN instruments; null when none. */
             BigDecimal friLatest,
+            /** {@code friLatest} minus the previous sitting on those instruments; null until two. */
             BigDecimal friDelta,
             /** Exercise submissions awaiting review — the "open items" count. */
             int awaitingReview,
@@ -69,7 +71,11 @@ public record CohortMatrixResponse(
 
     /** The §2.3 needs-attention strip vocabulary. */
     public enum AttentionFlag {
-        /** No member activity for over 7 days (or never). */
+        /**
+         * No member activity for over 7 days SINCE THE COHORT LAUNCHED
+         * (GREATEST(last activity, launched_at)); a member with no footprint
+         * at all is "no data", not idle.
+         */
         IDLE,
         /**
          * At least one LIVE, in-audience, gating task past its due date and not

@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.bvisionry.cohortview.dto.CohortMemberReadinessResponse;
 import com.bvisionry.cohortview.dto.CohortOutlineResponse;
 import com.bvisionry.cohortview.dto.CohortOverviewResponse;
 import com.bvisionry.cohortview.dto.CohortRosterResponse;
@@ -51,6 +52,13 @@ public class CohortViewController {
     @GetMapping("/cohorts/{cohortId}/roster")
     public CohortRosterResponse roster(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
         return service.roster(orgId, cohortId);
+    }
+
+    /** Readiness on the cohort's OWN instruments — the member-in-cohort FRI card + pillar table. */
+    @GetMapping("/cohorts/{cohortId}/members/{memberId}/readiness")
+    public CohortMemberReadinessResponse memberReadiness(@PathVariable UUID orgId,
+            @PathVariable UUID cohortId, @PathVariable UUID memberId) {
+        return service.memberReadiness(orgId, cohortId, memberId);
     }
 
     @GetMapping("/members/{memberId}/courses/{courseId}/progress")

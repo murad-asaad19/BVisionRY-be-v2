@@ -90,8 +90,10 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
                 pillarId, pipelineId, "Mindset");
 
         cohortId = UUID.randomUUID();
+        // Launched two months ago: IDLE measures silence SINCE LAUNCH, so A's
+        // 30 quiet days only count against a launch that predates them.
         jdbc.update("INSERT INTO cohorts (id, name, status, launched_at) "
-                + "VALUES (?, 'Matrix Cohort', 'LAUNCHED', now())", cohortId);
+                + "VALUES (?, 'Matrix Cohort', 'LAUNCHED', now() - interval '60 days')", cohortId);
         jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)",
                 cohortId, org.getId());
         for (User u : new User[] {founderA, founderB, founderC, founderD}) {
@@ -139,6 +141,33 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
                 INSERT INTO pillar_evaluations (submission_id, pillar_id, score_percentage, maturity_label)
                 VALUES (?, ?, ?, 'Emerging')
                 """, submissionId, pillarId, new BigDecimal("20.00"));
+
+        // C also sat an UNRELATED instrument afterwards — 90 overall, pillar 80.
+        // No cohort task references it, so the matrix must keep quoting the
+        // cohort instrument's 62 / pillar 20 (the FRI cell and the pillar flag
+        // read the cohort's own instruments only).
+        UUID scanPipeline = UUID.randomUUID();
+        jdbc.update("INSERT INTO pipelines (id, name, status, created_by) VALUES (?, 'Magic Number Scan', 'PUBLISHED', ?)",
+                scanPipeline, founderA.getId());
+        UUID scanPillar = UUID.randomUUID();
+        jdbc.update("INSERT INTO pillars (id, pipeline_id, name, display_order) VALUES (?, ?, 'Magic', 0)",
+                scanPillar, scanPipeline);
+        UUID scanAssignment = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO assignments (id, pipeline_id, organization_id, user_id, assigned_by)
+                VALUES (?, ?, ?, ?, ?)
+                """, scanAssignment, scanPipeline, org.getId(), founderC.getId(), founderC.getId());
+        UUID scanSitting = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO submissions (id, assignment_id, user_id, status, submitted_at, evaluated_at)
+                VALUES (?, ?, ?, 'EVALUATED', now() + interval '1 hour', now() + interval '1 hour')
+                """, scanSitting, scanAssignment, founderC.getId());
+        jdbc.update("INSERT INTO overall_summaries (submission_id, overall_score_percentage) VALUES (?, ?)",
+                scanSitting, new BigDecimal("90.00"));
+        jdbc.update("""
+                INSERT INTO pillar_evaluations (submission_id, pillar_id, score_percentage, maturity_label)
+                VALUES (?, ?, ?, 'Strong')
+                """, scanSitting, scanPillar, new BigDecimal("80.00"));
     }
 
     @AfterEach
@@ -193,8 +222,12 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(c.milestoneCells().get(0).score()).isEqualByComparingTo("62.00");
         assertThat(c.milestoneCells().get(0).evaluatedAt()).isNotNull();
         assertThat(c.milestoneCells().get(1).state()).isEqualTo(JourneyTaskState.NOT_STARTED);
+        // The 90-overall / 80-pillar Magic Number Scan sitting seeded for C is
+        // NEWER but on an instrument no cohort task references: the FRI cell,
+        // the delta and the pillar flag must all keep reading the cohort's own
+        // instrument (62, one sitting, pillar 20).
         assertThat(c.friLatest()).isEqualByComparingTo("62.00");
-        assertThat(c.friDelta()).as("one data point has no delta").isNull();
+        assertThat(c.friDelta()).as("one cohort-instrument sitting has no delta").isNull();
         assertThat(c.attentionFlags())
                 .contains(AttentionFlag.PILLAR_BELOW_THRESHOLD, AttentionFlag.CHECKIN_UNSTARTED);
         assertThat(c.awaitingReview()).isZero();
@@ -211,6 +244,25 @@ class CohortMatrixIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThat(d.lastSeenAt()).isNull();
         assertThat(d.attentionFlags())
+                .doesNotContain(AttentionFlag.IDLE)
+                .contains(AttentionFlag.OVERDUE_TASKS);
+    }
+
+    /**
+     * Idle measures silence SINCE LAUNCH — GREATEST(last activity,
+     * launched_at). Relaunch the fixture cohort today and A's 30 pre-existing
+     * quiet days stop counting: a cohort launched this morning must not open
+     * with its whole roster flagged idle. The "Last seen" stamp itself stays
+     * the honest activity instant.
+     */
+    @Test
+    void aCohortLaunchedTodayDoesNotFlagPreexistingSilenceAsIdle() {
+        jdbc.update("UPDATE cohorts SET launched_at = now() WHERE id = ?", cohortId);
+
+        FounderRow a = row(adminService.getMatrix(cohortId, null), founderA);
+
+        assertThat(a.lastSeenAt()).isNotNull();
+        assertThat(a.attentionFlags())
                 .doesNotContain(AttentionFlag.IDLE)
                 .contains(AttentionFlag.OVERDUE_TASKS);
     }

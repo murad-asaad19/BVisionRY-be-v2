@@ -566,6 +566,11 @@ public class ProgramAdminService {
      * cohort in any lifecycle state — admins may inspect drafts and archives.
      * {@code orgId} scopes the rows to that org's own members (spec §13.7);
      * {@code null} is the whole cross-org roster.
+     *
+     * <p>Row-end readiness (FRI, delta, the pillar flag) reads ONLY sittings on
+     * the cohort's own instruments ({@code CohortInstruments}), and the IDLE
+     * flag measures silence from GREATEST(last activity, {@code launched_at})
+     * — a cohort launched today must not open with its roster flagged idle.
      */
     @Transactional(readOnly = true)
     public CohortMatrixResponse getMatrix(UUID cohortId, UUID orgId) {
@@ -608,13 +613,16 @@ public class ProgramAdminService {
                         Collectors.toMap(ProgramSubmission::getTaskId, Function.identity())));
 
         Map<UUID, CohortBoardReadRepository.TriageRow> triage = boardReads
-                .triage(founderIds).stream()
+                .triage(cohortId, founderIds).stream()
                 .collect(Collectors.toMap(CohortBoardReadRepository.TriageRow::userId,
                         Function.identity()));
         int pillarThreshold = boardReads.platformInt(KEY_PILLAR_THRESHOLD, DEFAULT_PILLAR_THRESHOLD);
 
         java.time.LocalDate today = java.time.LocalDate.now();
         java.time.OffsetDateTime idleCutoff = java.time.OffsetDateTime.now().minusDays(IDLE_DAYS);
+        // Idle counts silence SINCE LAUNCH: a cohort launched today must not
+        // flag every pre-existing member for the weeks before it existed.
+        java.time.OffsetDateTime launchedAt = cohortService.require(cohortId).getLaunchedAt();
         // Spec §3/§13: course visibility is per MEMBER ORG on a cross-org
         // roster — one batched read per distinct org, not per founder.
         Map<UUID, Set<UUID>> blockedByOrg = founders.stream()
@@ -696,10 +704,16 @@ public class ProgramAdminService {
             // Null last-activity is "no footprint yet", not "idle since the
             // dawn of time": a founder who joined minutes ago must not be
             // flagged IDLE (null-not-zero — the row's Last seen already reads
-            // "—", which is the honest signal).
-            if (tri != null && tri.lastActivityAt() != null
-                    && tri.lastActivityAt().isBefore(idleCutoff)) {
-                flags.add(AttentionFlag.IDLE);
+            // "—", which is the honest signal). The verdict measures from
+            // GREATEST(last activity, cohort launch): idle means silent since
+            // LAUNCH, never silence predating the cohort.
+            if (tri != null && tri.lastActivityAt() != null) {
+                java.time.OffsetDateTime idleSince =
+                        launchedAt != null && launchedAt.isAfter(tri.lastActivityAt())
+                                ? launchedAt : tri.lastActivityAt();
+                if (idleSince.isBefore(idleCutoff)) {
+                    flags.add(AttentionFlag.IDLE);
+                }
             }
             if (anyOverdue) {
                 flags.add(AttentionFlag.OVERDUE_TASKS);
@@ -715,9 +729,12 @@ public class ProgramAdminService {
                 flags.add(AttentionFlag.PILLAR_BELOW_THRESHOLD);
             }
 
+            // Cohort-instrument sittings only (triage) — delta vs the previous
+            // sitting on those instruments, null until there are two.
             java.math.BigDecimal friLatest = tri == null ? null : tri.friLatest();
-            java.math.BigDecimal friDelta = tri == null || tri.evaluatedCount() < 2 ? null
-                    : tri.friLatest().subtract(tri.friEarliest());
+            java.math.BigDecimal friDelta = tri == null || tri.friPrevious() == null
+                    || tri.friLatest() == null ? null
+                    : tri.friLatest().subtract(tri.friPrevious());
             return new FounderRow(member.getId(), member.getName(),
                     member.getOrgId(), member.getOrgName(),
                     moduleCells, milestoneCells,

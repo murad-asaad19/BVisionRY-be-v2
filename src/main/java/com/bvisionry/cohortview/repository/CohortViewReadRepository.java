@@ -15,6 +15,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
+import com.bvisionry.common.programaccess.CohortInstruments;
 import com.bvisionry.common.programaccess.MemberActivity;
 import com.bvisionry.common.programaccess.ProgramAudience;
 import com.bvisionry.common.programaccess.TaskCompletion;
@@ -43,6 +44,25 @@ public class CohortViewReadRepository {
             JOIN users u ON u.id = cm.user_id
                         AND u.organization_id = :orgId
                         AND u.role = 'MEMBER'""";
+
+    /**
+     * Scalar sub-select: the member's Nth-latest (0 = latest, 1 = previous)
+     * evaluated overall score ON THIS COHORT'S OWN INSTRUMENTS
+     * ({@link CohortInstruments} — cohort surfaces never quote an unrelated
+     * instrument's score; a member with no sitting on them reads NULL).
+     * {@code :cohortId} must be bound by the composing query.
+     */
+    private static String friOnCohortInstruments(String userColumn, int offset) {
+        return """
+                (SELECT cos.overall_score_percentage
+                   FROM submissions cs
+                   JOIN overall_summaries cos ON cos.submission_id = cs.id
+                  WHERE cs.user_id = %s AND cs.status = 'EVALUATED'
+                    AND %s
+                  ORDER BY cs.evaluated_at DESC NULLS LAST, cs.created_at DESC
+                  OFFSET %d LIMIT 1)""".formatted(userColumn,
+                CohortInstruments.ON_COHORT_INSTRUMENT.formatted("cs", ":cohortId"), offset);
+    }
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -315,11 +335,13 @@ public class CohortViewReadRepository {
      * statement with correlated sub-selects: the row count is a cohort roster,
      * so clarity beats a pile of grouped joins.
      *
-     * <p>{@code friLatest} is global (the founder's latest evaluated overall,
-     * same shape as the profile header), while {@code friDelta} is this
-     * COHORT's stored comparison ({@code founder_comparisons.overall_delta},
-     * V161, unique per {@code (cohort_id, user_id)}) — null until the distance
-     * assessment is evaluated and the comparison computed.
+     * <p>{@code friLatest} is the member's latest evaluated sitting ON THIS
+     * COHORT'S OWN INSTRUMENTS ({@link #friOnCohortInstruments} — never the
+     * global latest, which may be an unrelated instrument), and
+     * {@code friDelta} is that sitting minus the PREVIOUS evaluated sitting
+     * within the same restricted set — null until there are two. A cohort with
+     * no assessment tasks, or a member who has never sat one of its
+     * instruments, reads null for both.
      *
      * <p>The three program counters share one shape: LIVE tasks of THIS cohort
      * whose module audience includes the member. {@code COALESCE(…, FALSE)}
@@ -348,14 +370,8 @@ public class CohortViewReadRepository {
 
         return jdbc.query("""
                 SELECT u.id, u.name, u.email, u.user_type,
-                       (SELECT os.overall_score_percentage
-                          FROM submissions s
-                          JOIN overall_summaries os ON os.submission_id = s.id
-                         WHERE s.user_id = u.id AND s.status = 'EVALUATED'
-                         ORDER BY s.evaluated_at DESC NULLS LAST, s.created_at DESC
-                         LIMIT 1) AS fri_latest,
-                       (SELECT fc.overall_delta FROM founder_comparisons fc
-                         WHERE fc.cohort_id = :cohortId AND fc.user_id = u.id) AS fri_delta,
+                       %6$s AS fri_latest,
+                       %7$s AS fri_previous,
                        (%1$s) AS progress_total,
                        (%1$s AND %2$s) AS progress_done,
                        (%1$s AND t.due_date < CURRENT_DATE AND NOT %2$s) AS overdue_count,
@@ -366,14 +382,65 @@ public class CohortViewReadRepository {
                 WHERE cm.cohort_id = :cohortId
                 ORDER BY u.name, u.email
                 """.formatted(audienceTasks, done, MemberActivity.LAST_ACTIVITY.formatted("u"),
-                        ORG_SLICE, awaitingReview),
+                        ORG_SLICE, awaitingReview, friOnCohortInstruments("u.id", 0),
+                        friOnCohortInstruments("u.id", 1)),
                 params(orgId, cohortId),
                 (rs, i) -> new RosterRow(rs.getObject("id", UUID.class), rs.getString("name"),
                         rs.getString("email"), rs.getString("user_type"),
-                        rs.getBigDecimal("fri_latest"), rs.getBigDecimal("fri_delta"),
+                        rs.getBigDecimal("fri_latest"),
+                        delta(rs.getBigDecimal("fri_latest"), rs.getBigDecimal("fri_previous")),
                         rs.getInt("progress_done"), rs.getInt("progress_total"),
                         rs.getInt("overdue_count"), rs.getInt("awaiting_review"),
                         instant(rs, "last_activity_at")));
+    }
+
+    /* -------------------------------------------------- member readiness */
+
+    public record ReadinessRow(UUID submissionId, BigDecimal friLatest, BigDecimal friDelta,
+                               Instant evaluatedAt) {}
+
+    /**
+     * The member's readiness AS THIS COHORT MEASURES IT: their latest evaluated
+     * sitting on the cohort's own instruments ({@link #friOnCohortInstruments}),
+     * with the delta against the previous such sitting. Empty when the cohort
+     * has no assessment tasks or the member never sat one of its instruments —
+     * the member-in-cohort card renders that as "—", never the global latest.
+     */
+    public Optional<ReadinessRow> readiness(UUID cohortId, UUID memberId) {
+        return jdbc.query("""
+                SELECT s.id, os.overall_score_percentage AS fri_latest, s.evaluated_at,
+                       %2$s AS fri_previous
+                FROM submissions s
+                JOIN overall_summaries os ON os.submission_id = s.id
+                WHERE s.user_id = :memberId AND s.status = 'EVALUATED'
+                  AND %1$s
+                ORDER BY s.evaluated_at DESC NULLS LAST, s.created_at DESC
+                LIMIT 1
+                """.formatted(CohortInstruments.ON_COHORT_INSTRUMENT.formatted("s", ":cohortId"),
+                        friOnCohortInstruments(":memberId", 1)),
+                new MapSqlParameterSource("cohortId", cohortId).addValue("memberId", memberId),
+                (rs, i) -> new ReadinessRow(rs.getObject("id", UUID.class),
+                        rs.getBigDecimal("fri_latest"),
+                        delta(rs.getBigDecimal("fri_latest"), rs.getBigDecimal("fri_previous")),
+                        instant(rs, "evaluated_at")))
+                .stream().findFirst();
+    }
+
+    public record ReadinessPillarRow(String pillarName, BigDecimal scorePercentage,
+                                     String maturityLabel) {}
+
+    /** The pillar rows of one sitting, in authoring order — the Growth tab's table. */
+    public List<ReadinessPillarRow> pillarScores(UUID submissionId) {
+        return jdbc.query("""
+                SELECT p.name, pe.score_percentage, pe.maturity_label
+                FROM pillar_evaluations pe
+                JOIN pillars p ON p.id = pe.pillar_id
+                WHERE pe.submission_id = :submissionId
+                ORDER BY p.display_order, p.name
+                """,
+                new MapSqlParameterSource("submissionId", submissionId),
+                (rs, i) -> new ReadinessPillarRow(rs.getString("name"),
+                        rs.getBigDecimal("score_percentage"), rs.getString("maturity_label")));
     }
 
     /* ------------------------------------------------------- course progress */
@@ -460,6 +527,11 @@ public class CohortViewReadRepository {
     }
 
     /* --------------------------------------------------------------- helpers */
+
+    /** Latest minus previous; null unless both sittings exist. */
+    private static BigDecimal delta(BigDecimal latest, BigDecimal previous) {
+        return latest == null || previous == null ? null : latest.subtract(previous);
+    }
 
     private static MapSqlParameterSource params(UUID orgId, UUID cohortId) {
         return new MapSqlParameterSource("orgId", orgId).addValue("cohortId", cohortId);

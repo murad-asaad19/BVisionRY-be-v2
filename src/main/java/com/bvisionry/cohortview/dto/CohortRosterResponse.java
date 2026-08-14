@@ -22,9 +22,9 @@ public record CohortRosterResponse(List<CohortRosterMember> members) {
             String name,
             String email,
             String memberType,
-            /** Latest EVALUATED overall score — the FRI. Global, like the profile header. */
+            /** Latest EVALUATED overall on THIS COHORT'S OWN instruments — null when none. */
             BigDecimal friLatest,
-            /** This cohort's computed distance delta (V161), null until one exists. */
+            /** {@code friLatest} minus the previous sitting on those instruments; null until two exist. */
             BigDecimal friDelta,
             /** LIVE tasks of this cohort in the member's module audience, done / total. */
             int progressDone,

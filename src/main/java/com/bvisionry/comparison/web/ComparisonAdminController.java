@@ -10,6 +10,7 @@ import com.bvisionry.comparison.dto.RecomputeResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -47,10 +48,17 @@ public class ComparisonAdminController {
         return queries.cohortComparisons(orgId, cohortId);
     }
 
+    /**
+     * One enrolled founder's detail — 204 when the cohort has no computed pair
+     * for them yet (an expected state, not an error); 404 stays for a cohort
+     * outside the org or a user outside the cohort's org slice.
+     */
     @GetMapping("/comparisons/{userId}")
-    public FounderComparisonDto detail(@PathVariable UUID orgId, @PathVariable UUID cohortId,
-                                       @PathVariable UUID userId) {
-        return queries.cohortComparisonForUser(orgId, cohortId, userId);
+    public ResponseEntity<FounderComparisonDto> detail(@PathVariable UUID orgId, @PathVariable UUID cohortId,
+                                                       @PathVariable UUID userId) {
+        return queries.cohortComparisonForUser(orgId, cohortId, userId)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.noContent().build());
     }
 
     /**
@@ -75,13 +83,18 @@ public class ComparisonAdminController {
         return computeService.recomputeCohortForOrg(orgId, cohortId, currentUser.require().userId());
     }
 
-    /** The cohort's designated pair mapping, read-only ("managed by Bvisionry"). */
+    /**
+     * The cohort's designated pair mapping, read-only ("managed by Bvisionry").
+     * 204 when the cohort has no designated pair — a legitimate state on every
+     * undesignated cohort's settings tab, so it must not be a 404.
+     */
     @GetMapping("/comparison-mapping")
-    public PillarMappingResponse mapping(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
+    public ResponseEntity<PillarMappingResponse> mapping(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
         reads.cohortNameInOrg(orgId, cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
-        var pair = reads.designatedPair(cohortId)
-                .orElseThrow(() -> new ResourceNotFoundException("Designated comparison pair for cohort", cohortId.toString()));
-        return mappingService.mappingForPair(pair.baselinePipelineId(), pair.distancePipelineId());
+        return reads.designatedPair(cohortId)
+                .map(pair -> ResponseEntity.ok(
+                        mappingService.mappingForPair(pair.baselinePipelineId(), pair.distancePipelineId())))
+                .orElseGet(() -> ResponseEntity.noContent().build());
     }
 }

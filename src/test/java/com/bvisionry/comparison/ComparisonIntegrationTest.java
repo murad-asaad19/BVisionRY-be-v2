@@ -823,6 +823,35 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(jsonPath("$.mappings.length()", is(4)));
         }
 
+        /**
+         * "No computed pair yet" is an EXPECTED state on the cohort member
+         * screen and the settings tab, so both reads answer 204, never a 404
+         * for the browser console to log. 404 stays for the genuine cases: a
+         * user outside the cohort's org slice.
+         */
+        @Test
+        void orgAdmin_absentComparisonAndMapping_are204_notFoundStaysForOutsiders() throws Exception {
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.a.204@test.invalid", UserRole.ORG_ADMIN, orgA));
+
+            // founder2 is enrolled but has no comparison yet → 204, empty body.
+            mockMvc.perform(get("/api/organizations/" + orgA.getId()
+                            + "/cohorts/" + cohortId + "/comparisons/" + founder2.getId()))
+                    .andExpect(status().isNoContent());
+
+            // A user outside the cohort's org slice is a genuine 404.
+            User outsider = saveUser("outsider.204@test.invalid", UserRole.MEMBER, orgB);
+            mockMvc.perform(get("/api/organizations/" + orgA.getId()
+                            + "/cohorts/" + cohortId + "/comparisons/" + outsider.getId()))
+                    .andExpect(status().isNotFound());
+
+            // A cohort with no designated pair → the mapping read is 204.
+            UUID pairless = insertCohort(orgA.getId(), "Pairless cohort", founder2.getId());
+            mockMvc.perform(get("/api/organizations/" + orgA.getId()
+                            + "/cohorts/" + pairless + "/comparison-mapping"))
+                    .andExpect(status().isNoContent());
+        }
+
         @Test
         void coachRead_isGatedByTheAssignmentUnion() throws Exception {
             computeFounder1();

@@ -120,12 +120,20 @@ public class ComparisonQueryService {
                 .toList());
     }
 
-    public FounderComparisonDto cohortComparisonForUser(UUID orgId, UUID cohortId, UUID userId) {
+    /**
+     * The per-cohort detail for one enrolled founder. Empty means "no computed
+     * pair for this member yet" — an EXPECTED state (204 at the controller,
+     * never a 404 for the browser console to shout about). Not-found stays for
+     * the genuine cases: cohort outside the org, or a user outside the
+     * cohort's org slice.
+     */
+    public Optional<FounderComparisonDto> cohortComparisonForUser(UUID orgId, UUID cohortId, UUID userId) {
         requireCohortInOrg(orgId, cohortId);
-        FounderComparison c = comparisons.findByOrgIdAndCohortIdAndUserId(orgId, cohortId, userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Comparison for user", userId.toString()));
-        String name = reads.userNames(Set.of(userId)).get(userId);
-        return toDto(c, name);
+        if (!reads.cohortMembersInOrg(orgId, cohortId).contains(userId)) {
+            throw new ResourceNotFoundException("Cohort member", userId.toString());
+        }
+        return comparisons.findByOrgIdAndCohortIdAndUserId(orgId, cohortId, userId)
+                .map(c -> toDto(c, reads.userNames(Set.of(userId)).get(userId)));
     }
 
     /**

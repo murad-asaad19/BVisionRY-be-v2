@@ -126,7 +126,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
     private UUID bigDecline;   // -12  decline
     private UUID midGain;      // +9   band_2
     private UUID smallDecline; // -6   decline
-    private UUID smallGain;    // +2   band_1  (outside the top 4)
+    private UUID smallGain;    // +2   band_1
     private UUID thinBaseline; // +1   band_1, before-text under the floor
 
     @BeforeEach
@@ -177,33 +177,30 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
     class Generation {
 
         @Test
-        void generatesOnlyTheTopFourPillarsByAbsoluteShift() {
-            int generated = narrativeService.generateTopPillars(cohortId, founder.getId());
+        void generatesEveryPillarWithEnoughBeforeText() {
+            int generated = narrativeService.generateAllPillars(cohortId, founder.getId());
 
-            assertThat(generated).isEqualTo(ShiftNarrativeService.TOP_N);
+            assertThat(generated).isEqualTo(5);
             assertThat(narratives.findByCohortIdAndUserId(cohortId, founder.getId()))
                     .extracting(ShiftNarrative::getDistancePillarId)
-                    // Biggest gains AND biggest declines — "biggest story", not "best news".
-                    .containsExactlyInAnyOrder(bigGain, bigDecline, midGain, smallDecline)
-                    .doesNotContain(smallGain, thinBaseline);
+                    .containsExactlyInAnyOrder(bigGain, bigDecline, midGain, smallDecline, smallGain)
+                    .doesNotContain(thinBaseline);
         }
 
         @Test
-        void aSecondRunTopsUpTheTopFour_ratherThanWalkingDownTheList() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+        void aSecondRunOnlyFillsTheGaps_neverDuplicates() {
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             narrativeService.delete(founder.getId(), narrativeOf(midGain).getId(), admin.getId());
 
-            assertThat(narrativeService.generateTopPillars(cohortId, founder.getId())).isEqualTo(1);
+            assertThat(narrativeService.generateAllPillars(cohortId, founder.getId())).isEqualTo(1);
             assertThat(narratives.findByCohortIdAndUserId(cohortId, founder.getId()))
                     .extracting(ShiftNarrative::getDistancePillarId)
-                    // The refilled slot is the pillar that belongs in the top 4 —
-                    // not the next one down the list.
-                    .containsExactlyInAnyOrder(bigGain, bigDecline, midGain, smallDecline);
+                    .containsExactlyInAnyOrder(bigGain, bigDecline, midGain, smallDecline, smallGain);
         }
 
         @Test
         void everyGeneratedNarrativeLandsAsADraftWithFullProvenance() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
 
             ShiftNarrative n = narrativeOf(bigGain);
             assertThat(n.getStatus()).isEqualTo(NarrativeStatus.DRAFT);
@@ -222,7 +219,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void aPillarWithoutEnoughBeforeText_getsNoRowAndTheStandardSentenceInstead() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
 
             assertThat(narratives.findByCohortIdAndUserIdAndDistancePillarId(
                     cohortId, founder.getId(), thinBaseline)).isEmpty();
@@ -233,10 +230,8 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
                     .containsExactly(thinBaseline);
             assertThat(review.notEnoughDataSentence())
                     .isEqualTo(NarrativeWording.defaultNotEnoughDataSentence());
-            // The remaining mapped pillar with real text is offered for on-demand generation.
-            assertThat(review.availablePillars())
-                    .extracting(NarrativeReviewResponse.NarrativePillarOption::distancePillarId)
-                    .containsExactly(smallGain);
+            // Every pillar with real text was generated — nothing left to offer.
+            assertThat(review.availablePillars()).isEmpty();
         }
 
         @Test
@@ -316,7 +311,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void draftBecomesApproved_withThe7bStamp() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             UUID id = narrativeOf(bigGain).getId();
 
             ShiftNarrativeDto approved = narrativeService.approve(founder.getId(), id, admin.getId());
@@ -329,7 +324,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void editingAnApprovedNarrative_returnsItToDraftAndClearsTheApproval() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             UUID id = narrativeOf(bigGain).getId();
             narrativeService.approve(founder.getId(), id, admin.getId());
 
@@ -349,7 +344,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void aReviewerCannotEditTheWayForwardOffADecliningPillar() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             UUID id = narrativeOf(bigDecline).getId();
 
             assertThatThrownBy(() -> narrativeService.update(founder.getId(), id,
@@ -359,7 +354,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void draftsAreDeletable_approvedOnesAreNot() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             UUID draftId = narrativeOf(midGain).getId();
             UUID approvedId = narrativeOf(bigGain).getId();
             narrativeService.approve(founder.getId(), approvedId, admin.getId());
@@ -373,7 +368,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void anotherFoundersNarrativeIdIsA404_notAnEdit() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             UUID id = narrativeOf(bigGain).getId();
 
             assertThatThrownBy(() -> narrativeService.approve(admin.getId(), id, admin.getId()))
@@ -388,7 +383,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void theMemberSeesNothingUntilApproved_andOnlyWhatIsApproved() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
 
             MyComparisonResponse before = queryService.myComparison(founder.getId());
             assertThat(before.state()).isEqualTo("done");
@@ -406,30 +401,30 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void theExportsRenderTheApprovedNarrative() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             narrativeService.approve(founder.getId(), narrativeOf(bigGain).getId(), admin.getId());
 
             // The PDF template gained a narratives block; this is the check that
             // fails if its expressions ever drift from NarrativeRow.
-            assertThat(exports.pdf(founder.getId())).isNotEmpty();
-            assertThat(exports.excel(founder.getId())).isNotEmpty();
+            assertThat(exports.pdf(founder.getId(), true)).isNotEmpty();
+            assertThat(exports.excel(founder.getId(), true)).isNotEmpty();
         }
 
         @Test
         void staffStillSeeTheDraftsThroughTheReviewEndpoint() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
 
             assertThat(narrativeService.review(founder.getId()).narratives()).hasSize(4);
         }
 
         @Test
         void theMemberIsToldHowManyAreStillInReview_butNeverWhatTheySay() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             narrativeService.approve(founder.getId(), narrativeOf(bigGain).getId(), admin.getId());
 
             var cmp = queryService.myComparison(founder.getId()).comparison();
             assertThat(cmp.narratives()).hasSize(1);
-            assertThat(cmp.draftNarrativeCount()).isEqualTo(3);
+            assertThat(cmp.draftNarrativeCount()).isEqualTo(4);
         }
     }
 
@@ -440,7 +435,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void recomputeReturnsApprovedNarrativesToDraft_withoutDeletingThem() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             UUID id = narrativeOf(bigGain).getId();
             narrativeService.approve(founder.getId(), id, admin.getId());
 
@@ -449,7 +444,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
             // The comparison row was rebuilt; the narratives survived it, because
             // they are anchored to the cohort + pillar, not to the comparison row.
             List<ShiftNarrative> after = narratives.findByCohortIdAndUserId(cohortId, founder.getId());
-            assertThat(after).hasSize(4);
+            assertThat(after).hasSize(5);
             assertThat(after).allMatch(n -> n.getStatus() == NarrativeStatus.DRAFT);
             assertThat(after).allMatch(n -> n.getApprovedAt() == null && n.getApprovedBy() == null);
             // And the member is back to seeing none of them.
@@ -495,7 +490,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void approvingTwice_keepsTheOriginalStamp() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             UUID id = narrativeOf(bigGain).getId();
             ShiftNarrativeDto first = narrativeService.approve(founder.getId(), id, admin.getId());
 
@@ -507,7 +502,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void aRemappedPillarDetaches_stayingVisibleToStaffAndGoneFromTheMemberSurface() {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             narrativeService.approve(founder.getId(), narrativeOf(bigGain).getId(), admin.getId());
 
             // A SUPER_ADMIN unmaps the pair's Vision row, then the cohort is
@@ -529,21 +524,21 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(cmp.narratives())
                     .extracting(ShiftNarrativeDto::distancePillarId)
                     .doesNotContain(bigGain);
-            assertThat(cmp.draftNarrativeCount()).isEqualTo(3);
+            assertThat(cmp.draftNarrativeCount()).isEqualTo(4);
         }
 
         @Test
         void autoApproveOn_landsNarrativesApprovedWithNoHumanAttribution() {
             enableAutoApprove();
 
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
 
             List<ShiftNarrative> rows = narratives.findByCohortIdAndUserId(cohortId, founder.getId());
-            assertThat(rows).hasSize(4);
+            assertThat(rows).hasSize(5);
             assertThat(rows).allMatch(n -> n.getStatus() == NarrativeStatus.APPROVED);
             assertThat(rows).allMatch(n -> n.getApprovedAt() != null && n.getApprovedBy() == null);
             assertThat(narrativeService.review(founder.getId()).autoApprove()).isTrue();
-            assertThat(queryService.myComparison(founder.getId()).comparison().narratives()).hasSize(4);
+            assertThat(queryService.myComparison(founder.getId()).comparison().narratives()).hasSize(5);
         }
     }
 
@@ -554,7 +549,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void adminSeesTheReviewList_overHttp() throws Exception {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             TestAuthentication.authenticate(admin);
 
             mockMvc.perform(get("/api/organizations/{orgId}/members/{userId}/shift-narratives",
@@ -566,7 +561,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void adminCanApproveOverHttp() throws Exception {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             TestAuthentication.authenticate(admin);
 
             mockMvc.perform(post("/api/organizations/{orgId}/members/{userId}/shift-narratives/{id}/approve",
@@ -578,7 +573,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         @Test
         void anUnassignedCoachIsRefused() throws Exception {
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             TestAuthentication.authenticate(coach);
 
             mockMvc.perform(get("/api/v1/coach/founders/{founderId}/shift-narratives", founder.getId()))
@@ -591,7 +586,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
                     INSERT INTO coach_assignments (id, org_id, coach_id, cohort_id, assigned_by)
                     VALUES (gen_random_uuid(), ?, ?, ?, ?)
                     """, org.getId(), coach.getId(), cohortId, admin.getId());
-            narrativeService.generateTopPillars(cohortId, founder.getId());
+            narrativeService.generateAllPillars(cohortId, founder.getId());
             TestAuthentication.authenticate(coach);
 
             mockMvc.perform(get("/api/v1/coach/founders/{founderId}/shift-narratives", founder.getId()))

@@ -44,8 +44,9 @@ public class MyGrowthController {
     public ResponseEntity<byte[]> reportPdf(
             @RequestParam(defaultValue = "download") String mode) {
         CurrentUser me = requirePremium();
+        // Identity-scoped: the name shown is the caller's own, so always shown.
         return MyGrowthExportService.pdfResponse(
-                exports.pdf(me.userId()), "My_Growth_Report.pdf", mode);
+                exports.pdf(me.userId(), true), "My_Growth_Report.pdf", mode);
     }
 
     @GetMapping(path = "/report/excel",
@@ -53,7 +54,7 @@ public class MyGrowthController {
     public ResponseEntity<byte[]> reportExcel(
             @RequestParam(defaultValue = "download") String mode) {
         CurrentUser me = requirePremium();
-        return XlsxResponse.build(exports.excel(me.userId()), "My_Growth_Report.xlsx", mode);
+        return XlsxResponse.build(exports.excel(me.userId(), true), "My_Growth_Report.xlsx", mode);
     }
 
     /**

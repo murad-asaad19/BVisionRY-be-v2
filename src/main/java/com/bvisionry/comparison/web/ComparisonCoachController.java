@@ -5,6 +5,7 @@ import com.bvisionry.common.excel.XlsxResponse;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.security.CurrentUser;
 import com.bvisionry.common.security.CurrentUserAccessor;
+import com.bvisionry.common.security.ExportNameGuard;
 import com.bvisionry.common.security.PremiumFeatureGuard;
 import com.bvisionry.comparison.dto.MyComparisonResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -47,21 +48,33 @@ public class ComparisonCoachController {
         return queries.founderComparisonForCoach(founderId);
     }
 
+    /**
+     * The coach export is ALWAYS masked: no coach-scoped export anywhere
+     * unmasks names — that privilege is SUPER_ADMIN-only, and the class-level
+     * COACH gate means no super admin can even reach this door. The
+     * {@code showNames} param exists so an explicit {@code true} is refused
+     * loudly ({@link ExportNameGuard}, 403) rather than silently downgraded.
+     */
     @GetMapping(path = "/growth-report.pdf", produces = MediaType.APPLICATION_PDF_VALUE)
     public ResponseEntity<byte[]> growthReportPdf(@PathVariable UUID founderId,
-            @RequestParam(defaultValue = "download") String mode) {
+            @RequestParam(defaultValue = "download") String mode,
+            @RequestParam(defaultValue = "false") boolean showNames) {
+        ExportNameGuard.checkShowNames(showNames);
         requireSeesAndPremium(founderId);
-        return MyGrowthExportService.pdfResponse(
-                exports.pdf(founderId), exports.reportFilename(founderId, "pdf"), mode);
+        return MyGrowthExportService.pdfResponse(exports.pdf(founderId, false),
+                exports.reportFilename(founderId, "pdf", false), mode);
     }
 
+    /** Same always-masked rule as the PDF above. */
     @GetMapping(path = "/growth-report.xlsx",
             produces = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     public ResponseEntity<byte[]> growthReportExcel(@PathVariable UUID founderId,
-            @RequestParam(defaultValue = "download") String mode) {
+            @RequestParam(defaultValue = "download") String mode,
+            @RequestParam(defaultValue = "false") boolean showNames) {
+        ExportNameGuard.checkShowNames(showNames);
         requireSeesAndPremium(founderId);
-        return XlsxResponse.build(
-                exports.excel(founderId), exports.reportFilename(founderId, "xlsx"), mode);
+        return XlsxResponse.build(exports.excel(founderId, false),
+                exports.reportFilename(founderId, "xlsx", false), mode);
     }
 
     private CurrentUser requireCoachSees(UUID founderId) {

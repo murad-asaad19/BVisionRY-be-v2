@@ -88,7 +88,7 @@ public class ComparisonComputeService {
                         // Dispatched AFTER the commit above, on its own executor, so
                         // the model round-trips neither extend the compute
                         // transaction nor can fail the comparison.
-                        narratives.generateTopPillarsAsync(pair.cohortId(), event.founderId());
+                        narratives.generateAllPillarsAsync(pair.cohortId(), event.founderId());
                     }
                 }
             }

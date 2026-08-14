@@ -973,6 +973,132 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(content().contentType(XLSX));
         }
 
+        /**
+         * The staff doors are MASKED BY DEFAULT — the founder appears as
+         * "Member" on the document and in the filename, same convention as
+         * every other org-scoped export. Asserted on the bytes, because a
+         * mocked service proves nothing about what the admin actually holds.
+         */
+        @Test
+        void staffExportsAreMaskedByDefault() throws Exception {
+            computeFounder1();
+            makePremium(orgA);
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.masked@test.invalid", UserRole.ORG_ADMIN, orgA));
+
+            var pdf = mockMvc.perform(get(adminReport("growth-report.pdf", founder1)))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Content-Disposition",
+                            containsString("Member_Growth_Report.pdf")))
+                    .andReturn().getResponse().getContentAsByteArray();
+            assertThat(pdfText(pdf)).doesNotContain(founder1.getName()).contains("Member");
+
+            var xlsx = mockMvc.perform(get(adminReport("growth-report.xlsx", founder1)))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Content-Disposition",
+                            containsString("Member_Growth_Report.xlsx")))
+                    .andReturn().getResponse().getContentAsByteArray();
+            assertThat(cellText(xlsx)).doesNotContain(founder1.getName());
+        }
+
+        /** Only a SUPER_ADMIN may unmask ({@code ExportNameGuard}); an org admin asking is a 403. */
+        @Test
+        void orgAdminAskingForNamesIsForbidden() throws Exception {
+            computeFounder1();
+            makePremium(orgA);
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.asknames@test.invalid", UserRole.ORG_ADMIN, orgA));
+
+            mockMvc.perform(get(adminReport("growth-report.pdf", founder1) + "?showNames=true"))
+                    .andExpect(status().isForbidden());
+            mockMvc.perform(get(adminReport("growth-report.xlsx", founder1) + "?showNames=true"))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        void superAdminAskingForNamesGetsTheRealName() throws Exception {
+            computeFounder1();
+            makePremium(orgA);
+            TestAuthentication.authenticateAsSuperAdmin(userRepository);
+
+            // "founder.one" sanitises to "founderone" in the filename.
+            var pdf = mockMvc.perform(get(adminReport("growth-report.pdf", founder1)
+                            + "?showNames=true"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Content-Disposition",
+                            containsString("founderone_Growth_Report.pdf")))
+                    .andReturn().getResponse().getContentAsByteArray();
+            assertThat(pdfText(pdf)).contains(founder1.getName());
+
+            var xlsx = mockMvc.perform(get(adminReport("growth-report.xlsx", founder1)
+                            + "?showNames=true"))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsByteArray();
+            assertThat(cellText(xlsx)).contains(founder1.getName());
+        }
+
+        /**
+         * The coach door is ALWAYS masked: an explicit {@code showNames=true}
+         * is refused loudly (a COACH is never a SUPER_ADMIN), and the default
+         * document carries the masked label, not the founder's name.
+         */
+        @Test
+        void coachExportIsAlwaysMasked() throws Exception {
+            computeFounder1();
+            makePremium(orgA);
+            User coach = saveUser("coach.masked@test.invalid", UserRole.COACH, orgA);
+            jdbc.update("""
+                    INSERT INTO coach_assignments (org_id, coach_id, cohort_id, member_id)
+                    VALUES (?, ?, ?, ?)
+                    """, orgA.getId(), coach.getId(), cohortId, null);
+            TestAuthentication.authenticate(coach);
+
+            mockMvc.perform(get("/api/v1/coach/founders/" + founder1.getId()
+                            + "/growth-report.pdf?showNames=true"))
+                    .andExpect(status().isForbidden());
+
+            var pdf = mockMvc.perform(get("/api/v1/coach/founders/" + founder1.getId()
+                            + "/growth-report.pdf"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Content-Disposition",
+                            containsString("Member_Growth_Report.pdf")))
+                    .andReturn().getResponse().getContentAsByteArray();
+            assertThat(pdfText(pdf)).doesNotContain(founder1.getName());
+        }
+
+        /** The rendered PDF text — the content stream is FlateDecoded, so raw bytes see nothing. */
+        private static String pdfText(byte[] pdf) throws Exception {
+            com.lowagie.text.pdf.PdfReader reader = new com.lowagie.text.pdf.PdfReader(pdf);
+            try {
+                var extractor = new com.lowagie.text.pdf.parser.PdfTextExtractor(reader);
+                StringBuilder text = new StringBuilder();
+                for (int page = 1; page <= reader.getNumberOfPages(); page++) {
+                    text.append(extractor.getTextFromPage(page)).append('\n');
+                }
+                return text.toString();
+            } finally {
+                reader.close();
+            }
+        }
+
+        /** Every string cell in the workbook — the readable content of the export. */
+        private static String cellText(byte[] xlsx) throws Exception {
+            StringBuilder out = new StringBuilder();
+            try (var wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook(
+                    new java.io.ByteArrayInputStream(xlsx))) {
+                for (var sheet : wb) {
+                    for (var row : sheet) {
+                        for (var cell : row) {
+                            if (cell.getCellType() == org.apache.poi.ss.usermodel.CellType.STRING) {
+                                out.append(cell.getStringCellValue()).append('\n');
+                            }
+                        }
+                    }
+                }
+            }
+            return out.toString();
+        }
+
         private String adminReport(String file, User member) {
             return "/api/organizations/" + orgA.getId() + "/members/"
                     + member.getId() + "/" + file;

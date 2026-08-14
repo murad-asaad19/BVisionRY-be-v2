@@ -34,12 +34,25 @@ import lombok.RequiredArgsConstructor;
  * §11: "My Growth includes PDF and Excel exports"). Renders whatever the
  * lifecycle state honestly has: {@code done} → the full comparison lead +
  * pillar-shift table + trajectory; {@code pending}/{@code none} → the
- * trajectory scores so far, no teased sections. Identity-scoped — the caller
- * IS the founder, so names are always their own.
+ * trajectory scores so far, no teased sections. Serves three doors: the
+ * member's own (names always shown — they are theirs), and the two staff
+ * doors, where {@code showNames} follows the same masking convention as every
+ * other export ({@code false} → the founder appears as "Member" on the
+ * document AND in the filename; the handler, not this service, decides who
+ * may pass {@code true} — see {@code ExportNameGuard}).
+ *
+ * <p>The shift narratives need no redaction pass: the AI prompt carries ONLY
+ * the pillar name and the assessment text blocks (see
+ * {@link ShiftNarrativeService}), so unlike the assessment narratives the
+ * generated prose never addresses the founder by name. A coach hand-editing a
+ * name into a body is the known ceiling of this masking.
  */
 @Service
 @RequiredArgsConstructor
 public class MyGrowthExportService {
+
+    /** Same masked label the other exports use ({@code MemberDisplayNameResolver}). */
+    private static final String MASKED_LABEL = "Member";
 
     private static final DateTimeFormatter DATE =
             DateTimeFormatter.ofPattern("MMM d, yyyy").withZone(ZoneOffset.UTC);
@@ -64,9 +77,9 @@ public class MyGrowthExportService {
                                String closingAction, String approved) {}
 
     @Transactional(readOnly = true)
-    public byte[] pdf(UUID userId) {
+    public byte[] pdf(UUID userId, boolean showNames) {
         MyComparisonResponse data = queries.myComparison(userId);
-        String name = memberName(userId);
+        String name = displayName(userId, showNames);
         FounderComparisonDto c = data.comparison();
 
         Context ctx = new Context();
@@ -92,9 +105,9 @@ public class MyGrowthExportService {
     }
 
     @Transactional(readOnly = true)
-    public byte[] excel(UUID userId) {
+    public byte[] excel(UUID userId, boolean showNames) {
         MyComparisonResponse data = queries.myComparison(userId);
-        String name = memberName(userId);
+        String name = displayName(userId, showNames);
         FounderComparisonDto c = data.comparison();
 
         try (ExcelWorkbookBuilder wb = new ExcelWorkbookBuilder();
@@ -162,10 +175,12 @@ public class MyGrowthExportService {
      * Download filename for a growth export, from the founder's own name —
      * shared by the member's identity-scoped door and the two staff doors
      * (spec §11), so an admin holding three founders' reports can tell them
-     * apart. Sanitised because a display name is user input.
+     * apart. Sanitised because a display name is user input. Masked exports
+     * get the masked label here too — a filename outlives the download and
+     * would otherwise leak the very name the document withholds.
      */
-    public String reportFilename(UUID userId, String extension) {
-        return XlsxResponse.sanitizeFilename(memberName(userId).replace(' ', '_'))
+    public String reportFilename(UUID userId, String extension, boolean showNames) {
+        return XlsxResponse.sanitizeFilename(displayName(userId, showNames).replace(' ', '_'))
                 + "_Growth_Report." + extension;
     }
 
@@ -179,9 +194,12 @@ public class MyGrowthExportService {
                 .body(pdf);
     }
 
-    private String memberName(UUID userId) {
+    private String displayName(UUID userId, boolean showNames) {
+        if (!showNames) {
+            return MASKED_LABEL;
+        }
         String name = reads.userNames(Set.of(userId)).get(userId);
-        return name == null || name.isBlank() ? "Member" : name;
+        return name == null || name.isBlank() ? MASKED_LABEL : name;
     }
 
     private List<PillarRow> pillarRows(List<ComparisonPillarDto> pillars) {

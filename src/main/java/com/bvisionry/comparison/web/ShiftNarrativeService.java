@@ -72,15 +72,6 @@ import java.util.UUID;
 public class ShiftNarrativeService {
 
     /**
-     * "Generate for the top 3–4 shift pillars" (§6) — the biggest-story pillars
-     * by absolute shift, so the largest gains AND the largest declines both
-     * qualify. 4, the top of the spec's range: the rest are one tap away via
-     * on-demand generation, and under-generating costs a human a round trip
-     * while over-generating costs one model call.
-     */
-    public static final int TOP_N = 4;
-
-    /**
      * The model gets one draft and exactly one corrective re-ask (§6). A third
      * try would just re-bill the same misunderstanding: when a model cannot
      * classify into five kinds or close a decline after being told to, the
@@ -102,15 +93,15 @@ public class ShiftNarrativeService {
     /* ======================================================== generation */
 
     /**
-     * Fire-and-forget generation for the top-N shift pillars of a freshly
+     * Fire-and-forget generation for every eligible shift pillar of a freshly
      * computed comparison. Runs on the evaluation executor so it never blocks
      * the compute transaction, and swallows everything: a narrative failure must
      * never fail — or un-compute — the comparison (§6).
      */
     @Async("evaluationExecutor")
-    public void generateTopPillarsAsync(UUID cohortId, UUID userId) {
+    public void generateAllPillarsAsync(UUID cohortId, UUID userId) {
         try {
-            generateTopPillars(cohortId, userId);
+            generateAllPillars(cohortId, userId);
         } catch (RuntimeException e) {
             log.warn("Shift-narrative generation failed for cohort {} user {} "
                     + "(comparison unaffected): {}", cohortId, userId, e.getMessage(), e);
@@ -118,17 +109,14 @@ public class ShiftNarrativeService {
     }
 
     /** Synchronous entry point — the async wrapper above, and the tests, call this. */
-    public int generateTopPillars(UUID cohortId, UUID userId) {
+    public int generateAllPillars(UUID cohortId, UUID userId) {
         Context ctx = context(cohortId, userId);
-        // Order matters: rank and CUT to the top N first, then drop the ones
-        // that already have a narrative. Filtering first would let a second run
-        // walk on down the list and narrate pillars 5-8 — the top N is the set
-        // this is allowed to fill, so a re-run tops it up rather than extends it.
+        // Biggest absolute shift first, so the biggest stories land even if a
+        // later call fails; pillars that already have a narrative are skipped.
         List<Candidate> candidates = ctx.candidates().stream()
                 .filter(Candidate::hasEnoughBeforeText)
                 .sorted(Comparator.comparingDouble(
                         (Candidate c) -> Math.abs(c.pillar().getDelta().doubleValue())).reversed())
-                .limit(TOP_N)
                 .filter(c -> !ctx.existingPillarIds().contains(c.distancePillarId()))
                 .toList();
 

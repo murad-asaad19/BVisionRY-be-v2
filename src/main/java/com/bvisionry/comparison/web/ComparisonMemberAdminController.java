@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.bvisionry.common.excel.XlsxResponse;
+import com.bvisionry.common.security.ExportNameGuard;
 import com.bvisionry.common.security.PremiumFeatureGuard;
 import com.bvisionry.comparison.dto.MyComparisonResponse;
 
@@ -47,23 +48,35 @@ public class ComparisonMemberAdminController {
         return queries.memberComparisonForAdmin(orgId, userId);
     }
 
+    /**
+     * {@code showNames} defaults to FALSE and true is SUPER_ADMIN-only
+     * ({@link ExportNameGuard}) — this is the admin view of somebody else's
+     * report; the member's own copy is {@code /api/my/growth/...}, where the
+     * name is always their own. Masked, the founder appears as "Member" in the
+     * document AND the filename.
+     */
     @GetMapping(path = "/growth-report.pdf", produces = MediaType.APPLICATION_PDF_VALUE)
     public ResponseEntity<byte[]> growthReportPdf(@PathVariable UUID orgId,
             @PathVariable UUID userId,
-            @RequestParam(defaultValue = "download") String mode) {
+            @RequestParam(defaultValue = "download") String mode,
+            @RequestParam(defaultValue = "false") boolean showNames) {
+        ExportNameGuard.checkShowNames(showNames);
         requireMemberAndPremium(orgId, userId);
-        return MyGrowthExportService.pdfResponse(
-                exports.pdf(userId), exports.reportFilename(userId, "pdf"), mode);
+        return MyGrowthExportService.pdfResponse(exports.pdf(userId, showNames),
+                exports.reportFilename(userId, "pdf", showNames), mode);
     }
 
+    /** Same masking default and same SUPER_ADMIN-only {@code showNames} as the PDF above. */
     @GetMapping(path = "/growth-report.xlsx",
             produces = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     public ResponseEntity<byte[]> growthReportExcel(@PathVariable UUID orgId,
             @PathVariable UUID userId,
-            @RequestParam(defaultValue = "download") String mode) {
+            @RequestParam(defaultValue = "download") String mode,
+            @RequestParam(defaultValue = "false") boolean showNames) {
+        ExportNameGuard.checkShowNames(showNames);
         requireMemberAndPremium(orgId, userId);
-        return XlsxResponse.build(
-                exports.excel(userId), exports.reportFilename(userId, "xlsx"), mode);
+        return XlsxResponse.build(exports.excel(userId, showNames),
+                exports.reportFilename(userId, "xlsx", showNames), mode);
     }
 
     /** Member-in-org first (a foreign id is a 404, never a 402), then the plan. */

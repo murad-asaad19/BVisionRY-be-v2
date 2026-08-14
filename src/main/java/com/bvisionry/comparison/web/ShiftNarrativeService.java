@@ -433,6 +433,19 @@ public class ShiftNarrativeService {
         return reverted;
     }
 
+    /** Org-scoped {@link #revertApprovalsForCohort}: only the given members' narratives. */
+    public int revertApprovalsForCohortMembers(UUID cohortId, java.util.Collection<UUID> userIds) {
+        if (userIds.isEmpty()) {
+            return 0;
+        }
+        int reverted = narratives.revertApprovalsForCohortMembers(cohortId, userIds);
+        if (reverted > 0) {
+            log.info("Recompute returned {} approved shift narrative(s) to draft for cohort {} "
+                    + "({} member(s))", reverted, cohortId, userIds.size());
+        }
+        return reverted;
+    }
+
     /**
      * The other half of the recompute seam: re-derive each narrative's decline
      * flag and band label from the freshly rebuilt pillar rows, so an edited
@@ -441,6 +454,14 @@ public class ShiftNarrativeService {
      */
     public int restampBandsForCohort(UUID cohortId) {
         return narratives.restampBandsForCohort(cohortId);
+    }
+
+    /** Org-scoped {@link #restampBandsForCohort}: only the given members' narratives. */
+    public int restampBandsForCohortMembers(UUID cohortId, java.util.Collection<UUID> userIds) {
+        if (userIds.isEmpty()) {
+            return 0;
+        }
+        return narratives.restampBandsForCohortMembers(cohortId, userIds);
     }
 
     /* ---------------------------------------------------------- plumbing */

@@ -72,7 +72,7 @@ public class ComparisonAdminController {
     public RecomputeResponse recompute(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
         reads.cohortNameInOrg(orgId, cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
-        return computeService.recomputeCohort(cohortId, currentUser.require().userId());
+        return computeService.recomputeCohortForOrg(orgId, cohortId, currentUser.require().userId());
     }
 
     /** The cohort's designated pair mapping, read-only ("managed by Bvisionry"). */

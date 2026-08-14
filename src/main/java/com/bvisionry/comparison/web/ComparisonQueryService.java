@@ -100,12 +100,18 @@ public class ComparisonQueryService {
      */
     public CohortComparisonStatus cohortComparisonStatus(UUID orgId, UUID cohortId) {
         requireCohortInOrg(orgId, cohortId);
-        return cohortComparisonStatusPlatform(cohortId);
+        // Org-scoped: a platform cohort (spec §13) spans orgs, so the pending list
+        // must be filtered to THIS org — the platform variant below would leak
+        // other tenants' founder ids and names.
+        return buildStatus(compute.foundersAwaitingComparison(orgId, cohortId));
     }
 
     /** SUPER_ADMIN variant for the platform board (spec §13): no org in the URL. */
     public CohortComparisonStatus cohortComparisonStatusPlatform(UUID cohortId) {
-        List<UUID> pending = compute.foundersAwaitingComparison(cohortId);
+        return buildStatus(compute.foundersAwaitingComparison(cohortId));
+    }
+
+    private CohortComparisonStatus buildStatus(List<UUID> pending) {
         Map<UUID, String> names = reads.userNames(pending);
         return new CohortComparisonStatus(pending.size(), pending.stream()
                 .map(id -> new CohortComparisonStatus.PendingFounder(id, names.get(id)))

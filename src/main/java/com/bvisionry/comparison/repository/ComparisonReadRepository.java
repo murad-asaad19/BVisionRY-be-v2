@@ -129,6 +129,22 @@ public class ComparisonReadRepository {
                 (rs, i) -> rs.getObject("user_id", UUID.class));
     }
 
+    /**
+     * A platform cohort (spec §13) spans orgs; this is the tenant slice an org
+     * admin may see and act on — cohort members whose org is {@code orgId}.
+     * Comparisons are stamped with the member's org, so this is the same
+     * boundary the org-scoped comparison reads use.
+     */
+    public List<UUID> cohortMembersInOrg(UUID orgId, UUID cohortId) {
+        return jdbc.query("""
+                SELECT cm.user_id FROM cohort_members cm
+                JOIN users u ON u.id = cm.user_id
+                WHERE cm.cohort_id = :cohortId AND u.organization_id = :orgId
+                """,
+                new MapSqlParameterSource("cohortId", cohortId).addValue("orgId", orgId),
+                (rs, i) -> rs.getObject("user_id", UUID.class));
+    }
+
     /** Whether the user belongs to the org — the admin-side member gate (404 when false). */
     public boolean userInOrg(UUID orgId, UUID userId) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""

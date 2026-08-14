@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -39,6 +40,24 @@ public interface ShiftNarrativeRepository extends JpaRepository<ShiftNarrative, 
     int revertApprovalsForCohort(@Param("cohortId") UUID cohortId);
 
     /**
+     * The org-scoped slice of {@link #revertApprovalsForCohort}: a platform
+     * cohort (spec §13) spans orgs, and an org admin's recompute may only return
+     * THEIR org's approved narratives to draft. {@code userIds} must be non-empty
+     * (the caller skips the whole recompute when the org has no members here).
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE ShiftNarrative n
+               SET n.status = com.bvisionry.comparison.domain.NarrativeStatus.DRAFT,
+                   n.approvedBy = NULL, n.approvedAt = NULL
+             WHERE n.cohortId = :cohortId
+               AND n.status = com.bvisionry.comparison.domain.NarrativeStatus.APPROVED
+               AND n.userId IN (:userIds)
+            """)
+    int revertApprovalsForCohortMembers(@Param("cohortId") UUID cohortId,
+                                        @Param("userIds") Collection<UUID> userIds);
+
+    /**
      * Re-stamps every narrative's decline flag and band label from the pillar
      * rows the recompute just rebuilt.
      *
@@ -66,4 +85,26 @@ public interface ShiftNarrativeRepository extends JpaRepository<ShiftNarrative, 
                AND p.distance_pillar_id = n.distance_pillar_id
             """)
     int restampBandsForCohort(@Param("cohortId") UUID cohortId);
+
+    /**
+     * Org-scoped {@link #restampBandsForCohort}: restamps only the narratives of
+     * the given members (one org's slice of a platform cohort). {@code userIds}
+     * must be non-empty.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(nativeQuery = true, value = """
+            UPDATE shift_narratives n
+               SET decline    = COALESCE(p.delta, 0) < 0,
+                   band_key   = p.band_key,
+                   updated_at = now()
+              FROM founder_comparison_pillars p
+              JOIN founder_comparisons c ON c.id = p.comparison_id
+             WHERE n.cohort_id = :cohortId
+               AND n.user_id IN (:userIds)
+               AND c.cohort_id = n.cohort_id
+               AND c.user_id   = n.user_id
+               AND p.distance_pillar_id = n.distance_pillar_id
+            """)
+    int restampBandsForCohortMembers(@Param("cohortId") UUID cohortId,
+                                     @Param("userIds") Collection<UUID> userIds);
 }

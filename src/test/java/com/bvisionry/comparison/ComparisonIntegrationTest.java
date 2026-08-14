@@ -36,6 +36,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -289,23 +290,26 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
     class PairDesignation {
 
         /**
-         * Same-instrument pairs are allowed since the typed task spine (D1):
-         * the DISTANCE milestone tag — not "latest evaluated" — resolves the
-         * distance submission, so an equal pair can no longer self-compare.
+         * The pair is DERIVED from the cohort's BASELINE/DISTANCE milestone
+         * tasks (V180), so the settings PUT cannot designate: the two pipeline
+         * ids it is handed are ignored and the stored pair is echoed back
+         * unchanged. Nothing else on the endpoint changes — this is the pacing
+         * write, and the Curriculum tab is where the instrument is chosen.
          */
         @Test
-        void equalBaselineAndDistancePipelines_areAccepted() throws Exception {
+        void theSettingsPutCannotRedesignateThePair() throws Exception {
             // Spec §13: program authoring is platform-scoped, super admin only.
             TestAuthentication.authenticateAsSuperAdmin(userRepository);
             mockMvc.perform(put("/api/cohorts/" + cohortId + "/program/settings")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("""
-                                    {"stageLabel":"Week","dripEnabled":true,"dueSoonDays":3,
+                                    {"stageLabel":"Sprint","dripEnabled":true,"dueSoonDays":3,
                                      "baselinePipelineId":"%s","distancePipelineId":"%s"}
                                     """.formatted(baselinePipelineId, baselinePipelineId)))
                     .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.stageLabel", is("Sprint")))
                     .andExpect(jsonPath("$.baselinePipelineId", is(baselinePipelineId.toString())))
-                    .andExpect(jsonPath("$.distancePipelineId", is(baselinePipelineId.toString())));
+                    .andExpect(jsonPath("$.distancePipelineId", is(distancePipelineId.toString())));
         }
     }
 
@@ -675,6 +679,94 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
+    /* ------------------------------------- platform cohorts: org scoping */
+
+    /**
+     * A PLATFORM cohort (spec §13) can span orgs, but everything an ORG admin
+     * does on it must stay inside their tenant: the status read must not name
+     * another org's founders, and their recompute must not rebuild another
+     * org's comparisons or return another org's approved narratives to draft.
+     */
+    @Nested
+    class PlatformCohortOrgScoping {
+
+        private User founderB;
+        private UUID founderBDistanceSubmission;
+
+        @BeforeEach
+        void enrollAnOrgBFounderInTheSameCohort() {
+            jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)",
+                    cohortId, orgB.getId());
+            founderB = saveUser("founder.b@test.invalid", UserRole.MEMBER, orgB);
+            jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
+                    cohortId, founderB.getId());
+            // Both sides evaluated — founderB is exactly as computable as founder1.
+            insertEvaluatedSubmission(founderB, baselinePipelineId, 40, new BigDecimal("50.00"));
+            founderBDistanceSubmission = insertEvaluatedSubmission(founderB, distancePipelineId, 0,
+                    new BigDecimal("60.00"));
+        }
+
+        @Test
+        void statusReadNeverNamesAnotherOrgsFounders() {
+            // Org A's view: only their own awaiting founder, even though founderB
+            // is just as ready — their id and name belong to org B's admin.
+            assertThat(queryService.cohortComparisonStatus(orgA.getId(), cohortId).founders())
+                    .extracting(CohortComparisonStatus.PendingFounder::userId)
+                    .containsExactly(founder1.getId());
+
+            // The platform (super admin) variant is the one that spans orgs.
+            assertThat(queryService.cohortComparisonStatusPlatform(cohortId).founders())
+                    .extracting(CohortComparisonStatus.PendingFounder::userId)
+                    .containsExactlyInAnyOrder(founder1.getId(), founderB.getId());
+        }
+
+        @Test
+        void orgAdminRecompute_neverRebuildsOrUnapprovesAnotherOrgsRows() throws Exception {
+            // founderB already has a computed comparison and an APPROVED narrative.
+            computeService.onSubmissionEvaluated(new EvaluationEvents.SubmissionEvaluated(
+                    founderBDistanceSubmission, founderB.getId(), Map.of()));
+            FounderComparison orgBRow = comparisons
+                    .findByCohortIdAndUserId(cohortId, founderB.getId()).orElseThrow();
+            jdbc.update("""
+                    INSERT INTO shift_narratives (cohort_id, org_id, user_id, baseline_pillar_id,
+                                                  distance_pillar_id, pillar_name_snapshot, kind,
+                                                  body, status, approved_by, approved_at)
+                    VALUES (?, ?, ?, ?, ?, 'Vision', 'PERSISTED', 'Org B narrative.',
+                            'APPROVED', ?, now())
+                    """, cohortId, orgB.getId(), founderB.getId(), baselineVision, distanceVision,
+                    founderB.getId());
+
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.a.scope@test.invalid", UserRole.ORG_ADMIN, orgA));
+            mockMvc.perform(post("/api/organizations/" + orgA.getId()
+                            + "/cohorts/" + cohortId + "/comparisons/recompute"))
+                    .andExpect(status().isOk())
+                    // founder1 only — founderB's rebuild belongs to org B or the platform.
+                    .andExpect(jsonPath("$.recomputed", is(1)));
+
+            // Org A's repair landed...
+            assertThat(comparisons.findByCohortIdAndUserId(cohortId, founder1.getId()))
+                    .isPresent();
+            // ...and org B's comparison was not rebuilt: same row, same stamp.
+            FounderComparison after = comparisons
+                    .findByCohortIdAndUserId(cohortId, founderB.getId()).orElseThrow();
+            assertThat(after.getId()).isEqualTo(orgBRow.getId());
+            // Micros: Instant.now() can outrun timestamptz, and the recompute's
+            // clearing modifying queries force `after` to be a fresh DB read.
+            assertThat(after.getComputedAt().truncatedTo(ChronoUnit.MICROS))
+                    .isEqualTo(orgBRow.getComputedAt().truncatedTo(ChronoUnit.MICROS));
+            // Org B's approved narrative survived with its approval intact —
+            // another tenant's recompute must not send it back to review.
+            Map<String, Object> narrative = jdbc.queryForMap("""
+                    SELECT status, approved_by, approved_at FROM shift_narratives
+                    WHERE cohort_id = ? AND user_id = ?
+                    """, cohortId, founderB.getId());
+            assertThat(narrative.get("status")).isEqualTo("APPROVED");
+            assertThat(narrative.get("approved_by")).isEqualTo(founderB.getId());
+            assertThat(narrative.get("approved_at")).isNotNull();
+        }
+    }
+
     /* --------------------------------------------------------------- authz */
 
     @Nested
@@ -972,7 +1064,8 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                     jdbc.update("""
                             INSERT INTO assignments (id, pipeline_id, organization_id, user_id, assigned_by)
                             VALUES (?, ?, ?, ?, ?)
-                            """, id, pipelineId, orgA.getId(), user.getId(), user.getId());
+                            """, id, pipelineId, user.getOrganization().getId(), user.getId(),
+                            user.getId());
                     return id;
                 });
         UUID submissionId = UUID.randomUUID();

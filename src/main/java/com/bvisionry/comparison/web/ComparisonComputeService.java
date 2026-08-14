@@ -112,11 +112,33 @@ public class ComparisonComputeService {
      */
     @Transactional
     public RecomputeResponse recomputeCohort(UUID cohortId, UUID actorId) {
+        // Platform (SUPER_ADMIN) variant: the whole cohort, every org.
+        return recompute(cohortId, null, actorId);
+    }
+
+    /**
+     * The org-admin self-service variant ({@link com.bvisionry.comparison.web.ComparisonAdminController#recompute}):
+     * a platform cohort (spec §13) spans orgs, so an org admin may only rebuild
+     * THEIR org's members and return only THEIR org's approved narratives to
+     * draft — never another tenant's.
+     */
+    @Transactional
+    public RecomputeResponse recomputeCohortForOrg(UUID orgId, UUID cohortId, UUID actorId) {
+        return recompute(cohortId, orgId, actorId);
+    }
+
+    /** Shared engine for both recompute variants. {@code orgId == null} → whole cohort. */
+    private RecomputeResponse recompute(UUID cohortId, UUID orgId, UUID actorId) {
         PairCohortRow pair = reads.designatedPair(cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException("Designated comparison pair for cohort", cohortId.toString()));
-        int revertedNarratives = narratives.revertApprovalsForCohort(cohortId);
+        List<UUID> members = orgId == null
+                ? reads.cohortMembers(cohortId)
+                : reads.cohortMembersInOrg(orgId, cohortId);
+        int revertedNarratives = orgId == null
+                ? narratives.revertApprovalsForCohort(cohortId)
+                : narratives.revertApprovalsForCohortMembers(cohortId, members);
         int recomputed = 0;
-        for (UUID userId : reads.cohortMembers(cohortId)) {
+        for (UUID userId : members) {
             comparisons.findByCohortIdAndUserId(cohortId, userId).ifPresent(existing -> {
                 comparisonPillars.deleteByComparisonId(existing.getId());
                 comparisons.delete(existing);
@@ -129,12 +151,17 @@ public class ComparisonComputeService {
         // AFTER the rebuild: re-derive each narrative's decline flag + band label
         // from the new pillar rows, so a §7 band edit binds the §6 guardrail
         // (a pillar that is a decline NOW cannot be approved without a next step).
-        narratives.restampBandsForCohort(cohortId);
-        auditLogger.log(actorId, null, "COMPARISON_COHORT_RECOMPUTED", "Cohort",
+        if (orgId == null) {
+            narratives.restampBandsForCohort(cohortId);
+        } else {
+            narratives.restampBandsForCohortMembers(cohortId, members);
+        }
+        auditLogger.log(actorId, orgId, "COMPARISON_COHORT_RECOMPUTED", "Cohort",
                 cohortId, Map.of("recomputed", recomputed,
                         "narrativesReturnedToDraft", revertedNarratives));
-        log.info("Recomputed {} comparisons for cohort {} (actor {}); {} approved narrative(s) "
-                + "returned to draft", recomputed, cohortId, actorId, revertedNarratives);
+        log.info("Recomputed {} comparisons for cohort {} (actor {}, org {}); {} approved "
+                + "narrative(s) returned to draft", recomputed, cohortId, actorId, orgId,
+                revertedNarratives);
         return new RecomputeResponse(recomputed);
     }
 
@@ -243,6 +270,20 @@ public class ComparisonComputeService {
      */
     @Transactional(readOnly = true)
     public List<UUID> foundersAwaitingComparison(UUID cohortId) {
+        return foundersAwaitingComparison(reads.cohortMembers(cohortId), cohortId);
+    }
+
+    /**
+     * Org-scoped {@link #foundersAwaitingComparison}: only THIS org's slice of a
+     * platform cohort (spec §13), so an org admin's status read never surfaces
+     * another tenant's founders.
+     */
+    @Transactional(readOnly = true)
+    public List<UUID> foundersAwaitingComparison(UUID orgId, UUID cohortId) {
+        return foundersAwaitingComparison(reads.cohortMembersInOrg(orgId, cohortId), cohortId);
+    }
+
+    private List<UUID> foundersAwaitingComparison(List<UUID> members, UUID cohortId) {
         Optional<PairCohortRow> pair = reads.designatedPair(cohortId);
         if (pair.isEmpty()) {
             return List.of();
@@ -250,7 +291,7 @@ public class ComparisonComputeService {
         // ponytail: roster-bounded N+1 of indexed lookups, reusing the exact
         // resolution the compute uses. Fold into one SQL if a cohort ever
         // grows past the point where an admin read notices.
-        return reads.cohortMembers(cohortId).stream()
+        return members.stream()
                 .filter(userId -> comparisons.findByCohortIdAndUserId(cohortId, userId).isEmpty())
                 .filter(userId -> resolveSides(pair.get(), userId).isPresent())
                 .toList();

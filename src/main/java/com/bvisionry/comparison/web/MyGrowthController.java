@@ -40,21 +40,28 @@ public class MyGrowthController {
         return queries.myComparison(currentUser.require().userId());
     }
 
+    /** {@code tz}: the browser's IANA zone, so the PDF's dates match the screen's (garbage → UTC). */
     @GetMapping(path = "/report/pdf", produces = MediaType.APPLICATION_PDF_VALUE)
     public ResponseEntity<byte[]> reportPdf(
-            @RequestParam(defaultValue = "download") String mode) {
+            @RequestParam(defaultValue = "download") String mode,
+            @RequestParam(required = false) String tz) {
         CurrentUser me = requirePremium();
-        // Identity-scoped: the name shown is the caller's own, so always shown.
+        // Identity-scoped: the name shown is the caller's own, so always shown —
+        // and the member voice, never the staff one.
         return MyGrowthExportService.pdfResponse(
-                exports.pdf(me.userId(), true), "My_Growth_Report.pdf", mode);
+                exports.pdf(me.userId(), true, false, MyGrowthExportService.zoneOrUtc(tz)),
+                "My_Growth_Report.pdf", mode);
     }
 
     @GetMapping(path = "/report/excel",
             produces = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     public ResponseEntity<byte[]> reportExcel(
-            @RequestParam(defaultValue = "download") String mode) {
+            @RequestParam(defaultValue = "download") String mode,
+            @RequestParam(required = false) String tz) {
         CurrentUser me = requirePremium();
-        return XlsxResponse.build(exports.excel(me.userId(), true), "My_Growth_Report.xlsx", mode);
+        return XlsxResponse.build(
+                exports.excel(me.userId(), true, MyGrowthExportService.zoneOrUtc(tz)),
+                "My_Growth_Report.xlsx", mode);
     }
 
     /**

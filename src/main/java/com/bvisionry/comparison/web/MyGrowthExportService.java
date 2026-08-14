@@ -4,8 +4,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -54,8 +56,8 @@ public class MyGrowthExportService {
     /** Same masked label the other exports use ({@code MemberDisplayNameResolver}). */
     private static final String MASKED_LABEL = "Member";
 
-    private static final DateTimeFormatter DATE =
-            DateTimeFormatter.ofPattern("MMM d, yyyy").withZone(ZoneOffset.UTC);
+    /** Zoned per request via {@link #zoneOrUtc} — the reader's wall-clock dates, not the server's. */
+    private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("MMM d, yyyy");
 
     private final ComparisonQueryService queries;
     private final ComparisonReadRepository reads;
@@ -76,11 +78,23 @@ public class MyGrowthExportService {
     public record NarrativeRow(String pillarName, String kindLabel, String body,
                                String closingAction, String approved) {}
 
+    /**
+     * @param staffVoice third-person copy for the two STAFF doors — "GROWTH
+     *        REPORT" / "Where they were…" instead of "MY GROWTH" / "Where you
+     *        were…". A document an admin generated ABOUT a member must not
+     *        address the reader as its subject; the member's own door keeps the
+     *        member voice verbatim. One flag through the one renderer, so the
+     *        numbers can never fork between the voices.
+     * @param zone the READER's zone for every rendered date (the {@code tz}
+     *        request param) — the web UI formats browser-local, and a PDF that
+     *        says "May 21" beside a screen that says "May 22" reads as a bug.
+     */
     @Transactional(readOnly = true)
-    public byte[] pdf(UUID userId, boolean showNames) {
+    public byte[] pdf(UUID userId, boolean showNames, boolean staffVoice, ZoneId zone) {
         MyComparisonResponse data = queries.myComparison(userId);
         String name = displayName(userId, showNames);
         FounderComparisonDto c = data.comparison();
+        DateTimeFormatter dates = DATE.withZone(zone);
 
         Context ctx = new Context();
         ctx.setVariable("memberName", name);
@@ -88,27 +102,30 @@ public class MyGrowthExportService {
         ctx.setVariable("state", data.state());
         ctx.setVariable("done", "done".equals(data.state()) && c != null);
         ctx.setVariable("pending", "pending".equals(data.state()));
-        ctx.setVariable("reportDate", LocalDate.now().format(
+        ctx.setVariable("staffVoice", staffVoice);
+        ctx.setVariable("reportDate", LocalDate.now(zone).format(
                 DateTimeFormatter.ofPattern("MMMM d, yyyy")));
-        ctx.setVariable("trajectory", trajectoryRows(data));
+        ctx.setVariable("trajectory", trajectoryRows(data, dates));
         if (c != null) {
             ctx.setVariable("overallBefore", score(c.overallBefore()));
             ctx.setVariable("overallAfter", score(c.overallAfter()));
             ctx.setVariable("overallShift", shiftLabel(c.overallDelta(), c.overallBandLabel()));
-            ctx.setVariable("baselineDate", instant(c.baselineEvaluatedAt()));
-            ctx.setVariable("distanceDate", instant(c.distanceEvaluatedAt()));
-            ctx.setVariable("computedAt", instant(c.computedAt()));
+            ctx.setVariable("baselineDate", instant(c.baselineEvaluatedAt(), dates));
+            ctx.setVariable("distanceDate", instant(c.distanceEvaluatedAt(), dates));
+            ctx.setVariable("computedAt", instant(c.computedAt(), dates));
             ctx.setVariable("pillars", pillarRows(c.pillars()));
         }
-        ctx.setVariable("narratives", narrativeRows(c));
+        ctx.setVariable("narratives", narrativeRows(c, dates));
         return pdfRenderer.renderTemplate("growth-report", ctx);
     }
 
+    /** Same {@code zone} contract as {@link #pdf}; the Excel copy is voice-neutral already. */
     @Transactional(readOnly = true)
-    public byte[] excel(UUID userId, boolean showNames) {
+    public byte[] excel(UUID userId, boolean showNames, ZoneId zone) {
         MyComparisonResponse data = queries.myComparison(userId);
         String name = displayName(userId, showNames);
         FounderComparisonDto c = data.comparison();
+        DateTimeFormatter dates = DATE.withZone(zone);
 
         try (ExcelWorkbookBuilder wb = new ExcelWorkbookBuilder();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
@@ -129,9 +146,9 @@ public class MyGrowthExportService {
                 overview.labeledRow("Overall after", score(c.overallAfter()));
                 overview.labeledRow("Overall shift",
                         shiftLabel(c.overallDelta(), c.overallBandLabel()));
-                overview.labeledRow("Baseline evaluated", instant(c.baselineEvaluatedAt()));
-                overview.labeledRow("Distance evaluated", instant(c.distanceEvaluatedAt()));
-                overview.labeledRow("Computed at", instant(c.computedAt()));
+                overview.labeledRow("Baseline evaluated", instant(c.baselineEvaluatedAt(), dates));
+                overview.labeledRow("Distance evaluated", instant(c.distanceEvaluatedAt(), dates));
+                overview.labeledRow("Computed at", instant(c.computedAt(), dates));
             }
             overview.autoSize();
 
@@ -143,7 +160,7 @@ public class MyGrowthExportService {
                 }
                 shifts.autoSize();
 
-                List<NarrativeRow> narratives = narrativeRows(c);
+                List<NarrativeRow> narratives = narrativeRows(c, dates);
                 if (!narratives.isEmpty()) {
                     ExcelWorkbookBuilder.SheetBuilder sheet = wb.newSheet("Shift narratives");
                     sheet.headers("Pillar", "Kind", "Narrative", "Next step", "Approved");
@@ -157,7 +174,7 @@ public class MyGrowthExportService {
 
             ExcelWorkbookBuilder.SheetBuilder trajectory = wb.newSheet("Trajectory");
             trajectory.headers("Assessment", "Evaluated", "Overall score");
-            for (TrajectoryRow t : trajectoryRows(data)) {
+            for (TrajectoryRow t : trajectoryRows(data, dates)) {
                 trajectory.row(t.assessment(), t.evaluated(), t.score());
             }
             trajectory.autoSize();
@@ -216,7 +233,7 @@ public class MyGrowthExportService {
                 .toList();
     }
 
-    private List<NarrativeRow> narrativeRows(FounderComparisonDto c) {
+    private List<NarrativeRow> narrativeRows(FounderComparisonDto c, DateTimeFormatter dates) {
         if (c == null || c.narratives() == null) {
             return List.of();
         }
@@ -224,7 +241,7 @@ public class MyGrowthExportService {
                 .map(n -> new NarrativeRow(n.pillarName(), kindLabel(n.kind()), n.body(),
                         n.closingAction(),
                         // §7b: the approval stamp travels onto the export too.
-                        n.approvedAt() == null ? "—" : "Approved " + instant(n.approvedAt())))
+                        n.approvedAt() == null ? "—" : "Approved " + instant(n.approvedAt(), dates)))
                 .toList();
     }
 
@@ -237,9 +254,9 @@ public class MyGrowthExportService {
         return Character.toUpperCase(words.charAt(0)) + words.substring(1);
     }
 
-    private List<TrajectoryRow> trajectoryRows(MyComparisonResponse data) {
+    private List<TrajectoryRow> trajectoryRows(MyComparisonResponse data, DateTimeFormatter dates) {
         return data.trajectory().stream()
-                .map(t -> new TrajectoryRow(t.pipelineName(), instant(t.evaluatedAt()),
+                .map(t -> new TrajectoryRow(t.pipelineName(), instant(t.evaluatedAt(), dates),
                         score(t.overallScore())))
                 .toList();
     }
@@ -264,7 +281,23 @@ public class MyGrowthExportService {
         return (before == null ? "—" : before) + " → " + (after == null ? "—" : after);
     }
 
-    private static String instant(Instant value) {
-        return value == null ? "—" : DATE.format(value);
+    private static String instant(Instant value, DateTimeFormatter dates) {
+        return value == null ? "—" : dates.format(value);
+    }
+
+    /**
+     * The {@code tz} request param → zone. Garbage falls back to UTC rather
+     * than 400ing: the timezone is a rendering nicety, and a mistyped query
+     * param must not cost anyone their report.
+     */
+    public static ZoneId zoneOrUtc(String tz) {
+        if (tz == null || tz.isBlank()) {
+            return ZoneOffset.UTC;
+        }
+        try {
+            return ZoneId.of(tz);
+        } catch (DateTimeException e) {
+            return ZoneOffset.UTC;
+        }
     }
 }

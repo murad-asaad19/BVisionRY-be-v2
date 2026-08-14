@@ -59,10 +59,13 @@ public class ComparisonMemberAdminController {
     public ResponseEntity<byte[]> growthReportPdf(@PathVariable UUID orgId,
             @PathVariable UUID userId,
             @RequestParam(defaultValue = "download") String mode,
-            @RequestParam(defaultValue = "false") boolean showNames) {
+            @RequestParam(defaultValue = "false") boolean showNames,
+            @RequestParam(required = false) String tz) {
         ExportNameGuard.checkShowNames(showNames);
         requireMemberAndPremium(orgId, userId);
-        return MyGrowthExportService.pdfResponse(exports.pdf(userId, showNames),
+        // Staff voice: an admin's copy speaks about the member, never AS them.
+        return MyGrowthExportService.pdfResponse(
+                exports.pdf(userId, showNames, true, MyGrowthExportService.zoneOrUtc(tz)),
                 exports.reportFilename(userId, "pdf", showNames), mode);
     }
 
@@ -72,10 +75,12 @@ public class ComparisonMemberAdminController {
     public ResponseEntity<byte[]> growthReportExcel(@PathVariable UUID orgId,
             @PathVariable UUID userId,
             @RequestParam(defaultValue = "download") String mode,
-            @RequestParam(defaultValue = "false") boolean showNames) {
+            @RequestParam(defaultValue = "false") boolean showNames,
+            @RequestParam(required = false) String tz) {
         ExportNameGuard.checkShowNames(showNames);
         requireMemberAndPremium(orgId, userId);
-        return XlsxResponse.build(exports.excel(userId, showNames),
+        return XlsxResponse.build(
+                exports.excel(userId, showNames, MyGrowthExportService.zoneOrUtc(tz)),
                 exports.reportFilename(userId, "xlsx", showNames), mode);
     }
 

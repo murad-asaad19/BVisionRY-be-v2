@@ -50,12 +50,17 @@ public class ComparisonQueryService {
      * distance designation gets {@code none}, never a teased report.
      */
     public MyComparisonResponse myComparison(UUID userId) {
-        List<TrajectoryPoint> trajectory = reads.trajectory(userId).stream()
+        Optional<PairCohortRow> pairCohort = reads.memberPairCohort(userId);
+        // Anchored to a designated cohort → only that cohort's instruments
+        // (operator rule 2026-08-14); no anchor → everything evaluated so far.
+        // One central scoping, so the UI strip, the PDF table and the Excel
+        // sheet — which all read this payload — can never disagree.
+        List<TrajectoryPoint> trajectory = reads.trajectory(userId,
+                        pairCohort.map(PairCohortRow::cohortId).orElse(null)).stream()
                 .map(t -> new TrajectoryPoint(t.submissionId(), t.pipelineName(),
                         t.overallScore(), t.evaluatedAt()))
                 .toList();
 
-        Optional<PairCohortRow> pairCohort = reads.memberPairCohort(userId);
         if (pairCohort.isEmpty()) {
             return new MyComparisonResponse("none", null, null, null, trajectory);
         }

@@ -14,6 +14,7 @@ import com.bvisionry.comparison.domain.NarrativeKind;
 import com.bvisionry.comparison.domain.NarrativeStatus;
 import com.bvisionry.comparison.domain.PillarComparisonState;
 import com.bvisionry.comparison.domain.ShiftNarrative;
+import com.bvisionry.comparison.dto.GenerateAllNarrativesResponse;
 import com.bvisionry.comparison.dto.NarrativeReviewResponse;
 import com.bvisionry.comparison.dto.NarrativeReviewResponse.NarrativePillarOption;
 import com.bvisionry.comparison.dto.NarrativeRequests.UpdateNarrativeRequest;
@@ -27,6 +28,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -110,9 +112,41 @@ public class ShiftNarrativeService {
 
     /** Synchronous entry point — the async wrapper above, and the tests, call this. */
     public int generateAllPillars(UUID cohortId, UUID userId) {
-        Context ctx = context(cohortId, userId);
-        // Biggest absolute shift first, so the biggest stories land even if a
-        // later call fails; pillars that already have a narrative are skipped.
+        GenerateAllNarrativesResponse result = generateBatch(context(cohortId, userId));
+        log.info("Generated {} shift narratives ({} skipped, {} failed) for cohort {} user {}",
+                result.generated(), result.skipped(), result.failed(), cohortId, userId);
+        return result.generated();
+    }
+
+    /**
+     * The staff "Generate narratives" button: every remaining eligible pillar of
+     * the founder's anchor comparison, in one synchronous call. Same anchor and
+     * same candidate rules as the review payload, so "N pillars remaining" on
+     * the button and what this actually generates can never disagree.
+     *
+     * <p>Like {@link #generateForPillar}, deliberately NOT {@code @Transactional}:
+     * this loops one model call per pillar, and a database connection must not
+     * sit open across that many provider round-trips.
+     */
+    public GenerateAllNarrativesResponse generateAllForFounder(UUID userId, UUID actorId) {
+        Context ctx = context(anchorCohort(userId), userId);
+        GenerateAllNarrativesResponse result = generateBatch(ctx);
+        auditLogger.log(actorId, ctx.comparison().getOrgId(), "SHIFT_NARRATIVES_GENERATED_ALL",
+                "FounderComparison", ctx.comparison().getId(),
+                Map.of("generated", result.generated(), "skipped", result.skipped(),
+                        "failed", result.failed()));
+        return result;
+    }
+
+    /**
+     * The one batch loop both the post-compute job and the staff button run.
+     * Biggest absolute shift first, so the biggest stories land even if a later
+     * call fails; pillars that already have a narrative are not candidates at
+     * all. A concurrent duplicate — two staff clicking at once, or the async
+     * batch racing a click — dies on the V169 unique constraint at save time;
+     * that is a SKIP (somebody's draft is there), never a failure.
+     */
+    private GenerateAllNarrativesResponse generateBatch(Context ctx) {
         List<Candidate> candidates = ctx.candidates().stream()
                 .filter(Candidate::hasEnoughBeforeText)
                 .sorted(Comparator.comparingDouble(
@@ -120,15 +154,31 @@ public class ShiftNarrativeService {
                 .filter(c -> !ctx.existingPillarIds().contains(c.distancePillarId()))
                 .toList();
 
+        List<GenerateAllNarrativesResponse.NarrativePillarOutcome> outcomes = new ArrayList<>();
         int generated = 0;
+        int skipped = 0;
+        int failed = 0;
         for (Candidate candidate : candidates) {
-            if (generateOne(ctx, candidate).isPresent()) {
-                generated++;
+            String outcome;
+            try {
+                if (generateOne(ctx, candidate).isPresent()) {
+                    outcome = "GENERATED";
+                    generated++;
+                } else {
+                    outcome = "FAILED";
+                    failed++;
+                }
+            } catch (DataIntegrityViolationException e) {
+                log.info("Shift narrative for pillar '{}' was generated concurrently — skipping",
+                        candidate.pillar().getPillarNameSnapshot());
+                outcome = "SKIPPED";
+                skipped++;
             }
+            outcomes.add(new GenerateAllNarrativesResponse.NarrativePillarOutcome(
+                    candidate.distancePillarId(), candidate.pillar().getPillarNameSnapshot(),
+                    outcome));
         }
-        log.info("Generated {} of {} candidate shift narratives for cohort {} user {}",
-                generated, candidates.size(), cohortId, userId);
-        return generated;
+        return new GenerateAllNarrativesResponse(generated, skipped, failed, outcomes);
     }
 
     /**
@@ -153,9 +203,17 @@ public class ShiftNarrativeService {
         if (!candidate.hasEnoughBeforeText()) {
             throw new BadRequestException(ctx.wording().notEnoughDataSentence());
         }
-        ShiftNarrative saved = generateOne(ctx, candidate)
-                .orElseThrow(() -> new BadRequestException(
-                        "The narrative could not be generated for this pillar. Try again in a moment."));
+        ShiftNarrative saved;
+        try {
+            saved = generateOne(ctx, candidate)
+                    .orElseThrow(() -> new BadRequestException(
+                            "The narrative could not be generated for this pillar. Try again in a moment."));
+        } catch (DataIntegrityViolationException e) {
+            // Lost a race with a concurrent generation (V169 unique constraint):
+            // the pillar HAS a narrative now, which is the same refusal as above,
+            // not a 500.
+            throw new BadRequestException("This pillar already has a narrative.");
+        }
         auditLogger.log(actorId, ctx.comparison().getOrgId(), "SHIFT_NARRATIVE_GENERATED",
                 "ShiftNarrative", saved.getId(), Map.of("pillar", saved.getPillarNameSnapshot()));
         return toDto(saved, names(List.of(saved)), false);

@@ -9,6 +9,14 @@ import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
 import com.bvisionry.testsupport.EnabledIfDockerAvailable;
 import com.bvisionry.testsupport.TestAuthentication;
+import com.lowagie.text.pdf.PdfReader;
+import com.lowagie.text.pdf.parser.PdfTextExtractor;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellType;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -22,10 +30,12 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
@@ -34,6 +44,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -559,6 +571,154 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
 
             TestAuthentication.authenticate(superAdmin);
             mockMvc.perform(get(url(UUID.randomUUID()))).andExpect(status().isNotFound());
+        }
+    }
+
+    /* ------------------------------------------------- engagement report */
+
+    /**
+     * The Engagement tab as a file — same numbers, same gate, plus the
+     * {@code showNames} authority ({@code ExportNameGuard}): masked positional
+     * labels by default, real names only when an org admin or super admin asks.
+     * Assertions read the BYTES the caller receives, like
+     * {@code ExportNameAuthorityIntegrationTest}.
+     */
+    @Nested
+    class EngagementReportExports {
+
+        private String url(UUID orgId, UUID cohortId, String ext) {
+            return "/api/organizations/" + orgId + "/cohorts/" + cohortId
+                    + "/engagement-report." + ext;
+        }
+
+        private byte[] ok(String route) throws Exception {
+            return mockMvc.perform(get(route))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsByteArray();
+        }
+
+        private void seedParticipation() {
+            seedAssignmentsForFounder();
+            UUID attended = insertSession(cohort1, "WORKSHOP", "-7 days");
+            insertSession(cohort1, "WORKSHOP", "-1 day");
+            jdbc.update("""
+                    INSERT INTO session_attendance (session_id, member_id, marked_by)
+                    VALUES (?, ?, ?)
+                    """, attended, founder.getId(), admin.getId());
+        }
+
+        @Test
+        void maskedByDefault_onTheBytes() throws Exception {
+            seedParticipation();
+            TestAuthentication.authenticate(admin);
+
+            String pdf = pdfText(ok(url(orgA.getId(), cohort1, "pdf")));
+            assertThat(pdf).doesNotContain("founder.a").contains("Member 1")
+                    .contains("Cohort One");
+
+            String cells = cellText(ok(url(orgA.getId(), cohort1, "xlsx")));
+            assertThat(cells).doesNotContain("founder.a").contains("Member 1");
+        }
+
+        @Test
+        void orgAdminAskingForNamesGetsThem_andTheNumbersMatchTheTab() throws Exception {
+            seedParticipation();
+            TestAuthentication.authenticate(admin);
+
+            assertThat(pdfText(ok(url(orgA.getId(), cohort1, "pdf") + "?showNames=true")))
+                    .contains("founder.a");
+
+            byte[] xlsx = ok(url(orgA.getId(), cohort1, "xlsx") + "?showNames=true");
+            try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(xlsx))) {
+                Sheet sheet = wb.getSheetAt(0);
+                assertThat(sheet.getSheetName()).isEqualTo("Engagement");
+                assertThat(sheet.getRow(0).getCell(0).getStringCellValue()).isEqualTo("Founder");
+                Row row = sheet.getRow(1);
+                assertThat(row.getCell(0).getStringCellValue()).isEqualTo("founder.a");
+                // 4 config categories × (done, total, %) after the name, then
+                // score + band — the same 61.1 / Partial the JSON read serves.
+                assertThat(row.getCell(13).getNumericCellValue()).isEqualTo(61.1);
+                assertThat(row.getCell(14).getStringCellValue()).isEqualTo("Partial");
+                // The average footer.
+                assertThat(sheet.getRow(2).getCell(0).getStringCellValue())
+                        .isEqualTo("Cohort average");
+                assertThat(sheet.getRow(2).getCell(13).getNumericCellValue()).isEqualTo(61.1);
+            }
+        }
+
+        @Test
+        void previewIsInline_downloadIsAttachment_namedAfterTheCohort() throws Exception {
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(url(orgA.getId(), cohort1, "pdf")))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType(MediaType.APPLICATION_PDF))
+                    .andExpect(header().string("Content-Disposition",
+                            "attachment; filename=\"Engagement_Report_Cohort_One.pdf\""));
+            mockMvc.perform(get(url(orgA.getId(), cohort1, "pdf") + "?mode=preview"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Content-Disposition",
+                            "inline; filename=\"Engagement_Report_Cohort_One.pdf\""));
+            mockMvc.perform(get(url(orgA.getId(), cohort1, "xlsx") + "?mode=preview"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Content-Disposition",
+                            "inline; filename=\"Engagement_Report_Cohort_One.xlsx\""));
+        }
+
+        @Test
+        void coachMemberAndForeignAdminAreDenied() throws Exception {
+            for (User denied : java.util.List.of(coach, founder, adminB)) {
+                TestAuthentication.authenticate(denied);
+                mockMvc.perform(get(url(orgA.getId(), cohort1, "pdf")))
+                        .andExpect(status().isForbidden());
+                mockMvc.perform(get(url(orgA.getId(), cohort1, "xlsx")))
+                        .andExpect(status().isForbidden());
+            }
+        }
+
+        /** Pointing your own org at a cohort not assigned to it is a 404, not a leak. */
+        @Test
+        void foreignCohortReadsAsAbsent() throws Exception {
+            TestAuthentication.authenticate(adminB);
+            mockMvc.perform(get(url(orgB.getId(), cohort1, "pdf")))
+                    .andExpect(status().isNotFound());
+            mockMvc.perform(get(url(orgB.getId(), cohort1, "xlsx")))
+                    .andExpect(status().isNotFound());
+
+            TestAuthentication.authenticate(superAdmin);
+            mockMvc.perform(get(url(orgA.getId(), UUID.randomUUID(), "pdf")))
+                    .andExpect(status().isNotFound());
+        }
+
+        /** The rendered text of the PDF, decompressed — a raw byte search sees nothing. */
+        private String pdfText(byte[] pdf) throws Exception {
+            PdfReader reader = new PdfReader(pdf);
+            try {
+                PdfTextExtractor extractor = new PdfTextExtractor(reader);
+                StringBuilder text = new StringBuilder();
+                for (int page = 1; page <= reader.getNumberOfPages(); page++) {
+                    text.append(extractor.getTextFromPage(page)).append('\n');
+                }
+                return text.toString();
+            } finally {
+                reader.close();
+            }
+        }
+
+        /** Every string cell in the workbook — the readable content of the export. */
+        private String cellText(byte[] xlsx) throws Exception {
+            StringBuilder out = new StringBuilder();
+            try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(xlsx))) {
+                for (Sheet sheet : wb) {
+                    for (Row row : sheet) {
+                        for (Cell cell : row) {
+                            if (cell.getCellType() == CellType.STRING) {
+                                out.append(cell.getStringCellValue()).append('\n');
+                            }
+                        }
+                    }
+                }
+            }
+            return out.toString();
         }
     }
 

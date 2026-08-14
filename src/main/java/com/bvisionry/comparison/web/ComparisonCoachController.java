@@ -58,10 +58,13 @@ public class ComparisonCoachController {
     @GetMapping(path = "/growth-report.pdf", produces = MediaType.APPLICATION_PDF_VALUE)
     public ResponseEntity<byte[]> growthReportPdf(@PathVariable UUID founderId,
             @RequestParam(defaultValue = "download") String mode,
-            @RequestParam(defaultValue = "false") boolean showNames) {
+            @RequestParam(defaultValue = "false") boolean showNames,
+            @RequestParam(required = false) String tz) {
         ExportNameGuard.checkShowNames(showNames);
         requireSeesAndPremium(founderId);
-        return MyGrowthExportService.pdfResponse(exports.pdf(founderId, false),
+        // Staff voice: a coach's copy speaks about the founder, never AS them.
+        return MyGrowthExportService.pdfResponse(
+                exports.pdf(founderId, false, true, MyGrowthExportService.zoneOrUtc(tz)),
                 exports.reportFilename(founderId, "pdf", false), mode);
     }
 
@@ -70,10 +73,12 @@ public class ComparisonCoachController {
             produces = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     public ResponseEntity<byte[]> growthReportExcel(@PathVariable UUID founderId,
             @RequestParam(defaultValue = "download") String mode,
-            @RequestParam(defaultValue = "false") boolean showNames) {
+            @RequestParam(defaultValue = "false") boolean showNames,
+            @RequestParam(required = false) String tz) {
         ExportNameGuard.checkShowNames(showNames);
         requireSeesAndPremium(founderId);
-        return XlsxResponse.build(exports.excel(founderId, false),
+        return XlsxResponse.build(
+                exports.excel(founderId, false, MyGrowthExportService.zoneOrUtc(tz)),
                 exports.reportFilename(founderId, "xlsx", false), mode);
     }
 

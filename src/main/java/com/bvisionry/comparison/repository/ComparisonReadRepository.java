@@ -1,5 +1,6 @@
 package com.bvisionry.comparison.repository;
 
+import com.bvisionry.common.programaccess.CohortInstruments;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -345,8 +346,17 @@ public class ComparisonReadRepository {
     public record TrajectoryRow(UUID submissionId, String pipelineName,
                                 BigDecimal overallScore, Instant evaluatedAt) {}
 
-    /** Every evaluated overall score of the user, oldest first — the trajectory chart. */
-    public List<TrajectoryRow> trajectory(UUID userId) {
+    /**
+     * Every evaluated overall score of the user, oldest first — the trajectory
+     * chart. When {@code cohortId} is given, the trajectory is scoped to that
+     * cohort's own instruments ({@link CohortInstruments}, operator rule
+     * 2026-08-14): a growth surface anchored to a designated cohort tells THAT
+     * cohort's baseline → distance story, so a sitting on an unrelated scan
+     * somebody assigned directly must not appear between its points. Null keeps
+     * the global read — a member with no designated pair has no cohort story,
+     * only "everything so far".
+     */
+    public List<TrajectoryRow> trajectory(UUID userId, UUID cohortId) {
         return jdbc.query("""
                 SELECT s.id, p.name AS pipeline_name,
                        os.overall_score_percentage, s.evaluated_at
@@ -355,9 +365,11 @@ public class ComparisonReadRepository {
                 JOIN pipelines p ON p.id = a.pipeline_id
                 JOIN overall_summaries os ON os.submission_id = s.id
                 WHERE s.user_id = :userId AND s.status = 'EVALUATED'
-                ORDER BY s.evaluated_at ASC NULLS LAST, s.created_at ASC
-                """,
-                new MapSqlParameterSource("userId", userId),
+                """
+                + (cohortId == null ? ""
+                        : "  AND " + CohortInstruments.ON_COHORT_INSTRUMENT.formatted("s", ":cohortId") + "\n")
+                + "ORDER BY s.evaluated_at ASC NULLS LAST, s.created_at ASC",
+                new MapSqlParameterSource("userId", userId).addValue("cohortId", cohortId),
                 (rs, i) -> {
                     java.sql.Timestamp ts = rs.getTimestamp("evaluated_at");
                     return new TrajectoryRow(rs.getObject("id", UUID.class),

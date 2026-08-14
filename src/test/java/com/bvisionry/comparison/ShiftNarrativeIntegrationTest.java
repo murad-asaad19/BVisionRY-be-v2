@@ -60,7 +60,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * {@link FakeLangChainChatModel} is wired in as the only transport, so every
  * assertion below is about OUR code, never about a provider's mood.
  *
- * <p>Covered: top-N selection by |shift|, the before-text floor producing NO row
+ * <p>Covered: generation for every eligible pillar (biggest |shift| first, no
+ * cap), the before-text floor producing NO row
  * and an inline sentence instead, the decline retry path, an unrecoverable
  * guardrail failure persisting nothing, on-demand generation, the draft →
  * approve → edit-back-to-draft state machine, approved-only member visibility,
@@ -406,15 +407,16 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
             // The PDF template gained a narratives block; this is the check that
             // fails if its expressions ever drift from NarrativeRow.
-            assertThat(exports.pdf(founder.getId(), true)).isNotEmpty();
-            assertThat(exports.excel(founder.getId(), true)).isNotEmpty();
+            assertThat(exports.pdf(founder.getId(), true, false, java.time.ZoneOffset.UTC))
+                    .isNotEmpty();
+            assertThat(exports.excel(founder.getId(), true, java.time.ZoneOffset.UTC)).isNotEmpty();
         }
 
         @Test
         void staffStillSeeTheDraftsThroughTheReviewEndpoint() {
             narrativeService.generateAllPillars(cohortId, founder.getId());
 
-            assertThat(narrativeService.review(founder.getId()).narratives()).hasSize(4);
+            assertThat(narrativeService.review(founder.getId()).narratives()).hasSize(5);
         }
 
         @Test
@@ -555,7 +557,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
             mockMvc.perform(get("/api/organizations/{orgId}/members/{userId}/shift-narratives",
                             org.getId(), founder.getId()))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.narratives.length()").value(4))
+                    .andExpect(jsonPath("$.narratives.length()").value(5))
                     .andExpect(jsonPath("$.notEnoughDataSentence").isNotEmpty());
         }
 
@@ -591,7 +593,54 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
             mockMvc.perform(get("/api/v1/coach/founders/{founderId}/shift-narratives", founder.getId()))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.narratives.length()").value(4));
+                    .andExpect(jsonPath("$.narratives.length()").value(5));
+        }
+
+        /**
+         * The staff "Generate narratives" button: one POST narrates every
+         * eligible pillar; pillars that already have a narrative are never
+         * candidates again; a second call has nothing to do and SAYS so
+         * (generated 0, no outcomes) instead of erroring.
+         */
+        @Test
+        void generateAll_narratesEveryEligiblePillar_andASecondCallSaysNothingLeft() throws Exception {
+            // One pillar narrated ahead of the batch — generate-all must skip it.
+            narrativeService.generateForPillar(founder.getId(), midGain, admin.getId());
+            TestAuthentication.authenticate(admin);
+
+            mockMvc.perform(post("/api/organizations/{orgId}/members/{userId}/shift-narratives/generate-all",
+                            org.getId(), founder.getId()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.generated").value(4))
+                    .andExpect(jsonPath("$.skipped").value(0))
+                    .andExpect(jsonPath("$.failed").value(0))
+                    .andExpect(jsonPath("$.outcomes.length()").value(4));
+
+            // Everything with enough before-text now has exactly one narrative;
+            // the thin-baseline pillar still has none.
+            assertThat(narratives.findByCohortIdAndUserId(cohortId, founder.getId()))
+                    .extracting(ShiftNarrative::getDistancePillarId)
+                    .containsExactlyInAnyOrder(bigGain, bigDecline, midGain, smallDecline, smallGain);
+
+            mockMvc.perform(post("/api/organizations/{orgId}/members/{userId}/shift-narratives/generate-all",
+                            org.getId(), founder.getId()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.generated").value(0))
+                    .andExpect(jsonPath("$.outcomes").isEmpty());
+        }
+
+        @Test
+        void anAssignedCoachCanGenerateAll() throws Exception {
+            jdbc.update("""
+                    INSERT INTO coach_assignments (id, org_id, coach_id, cohort_id, assigned_by)
+                    VALUES (gen_random_uuid(), ?, ?, ?, ?)
+                    """, org.getId(), coach.getId(), cohortId, admin.getId());
+            TestAuthentication.authenticate(coach);
+
+            mockMvc.perform(post("/api/v1/coach/founders/{founderId}/shift-narratives/generate-all",
+                            founder.getId()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.generated").value(5));
         }
 
         @Test

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<!--
+  Cohort Engagement report (spec §4) — the participation matrix as a file: one
+  row per founder, one column per scoring category, then the composite score
+  and its band. Layout and palette come from fragments/pdf-base, exactly as the
+  ROI and workshop-answers exports do; only the table styles below are local.
+-->
+<head>
+    <meta charset="UTF-8"/>
+    <th:block th:replace="~{fragments/pdf-base :: pdfStyles}"></th:block>
+    <style>
+        /* ===== Engagement-report specific ===== */
+        /* -fs-table-paginate repeats the table head on every page a table spills
+           onto. NOTE: no angle brackets in this block — Flying Saucer parses the
+           rendered document as XML. */
+        .data-table {
+            width: 100%; border-collapse: collapse; margin-top: 10px;
+            -fs-table-paginate: paginate;
+        }
+        .data-table th {
+            font-size: 8.5pt; font-weight: 700; color: #051647; text-align: left;
+            letter-spacing: 0.05em; text-transform: uppercase;
+            padding: 7px 8px; border-bottom: 2px solid #d9ad62;
+        }
+        .data-table td {
+            font-size: 9.5pt; padding: 6px 8px; border-bottom: 1px solid #dce3ee;
+            vertical-align: top;
+        }
+        .data-table tr { page-break-inside: avoid; }
+        .num { text-align: right; }
+        .none { color: #55647d; }
+        .score { font-weight: 700; color: #051647; }
+        .avg-row td { background: #f8f9fc; font-weight: 700; }
+    </style>
+</head>
+<body>
+
+<!-- ============ PAGE 1: Cover ============ -->
+<div class="page cover">
+    <div class="watermark" style="top: 70px; right: -120px;">
+        <img th:src="${brandWatermark}" style="width: 360px;" alt=""/>
+    </div>
+
+    <div style="position: relative; z-index: 1;">
+        <p class="cover-eyebrow">Cohort Engagement Report</p>
+        <h1 class="cover-title" th:text="${cohortName}">Cohort</h1>
+        <span class="accent-rule" style="width: 78px; margin-top: 20px;"></span>
+
+        <p class="cover-date" th:text="${reportDate}">Date</p>
+        <p th:unless="${showNames}" class="cover-date">Member names anonymised</p>
+        <p class="cover-confidential">Confidential</p>
+    </div>
+
+    <div class="cover-foot">
+        <div style="display: table; width: 100%;">
+            <div class="cover-foot-cell">
+                <img class="cover-logo" th:src="${brandLogo}" alt="Bvisionry"/>
+            </div>
+            <div class="cover-foot-cell cover-url">www.bvisionry.com</div>
+        </div>
+    </div>
+</div>
+
+<!-- ============ PAGE 2+: The participation matrix ============ -->
+<div class="page">
+    <p class="page-heading">Participation, founder by founder</p>
+    <span class="accent-rule"></span>
+
+    <table class="data-table" th:if="${!rows.isEmpty()}">
+        <thead>
+        <tr>
+            <th>Founder</th>
+            <th class="num" th:each="col : ${columns}" th:text="${col.label()}">Category</th>
+            <th class="num">Score</th>
+            <th>Band</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="row : ${rows}">
+            <td th:text="${row.displayName()}">Founder</td>
+            <td class="num" th:each="c : ${row.categories()}">
+                <span th:if="${c.pct() == null}" class="none">&mdash;</span>
+                <span th:unless="${c.pct() == null}"
+                      th:text="|${#numbers.formatDecimal(c.pct(), 1, 0)}% (${c.done()}/${c.total()})|">0% (0/0)</span>
+            </td>
+            <td class="num score"
+                th:text="${row.score() != null} ? |${#numbers.formatDecimal(row.score(), 1, 0)}%| : '—'">—</td>
+            <td th:text="${row.bandLabel() != null} ? ${row.bandLabel()} : '—'">—</td>
+        </tr>
+        <tr class="avg-row" th:if="${average != null}">
+            <td>Cohort average</td>
+            <td th:each="col : ${columns}"></td>
+            <td class="num" th:text="|${#numbers.formatDecimal(average, 1, 0)}%|">0%</td>
+            <td></td>
+        </tr>
+        </tbody>
+    </table>
+
+    <div class="card-cream mt-6" th:if="${rows.isEmpty()}">
+        <p style="font-size: 10pt;">
+            No participation has been recorded for this cohort yet. Scores appear
+            once the cohort has members with sessions held or work assigned.
+        </p>
+    </div>
+
+    <p class="muted mt-4" style="font-size: 9pt;">
+        Each category shows the share of that founder&rsquo;s expected sessions
+        attended or assigned work submitted, as a percentage of what was actually
+        held or assigned. A dash means the category has no denominator yet
+        &mdash; it is left out of the score, never counted as zero. The score is
+        the weighted composite over the categories that do have one.
+    </p>
+</div>
+
+</body>
+</html>

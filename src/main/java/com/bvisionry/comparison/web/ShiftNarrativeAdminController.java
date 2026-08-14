@@ -1,6 +1,7 @@
 package com.bvisionry.comparison.web;
 
 import com.bvisionry.common.security.CurrentUserAccessor;
+import com.bvisionry.comparison.dto.GenerateAllNarrativesResponse;
 import com.bvisionry.comparison.dto.NarrativeRequests.GenerateNarrativeRequest;
 import com.bvisionry.comparison.dto.NarrativeRequests.UpdateNarrativeRequest;
 import com.bvisionry.comparison.dto.NarrativeReviewResponse;
@@ -57,6 +58,14 @@ public class ShiftNarrativeAdminController {
         queries.requireMemberInOrg(orgId, userId);
         return narratives.generateForPillar(userId, request.distancePillarId(),
                 currentUser.require().userId());
+    }
+
+    /** One click, every remaining eligible pillar — the staff "Generate narratives" button. */
+    @PostMapping("/generate-all")
+    public GenerateAllNarrativesResponse generateAll(@PathVariable UUID orgId,
+                                                     @PathVariable UUID userId) {
+        queries.requireMemberInOrg(orgId, userId);
+        return narratives.generateAllForFounder(userId, currentUser.require().userId());
     }
 
     @PatchMapping(path = "/{narrativeId}", consumes = MediaType.APPLICATION_JSON_VALUE)

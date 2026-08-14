@@ -4,6 +4,7 @@ import com.bvisionry.common.coachaccess.CoachAccess;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.security.CurrentUser;
 import com.bvisionry.common.security.CurrentUserAccessor;
+import com.bvisionry.comparison.dto.GenerateAllNarrativesResponse;
 import com.bvisionry.comparison.dto.NarrativeRequests.GenerateNarrativeRequest;
 import com.bvisionry.comparison.dto.NarrativeRequests.UpdateNarrativeRequest;
 import com.bvisionry.comparison.dto.NarrativeReviewResponse;
@@ -56,6 +57,12 @@ public class ShiftNarrativeCoachController {
                                       @Valid @RequestBody GenerateNarrativeRequest request) {
         return narratives.generateForPillar(founderId, request.distancePillarId(),
                 requireSeen(founderId).userId());
+    }
+
+    /** One click, every remaining eligible pillar — the staff "Generate narratives" button. */
+    @PostMapping("/generate-all")
+    public GenerateAllNarrativesResponse generateAll(@PathVariable UUID founderId) {
+        return narratives.generateAllForFounder(founderId, requireSeen(founderId).userId());
     }
 
     @PatchMapping(path = "/{narrativeId}", consumes = MediaType.APPLICATION_JSON_VALUE)

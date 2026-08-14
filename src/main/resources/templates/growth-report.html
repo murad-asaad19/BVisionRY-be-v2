@@ -45,9 +45,15 @@
 <body>
 
 <div class="page">
-    <p class="cover-eyebrow">My Growth</p>
+    <!-- Staff voice (the two staff doors): third-person copy — a document an
+         admin or coach generates ABOUT the member must not address its reader
+         as its subject. The member's own door keeps the member voice. -->
+    <p class="cover-eyebrow" th:text="${staffVoice} ? 'Growth Report' : 'My Growth'">My Growth</p>
     <h1 class="page-heading"
-        th:text="${done} ? 'Where you were — and where you are now' : 'Your growth so far'">Title</h1>
+        th:text="${done}
+                 ? (${staffVoice} ? 'Where they were — and where they are now'
+                                  : 'Where you were — and where you are now')
+                 : (${staffVoice} ? 'Their growth so far' : 'Your growth so far')">Title</h1>
     <span class="accent-rule"></span>
     <p class="meta-line">
         <span th:text="${memberName}">Member</span>
@@ -73,7 +79,7 @@
 
     <!-- Trajectory -->
     <div class="section">
-        <p class="section-title">Your trajectory</p>
+        <p class="section-title" th:text="${staffVoice} ? 'Trajectory' : 'Your trajectory'">Your trajectory</p>
         <table class="shift-table">
             <thead>
             <tr><th>Assessment</th><th>Evaluated</th><th class="num">Overall</th></tr>
@@ -119,7 +125,9 @@
          approved-only from the service, so nothing here can leak a draft; the
          whole section disappears when none are approved. -->
     <div class="section" th:if="${done and !narratives.isEmpty()}">
-        <p class="section-title">What changed — in your own words</p>
+        <p class="section-title"
+           th:text="${staffVoice} ? 'What changed — pillar narratives' : 'What changed — in your own words'">
+            What changed — in your own words</p>
         <div class="narrative" th:each="n : ${narratives}">
             <p class="narrative-head">
                 <span th:text="${n.pillarName()}">Pillar</span>
@@ -134,10 +142,15 @@
     </div>
 
     <!-- Pending explainer — only when a distance pair actually exists (§5 guard) -->
-    <div class="explainer" th:if="${pending}">
+    <div class="explainer" th:if="${pending and !staffVoice}">
         Your distance report unlocks after the distance assessment is evaluated —
         this page then becomes your before &#8594; after story: every pillar's shift
         and your maturity movement.
+    </div>
+    <div class="explainer" th:if="${pending and staffVoice}">
+        The distance report unlocks after the distance assessment is evaluated —
+        this page then becomes the member's before &#8594; after story: every
+        pillar's shift and their maturity movement.
     </div>
 </div>
 

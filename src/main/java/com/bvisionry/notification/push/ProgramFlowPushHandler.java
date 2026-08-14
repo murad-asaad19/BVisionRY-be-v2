@@ -129,7 +129,10 @@ public class ProgramFlowPushHandler {
         String body = event.learnerName() + " replied on “" + event.exerciseName() + "”.";
         pushNotificationService.notifyOrgAdmins(orgId, NotificationType.EXERCISE_ACTIVITY,
                 "Exercise feedback reply", body, "/app/admin/exercises", "/app/admin/exercises");
+        // A reply lands on an already-reviewed exercise, which the SUBMITTED-only
+        // coach queue cannot show — deep-link to the founder profile instead.
         coachReviewNotifier.notifyCoachesOf(orgId, event.learnerId(),
-                NotificationType.EXERCISE_ACTIVITY, "Exercise feedback reply", body);
+                NotificationType.EXERCISE_ACTIVITY, "Exercise feedback reply", body,
+                CoachReviewNotifier.coachFounderUrl(event.learnerId()));
     }
 }

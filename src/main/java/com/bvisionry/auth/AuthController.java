@@ -11,6 +11,7 @@ import com.bvisionry.auth.dto.ResetPasswordRequest;
 import com.bvisionry.auth.dto.UpdateProfileRequest;
 import com.bvisionry.auth.dto.UserResponse;
 import com.bvisionry.auth.entity.User;
+import com.bvisionry.common.exception.AccountNotActiveException;
 import com.bvisionry.common.exception.AuthenticationException;
 import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import com.bvisionry.common.web.ClientIpResolver;
@@ -89,6 +90,11 @@ public class AuthController {
         AuthResponse response;
         try {
             response = authService.login(request, contextOf(httpRequest));
+        } catch (AccountNotActiveException e) {
+            // Correct password, account/org just unusable — do NOT advance the
+            // per-address guess backoff, or a legitimate user is locked out by
+            // their own credentials once the account/org is restored.
+            throw e;
         } catch (AuthenticationException e) {
             rateLimitService.recordLoginFailure(emailKey);
             throw e;

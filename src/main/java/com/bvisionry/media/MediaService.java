@@ -218,20 +218,26 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
     public PresignedUpload presignUpload(
             String kind, String filename, String contentType, Long sizeBytes, UUID orgId) {
         String resolvedKind = (kind == null || kind.isBlank()) ? "asset" : kind;
+        String callerRole = currentUser.require().role();
         MediaUploadPolicy.requireOrgScopedKindIsImage(resolvedKind, orgId);
-        MediaUploadPolicy.requireCoachKindIsImage(resolvedKind, currentUser.require().role());
-        // ponytail: only kind + content type are validated against MediaUploadPolicy
-        // here; -1 skips the per-kind 10MB cap. On the PLATFORM path that cap is
-        // genuinely unenforceable (nothing binds the body length). On the org-scoped
-        // path it now would be — the declared size is signed below — but turning it on
-        // would start refusing uploads that succeed today, which is a product call, not
-        // a quota fix. Pass sizeBytes here when that call is made.
-        String normalizedType = MediaUploadPolicy.validate(resolvedKind, contentType, filename, -1);
+        MediaUploadPolicy.requireCoachKindIsImage(resolvedKind, callerRole);
+        // Which callers must have their upload SIZE-BOUND: the org-scoped branding
+        // path (quota) AND the COACH profile-photo path. Both are lower-trust than
+        // the historical SUPER_ADMIN/INSTRUCTOR lesson-media dropzone, which alone
+        // keeps the unbound platform path (its client sends no declared size and
+        // its files are legitimately large). For a bound caller the declared size
+        // is (a) checked against the per-kind cap here and (b) signed into the PUT
+        // as Content-Length below, so the object store refuses a body of any other
+        // length — without which a coach could presign kind=image and PUT an
+        // arbitrarily large object into the shared platform bucket, unmetered.
+        boolean bindSize = orgId != null || MediaUploadPolicy.COACH_ROLE.equals(callerRole);
+        if (bindSize && (sizeBytes == null || sizeBytes <= 0)) {
+            throw new BadRequestException(
+                    "A positive declared size (sizeBytes) is required to presign this upload");
+        }
+        String normalizedType = MediaUploadPolicy.validate(
+                resolvedKind, contentType, filename, bindSize ? sizeBytes : -1);
         if (orgId != null) {
-            if (sizeBytes == null || sizeBytes <= 0) {
-                throw new BadRequestException(
-                        "A positive declared size (sizeBytes) is required to presign an org-scoped upload");
-            }
             orgStorageQuota.requireCapacity(orgId, sizeBytes);
         }
         lazyEnsureBucket();
@@ -246,10 +252,11 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
                     .bucket(props.getBucket())
                     .object(objectKey)
                     .expiry(props.getPresignedExpiryMinutes() * 60, TimeUnit.SECONDS);
-            if (orgId != null) {
-                // CONTENT-TYPE AND CONTENT-LENGTH PINNING, org-scoped paths only.
-                // Both go into extraHeaders, which makes them SIGNED headers, so the
-                // PUT is refused unless it carries exactly these values.
+            if (bindSize) {
+                // CONTENT-TYPE AND CONTENT-LENGTH PINNING, size-bound paths only
+                // (org-scoped branding + coach profile photo). Both go into
+                // extraHeaders, which makes them SIGNED headers, so the PUT is
+                // refused unless it carries exactly these values.
                 //
                 // Content-Type: without it the validated "image/png" is only ever a
                 // claim in the presign REQUEST — the browser could PUT the same object

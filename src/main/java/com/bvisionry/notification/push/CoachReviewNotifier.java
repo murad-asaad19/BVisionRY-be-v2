@@ -73,6 +73,24 @@ public class CoachReviewNotifier {
     @Async("pushExecutor")
     public void notifyCoachesOf(UUID orgId, UUID memberId, NotificationType type,
                                 String title, String body) {
+        dispatch(orgId, memberId, type, title, body, coachUrl(type, memberId));
+    }
+
+    /**
+     * As {@link #notifyCoachesOf(UUID, UUID, NotificationType, String, String)} but
+     * with an EXPLICIT deep link — for activity whose type's default target cannot
+     * hold it. A feedback reply is EXERCISE_ACTIVITY, but the exercise queue lists
+     * only SUBMITTED submissions and a replied-to one is REVIEWED/CHANGES_REQUESTED,
+     * so the default queue URL would open a list that cannot contain it.
+     */
+    @Async("pushExecutor")
+    public void notifyCoachesOf(UUID orgId, UUID memberId, NotificationType type,
+                                String title, String body, String coachUrl) {
+        dispatch(orgId, memberId, type, title, body, coachUrl);
+    }
+
+    private void dispatch(UUID orgId, UUID memberId, NotificationType type,
+                          String title, String body, String coachUrl) {
         if (orgId == null || memberId == null || !type.isCoachVisible()) {
             return;
         }
@@ -80,11 +98,16 @@ public class CoachReviewNotifier {
             // notifyUsers, not a loop: one opt-out query, one history batch and
             // one task for the whole (small) coach set.
             pushNotificationService.notifyUsers(coachesOf(orgId, memberId), type, title, body,
-                    coachUrl(type, memberId));
+                    coachUrl);
         } catch (RuntimeException e) {
             log.warn("Push dispatch {} to coaches of member {} failed: {}",
                     type, memberId, e.getMessage());
         }
+    }
+
+    /** The coach's founder-profile deep link — its Work tab holds any exercise activity. */
+    static String coachFounderUrl(UUID memberId) {
+        return "/app/coach/founders/" + memberId;
     }
 
     /**
@@ -118,6 +141,6 @@ public class CoachReviewNotifier {
     static String coachUrl(NotificationType type, UUID memberId) {
         return type == NotificationType.EXERCISE_ACTIVITY
                 ? "/app/coach/queue"
-                : "/app/coach/founders/" + memberId;
+                : coachFounderUrl(memberId);
     }
 }

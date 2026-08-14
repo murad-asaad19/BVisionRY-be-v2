@@ -6,6 +6,7 @@ import com.bvisionry.auth.dto.LoginRequest;
 import com.bvisionry.auth.sso.SsoHandshakeController;
 import com.bvisionry.auth.sso.SsoRegistrationService;
 import com.bvisionry.common.errortracking.ErrorEventRecorder;
+import com.bvisionry.common.exception.AccountNotActiveException;
 import com.bvisionry.common.exception.AuthenticationException;
 import com.bvisionry.common.exception.GlobalExceptionHandler;
 import com.bvisionry.common.web.ClientIpResolver;
@@ -42,6 +43,8 @@ class AuthControllerLoginBackoffTest {
     private static final String REAL_EMAIL = "real@example.com";
     /** Does not exist: the stub rejects it whatever the password. */
     private static final String GHOST_EMAIL = "ghost@example.com";
+    /** Exists, password below is RIGHT — but the account/org is unusable. */
+    private static final String SUSPENDED_EMAIL = "suspended@example.com";
     private static final String GOOD_PASSWORD = "Password123!";
 
     private MockMvc mvc;
@@ -64,6 +67,10 @@ class AuthControllerLoginBackoffTest {
             LoginRequest request = invocation.getArgument(0);
             if (REAL_EMAIL.equals(request.email()) && GOOD_PASSWORD.equals(request.password())) {
                 return new AuthResponse(null, "access-token", "refresh-token");
+            }
+            if (SUSPENDED_EMAIL.equals(request.email()) && GOOD_PASSWORD.equals(request.password())) {
+                // Correct password, unusable account — AuthService's NON-credential refusal.
+                throw new AccountNotActiveException("Account is not active");
             }
             // Exactly what AuthService does for a wrong password AND for an unknown
             // address: one indistinguishable rejection.
@@ -157,6 +164,27 @@ class AuthControllerLoginBackoffTest {
         for (int i = 0; i < 6; i++) {
             assertThat(login(REAL_EMAIL, "again-" + i).getResponse().getStatus()).isEqualTo(401);
         }
+    }
+
+    /**
+     * The backoff exists to cap password GUESSING — a CORRECT password against an
+     * unusable account ({@link AccountNotActiveException}: not-active user, suspended
+     * org) must NOT advance it, or the legitimate owner arrives at a restored account
+     * already locked out by their own credentials. Wrong passwords on the very same
+     * address must still count.
+     */
+    @Test
+    void aCorrectPasswordAgainstAnInactiveAccountNeverAdvancesTheBackoff() throws Exception {
+        // Far past the budget that throttles guessing: every refusal stays a 401.
+        for (int i = 0; i < 10; i++) {
+            assertThat(login(SUSPENDED_EMAIL, GOOD_PASSWORD).getResponse().getStatus())
+                    .as("attempt %d with the RIGHT password is refused but never throttled", i + 1)
+                    .isEqualTo(401);
+        }
+        // The full guessing budget is still intact — throttle() asserts six wrong
+        // passwords are answered 401 before the seventh finally trips the 429, which
+        // fails on the first attempt if the not-active refusals above were counted.
+        assertThat(throttle(SUSPENDED_EMAIL).getResponse().getStatus()).isEqualTo(429);
     }
 
     @Test

@@ -19,9 +19,12 @@ import com.bvisionry.common.exception.BadRequestException;
  * presigned GET URLs, so allowing markup would open a stored-XSS channel on
  * the object-store origin.</p>
  *
- * <p>Size caps apply to the server-proxied multipart path only: a presigned
- * PUT does not bind Content-Length, so the presign path cannot enforce a size
- * server-side (the fronting proxy and MinIO quotas are the bounds there).</p>
+ * <p>Size caps apply to the server-proxied multipart path always, and to the
+ * presign path wherever the declared size is signed into the PUT as
+ * Content-Length — the org-scoped branding and COACH profile-photo paths (see
+ * {@code MediaService.presignUpload}). The historical SUPER_ADMIN/INSTRUCTOR
+ * lesson-media presign alone stays unbound (its client sends no size and its
+ * files are legitimately large); the fronting proxy and MinIO quotas bound it.</p>
  */
 final class MediaUploadPolicy {
 

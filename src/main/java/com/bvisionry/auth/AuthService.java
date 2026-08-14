@@ -11,6 +11,7 @@ import com.bvisionry.auth.jwt.JwtProvider;
 import com.bvisionry.auth.jwt.TokenType;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.common.exception.AccountNotActiveException;
 import com.bvisionry.common.exception.AuthenticationException;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.DuplicateResourceException;
@@ -98,12 +99,15 @@ public class AuthService {
             throw new AuthenticationException("Invalid email or password");
         }
 
+        // Correct password past this point — these are AccountNotActiveException
+        // (not a credential failure) so the login backoff does not advance and a
+        // legitimate user is not locked out by their own password.
         if (user.getStatus() != UserStatus.ACTIVE) {
-            throw new AuthenticationException("Account is not active");
+            throw new AccountNotActiveException("Account is not active");
         }
 
         if (user.getOrganization() != null && !user.getOrganization().isActive()) {
-            throw new AuthenticationException("Your organization has been suspended. Contact support for assistance.");
+            throw new AccountNotActiveException("Your organization has been suspended. Contact support for assistance.");
         }
 
         user.setLastLoginAt(Instant.now());

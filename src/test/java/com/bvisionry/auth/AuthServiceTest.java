@@ -10,6 +10,7 @@ import com.bvisionry.auth.jwt.JwtProvider;
 import com.bvisionry.auth.jwt.TokenType;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.common.exception.AccountNotActiveException;
 import com.bvisionry.common.exception.AuthenticationException;
 import com.bvisionry.common.exception.SsoFlowException;
 import com.bvisionry.organization.entity.Organization;
@@ -372,6 +373,26 @@ class AuthServiceTest {
                 .hasMessage(unknownEmail.getMessage());
     }
 
+    /**
+     * The CONCRETE type is load-bearing on both refusals below: the controller
+     * exempts {@link AccountNotActiveException} from the login backoff, so a
+     * plain {@link AuthenticationException} here would let a CORRECT password
+     * advance the guess counter and lock the legitimate owner out of their own
+     * account once it (or the org) is restored.
+     */
+    @Test
+    void login_inactiveAccount_isRefusedAsAccountNotActive_andMintsNothing() {
+        user.setStatus(UserStatus.SUSPENDED);
+        when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("pw", "hash")).thenReturn(true);
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("ada@example.com", "pw")))
+                .isInstanceOf(AccountNotActiveException.class)
+                .hasMessage("Account is not active");
+
+        assertNothingWasMinted();
+    }
+
     @Test
     void login_suspendedOrganization_isRefusedAndMintsNothing() {
         user.setOrganization(suspendedOrg());
@@ -379,7 +400,7 @@ class AuthServiceTest {
         when(passwordEncoder.matches("pw", "hash")).thenReturn(true);
 
         assertThatThrownBy(() -> authService.login(new LoginRequest("ada@example.com", "pw")))
-                .isInstanceOf(AuthenticationException.class)
+                .isInstanceOf(AccountNotActiveException.class)
                 .hasMessageContaining("organization has been suspended");
 
         assertNothingWasMinted();

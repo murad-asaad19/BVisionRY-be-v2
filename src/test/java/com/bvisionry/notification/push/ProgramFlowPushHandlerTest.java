@@ -96,7 +96,10 @@ class ProgramFlowPushHandlerTest {
 
         verify(pushNotificationService).notifyOrgAdmins(eq(orgId),
                 eq(NotificationType.EXERCISE_ACTIVITY), any(), any(), any(), any());
+        // A reply lands on an already-reviewed exercise, which the SUBMITTED-only
+        // coach queue cannot show — it deep-links to the founder profile instead.
         verify(coachReviewNotifier).notifyCoachesOf(
-                eq(orgId), eq(learnerId), eq(NotificationType.EXERCISE_ACTIVITY), any(), any());
+                eq(orgId), eq(learnerId), eq(NotificationType.EXERCISE_ACTIVITY), any(), any(),
+                eq(CoachReviewNotifier.coachFounderUrl(learnerId)));
     }
 }

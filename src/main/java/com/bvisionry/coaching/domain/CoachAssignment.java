@@ -15,10 +15,12 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * One visibility grant for a coach: EITHER a whole cohort ({@code cohortId}
- * set) OR a single founder ({@code memberId} set) — never both, enforced by the
- * table's CHECK. A coach sees the union of their grants (policy
- * {@code coach_assignment_grain: COHORT_AND_DIRECT}).
+ * One visibility grant for a coach, at one of three grains: a whole cohort
+ * ({@code cohortId} set), a single founder ({@code memberId} set), or the whole
+ * ORG ({@code cohortId} and {@code memberId} both null — V176). Never both set,
+ * enforced by the table's CHECK. A coach sees the union of their grants (policy
+ * {@code coach_assignment_grain: COHORT_AND_DIRECT_AND_ORG}); {@code orgId} is
+ * NOT NULL on every grain, so even the widest one is tenant-bounded.
  *
  * <p>Soft-coupled to identity by UUID (the programflow/catalog convention):
  * the FKs exist at the DB level, the Java slice never imports another feature's

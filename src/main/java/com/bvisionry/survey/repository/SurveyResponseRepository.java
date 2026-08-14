@@ -38,6 +38,10 @@ public interface SurveyResponseRepository extends JpaRepository<SurveyResponse, 
 
     Optional<SurveyResponse> findFirstBySubmissionIdOrderBySubmittedAtDesc(UUID submissionId);
 
+    /** The member's response to a SURVEY journey task (unique per V173). */
+    Optional<SurveyResponse> findByProgramTaskIdAndRespondentUserId(UUID programTaskId,
+            UUID respondentUserId);
+
     boolean existsBySurveyIdAndSubmissionId(UUID surveyId, UUID submissionId);
 
     /**

@@ -31,6 +31,16 @@ public record FounderProfileResponse(
     /** A cohort the member belongs to — id carried so the Journey tab can switch. */
     public record FounderCohortRef(UUID id, String name) {}
 
+    /**
+     * A coach covering this member, grouped from their {@code coach_assignments}
+     * grants: {@code cohortIds} are the member's cohorts the coach holds a
+     * whole-cohort grant for; {@code direct} marks a single-member grant;
+     * {@code orgWide} marks the V176 org-wide grant (every member of the org).
+     * The three are independent — a coach may hold any combination.
+     */
+    public record FounderCoachRef(UUID id, String name, List<UUID> cohortIds, boolean direct,
+                                  boolean orgWide) {}
+
     public record FounderProfileHeader(
             UUID userId,
             String name,
@@ -39,6 +49,8 @@ public record FounderProfileResponse(
             String status,
             String memberType,
             List<FounderCohortRef> cohorts,
+            /** Coaches covering this member (cohort grants + direct grants). */
+            List<FounderCoachRef> coaches,
             /** Latest evaluated overall score (the FRI), null when never evaluated. */
             BigDecimal friLatest,
             /** Latest minus earliest evaluated overall — the Δ-so-far. Null with fewer than two. */
@@ -53,11 +65,24 @@ public record FounderProfileResponse(
      * the nullable fields apply: PROGRAM (task), EXERCISE (assignment),
      * COURSE (enrollment) or ASSESSMENT (assignment × submission — one row
      * per submission, or a bare TODO row when none exists yet).
+     *
+     * <p>A PROGRAM row is MERGED with its tagged artifact (V164/V173): its
+     * {@code taskType} names the real work (LESSON/EXERCISE/ASSESSMENT/
+     * SURVEY/COURSE) and the artifact's status/score/links ride on the row;
+     * the artifact is then suppressed from the org-level list so one piece of
+     * work never appears twice. Artifact rows with no tag stay as before,
+     * with {@code cohortId} null — the "Direct" bucket.
      */
     public record FounderWorkItem(
             String type,
             /** Program task id / exercise assignment id / course id / assessment assignment id. */
             UUID refId,
+            /** PROGRAM rows: the cohort the task belongs to. Null = direct/org-level work. */
+            UUID cohortId,
+            /** PROGRAM rows: the task's real type (LESSON/EXERCISE/ASSESSMENT/SURVEY/COURSE). */
+            String taskType,
+            /** PROGRAM rows: the merged artifact's id — exercise assignment / course id. */
+            UUID artifactId,
             /** Assessment submission id (results link); null elsewhere. */
             UUID submissionId,
             String title,

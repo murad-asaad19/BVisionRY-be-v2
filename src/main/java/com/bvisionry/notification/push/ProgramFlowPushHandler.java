@@ -16,6 +16,13 @@ import lombok.RequiredArgsConstructor;
  * programflow slice publishes (enrolment, module assignment/unlock, due-soon
  * reminders, submissions). AFTER_COMMIT like {@link MemberJoinedPushHandler}:
  * a rolled-back roster edit or submit must not notify.
+ *
+ * <p>Also handles the assessment and exercise SUBMISSION events declared
+ * alongside {@link ProgramFlowEvents.TaskSubmitted} in {@link ProgramFlowEvents}.
+ * They are not program-flow, but redesign spec §2.2 (and {@link NotificationType}'s
+ * javadoc) treats all three submission types as one review-work concept with the
+ * identical org-admin + coach fan-out shape, so they share this handler rather
+ * than each spinning up its own near-identical class.
  */
 @Component
 @RequiredArgsConstructor
@@ -26,6 +33,7 @@ public class ProgramFlowPushHandler {
     private static final String ADMIN_URL = "/app/admin/program-flow";
 
     private final PushNotificationService pushNotificationService;
+    private final CoachReviewNotifier coachReviewNotifier;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onCohortEnrolled(ProgramFlowEvents.CohortEnrolled event) {
@@ -74,11 +82,54 @@ public class ProgramFlowPushHandler {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onTaskSubmitted(ProgramFlowEvents.TaskSubmitted event) {
-        pushNotificationService.notifyOrgAdmins(event.orgId(),
+        UUID orgId = event.orgId();
+        // The org-admin slot used to be ADMIN_URL as well, but
+        // /app/admin/program-flow is requireSuperAdmin — every org admin clicking
+        // this bell item hit a 404, the same bug MemberJoinedPushHandler carried.
+        // Their own org's Cohorts tab is org-scoped and one click from the work.
+        // No deeper link exists here: the event names only the SUBMITTING
+        // member's org (a cohort spans orgs), so there is no cohort id to aim at.
+        String body = event.learnerName() + " submitted “" + event.taskName() + "”.";
+        pushNotificationService.notifyOrgAdmins(orgId,
                 NotificationType.PROGRAM_TASK_SUBMITTED,
                 "Program task submitted",
-                event.learnerName() + " submitted “" + event.taskName() + "”.",
-                ADMIN_URL,
+                body,
+                "/app/admin/organizations/" + orgId + "/cohorts",
                 ADMIN_URL);
+        coachReviewNotifier.notifyCoachesOf(orgId, event.learnerId(),
+                NotificationType.PROGRAM_TASK_SUBMITTED,
+                "Program task submitted",
+                body);
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onAssessmentSubmitted(ProgramFlowEvents.AssessmentSubmitted event) {
+        UUID orgId = event.orgId();
+        String body = event.learnerName() + " completed “" + event.pipelineName() + "”.";
+        String url = "/app/admin/organizations/" + orgId + "/assignments";
+        pushNotificationService.notifyOrgAdmins(orgId, NotificationType.MEMBER_SUBMITTED,
+                "Assessment completed", body, url, url);
+        coachReviewNotifier.notifyCoachesOf(orgId, event.learnerId(),
+                NotificationType.MEMBER_SUBMITTED, "Assessment completed", body);
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onExerciseSubmitted(ProgramFlowEvents.ExerciseSubmitted event) {
+        UUID orgId = event.orgId();
+        String body = event.learnerName() + " submitted “" + event.exerciseName() + "”.";
+        pushNotificationService.notifyOrgAdmins(orgId, NotificationType.EXERCISE_ACTIVITY,
+                "Exercise submitted", body, "/app/admin/exercises", "/app/admin/exercises");
+        coachReviewNotifier.notifyCoachesOf(orgId, event.learnerId(),
+                NotificationType.EXERCISE_ACTIVITY, "Exercise submitted", body);
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onExerciseFeedbackReplied(ProgramFlowEvents.ExerciseFeedbackReplied event) {
+        UUID orgId = event.orgId();
+        String body = event.learnerName() + " replied on “" + event.exerciseName() + "”.";
+        pushNotificationService.notifyOrgAdmins(orgId, NotificationType.EXERCISE_ACTIVITY,
+                "Exercise feedback reply", body, "/app/admin/exercises", "/app/admin/exercises");
+        coachReviewNotifier.notifyCoachesOf(orgId, event.learnerId(),
+                NotificationType.EXERCISE_ACTIVITY, "Exercise feedback reply", body);
     }
 }

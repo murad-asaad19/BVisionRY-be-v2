@@ -173,7 +173,8 @@ public class ProgramAdminService {
     private static BoardSnapshot toSnapshot(SaveBoardRequest req) {
         return new BoardSnapshot(req.modules().stream()
                 .map(m -> new BoardSnapshot.ModuleSnap(m.id(), m.name(), m.summary(),
-                        blankToNull(m.pillarLabel()), m.lockMode(), m.unlockAt(), m.assignMode(),
+                        blankToNull(m.pillarLabel()), m.paced(), m.lockMode(), m.unlockAt(),
+                        m.assignMode(),
                         List.copyOf(m.memberIds()),
                         m.tasks().stream()
                                 .map(t -> new BoardSnapshot.TaskSnap(t.id(), t.name(), t.taskType(),
@@ -214,6 +215,31 @@ public class ProgramAdminService {
     }
 
     /**
+     * The name the builder puts on a new column so the column has something to
+     * render before the admin types over it. Because it is SEEDED and not
+     * typed, carrying it is no evidence anyone named the module — which is
+     * exactly how it reached a founder's Journey (spec §12). So it is refused
+     * outright rather than only when blank (blank the DTO's {@code @NotBlank}
+     * already catches): an admin who genuinely wants those two words pays one
+     * rename, while letting them through puts the builder's scaffolding in
+     * front of every member of the cohort.
+     */
+    private static final String MODULE_PLACEHOLDER_NAME = "Untitled module";
+
+    /**
+     * The same argument as {@link #MODULE_PLACEHOLDER_NAME}, one level down. The
+     * builder seeds every new card with {@code "Untitled <type> task"} so the
+     * column has something to render, and its save payload used to substitute a
+     * bare {@code "Untitled task"} for a name the admin left empty — both are
+     * scaffolding, and both reached a founder's Journey looking like content.
+     */
+    private static boolean isTaskPlaceholderName(String name, ProgramTaskType type) {
+        String trimmed = name == null ? "" : name.trim();
+        return trimmed.equalsIgnoreCase("Untitled task")
+                || trimmed.equalsIgnoreCase("Untitled " + type.name().toLowerCase() + " task");
+    }
+
+    /**
      * Re-applies to the batch every rule a single-task save enforces, so "save
      * the whole board" cannot become a hole in the typed spine. The cohort-level
      * milestone pair is read across the SUBMITTED board rather than the DB —
@@ -235,10 +261,20 @@ public class ProgramAdminService {
         Map<MilestoneRole, UUID> milestones = new EnumMap<>(MilestoneRole.class);
 
         for (SaveBoardRequest.ModuleUpsert m : req.modules()) {
+            if (MODULE_PLACEHOLDER_NAME.equals(blankToNull(m.name()))) {
+                throw new BadRequestException("“" + MODULE_PLACEHOLDER_NAME + "” is the builder's "
+                        + "placeholder, not a name — rename that module before saving, or members "
+                        + "will see it on their journey.");
+            }
             if (m.assignMode() == AudienceMode.MEMBERS && !rosterIds.containsAll(m.memberIds())) {
                 throw new BadRequestException("One or more members are not enrolled in this cohort");
             }
             for (SaveBoardRequest.TaskUpsert t : m.tasks()) {
+                if (isTaskPlaceholderName(t.name(), t.taskType())) {
+                    throw new BadRequestException("“" + t.name().trim() + "” in “" + m.name()
+                            + "” is the builder's placeholder, not a name — name that task before "
+                            + "saving, or members will see it on their journey.");
+                }
                 Map<String, String> errors = taskSpineErrors(existing.get(t.id()), t.taskType(),
                         t.refId(), t.milestoneRole(), t.status(), t.fields().size());
                 if (errors.isEmpty()) {

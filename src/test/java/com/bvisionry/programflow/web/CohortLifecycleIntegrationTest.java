@@ -15,10 +15,12 @@ import com.bvisionry.programflow.dto.BoardResponse;
 import com.bvisionry.programflow.dto.CohortDto;
 import com.bvisionry.programflow.dto.CreateCohortRequest;
 import com.bvisionry.programflow.dto.ModuleDto;
+import com.bvisionry.programflow.dto.ProgramSettingsDto;
 import com.bvisionry.programflow.dto.SaveBoardRequest;
 import com.bvisionry.programflow.dto.SaveBoardRequest.ModuleUpsert;
 import com.bvisionry.programflow.dto.UpdateCohortMembersRequest;
 import com.bvisionry.programflow.dto.UpdateCohortRequest;
+import com.bvisionry.programflow.dto.UpdateOrgAssignmentRequest;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
 import com.bvisionry.testsupport.BoardPayloads;
 import com.bvisionry.testsupport.EnabledIfDockerAvailable;
@@ -172,7 +174,7 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
         UUID id = UUID.randomUUID();
         adminService.saveBoard(cohortId, BoardPayloads.of(board,
                 java.util.stream.Stream.concat(BoardPayloads.modulesOf(board).stream(),
-                        java.util.stream.Stream.of(new ModuleUpsert(id, name, null, pillarLabel,
+                        java.util.stream.Stream.of(new ModuleUpsert(id, name, null, pillarLabel, true,
                                 ModuleLockMode.SEQUENTIAL, null, AudienceMode.ALL,
                                 List.of(), List.of())))
                         .toList()));
@@ -184,7 +186,7 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
         BoardResponse board = adminService.getBoard(cohortId);
         adminService.saveBoard(cohortId, BoardPayloads.of(board, board.modules().stream()
                 .map(m -> m.id().equals(moduleId)
-                        ? new ModuleUpsert(m.id(), m.name(), m.summary(), m.pillarLabel(),
+                        ? new ModuleUpsert(m.id(), m.name(), m.summary(), m.pillarLabel(), m.paced(),
                                 m.lockMode(), m.unlockAt(), AudienceMode.MEMBERS, memberIds,
                                 m.tasks().stream().map(BoardPayloads::asUpsert).toList())
                         : BoardPayloads.asUpsert(m,
@@ -231,6 +233,32 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
                 .as("nobody enrolled → nothing to score, not the org roster").isEmpty();
     }
 
+    /* --------------------------------------------- cohort-card progress bar */
+
+    /**
+     * Spec §8 cohort-card progress bar: the org list read carries the real
+     * module count and stage label — zero/"Week" before any curriculum or
+     * settings exist, the true count and label once they do.
+     */
+    @Test
+    void listAssigned_carriesModuleCountAndStageLabelForTheCards() {
+        TestAuthentication.authenticate(admin);
+        assertThat(cohortService.listAssigned(org.getId())).singleElement().satisfies(c -> {
+            assertThat(c.moduleCount()).as("no modules yet").isZero();
+            assertThat(c.stageLabel()).as("no settings row yet, default label").isEqualTo("Week");
+        });
+
+        addModule("Week 1", null);
+        addModule("Week 2", null);
+        adminService.updateSettings(cohortId,
+                new ProgramSettingsDto("Sprint", true, 3, null, null, null, null));
+
+        assertThat(cohortService.listAssigned(org.getId())).singleElement().satisfies(c -> {
+            assertThat(c.moduleCount()).isEqualTo(2);
+            assertThat(c.stageLabel()).isEqualTo("Sprint");
+        });
+    }
+
     /**
      * Spec §13.7: the org console's progress views are the org's OWN slice of
      * a cross-org roster — never another org's people — and a cohort the org
@@ -270,6 +298,57 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
         UUID strangerId = orgs.saveAndFlush(stranger).getId();
         assertThatThrownBy(() -> adminService.getMatrix(cohortId, strangerId))
                 .isInstanceOf(com.bvisionry.common.exception.ResourceNotFoundException.class);
+    }
+
+    /* -------------------------------------------------- auto-enroll (§13.3) */
+
+    /**
+     * Auto-enroll is learners-only, exactly like the two manual paths: a coach
+     * who accepts an invitation into an auto-enroll org is STAFFING the
+     * program, not joining it. Enrolling him would push him a "you were
+     * enrolled" notification and leave a memberIds row no roster surface ever
+     * shows (findRoster is role-filtered), so the raw count would disagree
+     * with the roster forever.
+     */
+    @Test
+    void autoEnroll_takesLearnersOnly_neverStaff() {
+        cohortService.launch(cohortId);
+        cohortService.updateOrgAssignment(cohortId, org.getId(),
+                new UpdateOrgAssignmentRequest(true));
+        User coach = newOrgUser("coach@lifecycle.invalid", "Program Coach",
+                com.bvisionry.common.enums.UserRole.COACH);
+        User joiner = newOrgUser("late.joiner@lifecycle.invalid", "Late Joiner",
+                com.bvisionry.common.enums.UserRole.MEMBER);
+        TestAuthentication.authenticate(admin);
+
+        cohortService.autoEnroll(org.getId(), coach.getId());
+        cohortService.autoEnroll(org.getId(), joiner.getId());
+
+        assertThat(rawMemberIds())
+                .as("the coach staffs the cohort; only learners land on the roster")
+                .containsExactlyInAnyOrder(member.getId(), joiner.getId());
+        assertThat(applicationEvents.stream(ProgramFlowEvents.CohortEnrolled.class)
+                .flatMap(e -> e.userIds().stream()))
+                .as("no 'you were enrolled' push for someone who is staffing")
+                .containsExactlyInAnyOrder(member.getId(), joiner.getId());
+    }
+
+    /** The cohort's RAW roster — the platform view, before any role filtering. */
+    private List<UUID> rawMemberIds() {
+        return cohortService.listAll().stream()
+                .filter(c -> c.id().equals(cohortId))
+                .findFirst().orElseThrow()
+                .memberIds();
+    }
+
+    private User newOrgUser(String email, String name, com.bvisionry.common.enums.UserRole role) {
+        User user = new User();
+        user.setEmail(email);
+        user.setName(name);
+        user.setRole(role);
+        user.setStatus(com.bvisionry.common.enums.UserStatus.ACTIVE);
+        user.setOrganization(org);
+        return users.saveAndFlush(user);
     }
 
     /* ------------------------------------------------ notification timing */

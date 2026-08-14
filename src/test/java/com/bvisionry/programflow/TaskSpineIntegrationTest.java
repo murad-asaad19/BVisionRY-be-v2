@@ -238,6 +238,58 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(starterRows).isEqualTo(1);
         }
 
+        /**
+         * An admin who re-points an EXERCISE task at a different template used
+         * to strand the member: the lookup keyed on the task alone, so the
+         * stale submission kept winning and "Frustration" opened the
+         * Appreciation brief and columns forever.
+         */
+        @Autowired private jakarta.persistence.EntityManager openEm;
+
+        @Test
+        void exerciseOpen_followsTheTaskToItsNewTemplate_whenNothingWasFilledIn() {
+            UUID before = myProgramService.open(exerciseTaskId).targetId();
+            UUID other = insertTemplate("A different exercise");
+            jdbc.update("UPDATE program_tasks SET ref_id = ? WHERE id = ?", other, exerciseTaskId);
+            openEm.clear(); // the raw UPDATE bypassed JPA; drop the stale entity
+
+            UUID after = myProgramService.open(exerciseTaskId).targetId();
+
+            UUID template = jdbc.queryForObject("""
+                    SELECT ea.template_id FROM exercise_assignments ea
+                    JOIN exercise_submissions es ON es.assignment_id = ea.id
+                    WHERE es.id = ?
+                    """, UUID.class, after);
+            assertThat(template).as("the member follows the task").isEqualTo(other);
+            assertThat(before).isNotNull();
+            // The starter rows come from the NEW template, not the old one.
+            Integer starterRows = jdbc.queryForObject(
+                    "SELECT count(*) FROM exercise_rows WHERE submission_id = ? AND is_starter",
+                    Integer.class, after);
+            assertThat(starterRows).isEqualTo(1);
+        }
+
+        /** Work the member has already typed outranks the admin's re-point. */
+        @Test
+        void exerciseOpen_keepsTheOldSubmission_onceTheMemberHasFilledSomethingIn() {
+            UUID before = myProgramService.open(exerciseTaskId).targetId();
+            jdbc.update("""
+                    INSERT INTO exercise_rows (submission_id, display_order, cells, is_starter)
+                    VALUES (?, 1, '{"c1": "my answer"}'::jsonb, false)
+                    """, before);
+            UUID other = insertTemplate("Yet another exercise");
+            jdbc.update("UPDATE program_tasks SET ref_id = ? WHERE id = ?", other, exerciseTaskId);
+            openEm.clear();
+
+            UUID after = myProgramService.open(exerciseTaskId).targetId();
+
+            assertThat(after).as("their work is not thrown away").isEqualTo(before);
+            Integer mine = jdbc.queryForObject(
+                    "SELECT count(*) FROM exercise_rows WHERE submission_id = ? AND NOT is_starter",
+                    Integer.class, after);
+            assertThat(mine).isEqualTo(1);
+        }
+
         @Test
         void assessmentOpen_createsTheTaggedSubmission_once() {
             OpenTaskResponse first = myProgramService.open(baselineTaskId);

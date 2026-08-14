@@ -45,6 +45,7 @@ public record SaveBoardRequest(
             @NotBlank @Size(max = 200) String name,
             String summary,
             @Size(max = 120) String pillarLabel,
+            boolean paced,
             @NotNull ModuleLockMode lockMode,
             OffsetDateTime unlockAt,
             @NotNull AudienceMode assignMode,

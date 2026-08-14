@@ -3,6 +3,7 @@ package com.bvisionry.programflow.web;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDate;
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.security.CurrentUser;
 import com.bvisionry.common.security.CurrentUserAccessor;
@@ -129,6 +131,14 @@ class MyProgramServiceTest {
         assertThat(response.submittedAt()).isNotNull();
         assertThat(response.answered()).isEqualTo(1);
         assertThat(response.answerable()).isEqualTo(1);
+
+        // First submit publishes TaskSubmitted carrying the SUBMITTING learner's
+        // id — ProgramFlowPushHandler needs it to find their coaches.
+        org.mockito.ArgumentCaptor<ProgramFlowEvents.TaskSubmitted> captor =
+                org.mockito.ArgumentCaptor.forClass(ProgramFlowEvents.TaskSubmitted.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().orgId()).isEqualTo(orgId);
+        assertThat(captor.getValue().learnerId()).isEqualTo(userId);
     }
 
     @Test

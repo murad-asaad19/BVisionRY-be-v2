@@ -80,7 +80,10 @@ class MediaOrgScopedUploadTest {
         lenient().when(internalClient.bucketExists(any(BucketExistsArgs.class))).thenReturn(true);
         lenient().when(publicClient.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class)))
                 .thenReturn("http://minio.test/presigned");
-        service = new MediaService(internalClient, publicClient, props, orgStorageQuota);
+        // A non-coach caller: this file is about the ORG-scoped bound.
+        service = new MediaService(internalClient, publicClient, props, orgStorageQuota,
+                () -> new com.bvisionry.common.security.CurrentUser(
+                java.util.UUID.randomUUID(), null, "Test", "SUPER_ADMIN"));
     }
 
     // ---------------------------------------------------------------- kind

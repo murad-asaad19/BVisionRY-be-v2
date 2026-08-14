@@ -51,14 +51,16 @@ public class CoachingReadRepository {
 
     /**
      * WHAT: cohort {@code c} is inside the coach's grant grain for founder
-     * {@code %1$s} — either the coach holds a DIRECT grant on the founder
-     * (full journey) or this specific cohort is granted. Binds {@code :orgId},
-     * {@code :coachId}.
+     * {@code %1$s} — the coach holds a DIRECT grant on the founder (full
+     * journey), or an ORG-WIDE grant (V176 — strictly wider than a direct one,
+     * so it grants the same full journey), or this specific cohort is granted.
+     * Binds {@code :orgId}, {@code :coachId}.
      */
     private static final String GRANTED_COHORT = """
             (EXISTS (SELECT 1 FROM coach_assignments dg
                      WHERE dg.org_id = :orgId AND dg.coach_id = :coachId
-                       AND dg.member_id = %1$s)
+                       AND (dg.member_id = %1$s
+                            OR (dg.cohort_id IS NULL AND dg.member_id IS NULL)))
              OR EXISTS (SELECT 1 FROM coach_assignments cg
                         WHERE cg.org_id = :orgId AND cg.coach_id = :coachId
                           AND cg.cohort_id = c.id))""";
@@ -259,7 +261,42 @@ public class CoachingReadRepository {
                         rs.getObject("quality_tagged_at", OffsetDateTime.class)));
     }
 
-    public record CoachOfMemberRow(UUID id, String name, String bookingUrl) {}
+    public record CoachOfMemberRow(UUID id, String name, String headline, String bio,
+                                   String photoUrl, String bookingUrl) {}
+
+    /**
+     * The coach card a founder reads: who they are (V178 headline/bio/photo) and
+     * the link they published, over the ACTIVE COACHES of one tenant.
+     *
+     * <p>The three predicates in this WHERE clause are the ones that hold in
+     * BOTH directions of the founder-side read, so they live here rather than in
+     * either caller — a fourth surface that forgets one of them is the leak:
+     *
+     * <ul>
+     *   <li>{@code cu.organization_id = :orgId} — the tenant floor, and
+     *       load-bearing on its own even where the assignment relation is also
+     *       applied (see {@link #coachesOfMember});</li>
+     *   <li>{@code role = 'COACH'} and {@code status = 'ACTIVE'} — the two the
+     *       shared {@link CoachAccess} fragment deliberately says nothing about,
+     *       because forwards the coach is the authenticated caller. Without them
+     *       a suspended coach, or one demoted out of the role while a stale
+     *       grant survives, is still offered to a founder as bookable.</li>
+     * </ul>
+     *
+     * <p>{@code photo_url} comes out RAW ({@code minio://…}); resolving it is the
+     * web layer's job through {@code MediaUrlPort}, which this package may not
+     * reach from SQL.
+     */
+    private static final String COACH_CARD_SELECT = """
+            SELECT cu.id, cu.name, cp.headline, cp.bio, cp.photo_url, cp.booking_url
+            FROM users cu
+            LEFT JOIN coach_profiles cp ON cp.coach_id = cu.id
+            WHERE cu.organization_id = :orgId
+              AND cu.role = 'COACH'
+              AND cu.status = 'ACTIVE'
+            """;
+
+    private static final String COACH_CARD_ORDER = " ORDER BY cu.name, cu.id";
 
     /**
      * The reverse of {@link #roster}: every coach who may see {@code memberId},
@@ -268,36 +305,53 @@ public class CoachingReadRepository {
      * a founder can never be shown a coach who cannot see them, nor miss one
      * who can.
      *
-     * <p>The two predicates the reverse direction has to add itself, because the
-     * shared fragment deliberately says nothing about the coach's own row (see
-     * its javadoc — forwards, the coach is the authenticated caller):
-     * {@code role = 'COACH'} and {@code status = 'ACTIVE'}. Without them a
-     * suspended coach, or one demoted out of the role while a stale grant
-     * survives, would still be offered to the founder as bookable.
-     *
-     * <p><strong>{@code cu.organization_id = :orgId} is load-bearing on its own.</strong>
-     * The shared relation pins the GRANT and the FOUNDER to {@code :orgId}; it
-     * says nothing about the coach's org, because forwards that is the caller's
-     * own. A hand-written grant naming a foreign coach — {@code org_id} and
-     * {@code member_id} in org A, {@code coach_id} in org B — satisfies the
-     * relation entirely, and without this line the founder would be handed
-     * another tenant's coach and their booking link. Covered by
+     * <p><strong>{@code cu.organization_id = :orgId} (in {@link #COACH_CARD_SELECT})
+     * is load-bearing on its own.</strong> The shared relation pins the GRANT and
+     * the FOUNDER to {@code :orgId}; it says nothing about the coach's org,
+     * because forwards that is the caller's own. A hand-written grant naming a
+     * foreign coach — {@code org_id} and {@code member_id} in org A,
+     * {@code coach_id} in org B — satisfies the relation entirely, and without
+     * that line the founder would be handed another tenant's coach and their
+     * booking link. Covered by
      * {@code aCrossOrgGrantNeverSurfacesAForeignCoach}.
      */
     public List<CoachOfMemberRow> coachesOfMember(UUID orgId, UUID memberId) {
-        return jdbc.query("""
-                SELECT cu.id, cu.name, cp.booking_url
-                FROM users cu
-                LEFT JOIN coach_profiles cp ON cp.coach_id = cu.id
-                WHERE cu.organization_id = :orgId
-                  AND cu.role = 'COACH'
-                  AND cu.status = 'ACTIVE'
-                  AND %s
-                ORDER BY cu.name, cu.id
-                """.formatted(CoachAccess.VISIBLE_COACH_PREDICATE.formatted("cu.id")),
+        return jdbc.query(
+                COACH_CARD_SELECT
+                        + "  AND " + CoachAccess.VISIBLE_COACH_PREDICATE.formatted("cu.id")
+                        + COACH_CARD_ORDER,
                 new MapSqlParameterSource("orgId", orgId).addValue("memberId", memberId),
-                (rs, i) -> new CoachOfMemberRow(rs.getObject("id", UUID.class),
-                        rs.getString("name"), rs.getString("booking_url")));
+                CoachingReadRepository::coachOfMemberRow);
+    }
+
+    /**
+     * Coaches Corner: every ACTIVE COACH of the caller's own org, assigned to
+     * them or not — {@link #coachesOfMember} minus the assignment relation, and
+     * nothing else. The tenant floor and the role/status predicates are shared
+     * verbatim ({@link #COACH_CARD_SELECT}), so widening WHO is listed cannot
+     * quietly widen WHICH ORG they come from.
+     *
+     * <p>Dropping the relation is the whole point and is not a leak: this
+     * returns a colleague's name, headline, public bio, photo and the booking
+     * page they chose to publish — the directory a founder needs in order to
+     * pick a coach at all. Nothing here is founder data, and nothing here is
+     * private to an assignment. The narrower read stays the default on the
+     * endpoint precisely so no existing caller is widened by accident.
+     *
+     * <p>ponytail: unbounded, like {@link #roster} — an org has tens of coaches;
+     * paginate when one runs hundreds.
+     */
+    public List<CoachOfMemberRow> coachesInOrg(UUID orgId) {
+        return jdbc.query(COACH_CARD_SELECT + COACH_CARD_ORDER,
+                new MapSqlParameterSource("orgId", orgId),
+                CoachingReadRepository::coachOfMemberRow);
+    }
+
+    private static CoachOfMemberRow coachOfMemberRow(java.sql.ResultSet rs, int i)
+            throws java.sql.SQLException {
+        return new CoachOfMemberRow(rs.getObject("id", UUID.class), rs.getString("name"),
+                rs.getString("headline"), rs.getString("bio"), rs.getString("photo_url"),
+                rs.getString("booking_url"));
     }
 
     public record PillarScoreRow(String pillarName, BigDecimal scorePercentage,

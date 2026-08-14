@@ -101,9 +101,10 @@ public class FounderProfileReadRepository {
 
     /* ------------------------------------------------------------- work list */
 
-    public record ProgramTaskRow(UUID taskId, String taskName, String cohortName, String moduleName,
-                                 LocalDate dueDate, String taskType, boolean done,
-                                 String status, Instant savedAt, Instant submittedAt) {}
+    public record ProgramTaskRow(UUID taskId, String taskName, UUID cohortId, String cohortName,
+                                 String moduleName, LocalDate dueDate, String taskType, UUID refId,
+                                 boolean done, String status, Instant savedAt, Instant submittedAt,
+                                 UUID surveyResponseId, Instant surveySubmittedAt) {}
 
     /**
      * LIVE program tasks in the member's cohorts whose module audience includes
@@ -114,17 +115,26 @@ public class FounderProfileReadRepository {
      * stuck on "To do" even after the member finished it. {@code done} is the
      * one done-semantics authority ({@link TaskCompletion#DONE_FOR_USER}) the
      * journey, the pulse and the matrix already answer to.
+     *
+     * <p>The row carries its cohort id (the Work tab groups per cohort) and, for
+     * SURVEY tasks, the member's tagged response (V173) — surveys have no
+     * artifact read of their own, so their state rides here. EXERCISE/
+     * ASSESSMENT/COURSE state is merged in the service off the artifact reads'
+     * own {@code program_task_id} tags.
      */
     public List<ProgramTaskRow> programTasks(UUID orgId, UUID memberId) {
         return jdbc.query("""
-                SELECT t.id, t.name AS task_name, c.name AS cohort_name, m.name AS module_name,
-                       t.due_date, t.task_type, COALESCE(%1$s, FALSE) AS done,
-                       ps.status, ps.saved_at, ps.submitted_at
+                SELECT t.id, t.name AS task_name, c.id AS cohort_id, c.name AS cohort_name,
+                       m.name AS module_name,
+                       t.due_date, t.task_type, t.ref_id, COALESCE(%1$s, FALSE) AS done,
+                       ps.status, ps.saved_at, ps.submitted_at,
+                       sr.id AS survey_response_id, sr.submitted_at AS survey_submitted_at
                 FROM cohort_members cm
                 JOIN cohorts c         ON c.id = cm.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                 JOIN program_modules m ON m.cohort_id = c.id
                 JOIN program_tasks t   ON t.module_id = m.id AND t.status = 'LIVE'
                 LEFT JOIN program_submissions ps ON ps.task_id = t.id AND ps.user_id = :memberId
+                LEFT JOIN survey_responses sr ON sr.program_task_id = t.id AND sr.respondent_user_id = :memberId
                 WHERE cm.user_id = :memberId
                   AND %2$s
                 ORDER BY c.position, c.name, m.position, t.position
@@ -132,13 +142,18 @@ public class FounderProfileReadRepository {
                         ProgramAudience.INCLUDES_USER.formatted(":memberId")),
                 params(orgId, memberId),
                 (rs, i) -> new ProgramTaskRow(rs.getObject("id", UUID.class),
-                        rs.getString("task_name"), rs.getString("cohort_name"),
+                        rs.getString("task_name"), rs.getObject("cohort_id", UUID.class),
+                        rs.getString("cohort_name"),
                         rs.getString("module_name"), rs.getObject("due_date", LocalDate.class),
-                        rs.getString("task_type"), rs.getBoolean("done"),
-                        rs.getString("status"), instant(rs, "saved_at"), instant(rs, "submitted_at")));
+                        rs.getString("task_type"), rs.getObject("ref_id", UUID.class),
+                        rs.getBoolean("done"),
+                        rs.getString("status"), instant(rs, "saved_at"), instant(rs, "submitted_at"),
+                        rs.getObject("survey_response_id", UUID.class),
+                        instant(rs, "survey_submitted_at")));
     }
 
-    public record ExerciseRow(UUID assignmentId, String exerciseName, Instant deadline, String status,
+    public record ExerciseRow(UUID assignmentId, UUID programTaskId, String exerciseName,
+                              Instant deadline, String status,
                               Instant lastSavedAt, Instant submittedAt, Instant reviewedAt,
                               String qualityTagLabel, Instant qualityTaggedAt, Instant assignedAt) {}
 
@@ -149,7 +164,7 @@ public class FounderProfileReadRepository {
      */
     public List<ExerciseRow> exercises(UUID orgId, UUID memberId) {
         return jdbc.query("""
-                SELECT ea.id, et.name, ea.deadline, es.status,
+                SELECT ea.id, ea.program_task_id, et.name, ea.deadline, es.status,
                        es.last_saved_at, es.submitted_at, es.reviewed_at, es.quality_tag_label,
                        es.quality_tagged_at, ea.created_at AS assigned_at
                 FROM exercise_assignments ea
@@ -159,7 +174,8 @@ public class FounderProfileReadRepository {
                 ORDER BY ea.created_at DESC
                 """,
                 params(orgId, memberId),
-                (rs, i) -> new ExerciseRow(rs.getObject("id", UUID.class), rs.getString("name"),
+                (rs, i) -> new ExerciseRow(rs.getObject("id", UUID.class),
+                        rs.getObject("program_task_id", UUID.class), rs.getString("name"),
                         instant(rs, "deadline"), rs.getString("status"),
                         instant(rs, "last_saved_at"), instant(rs, "submitted_at"),
                         instant(rs, "reviewed_at"), rs.getString("quality_tag_label"),
@@ -233,7 +249,8 @@ public class FounderProfileReadRepository {
                         instant(rs, "deadline")));
     }
 
-    public record AssessmentRow(UUID assignmentId, UUID submissionId, String pipelineName,
+    public record AssessmentRow(UUID assignmentId, UUID submissionId, UUID programTaskId,
+                                UUID pipelineId, String pipelineName,
                                 Instant deadline, String status, Instant startedAt,
                                 Instant submittedAt, Instant evaluatedAt, BigDecimal score,
                                 Instant assignedAt) {}
@@ -245,7 +262,8 @@ public class FounderProfileReadRepository {
      */
     public List<AssessmentRow> assessments(UUID orgId, UUID memberId) {
         return jdbc.query("""
-                SELECT a.id AS assignment_id, s.id AS submission_id, p.name AS pipeline_name,
+                SELECT a.id AS assignment_id, s.id AS submission_id, s.program_task_id,
+                       a.pipeline_id, p.name AS pipeline_name,
                        COALESCE(s.deadline_override, a.deadline) AS deadline,
                        s.status, s.started_at, s.submitted_at, s.evaluated_at,
                        os.overall_score_percentage AS score, a.created_at AS assigned_at
@@ -258,10 +276,54 @@ public class FounderProfileReadRepository {
                 """,
                 params(orgId, memberId),
                 (rs, i) -> new AssessmentRow(rs.getObject("assignment_id", UUID.class),
-                        rs.getObject("submission_id", UUID.class), rs.getString("pipeline_name"),
+                        rs.getObject("submission_id", UUID.class),
+                        rs.getObject("program_task_id", UUID.class),
+                        rs.getObject("pipeline_id", UUID.class), rs.getString("pipeline_name"),
                         instant(rs, "deadline"), rs.getString("status"), instant(rs, "started_at"),
                         instant(rs, "submitted_at"), instant(rs, "evaluated_at"),
                         rs.getBigDecimal("score"), instant(rs, "assigned_at")));
+    }
+
+    public record CoachRow(UUID coachId, String coachName, UUID cohortId, UUID memberId) {}
+
+    /**
+     * Every coach grant covering this member (the {@code coach_assignments}
+     * union: whole-cohort grants for cohorts they're in, direct member grants,
+     * and org-wide grants — V176). One row per grant; the service groups by
+     * coach.
+     *
+     * <p>The row carries the grant's {@code member_id} as well as its
+     * {@code cohort_id} because since V176 a null {@code cohortId} no longer
+     * means "direct": both null is the ORG-WIDE grain, and the two must not
+     * collapse into one flag on the way out.
+     *
+     * <p>The COACH's own row is this query's to pin — org, role, ACTIVE. A grant
+     * asserts nothing about the coach it names (see
+     * {@code common.coachaccess.CoachAccess#VISIBLE_COACH_PREDICATE}'s javadoc,
+     * and the identical three lines in {@code coaching}'s
+     * {@code coachesOfMember}): without them a suspended coach, one demoted out
+     * of the role while a stale grant survives, or another tenant's coach named
+     * by a hand-written grant would still be offered on this header.
+     */
+    public List<CoachRow> coaches(UUID orgId, UUID memberId) {
+        return jdbc.query("""
+                SELECT ca.coach_id, u.name AS coach_name, ca.cohort_id, ca.member_id
+                FROM coach_assignments ca
+                JOIN users u ON u.id = ca.coach_id
+                WHERE ca.org_id = :orgId
+                  AND u.organization_id = :orgId
+                  AND u.role = 'COACH'
+                  AND u.status = 'ACTIVE'
+                  AND (ca.member_id = :memberId
+                       OR EXISTS (SELECT 1 FROM cohort_members cm
+                                  WHERE cm.cohort_id = ca.cohort_id AND cm.user_id = :memberId)
+                       OR (ca.cohort_id IS NULL AND ca.member_id IS NULL))
+                ORDER BY u.name, ca.created_at
+                """,
+                params(orgId, memberId),
+                (rs, i) -> new CoachRow(rs.getObject("coach_id", UUID.class),
+                        rs.getString("coach_name"), rs.getObject("cohort_id", UUID.class),
+                        rs.getObject("member_id", UUID.class)));
     }
 
     /* ------------------------------------------------- pillar snapshot, notes */

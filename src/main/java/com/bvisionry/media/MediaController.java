@@ -74,7 +74,10 @@ public class MediaController {
      * image into an org they govern. Both halves are enforced on BOTH paths.
      */
     private static final String UPLOAD_AUTHORIZATION =
-            "(#orgId == null and hasAnyAuthority('SUPER_ADMIN', 'INSTRUCTOR')) "
+            // COACH is admitted ONLY on the org-less path, and MediaUploadPolicy
+            // .requireCoachKindIsImage bounds them to kind=image there — the same
+            // two-halves shape that admits ORG_ADMIN for branding images.
+            "(#orgId == null and hasAnyAuthority('SUPER_ADMIN', 'INSTRUCTOR', 'COACH')) "
           + "or (#orgId != null and hasAnyAuthority('SUPER_ADMIN', 'ORG_ADMIN') "
           + "and @orgAccess.isInOrg(#orgId))";
 

@@ -38,6 +38,12 @@ public record JourneyResponse(
             UUID id,
             String name,
             String summary,
+            /**
+             * False for always-on material (an orientation section, a closing
+             * letter) that is NOT a numbered stage of the drip. The hero's
+             * "week x of y" counts only paced modules.
+             */
+            boolean paced,
             LockState lockState,
             OffsetDateTime unlockAt,
             String previousModuleName,

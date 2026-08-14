@@ -16,6 +16,11 @@ import lombok.RequiredArgsConstructor;
  * assessment slice's {@code AutoAssignmentEventHandler}. AFTER_COMMIT for the
  * same reasons: a rolled-back join must not leave phantom enrollments, and a
  * move only reads correctly once committed.
+ *
+ * <p>The event's {@code userType} is deliberately unused here (unlike the
+ * assessment handler, whose rules match on it): who may be enrolled is the
+ * learners-only rule, and that lives once inside
+ * {@link CohortService#autoEnroll} next to the manual paths that share it.
  */
 @Component
 @RequiredArgsConstructor

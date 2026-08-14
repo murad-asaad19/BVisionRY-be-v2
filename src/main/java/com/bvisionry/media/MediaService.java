@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.security.CurrentUserAccessor;
 
 import io.minio.BucketExistsArgs;
 import io.minio.GetObjectArgs;
@@ -73,17 +74,20 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
     private final MinioClient publicClient;
     private final MediaProperties props;
     private final OrgStorageQuotaService orgStorageQuota;
+    private final CurrentUserAccessor currentUser;
     private final AtomicBoolean bucketEnsured = new AtomicBoolean(false);
 
     public MediaService(
             @Qualifier("minioInternal") MinioClient internalClient,
             @Qualifier("minioPublic")   MinioClient publicClient,
             MediaProperties props,
-            OrgStorageQuotaService orgStorageQuota) {
+            OrgStorageQuotaService orgStorageQuota,
+            CurrentUserAccessor currentUser) {
         this.internalClient  = internalClient;
         this.publicClient    = publicClient;
         this.props           = props;
         this.orgStorageQuota = orgStorageQuota;
+        this.currentUser     = currentUser;
     }
 
     // -------------------------------------------------------------------------
@@ -117,6 +121,7 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
      */
     public String upload(MultipartFile file, String kind, UUID orgId) {
         MediaUploadPolicy.requireOrgScopedKindIsImage(kind, orgId);
+        MediaUploadPolicy.requireCoachKindIsImage(kind, currentUser.require().role());
         String contentType = MediaUploadPolicy.validate(
                 kind, file.getContentType(), file.getOriginalFilename(), file.getSize());
         if (orgId != null) {
@@ -214,6 +219,7 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
             String kind, String filename, String contentType, Long sizeBytes, UUID orgId) {
         String resolvedKind = (kind == null || kind.isBlank()) ? "asset" : kind;
         MediaUploadPolicy.requireOrgScopedKindIsImage(resolvedKind, orgId);
+        MediaUploadPolicy.requireCoachKindIsImage(resolvedKind, currentUser.require().role());
         // ponytail: only kind + content type are validated against MediaUploadPolicy
         // here; -1 skips the per-kind 10MB cap. On the PLATFORM path that cap is
         // genuinely unenforceable (nothing binds the body length). On the org-scoped

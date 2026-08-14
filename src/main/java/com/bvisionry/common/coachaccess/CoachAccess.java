@@ -10,8 +10,10 @@ import java.util.UUID;
  * The single source of truth for "may this coach see this member?".
  *
  * <p>A coach's visibility is the UNION of their {@code coach_assignments} rows
- * (policy {@code coach_assignment_grain: COHORT_AND_DIRECT}): every member of a
- * cohort the coach is assigned to, plus every member assigned directly. The
+ * (policy {@code coach_assignment_grain: COHORT_AND_DIRECT_AND_ORG}): every
+ * member of a cohort the coach is assigned to, plus every member assigned
+ * directly, plus — when the coach holds an ORG-WIDE grant (V176: both
+ * {@code cohort_id} and {@code member_id} null) — every member of that org. The
  * member must be an ACTIVE MEMBER of the assignment's organization — a member
  * moved to another sub-org, suspended, or deactivated drops out of visibility
  * even if a stale grant remains.
@@ -35,6 +37,13 @@ public class CoachAccess {
      * one template with one side pinned — so "which founders may this coach see"
      * and "which coaches see this founder" are the same rule read in two
      * directions, and cannot fork.
+     *
+     * <p>The third arm ({@code cohort_id IS NULL AND member_id IS NULL}) is the
+     * org-wide grain. It carries no predicate of its own because the join
+     * already supplies one: {@code mu} is pinned to an ACTIVE MEMBER of
+     * {@code ca.org_id}, and {@code ca.org_id = :orgId}. "Every member" is
+     * therefore every member OF THIS ORG — the arm cannot widen past the
+     * tenant.
      */
     private static final String RELATION = """
             EXISTS (
@@ -50,7 +59,8 @@ public class CoachAccess {
                        OR EXISTS (SELECT 1
                                   FROM cohort_members cm
                                   WHERE cm.cohort_id = ca.cohort_id
-                                    AND cm.user_id = mu.id))
+                                    AND cm.user_id = mu.id)
+                       OR (ca.cohort_id IS NULL AND ca.member_id IS NULL))
             )""";
 
     /**
@@ -84,6 +94,9 @@ public class CoachAccess {
      * coach act on this COHORT?", not "may this coach see this MEMBER?". A
      * direct founder grant deliberately does NOT qualify — it grants sight of
      * one founder, never the right to address a cohort they happen to be in.
+     * Nor does an ORG-WIDE grant (V176): sight of everyone is not the right to
+     * address a cohort, and the equality {@code gca.cohort_id = %1$s} is NULL —
+     * hence false — on such a row, so this predicate needed no change.
      *
      * <p>Aliases are prefixed {@code g*} on purpose: a composing query that
      * selects {@code FROM cohorts c} would otherwise have its own alias shadowed

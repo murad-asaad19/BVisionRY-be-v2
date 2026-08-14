@@ -13,13 +13,12 @@ import com.bvisionry.assessment.entity.Assignment;
 import com.bvisionry.assessment.entity.Submission;
 import com.bvisionry.audit.AuditService;
 import com.bvisionry.common.enums.SubmissionStatus;
+import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.tx.AfterCommit;
 import com.bvisionry.evaluation.EvaluationService;
 import com.bvisionry.evaluation.SubmissionPillarUnlockRepository;
-import com.bvisionry.notification.push.NotificationType;
-import com.bvisionry.notification.push.PushNotificationService;
 import com.bvisionry.organization.OrgAuditActions;
 import com.bvisionry.pipeline.entity.Pillar;
 import com.bvisionry.pipeline.entity.Pipeline;
@@ -29,6 +28,7 @@ import com.bvisionry.pipeline.repository.QuestionRepository;
 import com.bvisionry.pipeline.service.PostCompletionLinkResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -52,7 +52,15 @@ public class AssessmentService {
     private final EvaluationService evaluationService;
     private final PostCompletionLinkResolver postCompletionLinkResolver;
     private final AuditService auditService;
-    private final PushNotificationService pushNotificationService;
+    // Published, not called directly. This class used to hold a
+    // PushNotificationService and call notifyOrgAdmins() straight — a frozen
+    // ArchUnit violation. Adding the new coach notification as a SECOND direct
+    // call would freeze a NEW violation (rule 1 keys on exact call sites, not
+    // just the class pair), so both the org-admin and the coach notification
+    // now go through ProgramFlowPushHandler instead — see ProgramFlowEvents'
+    // javadoc on the SUBMISSION event group — which drops this class to ZERO
+    // dependency on notification.push.
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(readOnly = true)
     public List<AssessmentSummaryResponse> listAssessments(UUID userId) {
@@ -338,12 +346,14 @@ public class AssessmentService {
         AfterCommit.dispatch(() -> {
             log.info("Transaction committed for submission {}, dispatching async evaluation", submissionId);
             evaluationService.evaluateSubmissionAsync(submissionId);
-            pushNotificationService.notifyOrgAdmins(orgId, NotificationType.MEMBER_SUBMITTED,
-                    "Assessment completed",
-                    memberName + " completed \"" + pipelineName + "\".",
-                    "/app/admin/organizations/" + orgId + "/assignments",
-                    "/app/admin/organizations/" + orgId + "/assignments");
         });
+        // publishEvent, called here inside the still-open @Transactional method
+        // (not inside the AfterCommit.dispatch lambda above), is what lets
+        // ProgramFlowPushHandler's @TransactionalEventListener defer itself to
+        // AFTER_COMMIT — the same deferral AfterCommit.dispatch gives the
+        // evaluation kick-off, just via Spring's mechanism instead of a manual one.
+        eventPublisher.publishEvent(
+                new ProgramFlowEvents.AssessmentSubmitted(orgId, userId, memberName, pipelineName));
 
         log.info("Submission {} submitted and enqueued for evaluation", submissionId);
 

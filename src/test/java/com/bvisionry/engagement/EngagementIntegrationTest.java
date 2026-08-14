@@ -251,6 +251,74 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
+    /**
+     * "Bvisionry Labs" — the member-facing schedule. Distinct from the
+     * Engagement Record §4 keeps off the member's report: it answers when we
+     * meet and whether I turned up, and carries nothing about anyone else.
+     */
+    @Nested
+    class MySessions {
+
+        @Test
+        void listsOnlyTheCallersOwnCohortsAndOwnAttendance() throws Exception {
+            UUID attended = insertSession(cohort1, "WORKSHOP", "-7 days");
+            insertSession(cohort1, "COACHING_GROUP", "+7 days");
+            // Another cohort the founder is NOT in.
+            UUID otherCohort = insertCohort(orgA.getId(), "Not Mine", founderEmpty.getId());
+            insertSession(otherCohort, "WORKSHOP", "-1 day");
+            jdbc.update("INSERT INTO session_attendance (session_id, member_id, marked_by) VALUES (?, ?, ?)",
+                    attended, founder.getId(), admin.getId());
+
+            TestAuthentication.authenticate(founder);
+            mockMvc.perform(get("/api/my/sessions"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(2)))
+                    // Newest first: the future one leads.
+                    .andExpect(jsonPath("$[0].type", is("COACHING_GROUP")))
+                    .andExpect(jsonPath("$[0].attended", is(false)))
+                    .andExpect(jsonPath("$[1].id", is(attended.toString())))
+                    .andExpect(jsonPath("$[1].attended", is(true)))
+                    .andExpect(jsonPath("$[1].cohortName", is("Cohort One")))
+                    // Nobody else's data rides along.
+                    .andExpect(jsonPath("$[0].expectedMemberIds").doesNotExist())
+                    .andExpect(jsonPath("$[0].attendance").doesNotExist());
+        }
+
+        /** A 1:1 that names another founder is not on my schedule. */
+        @Test
+        void hidesASessionTheCallerIsNotExpectedAt() throws Exception {
+            jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
+                    cohort1, founderTwo.getId());
+            UUID oneOnOne = insertSession(cohort1, "COACHING_1ON1", "-1 day");
+            jdbc.update("INSERT INTO session_expected_attendees (session_id, member_id) VALUES (?, ?)",
+                    oneOnOne, founderTwo.getId());
+
+            TestAuthentication.authenticate(founder);
+            mockMvc.perform(get("/api/my/sessions"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(0)));
+
+            TestAuthentication.authenticate(founderTwo);
+            mockMvc.perform(get("/api/my/sessions"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(1)))
+                    .andExpect(jsonPath("$[0].id", is(oneOnOne.toString())));
+        }
+
+        /** A DRAFT cohort is invisible to members everywhere else too. */
+        @Test
+        void hidesSessionsOfADraftCohort() throws Exception {
+            UUID draft = insertCohort(orgA.getId(), "Unlaunched", founder.getId());
+            jdbc.update("UPDATE cohorts SET status = 'DRAFT' WHERE id = ?", draft);
+            insertSession(draft, "WORKSHOP", "-1 day");
+
+            TestAuthentication.authenticate(founder);
+            mockMvc.perform(get("/api/my/sessions"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(0)));
+        }
+    }
+
     @Nested
     class ExpectedAttendees {
 

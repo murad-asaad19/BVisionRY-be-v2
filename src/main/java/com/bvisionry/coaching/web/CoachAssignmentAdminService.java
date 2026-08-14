@@ -51,9 +51,11 @@ public class CoachAssignmentAdminService {
 
     @Transactional
     public CoachAssignmentResponse create(UUID orgId, CreateCoachAssignmentRequest request) {
-        if ((request.cohortId() == null) == (request.memberId() == null)) {
+        // Three grains (V176), so only BOTH is rejected: neither IS the grain
+        // "every member of this org".
+        if (request.cohortId() != null && request.memberId() != null) {
             throw new BadRequestException(
-                    "Assign the coach to exactly one target: a cohort or a founder.");
+                    "Assign the coach to a cohort or a founder, not both.");
         }
 
         OrgUserRow coach = reads.userInOrg(orgId, request.coachId())
@@ -73,7 +75,7 @@ public class CoachAssignmentAdminService {
                     request.cohortId())) {
                 throw new BadRequestException("This coach is already assigned to that cohort.");
             }
-        } else {
+        } else if (request.memberId() != null) {
             member = reads.userInOrg(orgId, request.memberId())
                     .orElseThrow(() -> new ResourceNotFoundException("Member",
                             request.memberId().toString()));
@@ -84,6 +86,11 @@ public class CoachAssignmentAdminService {
                     request.memberId())) {
                 throw new BadRequestException("This coach is already assigned to that founder.");
             }
+        } else if (assignments.existsByOrgIdAndCoachIdAndCohortIdIsNullAndMemberIdIsNull(
+                orgId, coach.id())) {
+            // Org-wide grain: nothing to look up — the org itself is the target,
+            // and it is already resolved by the guard stack.
+            throw new BadRequestException("This coach already covers the whole organization.");
         }
 
         CoachAssignment assignment = new CoachAssignment();
@@ -97,6 +104,7 @@ public class CoachAssignmentAdminService {
         return new CoachAssignmentResponse(saved.getId(), coach.id(), coach.name(),
                 coach.email(), saved.getCohortId(), cohortName, saved.getMemberId(),
                 member == null ? null : member.name(), member == null ? null : member.email(),
+                saved.getCohortId() == null && saved.getMemberId() == null,
                 saved.getCreatedAt());
     }
 
@@ -116,6 +124,7 @@ public class CoachAssignmentAdminService {
                 coach == null ? null : coach.name(), coach == null ? null : coach.email(),
                 a.getCohortId(), a.getCohortId() == null ? null : cohorts.get(a.getCohortId()),
                 a.getMemberId(), member == null ? null : member.name(),
-                member == null ? null : member.email(), a.getCreatedAt());
+                member == null ? null : member.email(),
+                a.getCohortId() == null && a.getMemberId() == null, a.getCreatedAt());
     }
 }

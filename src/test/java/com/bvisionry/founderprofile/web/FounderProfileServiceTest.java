@@ -45,32 +45,23 @@ class FounderProfileServiceTest {
     }
 
     private static ProgramTaskRow task(String type, boolean done, String submissionStatus) {
-        return new ProgramTaskRow(null, "T", "Cohort", "Module", null, type, done,
-                submissionStatus, null, null);
+        return new ProgramTaskRow(null, "T", null, "Cohort", "Module", null, type, null, done,
+                submissionStatus, null, null, null, null);
     }
 
-    /**
-     * Only LESSON tasks own a program_submissions row, so every other type
-     * used to read "To do" (null) forever however finished it was.
-     */
+    /** lessonStatus only maps LESSON's done flag to SUBMITTED; unfinished tasks keep their raw status. */
     @Test
-    void doneCohortTasksReportTheirTypesDoneWord() {
-        assertThat(FounderProfileService.programStatus(task("COURSE", true, null)))
-                .isEqualTo("COMPLETED");
-        assertThat(FounderProfileService.programStatus(task("EXERCISE", true, null)))
+    void doneLessonReportsSubmitted() {
+        assertThat(FounderProfileService.lessonStatus(task("LESSON", true, "SUBMITTED")))
                 .isEqualTo("SUBMITTED");
-        assertThat(FounderProfileService.programStatus(task("SURVEY", true, null)))
-                .isEqualTo("SUBMITTED");
-        assertThat(FounderProfileService.programStatus(task("ASSESSMENT", true, null)))
-                .isEqualTo("SUBMITTED");
-        assertThat(FounderProfileService.programStatus(task("LESSON", true, "SUBMITTED")))
+        assertThat(FounderProfileService.lessonStatus(task("LESSON", true, null)))
                 .isEqualTo("SUBMITTED");
     }
 
     @Test
     void unfinishedTasksKeepTheirSubmissionStatus() {
-        assertThat(FounderProfileService.programStatus(task("LESSON", false, "DRAFT")))
+        assertThat(FounderProfileService.lessonStatus(task("LESSON", false, "DRAFT")))
                 .isEqualTo("DRAFT");
-        assertThat(FounderProfileService.programStatus(task("COURSE", false, null))).isNull();
+        assertThat(FounderProfileService.lessonStatus(task("LESSON", false, null))).isNull();
     }
 }

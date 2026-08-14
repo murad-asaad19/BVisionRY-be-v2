@@ -261,6 +261,76 @@ class CoachConsoleIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
+    /* ------------------------------------------- V176 org-wide grant (grain) */
+
+    /**
+     * The third grain's WHAT, not its WHO. {@code CoachAccess} decides who the
+     * house coach may see; {@code CoachingReadRepository.GRANTED_COHORT} decides
+     * how much of their journey comes back — and until the org-wide arm was
+     * added to that predicate the two disagreed: the founder appeared on the
+     * roster with no cohort, no task counts and no modules. An authorized coach
+     * looking at an empty journey is worse than a 404, because it reads as
+     * "this founder has done nothing".
+     */
+    @Nested
+    class OrgWideGrant {
+
+        private User house;
+
+        @BeforeEach
+        void grantTheHouseCoach() {
+            house = saveUser("coach.house@test.invalid", UserRole.COACH, orgA);
+            insertGrant(orgA.getId(), house.getId(), null, null);
+        }
+
+        @Test
+        void theHouseCoachOpensTheFullJourney_notAnEmptyOne() throws Exception {
+            TestAuthentication.authenticate(house);
+            mockMvc.perform(get("/api/v1/coach/founders/" + founderInCohort.getId()))
+                    .andExpect(status().isOk())
+                    // Every cohort, every LIVE task — an org-wide grant is
+                    // strictly wider than a direct one, so it grants the same
+                    // full journey a direct grant does.
+                    .andExpect(jsonPath("$.founder.cohortNames", is("Cohort One, Cohort Two")))
+                    .andExpect(jsonPath("$.founder.totalTasks", is(3)))
+                    .andExpect(jsonPath("$.founder.submittedTasks", is(2)))
+                    .andExpect(jsonPath("$.founder.completionPct", is(67)))
+                    .andExpect(jsonPath("$.modules", hasSize(2)))
+                    .andExpect(jsonPath("$.modules[0].moduleName", is("Module One")))
+                    .andExpect(jsonPath("$.modules[0].cohortName", is("Cohort One")))
+                    .andExpect(jsonPath("$.modules[0].totalTasks", is(2)))
+                    .andExpect(jsonPath("$.modules[0].submittedTasks", is(1)))
+                    .andExpect(jsonPath("$.modules[1].moduleName", is("Module Two")));
+        }
+
+        @Test
+        void theHouseCoachsRosterIsEveryActiveMemberOfTheOrg() throws Exception {
+            TestAuthentication.authenticate(house);
+            mockMvc.perform(get("/api/v1/coach/roster"))
+                    .andExpect(status().isOk())
+                    // all four org-A founders, including the two no other grant reaches
+                    .andExpect(jsonPath("$.founders", hasSize(4)))
+                    .andExpect(jsonPath("$.founders[0].name", is("founder.cohort")))
+                    .andExpect(jsonPath("$.founders[0].cohortNames",
+                            is("Cohort One, Cohort Two")))
+                    .andExpect(jsonPath("$.founders[0].totalTasks", is(3)))
+                    .andExpect(jsonPath("$.founders[1].name", is("founder.direct")))
+                    .andExpect(jsonPath("$.founders[2].name", is("founder.other")))
+                    // the founder NO cohort grant covers still carries their real
+                    // cohort and its task — the arm's other half
+                    .andExpect(jsonPath("$.founders[2].cohortNames", is("Cohort Two")))
+                    .andExpect(jsonPath("$.founders[2].totalTasks", is(1)))
+                    .andExpect(jsonPath("$.founders[3].name", is("founder.unassigned")));
+        }
+
+        @Test
+        void anotherTenantsFounderIsStill404ForTheWidestGrain() throws Exception {
+            TestAuthentication.authenticate(house);
+            mockMvc.perform(get("/api/v1/coach/founders/" + founderB.getId()))
+                    .andExpect(status().isNotFound());
+        }
+    }
+
     /* -------------------------------------- booking profile (calendar_integration) */
 
     /**
@@ -377,6 +447,59 @@ class CoachConsoleIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(jdbc.queryForObject(
                     "SELECT booking_url FROM coach_profiles WHERE coach_id = ?",
                     String.class, otherCoach.getId())).isEqualTo("https://cal.com/coach-other");
+        }
+
+        /**
+         * V178 PATCH semantics, and the one thing about them that can surprise:
+         * the body is the WHOLE profile, so a field left out is CLEARED, not
+         * preserved. Asserted rather than merely documented, because the coach
+         * form saves all four together and a future second form that PATCHed
+         * only its own field would silently wipe the others.
+         */
+        @Test
+        void theWholeProfileIsReplacedOnEveryPatch() throws Exception {
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(patchProfileJson("""
+                    {"bookingUrl":"https://cal.com/coach-a",
+                     "headline":"  Fundraising & GTM  ",
+                     "bio":"{\\"type\\":\\"doc\\"}",
+                     "photoUrl":"minio://media/image/dana.jpg"}
+                    """))
+                    .andExpect(status().isOk())
+                    // Blank-trimmed on the way in, one representation per column.
+                    .andExpect(jsonPath("$.headline", is("Fundraising & GTM")))
+                    // The coach's OWN surface echoes the RAW marker: this record
+                    // is what the form PATCHes back, and a presigned URL would
+                    // expire in the column.
+                    .andExpect(jsonPath("$.photoUrl", is("minio://media/image/dana.jpg")));
+
+            mockMvc.perform(get("/api/v1/coach/profile"))
+                    .andExpect(jsonPath("$.bio", is("{\"type\":\"doc\"}")))
+                    .andExpect(jsonPath("$.headline", is("Fundraising & GTM")));
+
+            // A body naming only the link clears the rest — whole-profile replace.
+            mockMvc.perform(patchProfile("https://cal.com/coach-a"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.headline", nullValue()))
+                    .andExpect(jsonPath("$.bio", nullValue()))
+                    .andExpect(jsonPath("$.photoUrl", nullValue()))
+                    .andExpect(jsonPath("$.bookingUrl", is("https://cal.com/coach-a")));
+        }
+
+        /** The headline's cap matches its varchar(160) column, checked before the DB. */
+        @Test
+        void anOverlongHeadlineIsRefused() throws Exception {
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(patchProfileJson(
+                    "{\"headline\":\"%s\"}".formatted("a".repeat(161))))
+                    .andExpect(status().isBadRequest());
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM coach_profiles WHERE coach_id = ?",
+                    Integer.class, coach.getId())).isZero();
+
+            mockMvc.perform(patchProfileJson(
+                    "{\"headline\":\"%s\"}".formatted("a".repeat(160))))
+                    .andExpect(status().isOk());
         }
 
         @Test
@@ -534,6 +657,114 @@ class CoachConsoleIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(jsonPath("$[0].name", is("coach.a")));
         }
 
+        /**
+         * V178: the card is no longer a name and a URL. Headline, bio and photo
+         * ride the SAME row and the SAME read, so a coach who fills them in is
+         * described rather than merely listed.
+         *
+         * <p>The photo is an EXTERNAL url on purpose: {@code MediaUrlPort}
+         * promises a {@code minio://} marker becomes a presigned GET and
+         * anything else passes through untouched, and only the second half of
+         * that is assertable without a live object store. What this pins is that
+         * the founder read goes THROUGH the port at all — drop the call and an
+         * external URL still passes, but the marker case ships {@code minio://…}
+         * to an {@code <img>}.
+         */
+        @Test
+        void theCoachsHeadlineBioAndPhotoReachTheFoundersCard() throws Exception {
+            TestAuthentication.authenticate(coach);
+            mockMvc.perform(patchProfileJson("""
+                    {"bookingUrl":"https://cal.com/coach-a",
+                     "headline":"Fundraising & GTM",
+                     "bio":"{\\"type\\":\\"doc\\",\\"content\\":[]}",
+                     "photoUrl":"https://cdn.example.com/dana.jpg"}
+                    """)).andExpect(status().isOk());
+
+            TestAuthentication.authenticate(founderInCohort);
+            mockMvc.perform(get(MY_COACHES))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[0].headline", is("Fundraising & GTM")))
+                    .andExpect(jsonPath("$[0].bio", is("{\"type\":\"doc\",\"content\":[]}")))
+                    .andExpect(jsonPath("$[0].photoUrl", is("https://cdn.example.com/dana.jpg")))
+                    // Still no contact data, in either direction.
+                    .andExpect(jsonPath("$[0].email").doesNotExist());
+        }
+
+        /**
+         * {@code ?scope=all} — Coaches Corner. A founder cannot choose a coach
+         * from a list that only contains the coach they were already given, so
+         * this scope drops the assignment relation and keeps everything else.
+         */
+        @Test
+        void scopeAllListsEveryActiveCoachInTheOrg_assignedOrNot() throws Exception {
+            // An org-A coach with NO grant on anybody — invisible by default,
+            // listed by Coaches Corner.
+            saveUser("coach.unassigned@test.invalid", UserRole.COACH, orgA);
+
+            TestAuthentication.authenticate(founderInCohort);
+            // The DEFAULT is untouched by the new parameter existing.
+            mockMvc.perform(get(MY_COACHES))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(1)))
+                    .andExpect(jsonPath("$[0].name", is("coach.a")));
+
+            mockMvc.perform(get(MY_COACHES).param("scope", "all"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(2)))
+                    .andExpect(jsonPath("$[0].name", is("coach.a")))
+                    .andExpect(jsonPath("$[1].name", is("coach.unassigned")));
+
+            // A founder with no coach at all still gets the whole bench — the
+            // point of the surface.
+            TestAuthentication.authenticate(founderUnassigned);
+            mockMvc.perform(get(MY_COACHES).param("scope", "all"))
+                    .andExpect(jsonPath("$", hasSize(2)));
+            mockMvc.perform(get(MY_COACHES)).andExpect(jsonPath("$", hasSize(0)));
+        }
+
+        /**
+         * Widening WHO is listed must not widen WHICH ORG they come from, nor
+         * resurrect the two predicates the reverse read has to carry itself.
+         * Both live in the shared {@code COACH_CARD_SELECT}, which is exactly
+         * why this scope inherits them.
+         */
+        @Test
+        void scopeAllStaysInsideTheTenantAndSkipsSuspendedOrDemotedCoaches() throws Exception {
+            User suspended = saveUser("coach.suspended@test.invalid", UserRole.COACH, orgA);
+            User demoted = saveUser("coach.demoted@test.invalid", UserRole.COACH, orgA);
+            jdbc.update("UPDATE users SET status = 'SUSPENDED' WHERE id = ?", suspended.getId());
+            jdbc.update("UPDATE users SET role = 'MEMBER' WHERE id = ?", demoted.getId());
+
+            TestAuthentication.authenticate(founderInCohort);
+            mockMvc.perform(get(MY_COACHES).param("scope", "all"))
+                    .andExpect(status().isOk())
+                    // org B's coach.b is never in an org-A founder's corner.
+                    .andExpect(jsonPath("$", hasSize(1)))
+                    .andExpect(jsonPath("$[0].name", is("coach.a")));
+
+            // And the mirror: org B's founder sees org B's bench only.
+            TestAuthentication.authenticate(founderB);
+            mockMvc.perform(get(MY_COACHES).param("scope", "all"))
+                    .andExpect(jsonPath("$", hasSize(1)))
+                    .andExpect(jsonPath("$[0].name", is("coach.b")));
+        }
+
+        /**
+         * An unrecognised scope falls back to the DEFAULT, not to a 400 and not
+         * to the wide read — the fallback direction is the narrow one, so a typo
+         * can only ever show a founder less than they asked for.
+         */
+        @Test
+        void anUnknownScopeFallsBackToTheNarrowDefault() throws Exception {
+            saveUser("coach.unassigned2@test.invalid", UserRole.COACH, orgA);
+
+            TestAuthentication.authenticate(founderInCohort);
+            mockMvc.perform(get(MY_COACHES).param("scope", "everything"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(1)))
+                    .andExpect(jsonPath("$[0].name", is("coach.a")));
+        }
+
         @Test
         void aCallerWhoIsNotAVisibleMemberSeesNothing() throws Exception {
             // Not a 403 — the relation is the authority, and an admin simply has
@@ -593,14 +824,29 @@ class CoachConsoleIntegrationTest extends AbstractPostgresIntegrationTest {
             TestAuthentication.authenticate(saveUser("orgadmin.val@test.invalid",
                     UserRole.ORG_ADMIN, orgA));
 
-            // both / neither grain
+            // BOTH is not a grain — the only combination left illegal by V176.
             mockMvc.perform(post(grants(orgA)).contentType(MediaType.APPLICATION_JSON)
                             .content("{\"coachId\":\"%s\",\"cohortId\":\"%s\",\"memberId\":\"%s\"}"
                                     .formatted(coach.getId(), cohort2, founderUnassigned.getId())))
                     .andExpect(status().isBadRequest());
+
+            // NEITHER is the org-wide grain (V176): accepted, and unique per coach.
+            mockMvc.perform(post(grants(orgA)).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"coachId\":\"%s\"}".formatted(coach.getId())))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.orgWide", is(true)))
+                    .andExpect(jsonPath("$.cohortId", nullValue()))
+                    .andExpect(jsonPath("$.memberId", nullValue()));
+            // The V176 partial unique index is one row per (coach, org); the
+            // service refuses first, so the surface is 400, not 409 — and
+            // refused means NOT WRITTEN, not merely not echoed.
             mockMvc.perform(post(grants(orgA)).contentType(MediaType.APPLICATION_JSON)
                             .content("{\"coachId\":\"%s\"}".formatted(coach.getId())))
                     .andExpect(status().isBadRequest());
+            assertThat(jdbc.queryForObject("""
+                    SELECT count(*) FROM coach_assignments
+                    WHERE org_id = ? AND coach_id = ? AND cohort_id IS NULL AND member_id IS NULL
+                    """, Integer.class, orgA.getId(), coach.getId())).isOne();
 
             // a MEMBER is not a coach
             mockMvc.perform(post(grants(orgA)).contentType(MediaType.APPLICATION_JSON)
@@ -833,9 +1079,14 @@ class CoachConsoleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /** {@code PATCH /api/v1/coach/profile} with one booking-link value. */
     private static org.springframework.test.web.servlet.RequestBuilder patchProfile(String url) {
+        return patchProfileJson("{\"bookingUrl\":\"%s\"}".formatted(url));
+    }
+
+    /** {@code PATCH /api/v1/coach/profile} with a whole-profile body (V178). */
+    private static org.springframework.test.web.servlet.RequestBuilder patchProfileJson(String json) {
         return patch("/api/v1/coach/profile")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content("{\"bookingUrl\":\"%s\"}".formatted(url));
+                .content(json);
     }
 
     private String grants(Organization org) {

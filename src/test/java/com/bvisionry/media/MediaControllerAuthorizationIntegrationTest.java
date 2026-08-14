@@ -143,6 +143,76 @@ class MediaControllerAuthorizationIntegrationTest extends AbstractPostgresIntegr
         return orgId == null ? request : request.param("orgId", orgId.toString());
     }
 
+    /** A COACH belonging to {@code org} — they upload their own profile photo. */
+    private User coachIn(Organization org) {
+        User user = new User();
+        user.setEmail("test-coach@bvisionry.invalid");
+        user.setName("Test Coach");
+        user.setRole(UserRole.COACH);
+        user.setStatus(UserStatus.ACTIVE);
+        user.setOrganization(org);
+        User saved = userRepository.save(user);
+        TestAuthentication.authenticate(saved);
+        return saved;
+    }
+
+    // ------------------------------------------------------ COACH is bounded…
+
+    /**
+     * A coach owns their Coaches Corner card, so they must be able to put a
+     * photo on it — the dropzone 403'd before, with no way through.
+     */
+    @Test
+    void coachMayPresignTheirOwnProfilePhoto() throws Exception {
+        coachIn(own);
+        // Only the object-store hop is stubbed; authorization and the kind
+        // bound above it are the real thing. The refusal cases below need no
+        // stub — they throw before MinIO is ever reached.
+        doReturn(new MediaService.PresignedUpload(
+                        "http://minio.test/put", "minio://bucket/key", "http://minio.test/get", "image/png"))
+                .when(mediaService).presignUpload(any(), any(), any(), any(), any());
+
+        mockMvc.perform(presign("image", null, "image/png"))
+                .andExpect(status().isOk());
+    }
+
+    /**
+     * The other half of admitting them: a coach's ONLY upload is that photo.
+     * Without this the widening would hand every coach the platform media
+     * namespace — videos, PDFs, arbitrary assets.
+     */
+    @Test
+    void coachCannotUploadAnythingButAnImage() throws Exception {
+        coachIn(own);
+
+        mockMvc.perform(presign("video", null, "video/mp4"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(presign("asset", null, "application/zip"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(presign("pdf", null, "application/pdf"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(multipart("video", null, file("clip.mp4", "video/mp4")))
+                .andExpect(status().isBadRequest());
+    }
+
+    /** And never into an org's branding namespace, which is an admin's to own. */
+    @Test
+    void coachCannotUploadIntoAnOrgPrefix() throws Exception {
+        coachIn(own);
+
+        mockMvc.perform(presign("image", own.getId(), "image/png"))
+                .andExpect(status().isForbidden());
+    }
+
+    /** The kind bound is not a substitute for the content-type allowlist. */
+    @Test
+    void coachStillStopsAtTheContentTypeAllowlist() throws Exception {
+        coachIn(own);
+
+        mockMvc.perform(presign("image", null, "image/svg+xml"))
+                .andExpect(status().isBadRequest());
+    }
+
     // ------------------------------------------------ ORG_ADMIN is admitted…
 
     @Test

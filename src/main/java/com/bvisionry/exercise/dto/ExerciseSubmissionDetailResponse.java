@@ -17,7 +17,10 @@ public record ExerciseSubmissionDetailResponse(
         UUID assignmentId,
         UUID templateId,
         String templateName,
+        /** Serialised tiptap document — the brief above the member's sheet. */
         String templateDescription,
+        /** Cover art, already resolved to a loadable URL, or null. */
+        String templateCoverImageUrl,
         ExerciseSubmissionStatus status,
         Instant deadline,
         Instant lastSavedAt,

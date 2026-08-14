@@ -218,4 +218,22 @@ class PushNotificationServiceTest {
         assertThat(NotificationType.visibleTo(UserRole.SUPER_ADMIN))
                 .containsExactlyInAnyOrder(NotificationType.values());
     }
+
+    @Test
+    void aCoachSeesTheSubmissionTypesAndNothingElseFromTheAdminSet() {
+        // Spec §2.2 makes the coach a review target for submissions, so the
+        // three submission types must appear in their preferences — a type you
+        // receive but cannot mute is a bug. Everything else admin-only is org
+        // administration and stays out, and INSTRUCTOR is unchanged: the coach
+        // grant model says nothing about them.
+        assertThat(NotificationType.visibleTo(UserRole.COACH))
+                .contains(NotificationType.MEMBER_SUBMITTED,
+                        NotificationType.PROGRAM_TASK_SUBMITTED,
+                        NotificationType.EXERCISE_ACTIVITY)
+                .doesNotContain(NotificationType.MEMBER_JOINED)
+                .filteredOn(NotificationType::isAdminOnly)
+                .allMatch(NotificationType::isCoachVisible);
+        assertThat(NotificationType.visibleTo(UserRole.INSTRUCTOR))
+                .noneMatch(NotificationType::isAdminOnly);
+    }
 }

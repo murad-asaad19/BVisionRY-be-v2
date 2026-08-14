@@ -24,6 +24,28 @@ public interface CohortRepository extends JpaRepository<Cohort, UUID> {
             """, nativeQuery = true)
     List<Cohort> findAssigned(@Param("orgId") UUID orgId);
 
+    /**
+     * Module count + stage label per cohort assigned to an org (spec §8
+     * cohort-card progress bar). {@code LEFT JOIN program_settings} because
+     * that row is optional — its absence means the "Week" default, same as
+     * {@link com.bvisionry.programflow.domain.ProgramSettings}.
+     *
+     * The count is of PACED modules only: the card reads "Week 3/8", so
+     * always-on material (orientation, a closing letter) would otherwise
+     * lengthen a schedule it is not part of.
+     */
+    @Query(value = """
+            SELECT c.id AS cohortId,
+                   (SELECT count(*) FROM program_modules pm
+                     WHERE pm.cohort_id = c.id AND pm.paced) AS moduleCount,
+                   COALESCE(ps.stage_label, 'Week') AS stageLabel
+            FROM cohorts c
+            JOIN cohort_orgs co ON co.cohort_id = c.id
+            LEFT JOIN program_settings ps ON ps.cohort_id = c.id
+            WHERE co.org_id = :orgId
+            """, nativeQuery = true)
+    List<CohortProgressRow> findAssignedProgressStats(@Param("orgId") UUID orgId);
+
     /** Active members (role MEMBER) of an org — enrollment pickers and roster validation. */
     @Query(value = """
             SELECT u.id AS id, u.name AS name, u.email AS email

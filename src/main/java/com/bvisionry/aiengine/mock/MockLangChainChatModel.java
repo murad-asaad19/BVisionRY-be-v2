@@ -65,6 +65,13 @@ public class MockLangChainChatModel implements ChatModel {
         if (systemPrompt.contains("overallScorePercentage")) {
             return OVERALL_SUMMARY_DEFAULT;
         }
+        // The shift narrative (§6) has its own schema. Without this arm it fell
+        // through to PILLAR_DEFAULT, so every mocked generation failed the
+        // kind/narrative guardrail and no narrative could ever be reviewed on a
+        // sandbox lane. CARRIED_FORWARD appears only in that prompt.
+        if (systemPrompt.contains("CARRIED_FORWARD")) {
+            return SHIFT_NARRATIVE_DEFAULT;
+        }
         return PILLAR_DEFAULT;
     }
 
@@ -76,6 +83,24 @@ public class MockLangChainChatModel implements ChatModel {
               "whatCanImprove": ["Tighten feedback loops", "Translate insight into action faster"],
               "whyThisMattersForBusiness": "Faster learning here compounds directly into execution speed.",
               "evidence": [{"qid": "q1", "quote": "I review what worked and what didn't after each milestone."}]
+            }
+            """;
+
+    /**
+     * A shift narrative (§6). {@code closingAction} is deliberately non-empty:
+     * a declining pillar MUST come back with a next step, and a mock that
+     * returned "" would make every decline look like a generation failure on a
+     * sandbox lane.
+     */
+    private static final String SHIFT_NARRATIVE_DEFAULT = """
+            {
+              "kind": "PERSISTED",
+              "narrative": "The earlier assessment named ownership of outcomes as the strength here, \
+            and the later text still leans on it, but the follow-through it described has thinned. \
+            Where the first read showed decisions being closed out, the second describes them being \
+            revisited. The pattern is the same one named before, showing up later in the cycle.",
+              "closingAction": "Pick the one decision currently being revisited and close it this week, \
+            writing down what would have to be true to reopen it."
             }
             """;
 

@@ -3,6 +3,8 @@ package com.bvisionry.exercise;
 import com.bvisionry.audit.AuditService;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
+import com.bvisionry.common.event.ProgramFlowEvents;
+import com.bvisionry.common.media.MediaUrlPort;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
@@ -24,11 +26,10 @@ import com.bvisionry.exercise.repository.ExerciseCommentRepository;
 import com.bvisionry.exercise.repository.ExerciseColumnRepository;
 import com.bvisionry.exercise.repository.ExerciseRowRepository;
 import com.bvisionry.exercise.repository.ExerciseSubmissionRepository;
-import com.bvisionry.notification.push.NotificationType;
-import com.bvisionry.notification.push.PushNotificationService;
 import com.bvisionry.organization.OrgAuditActions;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -56,8 +57,13 @@ public class ExerciseSubmissionService {
     private final ExerciseRowRepository rowRepository;
     private final ExerciseColumnRepository columnRepository;
     private final ExerciseCommentRepository commentRepository;
+    private final MediaUrlPort mediaUrlPort;
     private final AuditService auditService;
-    private final PushNotificationService pushNotificationService;
+    // Published, not called directly: see AssessmentService's field comment —
+    // a direct notification.push call here is a NEW frozen-ArchUnit violation
+    // even where the class pair is already frozen, so both submit-notify call
+    // sites below go through ProgramFlowPushHandler instead.
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(readOnly = true)
     public List<MyExerciseSummaryResponse> listMine(UUID userId) {
@@ -216,11 +222,8 @@ public class ExerciseSubmissionService {
                 OrgAuditActions.ENTITY_EXERCISE_SUBMISSION, submission.getId(),
                 Map.of("exerciseName", template.getName(),
                        "memberName", submission.getUser().getName()));
-        pushNotificationService.notifyOrgAdmins(orgId, NotificationType.EXERCISE_ACTIVITY,
-                "Exercise submitted",
-                submission.getUser().getName() + " submitted \"" + template.getName() + "\".",
-                "/app/admin/exercises",
-                "/app/admin/exercises");
+        eventPublisher.publishEvent(new ProgramFlowEvents.ExerciseSubmitted(
+                orgId, userId, submission.getUser().getName(), template.getName()));
 
         return buildDetail(submission, false);
     }
@@ -248,13 +251,9 @@ public class ExerciseSubmissionService {
         ExerciseComment saved = commentRepository.save(replyComment);
 
         ExerciseTemplate template = submission.getAssignment().getTemplate();
-        pushNotificationService.notifyOrgAdmins(
-                submission.getAssignment().getOrganization().getId(),
-                NotificationType.EXERCISE_ACTIVITY,
-                "Exercise feedback reply",
-                submission.getUser().getName() + " replied on \"" + template.getName() + "\".",
-                "/app/admin/exercises",
-                "/app/admin/exercises");
+        eventPublisher.publishEvent(new ProgramFlowEvents.ExerciseFeedbackReplied(
+                submission.getAssignment().getOrganization().getId(), userId,
+                submission.getUser().getName(), template.getName()));
 
         return ExerciseCommentResponse.from(saved, false);
     }
@@ -298,6 +297,7 @@ public class ExerciseSubmissionService {
                 template.getId(),
                 template.getName(),
                 template.getDescription(),
+                mediaUrlPort.resolveUrl(template.getCoverImageUrl()),
                 submission.getStatus(),
                 submission.getAssignment().getDeadline(),
                 submission.getLastSavedAt(),

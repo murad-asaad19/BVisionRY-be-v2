@@ -62,6 +62,15 @@ public class ProgramModule {
     @Column(name = "pillar_label", length = 120)
     private String pillarLabel;
 
+    /**
+     * Whether this module is a NUMBERED STAGE of the drip ("Week 01") or
+     * always-on material that sits outside the pacing — a welcome section, a
+     * closing letter. False suppresses the stage kicker everywhere it renders.
+     * Orthogonal to {@code lockMode}: an unpaced module may still be gated.
+     */
+    @Column(nullable = false)
+    private boolean paced = true;
+
     @Column(name = "position", nullable = false)
     private int position = 0;
 

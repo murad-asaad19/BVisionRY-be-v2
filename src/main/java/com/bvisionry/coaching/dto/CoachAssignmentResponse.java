@@ -5,7 +5,9 @@ import java.util.UUID;
 
 /**
  * One coach grant for the org-admin assignment console. Cohort fields are set
- * on cohort-grain rows, member fields on direct-founder rows — never both.
+ * on cohort-grain rows, member fields on direct-founder rows — never both. Both
+ * groups null is the ORG-WIDE grain (V176): {@code orgWide} names it rather
+ * than leaving the client to infer a grain from two absences.
  */
 public record CoachAssignmentResponse(
         UUID id,
@@ -17,5 +19,6 @@ public record CoachAssignmentResponse(
         UUID memberId,
         String memberName,
         String memberEmail,
+        boolean orgWide,
         OffsetDateTime createdAt) {
 }

@@ -13,9 +13,9 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * A coach's own profile row (V153). Today it holds exactly one thing: the
- * Cal.com booking page the coach already owns, which the founder's browser
- * opens directly (policy {@code calendar: INTEGRATE_CAL_COM} — we never build
+ * A coach's own profile row (V153, widened by V178): who the coach IS, plus the
+ * Cal.com booking page they already own, which the founder's browser opens
+ * directly (policy {@code calendar: INTEGRATE_CAL_COM} — we never build
  * booking, and we store nothing about bookings).
  *
  * <p>The PK IS the coach's {@code users(id)}, so "may I write this row?" has
@@ -39,6 +39,25 @@ public class CoachProfile {
     /** Null or absent = the coach has published no booking link. */
     @Column(name = "booking_url")
     private String bookingUrl;
+
+    /** V178: one line under the name on Coaches Corner ("Fundraising & GTM"). */
+    @Column(name = "headline", length = 160)
+    private String headline;
+
+    /**
+     * V178: a serialised tiptap document (same shape as
+     * {@code exercise_templates.description}), rendered by {@code RichTextView}.
+     */
+    @Column(name = "bio")
+    private String bio;
+
+    /**
+     * V178: a {@code minio://bucket/key} marker or an external URL. NEVER handed
+     * to a browser raw — the founder-facing read resolves it through
+     * {@link com.bvisionry.common.media.MediaUrlPort}.
+     */
+    @Column(name = "photo_url", length = 500)
+    private String photoUrl;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;

@@ -25,6 +25,7 @@ public record BoardSnapshot(List<ModuleSnap> modules) {
             String name,
             String summary,
             String pillarLabel,
+            boolean paced,
             ModuleLockMode lockMode,
             OffsetDateTime unlockAt,
             AudienceMode assignMode,

@@ -549,15 +549,27 @@ public class TaskSpineRepository {
                 """, params);
     }
 
-    /** The member's exercise submission tagged to this cohort task, if any. */
-    public Optional<UUID> findExerciseSubmissionId(UUID userId, UUID taskId) {
+    /**
+     * The member's exercise submission tagged to this cohort task, if any —
+     * and only when it is a submission for the task's CURRENT template.
+     *
+     * <p>Keying on the task alone stranded members after an admin re-pointed a
+     * task at a different exercise: the stale submission kept winning, so the
+     * member opened "Frustration" and got the Appreciation brief and columns
+     * forever. Returning empty here lets
+     * {@link #ensureExerciseSubmission} reconcile it.
+     */
+    public Optional<UUID> findExerciseSubmissionId(UUID userId, UUID taskId, UUID templateId) {
         return jdbc.query("""
                 SELECT es.id
                 FROM exercise_assignments ea
                 JOIN exercise_submissions es ON es.assignment_id = ea.id
                 WHERE ea.user_id = :userId AND ea.program_task_id = :taskId
+                  AND ea.template_id = :templateId
                 """,
-                new MapSqlParameterSource("userId", userId).addValue("taskId", taskId),
+                new MapSqlParameterSource("userId", userId)
+                        .addValue("taskId", taskId)
+                        .addValue("templateId", templateId),
                 (rs, i) -> rs.getObject("id", UUID.class))
                 .stream().findFirst();
     }
@@ -576,6 +588,36 @@ public class TaskSpineRepository {
     public UUID ensureExerciseSubmission(UUID orgId, UUID templateId, UUID userId, UUID taskId) {
         MapSqlParameterSource params = exerciseParams(orgId, templateId, userId)
                 .addValue("taskId", taskId);
+        // An admin re-pointed this task at a different exercise. Carry an
+        // UNTOUCHED assignment across rather than stranding the member on the
+        // old template — (program_task_id, user_id) is unique, so a plain
+        // insert would be a no-op and the stale row would keep winning.
+        // A submission the member has actually typed into is left alone: their
+        // work outranks the rename, and the admin sees the mismatch instead.
+        int repointed = jdbc.update("""
+                UPDATE exercise_assignments ea
+                SET template_id = :templateId
+                WHERE ea.user_id = :userId AND ea.program_task_id = :taskId
+                  AND ea.template_id <> :templateId
+                  AND EXISTS (SELECT 1 FROM exercise_submissions es
+                              WHERE es.assignment_id = ea.id
+                                AND es.status = 'IN_PROGRESS'
+                                AND es.submitted_at IS NULL)
+                  AND NOT EXISTS (SELECT 1 FROM exercise_submissions es
+                                  JOIN exercise_rows er ON er.submission_id = es.id
+                                  WHERE es.assignment_id = ea.id
+                                    AND er.is_starter = false)
+                """, params);
+        if (repointed > 0) {
+            // The old template's starter rows are scaffolding for columns that
+            // no longer exist; reseed below from the new template.
+            jdbc.update("""
+                    DELETE FROM exercise_rows er
+                    USING exercise_submissions es, exercise_assignments ea
+                    WHERE er.submission_id = es.id AND es.assignment_id = ea.id
+                      AND ea.user_id = :userId AND ea.program_task_id = :taskId
+                    """, params);
+        }
         jdbc.update("""
                 INSERT INTO exercise_assignments (template_id, organization_id, user_id,
                                                   assigned_by, program_task_id)
@@ -597,7 +639,7 @@ public class TaskSpineRepository {
         UUID submissionId = jdbc.queryForObject(
                 "SELECT id FROM exercise_submissions WHERE assignment_id = :assignmentId",
                 new MapSqlParameterSource("assignmentId", assignmentId), UUID.class);
-        if (created > 0) {
+        if (created > 0 || repointed > 0) {
             jdbc.update("""
                     INSERT INTO exercise_rows (submission_id, display_order, cells, is_starter)
                     SELECT :submissionId, a.ord - 1, a.elem, true

@@ -61,7 +61,10 @@ class MediaServiceValidationTest {
         lenient().when(internalClient.bucketExists(any(BucketExistsArgs.class))).thenReturn(true);
         // Every case in this file uploads with orgId == null (platform path), which
         // never consults quota — an unstubbed mock is fine, it's simply never invoked.
-        service = new MediaService(internalClient, publicClient, props, mock(OrgStorageQuotaService.class));
+        service = new MediaService(internalClient, publicClient, props,
+                mock(OrgStorageQuotaService.class),
+                () -> new com.bvisionry.common.security.CurrentUser(
+                java.util.UUID.randomUUID(), null, "Test", "SUPER_ADMIN"));
     }
 
     @AfterEach

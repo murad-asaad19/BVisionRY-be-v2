@@ -74,6 +74,10 @@ public class PushNotificationService {
      * Notify the org's active ORG_ADMINs plus all active SUPER_ADMINs about an
      * event in {@code orgId}.
      *
+     * <p>Admins only. A submission also has coach recipients, but they are
+     * per-founder rather than per-org, so they are resolved by
+     * {@link CoachReviewNotifier} — a caller reporting a submission calls both.
+     *
      * <p>The two URL parameters date from a web app in which the two roles
      * reached the same resource through different route families — org admins a
      * flat {@code /app/admin/*} console, super admins the

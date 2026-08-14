@@ -33,6 +33,7 @@ import com.bvisionry.programflow.dto.UpdateCohortRequest;
 import com.bvisionry.programflow.dto.UpdateOrgAssignmentRequest;
 import com.bvisionry.programflow.repository.CohortOrgAssignmentRepository;
 import com.bvisionry.programflow.repository.CohortOrgNameRow;
+import com.bvisionry.programflow.repository.CohortProgressRow;
 import com.bvisionry.programflow.repository.CohortRepository;
 import com.bvisionry.programflow.repository.OrgMemberRow;
 
@@ -107,8 +108,14 @@ public class CohortService {
     @Transactional(readOnly = true)
     public List<CohortDto> listAssigned(UUID orgId) {
         Set<UUID> mine = orgMemberIds(orgId);
+        Map<UUID, CohortProgressRow> progress = cohorts.findAssignedProgressStats(orgId).stream()
+                .collect(Collectors.toMap(CohortProgressRow::getCohortId, r -> r));
         return cohorts.findAssigned(orgId).stream()
-                .map(c -> orgScoped(c, mine))
+                .map(c -> {
+                    CohortProgressRow p = progress.get(c.getId());
+                    return orgScoped(c, mine, p == null ? 0 : p.getModuleCount(),
+                            p == null ? "Week" : p.getStageLabel());
+                })
                 .toList();
     }
 
@@ -302,8 +309,26 @@ public class CohortService {
      * enroll them in every cohort whose assignment to that org says so.
      * DRAFT cohorts enroll silently (the roster hears at launch); COMPLETED /
      * ARCHIVED ones are done and skip.
+     *
+     * <p>Learners-only, the same rule {@link #setOrgMembers} and
+     * {@link #enrollForAssignment} enforce ({@link #NOT_ENROLLABLE}). The check
+     * lives HERE, on the one entry point both auto-enroll listeners call, and
+     * reuses {@link #orgMemberIds} so "enrollable" keeps a single definition
+     * instead of a third copy. It deliberately does NOT filter the event's
+     * {@code userType}: that is the member-type code (FOUNDER / LEADER / …),
+     * not the role, so a COACH invited to staff the program looks exactly like
+     * a founder there. Skipping silently rather than throwing is the right
+     * shape for an AFTER_COMMIT listener — nobody asked for this enrollment,
+     * so there is nobody to hand a 400 to. And the row it prevents is not
+     * cosmetic: {@code findRoster} is role-filtered, so a staffing coach in
+     * {@code memberIds} would make the raw count disagree with every
+     * roster-derived surface forever, and {@link #setOrgMembers}'s
+     * {@code removeAll(mine)} — mine being MEMBERs only — could never clear it.
      */
     public void autoEnroll(UUID orgId, UUID userId) {
+        if (!orgMemberIds(orgId).contains(userId)) {
+            return;
+        }
         for (CohortOrgAssignment a : assignments.findByOrgId(orgId)) {
             if (!a.isAutoEnroll()) {
                 continue;
@@ -376,13 +401,23 @@ public class CohortService {
                 .map(OrgMemberRow::getId).collect(Collectors.toSet());
     }
 
-    /** The cohort with its roster cut to the given org's members. */
+    /**
+     * The cohort with its roster cut to the given org's members, and the
+     * neutral 0/"Week" progress default ({@link CohortDto} explains why
+     * that's safe here — {@link #setOrgMembers} is this overload's only
+     * other caller and its response never reaches the cards' cache).
+     */
     private static CohortDto orgScoped(Cohort c, Set<UUID> orgMemberIds) {
+        return orgScoped(c, orgMemberIds, 0, "Week");
+    }
+
+    /** {@link #orgScoped(Cohort, Set)} with the real progress stats for the cohort cards. */
+    private static CohortDto orgScoped(Cohort c, Set<UUID> orgMemberIds, int moduleCount, String stageLabel) {
         // orgNames stays empty here: the org console already knows whose page it is.
         return new CohortDto(c.getId(), c.getName(), c.getPosition(), c.getStatus(),
                 c.getLaunchedAt(), c.getCompletedAt(), c.getArchivedAt(),
                 c.getMemberIds().stream().filter(orgMemberIds::contains).toList(),
-                List.of());
+                List.of(), moduleCount, stageLabel);
     }
 
     private void auditLifecycle(UUID orgId, Cohort c, String action) {

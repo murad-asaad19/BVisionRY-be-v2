@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.bvisionry.common.coachaccess.CoachAccess;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.orgmember.OrgMemberAccess;
 import com.bvisionry.common.security.CurrentUser;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.programflow.dto.JourneyResponse;
@@ -33,6 +34,7 @@ public class MemberJourneyController {
     private final MyProgramService service;
     private final CoachAccess coachAccess;
     private final CurrentUserAccessor currentUser;
+    private final OrgMemberAccess orgMembers;
 
     @GetMapping(path = "/api/v1/coach/founders/{founderId}/journey",
             produces = MediaType.APPLICATION_JSON_VALUE)
@@ -51,6 +53,11 @@ public class MemberJourneyController {
     @PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId))")
     public JourneyResponse memberJourney(@PathVariable UUID orgId, @PathVariable UUID memberId,
             @RequestParam(required = false) UUID cohortId) {
+        // `journeyOfMember` TREATS orgId as "the viewed member's org" and scopes
+        // their direct assignments and course visibility with it — a premise it
+        // never checks. Since V171 a cohort spans orgs, so prove the premise
+        // here or an org-A admin reads org B's founder through org A's URL.
+        orgMembers.requireMemberOf(orgId, memberId);
         return service.journeyOfMember(orgId, memberId, cohortId);
     }
 }

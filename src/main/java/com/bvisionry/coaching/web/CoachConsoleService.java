@@ -19,6 +19,7 @@ import com.bvisionry.coaching.dto.UpdateCoachProfileRequest;
 import com.bvisionry.coaching.repository.CoachProfileRepository;
 import com.bvisionry.coaching.repository.CoachingReadRepository;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.media.MediaUrlPort;
 import com.bvisionry.common.security.CurrentUser;
 import com.bvisionry.common.security.CurrentUserAccessor;
 
@@ -36,6 +37,7 @@ public class CoachConsoleService {
 
     private final CoachingReadRepository reads;
     private final CoachProfileRepository profiles;
+    private final MediaUrlPort mediaUrlPort;
     private final CurrentUserAccessor currentUser;
 
     /* ------------------------------------------------------- the coach's own profile */
@@ -47,12 +49,13 @@ public class CoachConsoleService {
     @Transactional(readOnly = true)
     public CoachProfileResponse profile() {
         return profiles.findById(currentUser.require().userId())
-                .map(p -> new CoachProfileResponse(p.getBookingUrl()))
-                .orElseGet(() -> new CoachProfileResponse(null));
+                .map(this::asResponse)
+                .orElseGet(() -> new CoachProfileResponse(null, null, null, null, null));
     }
 
     /**
-     * Publish or withdraw the caller's Cal.com booking link.
+     * Publish or withdraw the caller's bookable profile: the Cal.com link plus
+     * the V178 headline / bio / photo a founder reads on Coaches Corner.
      *
      * <p>The row's PK is the authenticated principal's id and nothing in the
      * request can name a different one — there is no path parameter and no id
@@ -62,8 +65,15 @@ public class CoachConsoleService {
      * *.cal.com, dot-boundary), which is the authoritative check; the web form
      * mirrors it only for inline feedback.
      *
-     * <p>Blank normalises to null so "cleared" has one representation in the
-     * column and the founder-side card has one emptiness test.
+     * <p>WHOLE-PROFILE replace (see {@link UpdateCoachProfileRequest}): every
+     * field is written on every call, and blank normalises to null so "cleared"
+     * has one representation in each column and each reader has one emptiness
+     * test.
+     *
+     * <p>{@code photoUrl} is stored exactly as sent — a {@code minio://} marker
+     * from the upload dropzone, or an external URL. Resolving it is the
+     * founder-side read's job; storing a resolved presigned URL would expire in
+     * the column.
      */
     @Transactional
     public CoachProfileResponse updateProfile(UpdateCoachProfileRequest request) {
@@ -73,13 +83,24 @@ public class CoachConsoleService {
             fresh.setCoachId(coachId);
             return fresh;
         });
-        String url = request.bookingUrl();
-        profile.setBookingUrl(url == null || url.isBlank() ? null : url.trim());
+        profile.setBookingUrl(blankToNull(request.bookingUrl()));
+        profile.setHeadline(blankToNull(request.headline()));
+        profile.setBio(blankToNull(request.bio()));
+        profile.setPhotoUrl(blankToNull(request.photoUrl()));
         // saveAndFlush, not save: the founder-side read is raw SQL through the
         // same connection, so a write left sitting in the persistence context
         // would be invisible to it inside one transaction. Flushing here costs
         // nothing on a single-row upsert and removes the ordering hazard.
-        return new CoachProfileResponse(profiles.saveAndFlush(profile).getBookingUrl());
+        return asResponse(profiles.saveAndFlush(profile));
+    }
+
+    private CoachProfileResponse asResponse(CoachProfile p) {
+        return new CoachProfileResponse(p.getBookingUrl(), p.getHeadline(), p.getBio(),
+                p.getPhotoUrl(), mediaUrlPort.resolveUrl(p.getPhotoUrl()));
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     @Transactional(readOnly = true)

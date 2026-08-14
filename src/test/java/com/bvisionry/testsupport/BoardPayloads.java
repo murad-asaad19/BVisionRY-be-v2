@@ -52,7 +52,7 @@ public final class BoardPayloads {
     }
 
     public static ModuleUpsert asUpsert(ModuleDto m, List<TaskUpsert> tasks) {
-        return new ModuleUpsert(m.id(), m.name(), m.summary(), m.pillarLabel(),
+        return new ModuleUpsert(m.id(), m.name(), m.summary(), m.pillarLabel(), m.paced(),
                 m.lockMode(), m.unlockAt(), m.audience().mode(), m.audience().memberIds(), tasks);
     }
 

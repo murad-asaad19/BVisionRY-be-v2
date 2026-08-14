@@ -153,6 +153,7 @@ public class BoardRestoreRepository {
                     .addValue("name", m.name())
                     .addValue("summary", m.summary())
                     .addValue("pillarLabel", m.pillarLabel())
+                    .addValue("paced", m.paced())
                     .addValue("position", i)
                     .addValue("lockMode", m.lockMode().name())
                     .addValue("unlockAt", m.unlockAt())
@@ -160,13 +161,14 @@ public class BoardRestoreRepository {
         }
         batchUpdate("""
                 INSERT INTO program_modules (id, cohort_id, name, summary, pillar_label,
-                                             position, lock_mode, unlock_at, assign_mode)
+                                             paced, position, lock_mode, unlock_at, assign_mode)
                 VALUES (:id, :cohortId, :name, :summary, :pillarLabel,
-                        :position, :lockMode, :unlockAt, :assignMode)
+                        :paced, :position, :lockMode, :unlockAt, :assignMode)
                 ON CONFLICT (id) DO UPDATE SET
                     name         = EXCLUDED.name,
                     summary      = EXCLUDED.summary,
                     pillar_label = EXCLUDED.pillar_label,
+                    paced        = EXCLUDED.paced,
                     position     = EXCLUDED.position,
                     lock_mode    = EXCLUDED.lock_mode,
                     unlock_at    = EXCLUDED.unlock_at,

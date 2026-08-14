@@ -5,7 +5,7 @@
 -- WHEN THIS APPLIES
 -- -----------------
 --   1. An EMPTY Postgres database.
---   2. The backend has booted once, so Flyway has run V1..V160 to completion.
+--   2. The backend has booted once, so Flyway has run V1..V176 to completion.
 --      (Flyway is schema-owned: `spring.flyway.enabled=true`, `ddl-auto=none`.)
 --   3. THEN this file, exactly once:
 --        psql -U bvisionry -d bvisionry -v ON_ERROR_STOP=1 -f e2e-seed.sql
@@ -41,8 +41,10 @@
 --     movement in the fixture. Total measured founders is 3, comfortably under
 --     the benchmark min-sample of 30, which is what `benchmarking.spec.ts`
 --     asserts the "Insufficient data." branch on.
---   * A program-flow cohort with LIVE tasks so the member dashboard renders
---     "1 of 2 tasks".
+--   * Two LAUNCHED cohorts. Since V171 a cohort is a PLATFORM artifact with no
+--     org_id at all, so each one carries a `cohort_orgs` row naming the sub-org
+--     it runs for; the first also holds LIVE tasks, so the member dashboard
+--     renders "1 of 2 tasks".
 --   * Two exercise templates and the member assignments + submissions
 --     `release-flows.spec.ts` and `coach-console.spec.ts` name.
 --   * A survey with two individual responses.
@@ -260,13 +262,50 @@ INSERT INTO questions (id, pillar_id, type, prompt_text, display_order, is_requi
 --    "Alpha Founders" is named to sort first both by position and by name, so
 --    roi-report.spec.ts's `cohorts[0]` stays this cohort after auth.setup.ts
 --    appends "Coach E2E Cohort" and "Coach E2E Other" to the same sub-org.
+--
+--    THE COHORT ROW CARRIES NO ORG SINCE V171. `cohorts.org_id` is dropped and
+--    the relationship lives in `cohort_orgs` — see below; a cohort without one
+--    of those rows belongs to no organization and every org-scoped read
+--    (`CohortRepository.findAssigned`, the announcement targets, the ROI report
+--    header) returns empty for it.
+--
+--    `position` is GLOBAL now, not per-org: V171 renumbered every cohort across
+--    all orgs and `CohortService.create` derives the next one from the total
+--    count. So these two take 0 and 1, not 0 twice —
+--    `findAllByOrderByPositionAsc` has no tiebreak, and a tie hands "the first
+--    cohort" on the platform switcher to the heap.
+--
+--    `status` is the V167 vocabulary — DRAFT / LAUNCHED / COMPLETED / ARCHIVED,
+--    the old ACTIVE / FINISHED pair is gone from the CHECK. LAUNCHED is the only
+--    state that makes a cohort visible to its own members
+--    (`CohortRepository.findEnrolled` and the announcement fan-out both filter
+--    on LAUNCHED/COMPLETED), and `launched_at` is set alongside it because that
+--    transition never leaves the stamp null. Both stamps predate the oldest
+--    assignment (200d) and submission (181d) hanging off these cohorts.
+--
+--    No `cohort_launch_ledger` row is written. The meter only bites a limited
+--    tier and the fixture family sits on FOUNDER_SUCCESS (unlimited launches),
+--    so a ledger row here would be bookkeeping nothing in the suite reads.
 -- -----------------------------------------------------------------------------
-INSERT INTO cohorts (id, org_id, name, position, status) VALUES
-  ('e2e5eed0-0004-4000-8000-000000000001', '2a93054a-f352-4220-a321-a84063924096',
-   'Alpha Founders', 0, 'ACTIVE'),
+INSERT INTO cohorts (id, name, position, status, launched_at) VALUES
+  ('e2e5eed0-0004-4000-8000-000000000001', 'Alpha Founders', 0, 'LAUNCHED',
+   now() - interval '210 days'),
   -- pinned by web/e2e/roi-report.spec.ts MOVEMENT.cohortId / cohortName
+  ('fc065e8b-3576-4424-b850-40d6c60065f6', 'Cohort 1', 1, 'LAUNCHED',
+   now() - interval '210 days');
+
+-- The org relationship V171 moved off the cohort row: one row per participating
+-- organization. `assigned_at` takes its now() default; `assigned_by` is the
+-- fixture org admin.
+-- auto_enroll STAYS FALSE — the column default and V171's backfill value, and
+-- load-bearing here: auth.setup.ts invites empty.founder.e2e@example.com into
+-- this same sub-org and every empty-state spec depends on that account having no
+-- cohort at all. An auto-enrolling assignment would enrol it silently.
+INSERT INTO cohort_orgs (cohort_id, org_id, auto_enroll, assigned_by) VALUES
+  ('e2e5eed0-0004-4000-8000-000000000001', '2a93054a-f352-4220-a321-a84063924096',
+   false, 'e2e5eed0-0001-4000-8000-000000000001'),
   ('fc065e8b-3576-4424-b850-40d6c60065f6', 'e0077f30-1008-4362-9969-a759e8dfd5e8',
-   'Cohort 1', 0, 'ACTIVE');
+   false, 'e2e5eed0-0001-4000-8000-000000000001');
 
 INSERT INTO cohort_members (cohort_id, user_id) VALUES
   ('e2e5eed0-0004-4000-8000-000000000001', 'e2e5eed0-0001-4000-8000-000000000002'),  -- Test Member
@@ -438,10 +477,18 @@ INSERT INTO overall_summaries (id, submission_id, overall_score_percentage, summ
 --    learners and excluded from the denominator. lock_mode='UNLOCKED' keeps the
 --    module open regardless of the drip settings, and no program_settings row is
 --    needed — the mapper supplies defaults for a missing one.
+--    The module carries no org_id either (V171 dropped it): the cohort is the
+--    whole scope, and its org comes from `cohort_orgs`. assign_mode='ALL' is one
+--    of the only two modes left — TEAMS went with the team model in the same
+--    migration.
+--    task_type is left at its V164 default 'LESSON'. These two ARE the form
+--    flow, and LESSON is the one type that references nothing, so no ref_id is
+--    owed. Nothing here is a WORKSHOP task: V172 removed that value from
+--    ck_program_tasks_task_type outright.
 -- -----------------------------------------------------------------------------
-INSERT INTO program_modules (id, org_id, cohort_id, name, summary, position, lock_mode, assign_mode) VALUES
-  ('e2e5eed0-000a-4000-8000-000000000001', '2a93054a-f352-4220-a321-a84063924096',
-   'e2e5eed0-0004-4000-8000-000000000001', 'Week 1 — Foundations',
+INSERT INTO program_modules (id, cohort_id, name, summary, position, lock_mode, assign_mode) VALUES
+  ('e2e5eed0-000a-4000-8000-000000000001', 'e2e5eed0-0004-4000-8000-000000000001',
+   'Week 1 — Foundations',
    'Get the market case written down before anything is built.', 0, 'UNLOCKED', 'ALL');
 
 INSERT INTO program_tasks (id, module_id, name, due_date, status, ai_draft, position) VALUES

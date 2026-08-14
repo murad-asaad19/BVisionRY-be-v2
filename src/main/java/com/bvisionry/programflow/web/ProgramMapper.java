@@ -42,6 +42,7 @@ final class ProgramMapper {
                 m.getName(),
                 m.getSummary(),
                 m.getPillarLabel(),
+                m.isPaced(),
                 m.getPosition(),
                 m.getLockMode(),
                 m.getUnlockAt(),

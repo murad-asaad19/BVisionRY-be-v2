@@ -53,6 +53,35 @@ final class MediaUploadPolicy {
         }
     }
 
+    /**
+     * A COACH's only legitimate upload is their own profile photo.
+     *
+     * <p>The enforcement half of admitting COACH to the platform path in
+     * {@code MediaController}. Authorization admits a coach only when no
+     * {@code orgId} is present; this refuses any such upload whose kind is not
+     * {@code image}. Composed, a coach can upload images and nothing else — no
+     * videos, no PDFs, no generic assets — on BOTH the multipart and the
+     * presign path, exactly as {@link #requireOrgScopedKindIsImage} bounds an
+     * ORG_ADMIN.
+     *
+     * <p>Enforced in Java rather than SpEL for the same reason: {@code kind}
+     * rides in the request BODY on the presign path, and an authorization rule
+     * that reads a record component through SpEL fails open when the property
+     * reference is wrong.
+     *
+     * @param callerRole the authenticated caller's role name
+     */
+    static void requireCoachKindIsImage(String kind, String callerRole) {
+        if (COACH_ROLE.equals(callerRole) && !ORG_SCOPED_KIND.equals(kind)) {
+            throw new BadRequestException(
+                    "Coaches may only upload their profile photo (kind '" + ORG_SCOPED_KIND
+                            + "'), not '" + kind + "'");
+        }
+    }
+
+    /** Role name whose uploads are bounded to a profile photo. */
+    static final String COACH_ROLE = "COACH";
+
     private record KindPolicy(Set<String> contentTypes, long maxUploadBytes) {}
 
     private static final long MB = 1024L * 1024;

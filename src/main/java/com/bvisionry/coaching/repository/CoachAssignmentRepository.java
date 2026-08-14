@@ -22,4 +22,7 @@ public interface CoachAssignmentRepository extends JpaRepository<CoachAssignment
     boolean existsByOrgIdAndCoachIdAndCohortId(UUID orgId, UUID coachId, UUID cohortId);
 
     boolean existsByOrgIdAndCoachIdAndMemberId(UUID orgId, UUID coachId, UUID memberId);
+
+    /** The V176 org-wide grain: one row per (coach, org) with neither target set. */
+    boolean existsByOrgIdAndCoachIdAndCohortIdIsNullAndMemberIdIsNull(UUID orgId, UUID coachId);
 }

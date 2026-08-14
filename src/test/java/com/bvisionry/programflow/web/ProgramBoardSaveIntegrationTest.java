@@ -98,7 +98,7 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
         keptTaskId = UUID.randomUUID();
         doomedTaskId = UUID.randomUUID();
         adminService.saveBoard(cohortId, new SaveBoardRequest(0L, false, List.of(
-                new ModuleUpsert(moduleId, "Week 1", "Kick-off", "Mindset",
+                new ModuleUpsert(moduleId, "Week 1", "Kick-off", "Mindset", true,
                         ModuleLockMode.SEQUENTIAL, null, AudienceMode.ALL, List.of(), List.of(
                                 task(keptTaskId, "Kept task", ProgramTaskStatus.LIVE),
                                 task(doomedTaskId, "Doomed task", ProgramTaskStatus.LIVE))))));
@@ -124,7 +124,7 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private static ModuleUpsert module(UUID id, String name, List<TaskUpsert> tasks) {
-        return new ModuleUpsert(id, name, null, null, ModuleLockMode.UNLOCKED, null,
+        return new ModuleUpsert(id, name, null, null, true, ModuleLockMode.UNLOCKED, null,
                 AudienceMode.ALL, List.of(), tasks);
     }
 
@@ -164,7 +164,7 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
                 new SaveBoardRequest(before.version(), true, List.of(
                 // Week 1 renamed, narrowed to one member, emptied: one task moved
                 // out and the other dropped entirely.
-                new ModuleUpsert(existing.id(), "Week 1 (renamed)", "New summary", "Growth",
+                new ModuleUpsert(existing.id(), "Week 1 (renamed)", "New summary", "Growth", true,
                         ModuleLockMode.SCHEDULED, null,
                         AudienceMode.MEMBERS, List.of(member.getId()), List.of()),
                 // A module that does not exist yet, holding the moved task first.
@@ -342,6 +342,81 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
         // keeps this case about the milestone pair and nothing else.
         return new TaskUpsert(id, name, null, ProgramTaskStatus.DRAFT, false,
                 ProgramTaskType.ASSESSMENT, null, role, List.of());
+    }
+
+    /* ------------------------------------------------- the builder placeholder */
+
+    /**
+     * Spec §12: "Untitled module" — the name the builder seeds a new column
+     * with — reached the Alumni cohort's member Journey. A module nobody named
+     * fails the SAVE, so it can never get as far as a founder.
+     */
+    @Test
+    void save_refusesAModuleStillCarryingTheBuilderPlaceholderName() {
+        BoardResponse before = adminService.getBoard(cohortId);
+
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId, BoardPayloads.of(before,
+                List.of(module(UUID.randomUUID(), "Untitled module", List.of())))))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("Untitled module")
+                .hasMessageContaining("placeholder");
+        assertThat(board().modules()).extracting(ModuleDto::name)
+                .as("the refusal left the board alone").containsExactly("Week 1");
+    }
+
+    /**
+     * The same hole one level down: the builder seeds each card with
+     * "Untitled &lt;type&gt; task" and its save payload used to substitute a bare
+     * "Untitled task" for a name the admin left blank, so scaffolding reached
+     * the Journey looking like content.
+     */
+    @Test
+    void save_refusesATaskStillCarryingTheBuilderPlaceholderName() {
+        BoardResponse before = adminService.getBoard(cohortId);
+
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId, BoardPayloads.of(before,
+                List.of(module(UUID.randomUUID(), "Week 1", List.of(
+                        task(UUID.randomUUID(), "Untitled lesson task",
+                                ProgramTaskStatus.DRAFT)))))))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("Untitled lesson task")
+                .hasMessageContaining("placeholder");
+
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId, BoardPayloads.of(before,
+                List.of(module(UUID.randomUUID(), "Week 1", List.of(
+                        task(UUID.randomUUID(), "Untitled task",
+                                ProgramTaskStatus.DRAFT)))))))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("placeholder");
+
+        assertThat(board().modules()).extracting(ModuleDto::name)
+                .as("the refusal left the board alone").containsExactly("Week 1");
+    }
+
+    /** A task whose type moved on keeps only the placeholder of its OWN type. */
+    @Test
+    void save_acceptsATaskNamedAfterAnotherTypesPlaceholder() {
+        adminService.saveBoard(cohortId, BoardPayloads.of(adminService.getBoard(cohortId),
+                List.of(module(UUID.randomUUID(), "Week 1", List.of(
+                        task(UUID.randomUUID(), "Untitled survey task",
+                                ProgramTaskStatus.DRAFT))))));
+
+        assertThat(board().modules()).singleElement()
+                .satisfies(m -> assertThat(m.tasks()).singleElement()
+                        .extracting(TaskDto::name).isEqualTo("Untitled survey task"));
+    }
+
+    /** The same save, once the admin has typed a name over the placeholder. */
+    @Test
+    void save_acceptsTheModuleOnceItHasARealName() {
+        UUID namedId = UUID.randomUUID();
+        adminService.saveBoard(cohortId, BoardPayloads.of(adminService.getBoard(cohortId),
+                List.of(module(namedId, "Fundraising", List.of()))));
+
+        assertThat(board().modules()).singleElement().satisfies(m -> {
+            assertThat(m.id()).isEqualTo(namedId);
+            assertThat(m.name()).isEqualTo("Fundraising");
+        });
     }
 
     /* ------------------------------------------------------------ foreign ids */

@@ -152,7 +152,8 @@ public class MyProgramService {
                 }
                 journeyTasks.add(row);
             }
-            journeyModules.add(new JourneyModule(m.getId(), m.getName(), m.getSummary(), lock, m.getUnlockAt(),
+            journeyModules.add(new JourneyModule(m.getId(), m.getName(), m.getSummary(), m.isPaced(),
+                    lock, m.getUnlockAt(),
                     i > 0 ? ctx.visibleModules().get(i - 1).getName() : null, journeyTasks));
         }
 
@@ -260,7 +261,8 @@ public class MyProgramService {
         ProgramSettingsDto s = settingsOf(access.ctx().cohort().getId());
         return new PlayerResponse(
                 t.getId(), t.getName(), t.getDueDate(),
-                access.module().getId(), access.module().getName(), access.moduleIndex() + 1,
+                access.module().getId(), access.module().getName(),
+                stageNumber(access.ctx().visibleModules(), access.moduleIndex()),
                 s.stageLabel(), s.dueSoonDays(),
                 t.getFields().stream().map(ProgramMapper::toDto).toList(),
                 sub == null ? Map.of() : sub.getAnswers(),
@@ -268,6 +270,47 @@ public class MyProgramService {
                 sub == null ? null : sub.getSavedAt(),
                 sub == null ? null : sub.getSubmittedAt(),
                 access.ctx().finished());
+    }
+
+    /**
+     * Read-only player of ANOTHER member's LESSON task for the shared founder
+     * profile (spec §2.4 — the Work tab's per-type view). CALLERS AUTHORIZE
+     * FIRST (org guard stack or {@code CoachAccess}) — same stance as
+     * {@link #journeyOfMember}; this method's own contribution is "the member
+     * is enrolled in the task's cohort", so a foreign task id 404s without
+     * leaking existence. No audience/drip re-check: staff review of submitted
+     * work must not be blocked by a lock the member has since passed.
+     */
+    @Transactional(readOnly = true)
+    public PlayerResponse playerOfMember(UUID memberId, UUID taskId) {
+        ProgramTask t = tasks.findWithModule(taskId)
+                .filter(x -> x.getStatus() == ProgramTaskStatus.LIVE)
+                .orElseThrow(() -> new ResourceNotFoundException("Task", taskId.toString()));
+        requireLesson(t);
+        Cohort cohort = cohorts.findEnrolled(memberId).stream()
+                .filter(c -> c.getId().equals(t.getModule().getCohortId()))
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("Task", taskId.toString()));
+        List<ProgramModule> mods = modules.findByCohortIdOrderByPositionAsc(cohort.getId());
+        int index = 0;
+        for (int i = 0; i < mods.size(); i++) {
+            if (mods.get(i).getId().equals(t.getModule().getId())) {
+                index = i;
+                break;
+            }
+        }
+        ProgramSubmission sub = submissions.findByTaskIdAndUserId(taskId, memberId).orElse(null);
+        ProgramSettingsDto s = settingsOf(cohort.getId());
+        return new PlayerResponse(
+                t.getId(), t.getName(), t.getDueDate(),
+                t.getModule().getId(), t.getModule().getName(), stageNumber(mods, index),
+                s.stageLabel(), s.dueSoonDays(),
+                t.getFields().stream().map(ProgramMapper::toDto).toList(),
+                sub == null ? Map.of() : sub.getAnswers(),
+                sub == null ? null : sub.getStatus(),
+                sub == null ? null : sub.getSavedAt(),
+                sub == null ? null : sub.getSubmittedAt(),
+                true);
     }
 
     /**
@@ -332,7 +375,7 @@ public class MyProgramService {
             // The bell goes to the SUBMITTING member's org admins (spec §13 —
             // the cohort spans orgs; each org hears about its own people).
             eventPublisher.publishEvent(new ProgramFlowEvents.TaskSubmitted(
-                    access.ctx().orgId(), currentUser.require().name(), t.getName()));
+                    access.ctx().orgId(), access.ctx().userId(), currentUser.require().name(), t.getName()));
         }
         submissions.save(sub);
 
@@ -646,6 +689,26 @@ public class MyProgramService {
         return new Access(ctx, t, ctx.visibleModules().get(index), index);
     }
 
+    /**
+     * The module's stage number for the player kicker: its 1-based position
+     * counting ONLY paced modules, or 0 when the module is itself unpaced and
+     * therefore has no stage. Position in the list is NOT the answer once a
+     * cohort carries always-on material — an orientation section at the front
+     * would push the first real week to "Week 02".
+     */
+    private static int stageNumber(List<ProgramModule> ordered, int index) {
+        if (!ordered.get(index).isPaced()) {
+            return 0;
+        }
+        int n = 0;
+        for (int i = 0; i <= index; i++) {
+            if (ordered.get(i).isPaced()) {
+                n++;
+            }
+        }
+        return n;
+    }
+
     /** Lessons are the only tasks with an in-place form; other types open via {@link #open}. */
     private static void requireLesson(ProgramTask t) {
         if (t.getTaskType() != ProgramTaskType.LESSON) {
@@ -683,7 +746,7 @@ public class MyProgramService {
                 }
                 yield t.getRefId();
             }
-            case EXERCISE -> spine.findExerciseSubmissionId(userId, t.getId())
+            case EXERCISE -> spine.findExerciseSubmissionId(userId, t.getId(), requireRef(t))
                     .orElseGet(() -> {
                         requireNotFinished(access);
                         return spine.ensureExerciseSubmission(orgId, requireRef(t), userId,

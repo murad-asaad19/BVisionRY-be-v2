@@ -235,6 +235,49 @@ public class EngagementReadRepository {
                         instant(rs, "marked_at")));
     }
 
+    /** One scheduled session as its own attendee sees it. */
+    public record MySessionRow(UUID id, UUID cohortId, String cohortName, String type,
+            String title, Instant sessionDate, boolean attended) {}
+
+    /**
+     * Every session across the caller's cohorts that the caller is expected at
+     * — the member-facing schedule ("Bvisionry Labs").
+     *
+     * <p>Deliberately narrower than {@link #sessionHistory}: it carries no
+     * roster, no other member's attendance and no marker names. Spec §4 keeps
+     * the Engagement Record off the member's report; "when are we meeting, and
+     * did I make it" is the schedule, not the score, and one founder's own
+     * presence is already theirs to see.
+     *
+     * <p>DRAFT cohorts are invisible to members everywhere else in the product,
+     * so their sessions are excluded here rather than leaking a cohort the
+     * member has not been launched into.
+     */
+    public List<MySessionRow> mySessions(UUID memberId) {
+        return jdbc.query("""
+                SELECT s.id, s.cohort_id, c.name AS cohort_name, s.type, s.title,
+                       s.session_date, (sa.member_id IS NOT NULL) AS attended
+                FROM sessions s
+                JOIN cohorts c ON c.id = s.cohort_id
+                JOIN cohort_members cm ON cm.cohort_id = s.cohort_id
+                                      AND cm.user_id = :memberId
+                LEFT JOIN session_attendance sa ON sa.session_id = s.id
+                                               AND sa.member_id = :memberId
+                WHERE c.status <> 'DRAFT'
+                  AND %s
+                ORDER BY s.session_date DESC
+                """.formatted(MEMBER_IS_EXPECTED),
+                new MapSqlParameterSource("memberId", memberId),
+                (rs, i) -> new MySessionRow(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("cohort_id", UUID.class),
+                        rs.getString("cohort_name"),
+                        rs.getString("type"),
+                        rs.getString("title"),
+                        instant(rs, "session_date"),
+                        rs.getBoolean("attended")));
+    }
+
     /** The member's cohorts within the org — the engagement record's grain. */
     public List<CohortRef> memberCohorts(UUID orgId, UUID memberId) {
         return jdbc.query("""

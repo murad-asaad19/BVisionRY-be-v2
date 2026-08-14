@@ -136,6 +136,31 @@ public class CourseAssignmentWriteRepository {
     }
 
     /**
+     * The org-wide counterpart of {@link #exclude}: one removed-by-admin override
+     * row per member the matching cancel is about to hit, so "remove for
+     * everyone" actually HOLDS — a CANCELLED row alone is one click from undone,
+     * because the self-enrol path reactivates any CANCELLED row that has no
+     * override ({@code EnrollmentService#reactivateIfRemoved}).
+     *
+     * <p><strong>Must run BEFORE {@link #cancelForOrg}</strong> — the predicate
+     * is "live enrollment of this source", which the status flip destroys. No
+     * {@code reason}: that column is the admin's own words, and an org-wide
+     * removal carries none.
+     */
+    public int excludeAllEnrolled(UUID orgId, UUID courseId, EnrollmentSource source, UUID actorId) {
+        return jdbc.update("""
+                INSERT INTO enrolment_overrides (user_id, course_id, removed_by)
+                SELECT e.user_id, e.course_id, :actorId
+                  FROM enrollment e
+                 WHERE e.course_id = :courseId AND e.source = :source AND e.status <> 'CANCELLED'
+                   AND e.user_id IN (SELECT id FROM users WHERE organization_id = :orgId)
+                ON CONFLICT ON CONSTRAINT uq_enrolment_overrides DO NOTHING
+                """,
+                new MapSqlParameterSource("orgId", orgId).addValue("courseId", courseId)
+                        .addValue("source", source.name()).addValue("actorId", actorId));
+    }
+
+    /**
      * An explicit by-name assignment clears a previous removal — an admin
      * assigning Lina this course today outranks an admin having removed her from
      * it last month, and leaving the row would let the rule re-hide it.

@@ -369,6 +369,28 @@ class AutoEnrolmentServiceTest {
     }
 
     @Test
+    void suggestModeNeverOffersACourseTheFounderAlreadyHolds_itRecordsAlreadyEnrolledInstead() {
+        // An open SUGGESTED row over a live enrolment is a permanent phantom
+        // "Accept" card: the effective-courses merge only surfaces SUGGESTED when
+        // there is NO enrolment, so accept() could never stamp it. The decision
+        // still gets its ledger row — in the AUTO_ASSIGN branch's vocabulary.
+        stubPillars(pillar);
+        stubRules(pillarId, 0, courseId, com.bvisionry.pipeline.entity.PillarCourseMode.SUGGEST);
+        when(ledger.findBySubmissionIdAndUserId(submissionId, founderId)).thenReturn(List.of());
+        when(courseCatalog.findEnrolledByFounder(eq(founderId), anyCollection()))
+                .thenReturn(Map.of(courseId, new CourseCatalogReadRepository.EnrolledCourse(
+                        courseId, "Pricing Foundations", "pricing-foundations", true)));
+
+        service.enrol(event(Map.of(pillarId, "Emerging")));
+
+        // Still no seat written — the founder already has one.
+        verifyNoInteractions(founderEnrolments);
+        AutoEnrolment row = captureLedgerRow();
+        assertThat(row.getOutcome()).isEqualTo(AutoEnrolmentOutcome.ALREADY_ENROLLED);
+        assertThat(row.getPillarId()).isEqualTo(pillarId);
+    }
+
+    @Test
     void aCourseTheFoundersOrgCannotSeeIsSkippedSilently_noEnrolmentAndNoLedgerRow() {
         stubPillars(pillar);
         stubRules(pillarId, 0, courseId);

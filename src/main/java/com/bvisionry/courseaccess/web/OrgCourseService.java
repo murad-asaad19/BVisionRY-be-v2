@@ -2,6 +2,7 @@ package com.bvisionry.courseaccess.web;
 
 import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
 import com.bvisionry.common.enums.EnrollmentSource;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.courseaccess.domain.OrgCourseRule;
@@ -49,6 +50,10 @@ public class OrgCourseService {
     private final CourseAssignmentWriteRepository writes;
     private final CourseAccessService courseAccess;
     private final CourseVisibilityAccess visibility;
+    // For removeForEveryone's removed_by stamp only; every other write takes the
+    // actor from the controller. The controller's DELETE signature carries no
+    // actor, and the override rows below deserve one.
+    private final CurrentUserAccessor currentUser;
 
     /* ------------------------------------------------------------------ read */
 
@@ -193,7 +198,9 @@ public class OrgCourseService {
     /** Spec §11: convert to optional / required, and re-date, after the fact. */
     @Transactional
     public void update(UUID orgId, UUID courseId, UpdateOrgCourseRequest request) {
-        EnrollmentSource source = EnrollmentSource.of(request.source());
+        // strictOf, not of: of()'s degrade-to-SELF is for stored columns, and on
+        // a write path it would silently retarget the update at self-enrolments.
+        EnrollmentSource source = EnrollmentSource.strictOf(request.source());
         if (source == EnrollmentSource.ORG_RULE) {
             OrgCourseRule rule = rules.findByOrgIdAndCourseId(orgId, courseId)
                     .orElseThrow(() -> new ResourceNotFoundException("Org course rule", courseId.toString()));
@@ -212,10 +219,22 @@ public class OrgCourseService {
      * "Remove for everyone" — delete the rule, or cancel every enrollment of
      * that source in this org. Never a DELETE of enrollment rows: the status
      * flip keeps progress, certificates and content progress intact.
+     *
+     * <p><strong>The override rows are what make the removal HOLD</strong>
+     * (operator decision 2026-08-14). A CANCELLED row alone is one click from
+     * undone: the member's self-enrol path
+     * ({@code EnrollmentService#reactivateIfRemoved}) restores any CANCELLED row
+     * that has no {@code enrolment_overrides} row saying an admin removed it. So
+     * this writes the same removed-by-admin row {@link #removeForMember} writes,
+     * once per member the cancel is about to hit — and, like every exclusion, it
+     * is member-level, sticky, and beats any org rule still standing until an
+     * explicit by-name assign clears it.
      */
     @Transactional
     public void removeForEveryone(UUID orgId, UUID courseId, String sourceName) {
-        EnrollmentSource source = EnrollmentSource.of(sourceName);
+        // strictOf, not of: of()'s degrade-to-SELF would turn a typo'd source
+        // into "cancel every self-enrolment in the org".
+        EnrollmentSource source = EnrollmentSource.strictOf(sourceName);
         if (source == EnrollmentSource.ORG_RULE) {
             rules.findByOrgIdAndCourseId(orgId, courseId).ifPresent(r -> {
                 rules.delete(r);
@@ -232,10 +251,11 @@ public class OrgCourseService {
             // who already OPENED the course are cancelled too — their row is a
             // materialization of this rule, not a separate claim. Progress,
             // content_progress and certificates survive the status flip.
-            writes.cancelForOrg(orgId, courseId, EnrollmentSource.ORG_RULE);
             log.info("Org {} course {} rule removed for everyone", orgId, courseId);
-            return;
         }
+        // Order matters: the exclusion insert selects the LIVE enrollments the
+        // cancel below is about to flip.
+        writes.excludeAllEnrolled(orgId, courseId, source, currentUser.require().userId());
         writes.cancelForOrg(orgId, courseId, source);
         log.info("Org {} course {} ({}) cancelled for everyone", orgId, courseId, source);
     }

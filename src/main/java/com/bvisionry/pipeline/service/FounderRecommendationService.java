@@ -121,26 +121,37 @@ public class FounderRecommendationService {
         Map<UUID, String> pillarNames = pillarRepository.findAllById(pillarIds).stream()
                 .collect(Collectors.toMap(Pillar::getId, Pillar::getName));
 
-        Map<UUID, RecommendedCourseResponse> newestPerCourse = new LinkedHashMap<>();
-        collect(newestPerCourse, suggestions, courses, pillarNames, true);
-        collect(newestPerCourse, enrolled, courses, pillarNames, false);
-        return List.copyOf(newestPerCourse.values());
+        // De-dup by course keeping the NEWEST decision (spec: "keeping the newest
+        // decision"): the two halves must not be collapsed suggestion-first, or a
+        // course a LATER rule enrolled still renders as an open suggestion just
+        // because an earlier suggestion sorted ahead of it. Each decision carries
+        // its own "suggested" flag (which half it came from); the newest wins.
+        Map<UUID, Decided> winner = new java.util.HashMap<>();
+        Stream.concat(suggestions.stream().map(d -> new Decided(d, true)),
+                        enrolled.stream().map(d -> new Decided(d, false)))
+                .forEach(t -> winner.merge(t.decision().getCourseId(), t,
+                        (a, b) -> b.decision().getCreatedAt().isAfter(a.decision().getCreatedAt())
+                                ? b : a));
+
+        return winner.values().stream()
+                .filter(t -> courses.get(t.decision().getCourseId()) != null
+                        && pillarNames.get(t.decision().getPillarId()) != null)
+                // Lead with open suggestions (the only rows with a one-tap Accept),
+                // then by recency — the rail order the two-phase collect used to give.
+                .sorted(java.util.Comparator.comparing((Decided t) -> !t.suggested())
+                        .thenComparing(java.util.Comparator.comparing(
+                                (Decided t) -> t.decision().getCreatedAt()).reversed()))
+                .map(t -> {
+                    EnrolledCourse course = courses.get(t.decision().getCourseId());
+                    return new RecommendedCourseResponse(course.id(), course.title(), course.slug(),
+                            course.published(), pillarNames.get(t.decision().getPillarId()),
+                            t.decision().getSubmissionId(), t.suggested());
+                })
+                .toList();
     }
 
-    private static void collect(Map<UUID, RecommendedCourseResponse> out, List<AutoEnrolment> decisions,
-                                Map<UUID, EnrolledCourse> courses, Map<UUID, String> pillarNames,
-                                boolean suggested) {
-        for (AutoEnrolment decision : decisions) {
-            EnrolledCourse course = courses.get(decision.getCourseId());
-            String pillarName = pillarNames.get(decision.getPillarId());
-            if (course == null || pillarName == null) {
-                continue;
-            }
-            out.putIfAbsent(course.id(), new RecommendedCourseResponse(
-                    course.id(), course.title(), course.slug(), course.published(),
-                    pillarName, decision.getSubmissionId(), suggested));
-        }
-    }
+    /** A ledger decision paired with whether it renders as an open suggestion. */
+    private record Decided(AutoEnrolment decision, boolean suggested) {}
 
     private static Set<UUID> ids(List<AutoEnrolment> decisions) {
         return decisions.stream().map(AutoEnrolment::getCourseId).collect(Collectors.toSet());

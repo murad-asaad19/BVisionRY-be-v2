@@ -1,5 +1,7 @@
 package com.bvisionry.common.enums;
 
+import com.bvisionry.common.exception.BadRequestException;
+
 /**
  * Redesign spec §3: WHY a member has a course. One enrollment model, three
  * creation paths plus self.
@@ -42,5 +44,23 @@ public enum EnrollmentSource {
             }
         }
         return SELF;
+    }
+
+    /**
+     * The strict counterpart of {@link #of}, for parsing a REQUEST rather than a
+     * stored column. The degrade-to-SELF above is right for data we already own —
+     * a mystery row should surface weakly, not crash a read — but on a write path
+     * it is a loaded gun: {@code ?source=ORG-RULE} (a typo) would silently become
+     * SELF and the caller's "remove ORG-RULE enrolments" would cancel every
+     * self-enrolment in the org instead. A typo is the caller's mistake, so it is
+     * a 400.
+     */
+    public static EnrollmentSource strictOf(String requested) {
+        for (EnrollmentSource s : values()) {
+            if (s.name().equals(requested)) {
+                return s;
+            }
+        }
+        throw new BadRequestException("Unknown enrollment source: " + requested);
     }
 }

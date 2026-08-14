@@ -81,6 +81,10 @@ class CourseWiringIntegrationTest extends AbstractPostgresIntegrationTest {
 
         admin = user("wiring-admin", UserRole.ORG_ADMIN);
         member = user("wiring-member", UserRole.MEMBER);
+        // removeForEveryone stamps removed_by from the security context (its
+        // DELETE endpoint carries no actor in the body); tests that need a
+        // different principal re-authenticate themselves.
+        com.bvisionry.testsupport.TestAuthentication.authenticate(admin);
         slug = "pricing-foundations-" + UUID.randomUUID();
         courseId = course("Pricing Foundations", slug);
     }
@@ -159,7 +163,7 @@ class CourseWiringIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void directBeatsTheRule_andRemovingTheDirectRevealsIt() {
+    void directBeatsTheRule_andRemovingTheDirectExcludesTheMemberFromTheRuleToo() {
         Instant deadline = Instant.now().plus(30, ChronoUnit.DAYS);
         orgCourses.assign(org.getId(),
                 new AssignCourseRequest(courseId, AssignCourseRequest.AUDIENCE_ORG, null, true, null),
@@ -175,8 +179,10 @@ class CourseWiringIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(row.deadline()).isNotNull();
 
         orgCourses.removeForEveryone(org.getId(), courseId, "DIRECT");
-        assertThat(only(courseAccess.effectiveCoursesOf(member.getId(), org.getId())).source())
-                .isEqualTo(EnrollmentSource.ORG_RULE);
+        // Operator decision 2026-08-14: "remove for everyone" HOLDS. The override
+        // row it writes is a member-level exclusion, so it beats the org rule
+        // still standing — the member does not silently fall back onto it.
+        assertThat(courseAccess.effectiveCoursesOf(member.getId(), org.getId())).isEmpty();
     }
 
     /* ------------------------------------------------------- required §11 */
@@ -257,6 +263,58 @@ class CourseWiringIntegrationTest extends AbstractPostgresIntegrationTest {
         // "Unassignment is one delete" holds for the opened member too.
         assertThat(courseAccess.effectiveCoursesOf(member.getId(), org.getId())).isEmpty();
         assertThat(spine.directCourses(member.getId())).isEmpty();
+    }
+
+    /* ------------------------------------------- remove-for-everyone holds */
+
+    @Test
+    void removeForEveryoneWritesAnOverridePerAffectedMember_soOneClickCannotUndoIt() {
+        User second = user("wiring-second", UserRole.MEMBER);
+        // Two self-enrolled members (SELF is the column default, like the endpoint writes).
+        selfEnroll(member.getId());
+        selfEnroll(second.getId());
+
+        orgCourses.removeForEveryone(org.getId(), courseId, "SELF");
+
+        // One removed-by-admin override row per member the cancel hit, stamped
+        // with who did it — the same shape removeForMember writes.
+        assertThat(jdbc.queryForList(
+                "SELECT user_id FROM enrolment_overrides WHERE course_id = :c",
+                new MapSqlParameterSource("c", courseId), UUID.class))
+                .containsExactlyInAnyOrder(member.getId(), second.getId());
+        assertThat(jdbc.queryForObject(
+                "SELECT removed_by FROM enrolment_overrides WHERE course_id = :c AND user_id = :u",
+                new MapSqlParameterSource("c", courseId).addValue("u", member.getId()), UUID.class))
+                .isEqualTo(admin.getId());
+
+        // The override is what makes the removal HOLD: without it,
+        // reactivateIfRemoved would restore the CANCELLED row in one click.
+        com.bvisionry.testsupport.TestAuthentication.authenticate(member);
+        assertThatThrownBy(() -> enrollmentService.enroll(slug))
+                .isInstanceOf(BadRequestException.class);
+        assertThat(courseAccess.effectiveCoursesOf(member.getId(), org.getId())).isEmpty();
+    }
+
+    @Test
+    void anUnknownSourceIsRefusedWithA400_andCancelsNothing() {
+        selfEnroll(member.getId());
+
+        // of() would degrade the typo'd "ORG-RULE" to SELF and cancel every
+        // self-enrolment in the org; strictOf refuses the request instead.
+        assertThatThrownBy(() -> orgCourses.removeForEveryone(org.getId(), courseId, "ORG-RULE"))
+                .isInstanceOf(BadRequestException.class);
+        assertThatThrownBy(() -> orgCourses.update(org.getId(), courseId,
+                new UpdateOrgCourseRequest("ORG-RULE", true, null)))
+                .isInstanceOf(BadRequestException.class);
+
+        assertThat(jdbc.queryForObject(
+                "SELECT status FROM enrollment WHERE user_id = :u AND course_id = :c",
+                new MapSqlParameterSource("u", member.getId()).addValue("c", courseId), String.class))
+                .isEqualTo("ACTIVE");
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM enrolment_overrides WHERE course_id = :c",
+                new MapSqlParameterSource("c", courseId), Integer.class))
+                .isZero();
     }
 
     @Test
@@ -592,6 +650,12 @@ class CourseWiringIntegrationTest extends AbstractPostgresIntegrationTest {
                             .addValue("s", sectionId).addValue("t", "Lesson " + i).addValue("q", i));
             return id;
         }).toList();
+    }
+
+    /** A self-enrolment as the endpoint writes it: SELF source, ACTIVE, no extras. */
+    private void selfEnroll(UUID userId) {
+        jdbc.update("INSERT INTO enrollment (user_id, course_id) VALUES (:u, :c)",
+                new MapSqlParameterSource("u", userId).addValue("c", courseId));
     }
 
     private void completeLesson(UUID contentId) {

@@ -209,6 +209,18 @@ public class AutoEnrolmentService {
         // candidate.
         Set<UUID> visible = courseVisibility.filterVisibleForUser(event.founderId(), candidateIds);
 
+        // What the founder already HOLDS, for the SUGGEST branch. AUTO_ASSIGN
+        // learns this for free from enrolIfAbsent's conflict; a suggestion writes
+        // no enrollment, so without its own read it would offer a course the
+        // founder already has — an open SUGGESTED row nothing can ever close,
+        // because the effective-courses merge only surfaces SUGGESTED when there
+        // is NO live enrolment, so accept() could never stamp it. One batched
+        // query, and none at all when no SUGGEST rule is in play.
+        Set<UUID> held = courseCatalog.findEnrolledByFounder(event.founderId(),
+                candidates.stream().filter(c -> c.mode() == PillarCourseMode.SUGGEST)
+                        .map(Candidate::courseId).collect(Collectors.toSet()))
+                .keySet();
+
         for (Candidate candidate : candidates) {
             if (!visible.contains(candidate.courseId())) {
                 log.debug("Auto-enrolment skipped course {}: not visible to founder {}'s organization",
@@ -235,7 +247,8 @@ public class AutoEnrolmentService {
                 continue;
             }
             try {
-                record(event, candidate, published.contains(candidate.courseId()));
+                record(event, candidate, published.contains(candidate.courseId()),
+                        held.contains(candidate.courseId()));
             } catch (DataIntegrityViolationException e) {
                 // The documented race: another worker decided this course between our
                 // ledger read and our write, and uq_auto_enrolments settled it. Their
@@ -332,9 +345,21 @@ public class AutoEnrolmentService {
      * a course the founder still has. Upgrade path if it ever bites: a
      * {@code TransactionTemplate} around this method body only.
      */
-    private void record(SubmissionEvaluated event, Candidate candidate, boolean published) {
+    private void record(SubmissionEvaluated event, Candidate candidate, boolean published,
+                        boolean alreadyEnrolled) {
         AutoEnrolmentOutcome outcome;
-        if (candidate.mode() == PillarCourseMode.SUGGEST) {
+        if (candidate.mode() == PillarCourseMode.SUGGEST && alreadyEnrolled) {
+            // The founder already holds a live enrolment in this course, so there
+            // is nothing to offer. Recorded in the AUTO_ASSIGN branch's
+            // vocabulary — the decision keeps its ledger row and its reason, the
+            // founder gets no dead "Accept" card, and the enrolment they already
+            // have is left exactly as it was (NEW_ENROLMENTS_ONLY).
+            outcome = AutoEnrolmentOutcome.ALREADY_ENROLLED;
+            log.info("Auto-enrolment suggestion withheld: founder {} already holds course {} "
+                    + "(pillar '{}', band {}, submission {})",
+                    event.founderId(), candidate.courseId(), candidate.pillarName(),
+                    candidate.bandPosition(), event.submissionId());
+        } else if (candidate.mode() == PillarCourseMode.SUGGEST) {
             // Suggest mode (spec §3): the founder is OFFERED the course. The
             // ledger row IS the suggestion — no enrollment, no seat, no progress
             // — and one tap on the recommendation card turns it into one. The
@@ -354,6 +379,14 @@ public class AutoEnrolmentService {
             log.info("Auto-enrolment refused course {} for founder {}: not PUBLISHED (pillar '{}', band {})",
                     candidate.courseId(), event.founderId(), candidate.pillarName(), candidate.bandPosition());
         } else {
+            // note: enrolIfAbsent's ON CONFLICT DO NOTHING also returns false when
+            // the existing row is CANCELLED, so a founder REMOVED from this course
+            // is recorded as ALREADY_ENROLLED — misleading, but the honest value
+            // ("removed") is not in the outcome set, and the V151/V168 CHECK
+            // reserves widening that set to a human. In practice the overridden
+            // guard above catches the admin-removed case first (removals now write
+            // an enrolment_overrides row); only an override-less CANCELLED row —
+            // a legacy removal — still lands here.
             outcome = founderEnrolments.enrolIfAbsent(event.founderId(), candidate.courseId())
                     ? AutoEnrolmentOutcome.ENROLLED
                     : AutoEnrolmentOutcome.ALREADY_ENROLLED;

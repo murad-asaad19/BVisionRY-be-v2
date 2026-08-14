@@ -41,10 +41,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * BYTES the user actually receives.
  *
  * <p>The defect this pins: {@code showNames} was a bare {@code @RequestParam} on
- * three org-scoped export controllers whose only gate is a class-level
- * {@code @PreAuthorize} that admits any in-org ORG_ADMIN. The rule "only a Super
- * Admin may unmask member names" existed solely as a comment in the web app, so
- * one hand-edited query string unmasked every founder in the org.
+ * three org-scoped export controllers, with the whole rule about who may set it
+ * living solely as a comment in the web app — so one hand-edited query string
+ * decided masking. {@link ExportNameGuard} moved that decision server-side.
+ *
+ * <p>The RULE it enforces was widened by operator ruling 2026-08-14: a
+ * SUPER_ADMIN or an ORG_ADMIN may unmask, a COACH never may, and masked is still
+ * the default for everyone. The org-admin case needs no tenancy assertion here
+ * because the class-level {@code @PreAuthorize} on each controller already pins
+ * them to their own org — that gate has its own tests.
  *
  * <h2>Why the assertions read the document, not a mock</h2>
  *
@@ -164,23 +169,24 @@ class ExportNameAuthorityIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     // ------------------------------------------------------------------
-    // 1. An in-org ORG_ADMIN asking for names is refused on every route they can
-    //    still reach (the workshop export they can no longer reach at all).
+    // 1. An in-org ORG_ADMIN may ask for names on every route they can reach
+    //    (operator ruling 2026-08-14) — and gets them, on the bytes.
     // ------------------------------------------------------------------
 
     @Test
-    void orgAdminAskingForNamesIsForbiddenOnEveryOrgScopedExport() throws Exception {
+    void orgAdminAskingForNamesGetsTheRealNameOnEveryOrgScopedExport() throws Exception {
         TestAuthentication.authenticate(orgAdmin);
-        for (String route : orgScopedExports()) {
-            mockMvc.perform(get(route + separator(route) + "showNames=true"))
-                    .andExpect(status().isForbidden());
-        }
+        assertThat(pdfText(ok(withNames(orgInsight("pdf"))))).contains(FOUNDER);
+        assertThat(cellText(ok(withNames(orgInsight("excel"))))).contains(FOUNDER);
+        assertThat(pdfText(ok(withNames(teamInsight("pdf"))))).contains(FOUNDER);
+        assertThat(cellText(ok(withNames(teamInsight("excel"))))).contains(FOUNDER);
+        assertThat(pdfText(ok(withNames(perMember("pdf"))))).contains(FOUNDER);
+        assertThat(cellText(ok(withNames(perMember("excel"))))).contains(FOUNDER);
     }
 
     /**
-     * Only the flag is refused, never the export. An org admin who does not ask
-     * for names still gets their document — otherwise the fix would read as an
-     * outage rather than a control.
+     * Masking is still the DEFAULT, for everyone. An org admin who does not ask
+     * for names gets their document masked, not merely "gets a document".
      */
     @Test
     void orgAdminWithoutTheFlagStillGetsEveryExport() throws Exception {
@@ -191,8 +197,8 @@ class ExportNameAuthorityIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     // ------------------------------------------------------------------
-    // 2. …and what they DO get carries no real name — read off the bytes.
-    //    One family per test so a failure names the resolution path.
+    // 2. …and what they get WITHOUT the flag carries no real name — read off the
+    //    bytes. One family per test so a failure names the resolution path.
     // ------------------------------------------------------------------
 
     @Test

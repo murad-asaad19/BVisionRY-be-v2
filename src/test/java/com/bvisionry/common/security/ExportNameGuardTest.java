@@ -41,7 +41,7 @@ class ExportNameGuardTest {
     void unmasked_withNobodyAuthenticated_isDenied() {
         assertThatThrownBy(() -> ExportNameGuard.checkShowNames(true))
                 .isInstanceOf(AccessDeniedException.class)
-                .hasMessageContaining("super admin");
+                .hasMessageContaining("super admin or an org admin");
     }
 
     /** An anonymous token IS "authenticated" to Spring — it must still be refused. */
@@ -54,12 +54,16 @@ class ExportNameGuardTest {
                 .isInstanceOf(AccessDeniedException.class);
     }
 
+    /**
+     * Operator ruling 2026-08-14. The missing tenancy check is not an omission:
+     * every caller is a handler whose class-level {@code @PreAuthorize} has
+     * already pinned an org admin to their own org.
+     */
     @Test
-    void unmasked_asOrgAdmin_isDenied() {
+    void unmasked_asOrgAdmin_isAllowed() {
         authenticateAs(UserRole.ORG_ADMIN);
 
-        assertThatThrownBy(() -> ExportNameGuard.checkShowNames(true))
-                .isInstanceOf(AccessDeniedException.class);
+        assertThatCode(() -> ExportNameGuard.checkShowNames(true)).doesNotThrowAnyException();
     }
 
     @Test
@@ -67,6 +71,23 @@ class ExportNameGuardTest {
         authenticateAs(UserRole.SUPER_ADMIN);
 
         assertThatCode(() -> ExportNameGuard.checkShowNames(true)).doesNotThrowAnyException();
+    }
+
+    /** The coach door stays shut — it is the only role gate the guard still holds. */
+    @Test
+    void unmasked_asCoach_isDenied() {
+        authenticateAs(UserRole.COACH);
+
+        assertThatThrownBy(() -> ExportNameGuard.checkShowNames(true))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test
+    void unmasked_asMember_isDenied() {
+        authenticateAs(UserRole.MEMBER);
+
+        assertThatThrownBy(() -> ExportNameGuard.checkShowNames(true))
+                .isInstanceOf(AccessDeniedException.class);
     }
 
     /** The exact shape both JWT filters install: principal + one role-named authority. */

@@ -213,10 +213,13 @@ class ArchitectureRulesTest {
     // without someone deciding who may.
     //
     // `showNames` was a bare @RequestParam on three ORG-SCOPED export
-    // controllers whose only gate is a class-level @PreAuthorize admitting any
-    // in-org ORG_ADMIN — so an org admin could set showNames=true and unmask
-    // their founders, while the web app's own comment claimed only a Super
-    // Admin could. The control had only ever existed in the client.
+    // controllers, with the entire rule about who may set it living as a comment
+    // in the WEB APP — so one hand-edited query string decided masking. The
+    // control had only ever existed in the client.
+    //
+    // (The rule the guard now enforces is SUPER_ADMIN or ORG_ADMIN — operator
+    // ruling 2026-08-14. What this ArchUnit rule pins is unchanged by that: the
+    // decision must be made server-side by SOMEONE, on every handler.)
     //
     // The fix is one shared guard, ExportNameGuard.checkShowNames, called first
     // thing in each handler. Nothing structural required the NEXT export to
@@ -492,7 +495,7 @@ class ArchitectureRulesTest {
                         "handler %s takes a boolean showNames but never calls "
                                 + "ExportNameGuard.checkShowNames and is not marked "
                                 + "@NamesVisibleToSelf: any caller the class-level "
-                                + "@PreAuthorize admits — including an in-org ORG_ADMIN — could "
+                                + "@PreAuthorize admits — including a COACH — could "
                                 + "set showNames=true and unmask the founders. Call "
                                 + "ExportNameGuard.checkShowNames(showNames) first thing, or "
                                 + "@NamesVisibleToSelf(\"which check pins the row to the caller\") "

@@ -1001,18 +1001,32 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(cellText(xlsx)).doesNotContain(founder1.getName());
         }
 
-        /** Only a SUPER_ADMIN may unmask ({@code ExportNameGuard}); an org admin asking is a 403. */
+        /**
+         * An ORG_ADMIN may unmask their own org's members ({@code ExportNameGuard},
+         * operator ruling 2026-08-14) — and the name lands in the document and the
+         * filename, not just a 200.
+         */
         @Test
-        void orgAdminAskingForNamesIsForbidden() throws Exception {
+        void orgAdminAskingForNamesGetsTheRealName() throws Exception {
             computeFounder1();
             makePremium(orgA);
             TestAuthentication.authenticate(
                     saveUser("orgadmin.asknames@test.invalid", UserRole.ORG_ADMIN, orgA));
 
-            mockMvc.perform(get(adminReport("growth-report.pdf", founder1) + "?showNames=true"))
-                    .andExpect(status().isForbidden());
-            mockMvc.perform(get(adminReport("growth-report.xlsx", founder1) + "?showNames=true"))
-                    .andExpect(status().isForbidden());
+            // "founder.one" sanitises to "founderone" in the filename.
+            var pdf = mockMvc.perform(get(adminReport("growth-report.pdf", founder1)
+                            + "?showNames=true"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Content-Disposition",
+                            containsString("founderone_Growth_Report.pdf")))
+                    .andReturn().getResponse().getContentAsByteArray();
+            assertThat(pdfText(pdf)).contains(founder1.getName());
+
+            var xlsx = mockMvc.perform(get(adminReport("growth-report.xlsx", founder1)
+                            + "?showNames=true"))
+                    .andExpect(status().isOk())
+                    .andReturn().getResponse().getContentAsByteArray();
+            assertThat(cellText(xlsx)).contains(founder1.getName());
         }
 
         @Test
@@ -1039,7 +1053,8 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
 
         /**
          * The coach door is ALWAYS masked: an explicit {@code showNames=true}
-         * is refused loudly (a COACH is never a SUPER_ADMIN), and the default
+         * is refused loudly (COACH is on neither side of the guard's
+         * SUPER_ADMIN-or-ORG_ADMIN allowlist), and the default
          * document carries the masked label, not the founder's name.
          */
         @Test

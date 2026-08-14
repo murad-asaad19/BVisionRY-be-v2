@@ -10,9 +10,12 @@ import org.springframework.security.core.context.SecurityContextHolder;
  * Authority gate for the {@code showNames} export flag: "may this caller take a
  * copy of this org's data with the founders' real names on it".
  *
- * <p>Orthogonal to tenancy, RBAC and entitlement, exactly as
- * {@link PremiumFeatureGuard} is: an ORG_ADMIN of a PAYING org clears all three
- * on their own org's exports and is still refused here.
+ * <p>Orthogonal to entitlement, exactly as {@link PremiumFeatureGuard} is, and
+ * deliberately NARROWER than tenancy: it asks only "which ROLE may put real
+ * names in a file", and leaves "whose names" entirely to the class-level
+ * {@code @PreAuthorize} that every calling controller already carries. A COACH
+ * of a PAYING org clears entitlement and tenancy on a founder they are assigned
+ * and is still refused here.
  *
  * <h2>What this is NOT — read before citing this class</h2>
  *
@@ -40,25 +43,40 @@ import org.springframework.security.core.context.SecurityContextHolder;
  * "founders are anonymous to their org admin".
  *
  * <p><b>Whether the latter should be true was escalated and has been DECIDED:
- * it should not.</b> Operator ruling, 2026-07-27 — an org admin may see their
- * own founders' names, because they administer a cohort they are accountable
- * for and already correspond with those people by email. So the bullets above
- * are not a backlog; they are the intended product, and nothing here should be
- * "hardened" into hiding names from an in-org admin. This guard survives the
- * ruling for a different and narrower reason: a FILE leaves the building, gets
- * forwarded and outlives the session, so who may generate one is a separate
- * question from who may see a name on screen.
+ * it should not.</b> Operator ruling, 2026-08-14 (superseding the narrower
+ * 2026-07-27 ruling, which allowed an org admin to SEE their founders' names on
+ * screen but still refused them a file): <b>an ORG_ADMIN may generate export
+ * files carrying their own org's members' real names.</b> They administer a
+ * cohort they are accountable for and already correspond with those people by
+ * email, and the file adds nothing they cannot already read off
+ * {@code /dashboard/overview}. So the bullets above are not a backlog; they are
+ * the intended product, and nothing here should be "hardened" into hiding names
+ * from an in-org admin.
+ *
+ * <p>What the guard still buys, post-ruling, is the COACH door and the
+ * unauthenticated one: a coach sees assigned founders across a boundary the org
+ * admin does not own, and a file outlives the session, so a coach's export stays
+ * masked unconditionally. {@code SUPER_ADMIN or ORG_ADMIN} is therefore the
+ * whole allowlist; everything else — COACH, MEMBER, anonymous, absent — is
+ * denied.
  *
  * <h2>Why a guard called imperatively, and not {@code @PreAuthorize}</h2>
  *
  * Every org-scoped export surface already carries a CLASS-level
  * {@code @PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN')
- * and @orgAccess.isInOrg(#orgId))")}. Spring method security <em>replaces</em> a
- * class-level expression with a method-level one — it never ANDs them — so
- * adding {@code @PreAuthorize("!#showNames or hasAuthority('SUPER_ADMIN')")} to a
- * handler would silently DELETE that class-level tenancy gate and turn a
- * name-masking bug into a cross-tenant one. Restating the class expression eight
- * times to avoid that is eight chances to mistype it.
+ * and @orgAccess.isInOrg(#orgId))")}. That is what makes the ROLE-ONLY test
+ * below sufficient and correct: <b>an ORG_ADMIN who reaches one of these
+ * handlers has already been pinned to their own {@code orgId} by that class
+ * expression</b>, so "is an org admin" here can only ever mean "is an org admin
+ * of THIS org". The guard never re-checks tenancy because it never has to, and
+ * duplicating the check would be a second copy to drift.
+ *
+ * <p>It also cannot become a method-level annotation. Spring method security
+ * <em>replaces</em> a class-level expression with a method-level one — it never
+ * ANDs them — so adding {@code @PreAuthorize("!#showNames or ...")} to a handler
+ * would silently DELETE that class-level tenancy gate and turn a name-masking
+ * bug into a cross-tenant one. Restating the class expression eight times to
+ * avoid that is eight chances to mistype it.
  *
  * <h2>Why not in the services</h2>
  *
@@ -95,43 +113,52 @@ public final class ExportNameGuard {
 
     /**
      * Refuses a request that asked for unmasked names unless the caller is a
-     * SUPER_ADMIN. A no-op when {@code showNames} is false, so it is safe (and
-     * intended) as the unconditional first line of every export handler that
-     * takes the flag.
+     * SUPER_ADMIN or an ORG_ADMIN. A no-op when {@code showNames} is false, so it
+     * is safe (and intended) as the unconditional first line of every export
+     * handler that takes the flag.
+     *
+     * <p>The ORG_ADMIN case is safe WITHOUT a tenancy check here because every
+     * caller of this method is a handler whose class-level {@code @PreAuthorize}
+     * has already required {@code @orgAccess.isInOrg(#orgId)} of an org admin —
+     * see the class javadoc.
      *
      * @param showNames the request's {@code showNames} flag, as received
      * @throws AccessDeniedException when {@code showNames} is true and the caller
-     *                               is not a SUPER_ADMIN — including when nobody
-     *                               is authenticated at all
+     *                               is neither a SUPER_ADMIN nor an ORG_ADMIN —
+     *                               notably a COACH, and including when nobody is
+     *                               authenticated at all
      */
     public static void checkShowNames(boolean showNames) {
         if (!showNames) {
             return;
         }
-        if (!isSuperAdmin()) {
-            throw new AccessDeniedException("Only a super admin may export unmasked member names");
+        if (!hasAnyAuthority(UserRole.SUPER_ADMIN, UserRole.ORG_ADMIN)) {
+            throw new AccessDeniedException(
+                    "Only a super admin or an org admin may export unmasked member names");
         }
     }
 
     /**
-     * Reads the granted authority, which is the same test the class-level
+     * Reads the granted authorities, which is the same test the class-level
      * {@code @PreAuthorize} on every one of these controllers already makes —
      * so a caller who reached the handler has necessarily been measured by the
      * same yardstick. Both JWT filters build the authority list as
      * {@code List.of(new SimpleGrantedAuthority(user.getRole().name()))}, so it
      * cannot diverge in production from the principal's role.
      *
-     * <p>An absent or anonymous {@link Authentication} reads as "not a super
-     * admin" and is therefore denied — the fail-closed answer.
+     * <p>An absent or anonymous {@link Authentication} matches no role and is
+     * therefore denied — the fail-closed answer.
      */
-    private static boolean isSuperAdmin() {
+    private static boolean hasAnyAuthority(UserRole... allowed) {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || !authentication.isAuthenticated()) {
             return false;
         }
         for (GrantedAuthority authority : authentication.getAuthorities()) {
-            if (UserRole.SUPER_ADMIN.name().equals(authority.getAuthority())) {
-                return true;
+            for (UserRole role : allowed) {
+                if (role.name().equals(authority.getAuthority())) {
+                    return true;
+                }
             }
         }
         return false;

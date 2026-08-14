@@ -367,9 +367,13 @@ public class CoachingReadRepository {
                 WHERE s.user_id = :founderId
                   AND s.id = (SELECT s2.id FROM submissions s2
                               WHERE s2.user_id = :founderId
+                                AND s2.status = 'EVALUATED'
                                 AND EXISTS (SELECT 1 FROM pillar_evaluations pe2
                                             WHERE pe2.submission_id = s2.id)
-                              ORDER BY s2.submitted_at DESC NULLS LAST, s2.created_at DESC
+                              -- Same key as the roster FRI (evaluated_at DESC,
+                              -- created_at DESC over EVALUATED) so the header score
+                              -- and these pillar bars describe the SAME submission.
+                              ORDER BY s2.evaluated_at DESC, s2.created_at DESC
                               LIMIT 1)
                   AND EXISTS (SELECT 1 FROM users u WHERE u.id = :founderId AND %s)
                 ORDER BY p.display_order, p.name

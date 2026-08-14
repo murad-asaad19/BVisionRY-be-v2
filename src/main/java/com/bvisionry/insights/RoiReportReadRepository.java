@@ -231,10 +231,15 @@ public class RoiReportReadRepository {
      * {@code u.organization_id = :orgId} a user who now belongs to another
      * tenant — or to none — would appear in a funder-facing roster under their
      * live name, and inflate {@code cohortSize} and the completion denominator
-     * as a permanent zero-assessment ghost. Within the org, an enrolled founder
-     * belongs in the headcount whether or not they were ever assessed, so the
-     * cohort size, the completion rate and the measured counts all come from
-     * this one query.
+     * as a permanent zero-assessment ghost. {@code role = 'MEMBER'} and
+     * {@code status = 'ACTIVE'} follow for the same reason: a coach seeded into
+     * {@code cohort_members} or a suspended member is not a learner — the coach
+     * roster's {@code VISIBLE_FOUNDER} and the cohort screen's org slice filter
+     * them out, and a funder roster must not out-count either surface. Within
+     * the org, an enrolled founder belongs
+     * in the headcount whether or not they were ever assessed, so the cohort
+     * size, the completion rate and the measured counts all come from this one
+     * query.
      *
      * <p>ponytail: unbounded — a cohort is tens of founders; paginate the day
      * one runs into the thousands, which is also the day the PDF stops being a
@@ -267,6 +272,7 @@ public class RoiReportReadRepository {
                 JOIN cohorts c ON c.id = cm.cohort_id
                                AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                 JOIN users u   ON u.id = cm.user_id AND u.organization_id = :orgId
+                               AND u.role = 'MEMBER' AND u.status = 'ACTIVE'
                 LEFT JOIN summary sm ON sm.user_id = u.id
                 LEFT JOIN LATERAL (
                     SELECT count(*)                   AS total,

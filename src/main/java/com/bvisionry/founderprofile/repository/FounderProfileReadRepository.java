@@ -103,8 +103,9 @@ public class FounderProfileReadRepository {
 
     public record ProgramTaskRow(UUID taskId, String taskName, UUID cohortId, String cohortName,
                                  String moduleName, LocalDate dueDate, String taskType, UUID refId,
-                                 boolean done, String status, Instant savedAt, Instant submittedAt,
-                                 UUID surveyResponseId, Instant surveySubmittedAt) {}
+                                 String milestoneRole, boolean done, String status, Instant savedAt,
+                                 Instant submittedAt, UUID surveyResponseId,
+                                 Instant surveySubmittedAt) {}
 
     /**
      * LIVE program tasks in the member's cohorts whose module audience includes
@@ -126,7 +127,8 @@ public class FounderProfileReadRepository {
         return jdbc.query("""
                 SELECT t.id, t.name AS task_name, c.id AS cohort_id, c.name AS cohort_name,
                        m.name AS module_name,
-                       t.due_date, t.task_type, t.ref_id, COALESCE(%1$s, FALSE) AS done,
+                       t.due_date, t.task_type, t.ref_id, t.milestone_role,
+                       COALESCE(%1$s, FALSE) AS done,
                        ps.status, ps.saved_at, ps.submitted_at,
                        sr.id AS survey_response_id, sr.submitted_at AS survey_submitted_at
                 FROM cohort_members cm
@@ -146,7 +148,7 @@ public class FounderProfileReadRepository {
                         rs.getString("cohort_name"),
                         rs.getString("module_name"), rs.getObject("due_date", LocalDate.class),
                         rs.getString("task_type"), rs.getObject("ref_id", UUID.class),
-                        rs.getBoolean("done"),
+                        rs.getString("milestone_role"), rs.getBoolean("done"),
                         rs.getString("status"), instant(rs, "saved_at"), instant(rs, "submitted_at"),
                         rs.getObject("survey_response_id", UUID.class),
                         instant(rs, "survey_submitted_at")));
@@ -341,9 +343,13 @@ public class FounderProfileReadRepository {
                 WHERE s.user_id = :memberId
                   AND s.id = (SELECT s2.id FROM submissions s2
                               WHERE s2.user_id = :memberId
+                                AND s2.status = 'EVALUATED'
                                 AND EXISTS (SELECT 1 FROM pillar_evaluations pe2
                                             WHERE pe2.submission_id = s2.id)
-                              ORDER BY s2.submitted_at DESC NULLS LAST, s2.created_at DESC
+                              -- Same key as the header FRI (evaluated_at DESC,
+                              -- created_at DESC over EVALUATED) so the header score
+                              -- and these pillar bars describe the SAME submission.
+                              ORDER BY s2.evaluated_at DESC, s2.created_at DESC
                               LIMIT 1)
                 ORDER BY p.display_order, p.name
                 """,
@@ -370,13 +376,14 @@ public class FounderProfileReadRepository {
                         rs.getString("body"), instant(rs, "created_at"), instant(rs, "updated_at")));
     }
 
-    public record AnnouncementRow(UUID id, String cohortName, String authorName, String body,
-                                  Instant createdAt) {}
+    public record AnnouncementRow(UUID id, UUID cohortId, String cohortName, String authorName,
+                                  String body, Instant createdAt) {}
 
     /** Announcements the member received: cohort-scoped posts for cohorts they belong to. */
     public List<AnnouncementRow> announcements(UUID orgId, UUID memberId) {
         return jdbc.query("""
-                SELECT a.id, c.name AS cohort_name, au.name AS author_name, a.body, a.created_at
+                SELECT a.id, a.cohort_id, c.name AS cohort_name, au.name AS author_name,
+                       a.body, a.created_at
                 FROM announcements a
                 JOIN cohorts c ON c.id = a.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
                 JOIN cohort_members cm ON cm.cohort_id = a.cohort_id AND cm.user_id = :memberId
@@ -387,6 +394,7 @@ public class FounderProfileReadRepository {
                 """,
                 params(orgId, memberId),
                 (rs, i) -> new AnnouncementRow(rs.getObject("id", UUID.class),
+                        rs.getObject("cohort_id", UUID.class),
                         rs.getString("cohort_name"), rs.getString("author_name"),
                         rs.getString("body"), instant(rs, "created_at")));
     }

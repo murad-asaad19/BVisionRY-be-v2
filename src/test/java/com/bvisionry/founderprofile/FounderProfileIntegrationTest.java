@@ -169,6 +169,38 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(jsonPath("$.announcements[0].createdAt", notNullValue()));
         }
 
+        /**
+         * The pillar snapshot describes the LATEST EVALUATED submission — the
+         * same one the header FRI quotes. A newer quarantined NEEDS_REVIEW run
+         * (ai_failed zeros persisted "fail loud, not quiet") must not hijack
+         * the bars while the header still shows the last clean score.
+         */
+        @Test
+        void aNewerQuarantinedRunDoesNotHijackThePillarSnapshot() throws Exception {
+            UUID assignment = jdbc.queryForObject(
+                    "SELECT assignment_id FROM submissions WHERE user_id = ? LIMIT 1",
+                    UUID.class, founder.getId());
+            UUID pillar = jdbc.queryForObject(
+                    "SELECT id FROM pillars WHERE name = 'Vision'", UUID.class);
+            UUID quarantined = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO submissions (id, assignment_id, user_id, status, submitted_at)
+                    VALUES (?, ?, ?, 'NEEDS_REVIEW', now() + interval '1 hour')
+                    """, quarantined, assignment, founder.getId());
+            jdbc.update("""
+                    INSERT INTO pillar_evaluations (submission_id, pillar_id, score_percentage,
+                                                    maturity_label, ai_failed)
+                    VALUES (?, ?, 0.00, 'Failed', true)
+                    """, quarantined, pillar);
+
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(adminProfile(orgA, founder)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.header.friLatest", is(71.25)))
+                    .andExpect(jsonPath("$.pillarScores", hasSize(1)))
+                    .andExpect(jsonPath("$.pillarScores[0].maturityLabel", is("Strong")));
+        }
+
         @Test
         void foreignAdminIsRejected_andForeignMemberIs404() throws Exception {
             TestAuthentication.authenticate(adminB);
@@ -325,6 +357,35 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
                             hasItem("Direct Pipeline")))
                     .andExpect(jsonPath("$.work[?(@.type=='ASSESSMENT')].refId",
                             hasItem(directAssessmentAssignment.toString())));
+        }
+
+        /**
+         * The pre-spine intake shape: an EVALUATED sitting nobody tagged. The
+         * journey shows it on the BASELINE band (the earliest-evaluated
+         * fallback), so the Work tab's PROGRAM row must pick it up too — and
+         * the Direct bucket must not show the same sitting a second time.
+         */
+        @Test
+        void anAdoptableUntaggedSittingRidesOnItsBaselineTaskRow_notInDirect() throws Exception {
+            UUID sitting = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO submissions (id, assignment_id, user_id, status,
+                                             submitted_at, evaluated_at)
+                    VALUES (?, ?, ?, 'EVALUATED', now(), now())
+                    """, sitting, neverStartedAssignment, merged.getId());
+
+            TestAuthentication.authenticate(admin);
+            String program = "$.work[?(@.type=='PROGRAM' && @.title=='Assessment Task')]";
+            mockMvc.perform(get(adminProfile(orgA, merged)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.work", hasSize(8)))
+                    .andExpect(jsonPath(program, hasSize(1)))
+                    .andExpect(jsonPath(program + ".status", hasItem("EVALUATED")))
+                    .andExpect(jsonPath(program + ".submissionId", hasItem(sitting.toString())))
+                    // …and Direct still holds only the untagged twin pipeline.
+                    .andExpect(jsonPath("$.work[?(@.type=='ASSESSMENT')]", hasSize(1)))
+                    .andExpect(jsonPath("$.work[?(@.type=='ASSESSMENT')].title",
+                            hasItem("Direct Pipeline")));
         }
 
         /**
@@ -754,6 +815,7 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
     private UUID mergedSurveyResponse;
     private UUID neverStartedTask;
     private UUID neverStartedPipeline;
+    private UUID neverStartedAssignment;
     private UUID removedCourseTask;
     private UUID removedCourseId;
     private UUID selfCourseId;
@@ -831,10 +893,12 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
                                            milestone_role)
                 VALUES (?, ?, 'Assessment Task', 'LIVE', 2, 'ASSESSMENT', ?, 'BASELINE')
                 """, neverStartedTask, moduleId, neverStartedPipeline);
+        neverStartedAssignment = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO assignments (pipeline_id, organization_id, user_id, assigned_by)
-                VALUES (?, ?, ?, ?)
-                """, neverStartedPipeline, orgA.getId(), merged.getId(), admin.getId());
+                INSERT INTO assignments (id, pipeline_id, organization_id, user_id, assigned_by)
+                VALUES (?, ?, ?, ?, ?)
+                """, neverStartedAssignment, neverStartedPipeline, orgA.getId(), merged.getId(),
+                admin.getId());
 
         // ---- COURSE: task over a course the admin later REMOVED for this member
         removedCourseId = UUID.randomUUID();

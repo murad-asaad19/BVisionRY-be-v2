@@ -404,13 +404,16 @@ class RoiReportIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
-    void foreignOrOrphanedCohortMemberNeverReachesTheRoster() throws Exception {
+    void foreignOrphanedSuspendedOrNonMemberNeverReachesTheRoster() throws Exception {
         // Nothing clears cohort_members when a member is moved between orgs
         // (MoveMemberService) or removed and anonymised (MemberService), so a
         // membership row outlives the membership. Without
-        // u.organization_id = :orgId these two appear in a funder-facing roster
+        // u.organization_id = :orgId these appear in a funder-facing roster
         // under their LIVE name and inflate cohortSize + the completion
-        // denominator as permanent zero-assessment ghosts.
+        // denominator as permanent zero-assessment ghosts. role = 'MEMBER' and
+        // status = 'ACTIVE' guard the same way: a coach seeded into the cohort
+        // or a suspended member is not a learner the cohort screen counts
+        // (VISIBLE_FOUNDER), and the funder roster must match it.
         UUID ours = enrol(orgA.getId(), cohortA, "Ada Lovelace");
         insertSubmission(insertAssignment(orgA.getId(), ours), ours, 40.0, 0);
 
@@ -419,6 +422,13 @@ class RoiReportIntegrationTest extends AbstractPostgresIntegrationTest {
 
         UUID orphaned = enrol(orgA.getId(), cohortA, "Olive Orphaned");
         jdbc.update("UPDATE users SET organization_id = NULL WHERE id = ?", orphaned);
+
+        UUID suspended = enrol(orgA.getId(), cohortA, "Sam Suspended");
+        jdbc.update("UPDATE users SET status = 'SUSPENDED' WHERE id = ?", suspended);
+
+        User enrolledCoach = saveUser("roi.coach.enrolled@test.invalid", UserRole.COACH, orgA);
+        jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
+                cohortA, enrolledCoach.getId());
 
         TestAuthentication.authenticate(orgAdminA);
         String body = mockMvc.perform(report(orgA, cohortA))
@@ -429,6 +439,8 @@ class RoiReportIntegrationTest extends AbstractPostgresIntegrationTest {
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(body).doesNotContain("Zebedee Moved");
         assertThat(body).doesNotContain("Olive Orphaned");
+        assertThat(body).doesNotContain("Sam Suspended");
+        assertThat(body).doesNotContain("roi.coach.enrolled");
 
         // The same exclusion survives the export path.
         String cells = String.join("\n", cellText(mockMvc.perform(export(orgA, cohortA, "xlsx"))
@@ -437,6 +449,8 @@ class RoiReportIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(cells).contains("Ada Lovelace");
         assertThat(cells).doesNotContain("Zebedee Moved");
         assertThat(cells).doesNotContain("Olive Orphaned");
+        assertThat(cells).doesNotContain("Sam Suspended");
+        assertThat(cells).doesNotContain("roi.coach.enrolled");
     }
 
     @Test

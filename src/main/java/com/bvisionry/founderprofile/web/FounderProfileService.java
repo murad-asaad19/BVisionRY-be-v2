@@ -4,6 +4,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -79,8 +80,8 @@ public class FounderProfileService {
                                 n.body(), n.createdAt(), n.updatedAt()))
                         .toList(),
                 reads.announcements(orgId, memberId).stream()
-                        .map(a -> new FounderAnnouncement(a.id(), a.cohortName(), a.authorName(),
-                                a.body(), a.createdAt()))
+                        .map(a -> new FounderAnnouncement(a.id(), a.cohortId(), a.cohortName(),
+                                a.authorName(), a.body(), a.createdAt()))
                         .toList());
     }
 
@@ -132,7 +133,8 @@ public class FounderProfileService {
      * and the artifact is suppressed from the org-level remainder. Whatever
      * carries no tag (direct assignments, self-enrolled courses, untagged
      * submissions) stays as its own row with a null {@code cohortId}: the
-     * Direct bucket.
+     * Direct bucket — except the untagged sitting a BASELINE milestone adopts
+     * (the journey's pre-spine fallback), which rides on the task row instead.
      */
     private List<FounderWorkItem> workItems(UUID orgId, UUID memberId) {
         List<ProgramTaskRow> tasks = reads.programTasks(orgId, memberId);
@@ -165,6 +167,14 @@ public class FounderProfileService {
                 .filter(t -> "ASSESSMENT".equals(t.taskType()) && t.refId() != null)
                 .map(ProgramTaskRow::refId)
                 .collect(Collectors.toSet());
+        // Every ASSESSMENT task id: a submitted attempt tagged to one of these
+        // belongs to that task's PROGRAM row (only the newest attempt is merged
+        // into it) and must never fall through to the Direct bucket — no matter
+        // which attempt it is.
+        Set<UUID> assessmentTaskIds = tasks.stream()
+                .filter(t -> "ASSESSMENT".equals(t.taskType()))
+                .map(ProgramTaskRow::taskId)
+                .collect(Collectors.toSet());
 
         List<FounderWorkItem> items = new ArrayList<>();
         for (ProgramTaskRow t : tasks) {
@@ -190,6 +200,22 @@ public class FounderProfileService {
                 }
                 case "ASSESSMENT" -> {
                     AssessmentRow a = assessmentByTask.get(t.taskId());
+                    if (a == null && "BASELINE".equals(t.milestoneRole())) {
+                        // The journey's pre-spine fallback, mirrored
+                        // (TaskSpineRepository#directAssessments): a BASELINE
+                        // with no tagged sitting adopts the member's earliest
+                        // evaluated UNTAGGED sitting of its pipeline. Without
+                        // this the task row read "To do" while the same sitting
+                        // showed again in the Direct bucket below.
+                        a = assessments.stream()
+                                .filter(s -> s.programTaskId() == null
+                                        && "EVALUATED".equals(s.status())
+                                        && t.refId() != null
+                                        && t.refId().equals(s.pipelineId()))
+                                .min(Comparator.comparing(AssessmentRow::evaluatedAt,
+                                        Comparator.nullsLast(Comparator.naturalOrder())))
+                                .orElse(null);
+                    }
                     if (a != null && a.submissionId() != null) {
                         mergedSubmissions.add(a.submissionId());
                     }
@@ -252,9 +278,18 @@ public class FounderProfileService {
                         c.enrolledAt(), null, null, null, c.completedAt(), c.removed(),
                         c.required(), null, null, c.enrolledAt())));
         assessments.stream()
-                .filter(a -> a.submissionId() == null
-                        ? !taskPipelines.contains(a.pipelineId())
-                        : !mergedSubmissions.contains(a.submissionId()))
+                .filter(a -> {
+                    if (a.submissionId() == null) {
+                        return !taskPipelines.contains(a.pipelineId());
+                    }
+                    // A submitted attempt of a cohort ASSESSMENT task is that
+                    // task's work (merged or an older retake) — never Direct.
+                    if (a.programTaskId() != null
+                            && assessmentTaskIds.contains(a.programTaskId())) {
+                        return false;
+                    }
+                    return !mergedSubmissions.contains(a.submissionId());
+                })
                 .forEach(a -> items.add(new FounderWorkItem(
                         "ASSESSMENT", a.assignmentId(), null, null, null, a.submissionId(),
                         a.pipelineName(), null,

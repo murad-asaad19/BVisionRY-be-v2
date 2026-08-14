@@ -45,8 +45,8 @@ class FounderProfileServiceTest {
     }
 
     private static ProgramTaskRow task(String type, boolean done, String submissionStatus) {
-        return new ProgramTaskRow(null, "T", null, "Cohort", "Module", null, type, null, done,
-                submissionStatus, null, null, null, null);
+        return new ProgramTaskRow(null, "T", null, "Cohort", "Module", null, type, null, null,
+                done, submissionStatus, null, null, null, null);
     }
 
     /** lessonStatus only maps LESSON's done flag to SUBMITTED; unfinished tasks keep their raw status. */

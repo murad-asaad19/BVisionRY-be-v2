@@ -144,6 +144,7 @@ public record FounderProfileResponse(
     /** An announcement the founder received (cohort-scoped). */
     public record FounderAnnouncement(
             UUID id,
+            UUID cohortId,
             String cohortName,
             String authorName,
             String body,

@@ -176,11 +176,14 @@ public class MemberResultsService {
                                                    boolean premium,
                                                    boolean superAdmin) {
         boolean premiumDetailUnavailable = premium && isLegacyBlankPremium(r);
+        // The lists are never null on the wire: the API contract says array,
+        // and a cached payload may carry null (see isNullOrEmpty) — passing
+        // that through crashed the web report on strengths.length.
         return new MemberResultsResponse(
                 r.submissionId(), r.pipelineName(), r.overallScore(), r.summaryNarrative(),
-                premium ? r.strengths() : List.of(),
-                premium ? r.developmentAreas() : List.of(),
-                r.pillarScores(),
+                premium ? orEmpty(r.strengths()) : List.of(),
+                premium ? orEmpty(r.developmentAreas()) : List.of(),
+                orEmpty(r.pillarScores()),
                 premium, r.evaluatedAt(), r.freeTierSummary(), r.topStrengths(),
                 r.maturityIndication(), r.premiumTeaser(),
                 premium ? r.corePattern() : null,
@@ -209,6 +212,10 @@ public class MemberResultsService {
 
     private boolean isNullOrEmpty(List<String> list) {
         return list == null || list.isEmpty();
+    }
+
+    private static <T> List<T> orEmpty(List<T> list) {
+        return list == null ? List.of() : list;
     }
 
     /**

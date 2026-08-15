@@ -23,7 +23,6 @@ import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.programflow.domain.AudienceMode;
-import com.bvisionry.programflow.domain.BoardSnapshot;
 import com.bvisionry.programflow.domain.Cohort;
 import com.bvisionry.programflow.domain.CohortStatus;
 import com.bvisionry.programflow.domain.FieldType;
@@ -53,6 +52,8 @@ import com.bvisionry.programflow.dto.PulseResponse.CellState;
 import com.bvisionry.programflow.dto.PulseResponse.PulseColumn;
 import com.bvisionry.programflow.dto.PulseResponse.PulseRow;
 import com.bvisionry.programflow.dto.SaveBoardRequest;
+import com.bvisionry.programflow.dto.SaveBoardRequest.ModuleUpsert;
+import com.bvisionry.programflow.dto.SaveBoardRequest.TaskUpsert;
 import com.bvisionry.programflow.repository.BoardRestoreRepository;
 import com.bvisionry.programflow.repository.CohortBoardReadRepository;
 import com.bvisionry.programflow.repository.CohortMemberRow;
@@ -136,12 +137,12 @@ public class ProgramAdminService {
         List<ProgramModule> current = modules.findByCohortIdOrderByPositionAsc(cohortId);
         List<CohortMemberRow> roster = cohorts.findRoster(cohortId);
 
-        BoardSnapshot snapshot = toSnapshot(req);
-        requireOwnIds(cohortId, snapshot);
+        List<ModuleUpsert> board = normalize(req);
+        requireOwnIds(cohortId, board);
         validateBoard(req, current, roster);
 
         List<BoardRestoreRepository.DoomedTask> atRisk =
-                restore.memberWorkAtRisk(cohortId, snapshot);
+                restore.memberWorkAtRisk(cohortId, board);
         if (!req.force() && !atRisk.isEmpty()) {
             throw new IllegalOperationException(memberWorkMessage(atRisk));
         }
@@ -159,7 +160,7 @@ public class ProgramAdminService {
                     "Someone else saved this board while you were editing it. "
                             + "Reload to pick up their changes — saving now would delete them.");
         }
-        restore.restore(cohortId, snapshot);
+        restore.restore(cohortId, board);
         entityManager.clear();
         // The curriculum IS the designation (spec §5) — re-derive AFTER the
         // clear, or the milestone tasks would be read back out of a first-level
@@ -184,27 +185,30 @@ public class ProgramAdminService {
                 + ". Save anyway to discard it.";
     }
 
-    /** The submitted board as the snapshot the restore speaks; new fields get an id here. */
-    private static BoardSnapshot toSnapshot(SaveBoardRequest req) {
-        return new BoardSnapshot(req.modules().stream()
-                .map(m -> new BoardSnapshot.ModuleSnap(m.id(), m.name(), m.summary(),
+    /**
+     * The submitted board, normalised for the restore: new fields get their id
+     * MINTED here (once — the probe, the foreign-id guard and the restore must
+     * all see the same ids), a non-answerable field cannot be required, and a
+     * blank pillar label becomes null. Same records in, same records out.
+     */
+    private static List<ModuleUpsert> normalize(SaveBoardRequest req) {
+        return req.modules().stream()
+                .map(m -> new ModuleUpsert(m.id(), m.name(), m.summary(),
                         blankToNull(m.pillarLabel()), m.paced(), m.lockMode(), m.unlockAt(),
-                        m.assignMode(),
-                        List.copyOf(m.memberIds()),
+                        m.assignMode(), m.memberIds(),
                         m.tasks().stream()
-                                .map(t -> new BoardSnapshot.TaskSnap(t.id(), t.name(), t.taskType(),
-                                        t.refId(), t.milestoneRole(), t.dueDate(), t.status(),
-                                        t.aiDraft(), fieldSnaps(t.fields())))
+                                .map(t -> new TaskUpsert(t.id(), t.name(), t.dueDate(),
+                                        t.status(), t.aiDraft(), t.taskType(), t.refId(),
+                                        t.milestoneRole(), normalizeFields(t.fields())))
                                 .toList()))
-                .toList());
+                .toList();
     }
 
-    private static List<BoardSnapshot.FieldSnap> fieldSnaps(List<FieldUpsert> fields) {
+    private static List<FieldUpsert> normalizeFields(List<FieldUpsert> fields) {
         return fields.stream()
-                .map(f -> new BoardSnapshot.FieldSnap(
+                .map(f -> new FieldUpsert(
                         f.id() == null ? UUID.randomUUID() : f.id(),
-                        f.type(), f.type().answerable() && f.required(),
-                        new LinkedHashMap<>(f.config())))
+                        f.type(), f.type().answerable() && f.required(), f.config()))
                 .toList();
     }
 
@@ -213,10 +217,10 @@ public class ProgramAdminService {
      * restore upserts BY ID, so an id owned by another cohort would silently
      * move that row here, and the same id twice would silently drop a row.
      */
-    private void requireOwnIds(UUID cohortId, BoardSnapshot snapshot) {
-        List<UUID> moduleIds = snapshot.moduleIds();
-        List<UUID> taskIds = snapshot.taskIds();
-        List<UUID> fieldIds = snapshot.fieldIds();
+    private void requireOwnIds(UUID cohortId, List<ModuleUpsert> board) {
+        List<UUID> moduleIds = BoardRestoreRepository.moduleIds(board);
+        List<UUID> taskIds = BoardRestoreRepository.taskIds(board);
+        List<UUID> fieldIds = BoardRestoreRepository.fieldIds(board);
         if (Set.copyOf(moduleIds).size() != moduleIds.size()
                 || Set.copyOf(taskIds).size() != taskIds.size()
                 || Set.copyOf(fieldIds).size() != fieldIds.size()) {

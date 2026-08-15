@@ -12,16 +12,18 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 import org.springframework.stereotype.Repository;
 
-import com.bvisionry.programflow.domain.BoardSnapshot;
-import com.bvisionry.programflow.domain.BoardSnapshot.FieldSnap;
-import com.bvisionry.programflow.domain.BoardSnapshot.ModuleSnap;
-import com.bvisionry.programflow.domain.BoardSnapshot.TaskSnap;
+import com.bvisionry.programflow.dto.FieldUpsert;
+import com.bvisionry.programflow.dto.SaveBoardRequest.ModuleUpsert;
+import com.bvisionry.programflow.dto.SaveBoardRequest.TaskUpsert;
 import tools.jackson.databind.ObjectMapper;
 
 /**
- * Makes a cohort's curriculum equal a {@link BoardSnapshot}, in raw SQL — the
- * engine behind the Curriculum builder's whole-board Save, where the snapshot is
- * the board as the admin edited it locally.
+ * Makes a cohort's curriculum equal the normalised {@code ModuleUpsert} list of
+ * a {@code SaveBoardRequest}, in raw SQL — the engine behind the Curriculum
+ * builder's whole-board Save, where the board is what the admin edited locally
+ * (positions implied by list order and re-derived on write; the service mints
+ * ids for new fields BEFORE handing the board here, so the probe, the foreign-id
+ * guard and the restore all see the same ids).
  *
  * <p><strong>Why not JPA.</strong> The write has to create rows <em>under ids
  * the browser minted</em>, and to re-create a row it was handed by id — that is
@@ -75,7 +77,7 @@ public class BoardRestoreRepository {
      * assessment ({@code submissions}, V164), exercise assignment and survey
      * response (both V173).
      */
-    public List<DoomedTask> memberWorkAtRisk(UUID cohortId, BoardSnapshot snapshot) {
+    public List<DoomedTask> memberWorkAtRisk(UUID cohortId, List<ModuleUpsert> board) {
         return jdbc.query("""
                 SELECT t.name AS task_name, w.member_count
                 FROM program_tasks t
@@ -98,8 +100,8 @@ public class BoardRestoreRepository {
                 ORDER BY t.name
                 """,
                 new MapSqlParameterSource("cohortId", cohortId)
-                        .addValue("keptTaskIds", withSentinel(snapshot.taskIds()))
-                        .addValue("retypedIds", withSentinel(retypedTaskIds(snapshot))),
+                        .addValue("keptTaskIds", withSentinel(taskIds(board)))
+                        .addValue("retypedIds", withSentinel(retypedTaskIds(board))),
                 (rs, i) -> new DoomedTask(rs.getString("task_name"), rs.getLong("member_count")));
     }
 
@@ -108,10 +110,10 @@ public class BoardRestoreRepository {
      * incoming one. A snapshot id with no stored row is a create, not a
      * retype, and simply doesn't come back from the query.
      */
-    private List<UUID> retypedTaskIds(BoardSnapshot snapshot) {
+    private List<UUID> retypedTaskIds(List<ModuleUpsert> board) {
         Map<UUID, String> incoming = new HashMap<>();
-        for (ModuleSnap m : snapshot.modules()) {
-            for (TaskSnap t : m.tasks()) {
+        for (ModuleUpsert m : board) {
+            for (TaskUpsert t : m.tasks()) {
                 incoming.put(t.id(), t.taskType().name());
             }
         }
@@ -161,23 +163,22 @@ public class BoardRestoreRepository {
      * created since are deleted. Positions are re-derived from list order, so
      * the restored board has no gaps.
      */
-    public void restore(UUID cohortId, BoardSnapshot snapshot) {
-        upsertModules(cohortId, snapshot);
-        upsertTasks(snapshot);
-        upsertFields(snapshot);
-        // Only now is it safe to delete: every snapshot row sits under its
-        // snapshot parent, so no cascade can reach one.
-        deleteTasksNotIn(cohortId, snapshot.taskIds());
-        deleteModulesNotIn(cohortId, snapshot.moduleIds());
-        deleteFieldsNotIn(cohortId, snapshot.fieldIds());
-        replaceAudiences(snapshot);
+    public void restore(UUID cohortId, List<ModuleUpsert> board) {
+        upsertModules(cohortId, board);
+        upsertTasks(board);
+        upsertFields(board);
+        // Only now is it safe to delete: every kept row sits under its
+        // payload parent, so no cascade can reach one.
+        deleteTasksNotIn(cohortId, taskIds(board));
+        deleteModulesNotIn(cohortId, moduleIds(board));
+        deleteFieldsNotIn(cohortId, fieldIds(board));
+        replaceAudiences(board);
     }
 
-    private void upsertModules(UUID cohortId, BoardSnapshot snapshot) {
+    private void upsertModules(UUID cohortId, List<ModuleUpsert> board) {
         List<SqlParameterSource> batch = new ArrayList<>();
-        List<ModuleSnap> mods = snapshot.modules();
-        for (int i = 0; i < mods.size(); i++) {
-            ModuleSnap m = mods.get(i);
+        for (int i = 0; i < board.size(); i++) {
+            ModuleUpsert m = board.get(i);
             batch.add(new MapSqlParameterSource("id", m.id())
                     .addValue("cohortId", cohortId)
                     .addValue("name", m.name())
@@ -207,12 +208,12 @@ public class BoardRestoreRepository {
                 """, batch);
     }
 
-    private void upsertTasks(BoardSnapshot snapshot) {
+    private void upsertTasks(List<ModuleUpsert> board) {
         List<SqlParameterSource> batch = new ArrayList<>();
-        for (ModuleSnap m : snapshot.modules()) {
-            List<TaskSnap> tasks = m.tasks();
+        for (ModuleUpsert m : board) {
+            List<TaskUpsert> tasks = m.tasks();
             for (int i = 0; i < tasks.size(); i++) {
-                TaskSnap t = tasks.get(i);
+                TaskUpsert t = tasks.get(i);
                 batch.add(new MapSqlParameterSource("id", t.id())
                         .addValue("moduleId", m.id())
                         .addValue("name", t.name())
@@ -245,13 +246,13 @@ public class BoardRestoreRepository {
                 """, batch);
     }
 
-    private void upsertFields(BoardSnapshot snapshot) {
+    private void upsertFields(List<ModuleUpsert> board) {
         List<SqlParameterSource> batch = new ArrayList<>();
-        for (ModuleSnap m : snapshot.modules()) {
-            for (TaskSnap t : m.tasks()) {
-                List<FieldSnap> fields = t.fields();
+        for (ModuleUpsert m : board) {
+            for (TaskUpsert t : m.tasks()) {
+                List<FieldUpsert> fields = t.fields();
                 for (int i = 0; i < fields.size(); i++) {
-                    FieldSnap f = fields.get(i);
+                    FieldUpsert f = fields.get(i);
                     batch.add(new MapSqlParameterSource("id", f.id())
                             .addValue("taskId", t.id())
                             .addValue("fieldType", f.type().name())
@@ -311,13 +312,12 @@ public class BoardRestoreRepository {
      * {@code users} so a member erased since the board was read is simply
      * dropped instead of failing the whole save on the FK.
      */
-    private void replaceAudiences(BoardSnapshot snapshot) {
-        List<UUID> moduleIds = snapshot.moduleIds();
+    private void replaceAudiences(List<ModuleUpsert> board) {
         jdbc.update("DELETE FROM program_module_members WHERE module_id IN (:moduleIds)",
-                new MapSqlParameterSource("moduleIds", withSentinel(moduleIds)));
+                new MapSqlParameterSource("moduleIds", withSentinel(moduleIds(board))));
 
         List<SqlParameterSource> batch = new ArrayList<>();
-        for (ModuleSnap m : snapshot.modules()) {
+        for (ModuleUpsert m : board) {
             for (UUID userId : m.memberIds()) {
                 batch.add(new MapSqlParameterSource("moduleId", m.id()).addValue("userId", userId));
             }
@@ -330,6 +330,25 @@ public class BoardRestoreRepository {
     }
 
     /* ------------------------------------------------------------------ helpers */
+
+    /** Every module id the board holds — the "keep" set a restore reconciles against. */
+    public static List<UUID> moduleIds(List<ModuleUpsert> board) {
+        return board.stream().map(ModuleUpsert::id).toList();
+    }
+
+    /** Every task id the board holds. */
+    public static List<UUID> taskIds(List<ModuleUpsert> board) {
+        return board.stream().flatMap(m -> m.tasks().stream()).map(TaskUpsert::id).toList();
+    }
+
+    /** Every field id the board holds (the service mints missing ones first). */
+    public static List<UUID> fieldIds(List<ModuleUpsert> board) {
+        return board.stream()
+                .flatMap(m -> m.tasks().stream())
+                .flatMap(t -> t.fields().stream())
+                .map(FieldUpsert::id)
+                .toList();
+    }
 
     private void batchUpdate(String sql, List<SqlParameterSource> batch) {
         if (!batch.isEmpty()) {

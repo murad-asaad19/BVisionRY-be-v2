@@ -1,12 +1,10 @@
 package com.bvisionry.insights;
 
-import com.bvisionry.auth.OrgAccessGuard;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
-import com.bvisionry.common.security.OrgHierarchyPort;
 import com.bvisionry.organization.OrganizationRepository;
 import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
@@ -69,7 +67,6 @@ class BenchmarkIntegrationTest extends AbstractPostgresIntegrationTest {
     @Autowired private UserRepository userRepository;
     @Autowired private OrganizationRepository organizationRepository;
     @Autowired private JdbcTemplate jdbc;
-    @Autowired private OrgHierarchyPort orgHierarchyPort;
 
     private Organization orgA;
     private Organization orgB;
@@ -84,12 +81,6 @@ class BenchmarkIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @BeforeEach
     void seed() {
-        // Re-pin OrgAccessGuard's static hierarchy port to THIS context's
-        // adapter — in a full run, later-built contexts (H2-backed slices)
-        // leave the static pointing at their own storage, which would 403 the
-        // parent-admin-on-sub-org-path case (same fix as
-        // SubOrganizationIntegrationTest).
-        new OrgAccessGuard(orgHierarchyPort);
 
         orgA = saveOrg("Benchmark Org A");
         orgB = saveOrg("Benchmark Org B");

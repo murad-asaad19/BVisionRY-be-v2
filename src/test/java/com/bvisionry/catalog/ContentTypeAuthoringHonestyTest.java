@@ -59,6 +59,7 @@ class ContentTypeAuthoringHonestyTest {
     @Mock private SectionRepository sections;
     @Mock private ContentRepository contents;
     @Mock private TagRepository tags;
+    @Mock private org.springframework.beans.factory.ObjectProvider<com.bvisionry.common.security.OrgHierarchyPort> hierarchyProvider;
 
     private AuthoringService service;
 
@@ -69,7 +70,8 @@ class ContentTypeAuthoringHonestyTest {
     @BeforeEach
     void setUp() {
         // Real mapper: the hydration test asserts what a retired row maps to.
-        service = new AuthoringService(courses, sections, contents, tags, new CourseMapper());
+        service = new AuthoringService(courses, sections, contents, tags, new CourseMapper(),
+                new com.bvisionry.config.SecurityContextOrgScope(hierarchyProvider));
         User admin = new User();
         admin.setId(UUID.randomUUID());
         admin.setRole(UserRole.SUPER_ADMIN);

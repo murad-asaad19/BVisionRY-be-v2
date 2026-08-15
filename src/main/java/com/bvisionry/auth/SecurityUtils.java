@@ -27,18 +27,4 @@ public final class SecurityUtils {
     public static boolean isSuperAdmin() {
         return getCurrentUser().getRole() == UserRole.SUPER_ADMIN;
     }
-
-    /**
-     * Imperative variant of {@link OrgAccessGuard#isInOrg(UUID)} for service-layer
-     * call sites that aren't gated by {@code @PreAuthorize}. Throws a uniform
-     * {@link AccessDeniedException} so 403/404 don't leak the existence of a foreign org.
-     */
-    public static void requireOrgAccess(UUID orgId) {
-        if (orgId == null) {
-            throw new AccessDeniedException("Organization id is required");
-        }
-        if (!OrgAccessGuard.callerHasAccess(orgId)) {
-            throw new AccessDeniedException("Cross-org access denied");
-        }
-    }
 }

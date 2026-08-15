@@ -2,7 +2,7 @@ package com.bvisionry.organization;
 
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
-import com.bvisionry.common.security.OrgHierarchyPort;
+import com.bvisionry.common.security.OrgScope;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -31,12 +31,11 @@ public class OrgAccessInterceptor implements HandlerInterceptor {
     /**
      * Lazily resolved: this interceptor is instantiated in {@code @WebMvcTest}
      * slices (HandlerInterceptors are part of the web slice) where the
-     * {@code OrgHierarchyAdapter} @Component is not — a hard constructor
-     * dependency would fail every slice context. When absent, the traversal
-     * check degrades to plain same-org equality (mirrors OrgAccessGuard's
-     * null-safe static fallback).
+     * {@code config} adapter @Component is not — a hard constructor dependency
+     * would fail every slice context. When absent, the check degrades to
+     * SUPER_ADMIN-or-same-org equality (the pre-hierarchy predicate).
      */
-    private final ObjectProvider<OrgHierarchyPort> orgHierarchy;
+    private final ObjectProvider<OrgScope> orgScope;
 
     // Case-insensitive: UUIDs may arrive upper- or mixed-case in the path. A
     // lowercase-only class let an uppercase-UUID request slip past the membership
@@ -73,22 +72,21 @@ public class OrgAccessInterceptor implements HandlerInterceptor {
         // cross-feature edges per origin method + target, and a second
         // occurrence of the same call would register as a new violation.
         UserRole role = user.getRole();
-
-        // Super admin bypasses org isolation
-        if (role == UserRole.SUPER_ADMIN) return true;
-
         UUID requestedOrgId = UUID.fromString(matcher.group(1));
         UUID userOrgId = user.getOrganization() != null ? user.getOrganization().getId() : null;
 
-        // A parent org's ORG_ADMIN manages its sub-orgs through the same
-        // org-scoped endpoints — mirror OrgAccessGuard.callerHasAccess.
-        OrgHierarchyPort hierarchy = orgHierarchy.getIfAvailable();
-        boolean parentAdminOfRequestedOrg = userOrgId != null
-                && role == UserRole.ORG_ADMIN
-                && hierarchy != null
-                && hierarchy.isParentOf(userOrgId, requestedOrgId);
+        // ONE tenancy predicate, owned by OrgScope — the same rule the
+        // @orgAccess SpEL bean and the service-layer checks ask. This
+        // interceptor is defence-in-depth over @PreAuthorize, not a second rule.
+        OrgScope scope = orgScope.getIfAvailable();
+        boolean allowed = scope != null
+                ? scope.mayAccess(requestedOrgId)
+                // Sliced-context fallback (no config beans): the pre-hierarchy
+                // predicate, so @WebMvcTest behaviour matches the old inline check.
+                : role == UserRole.SUPER_ADMIN
+                        || (userOrgId != null && userOrgId.equals(requestedOrgId));
 
-        if ((userOrgId == null || !userOrgId.equals(requestedOrgId)) && !parentAdminOfRequestedOrg) {
+        if (!allowed) {
             log.warn("Org access denied: user {} (org {}) tried to access org {}",
                     user.getId(), userOrgId, requestedOrgId);
             response.setContentType("application/json");

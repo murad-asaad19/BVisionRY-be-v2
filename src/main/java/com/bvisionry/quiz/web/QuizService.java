@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.OrgScope;
 import com.bvisionry.catalog.domain.Content;
 import com.bvisionry.catalog.repository.ContentRepository;
 import com.bvisionry.enrollment.domain.Enrollment;
@@ -49,17 +50,20 @@ public class QuizService {
     private final EnrollmentService enrollmentService;
     private final ContentRepository contents;
     private final EnrollmentRepository enrollments;
+    private final OrgScope orgScope;
 
     public QuizService(QuizRepository quizzes,
                        QuizAttemptRepository attempts,
                        EnrollmentService enrollmentService,
                        ContentRepository contents,
-                       EnrollmentRepository enrollments) {
+                       EnrollmentRepository enrollments,
+                       OrgScope orgScope) {
         this.quizzes = quizzes;
         this.attempts = attempts;
         this.enrollmentService = enrollmentService;
         this.contents = contents;
         this.enrollments = enrollments;
+        this.orgScope = orgScope;
     }
 
     // -------------------------------------------------------------------------
@@ -76,7 +80,7 @@ public class QuizService {
         // from one org could otherwise read another org's answer keys. Bind the
         // request to the content's org before exposing correct-answer flags.
         Content content = requireContent(contentId);
-        SecurityUtils.requireOrgAccess(content.getOrgId());
+        orgScope.require(content.getOrgId());
 
         Quiz quiz = quizzes.findByContentIdWithQuestionsAndOptions(contentId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
@@ -95,7 +99,7 @@ public class QuizService {
         // foreign org's quiz. Bind the destructive full-replace write to the
         // content's org before mutating anything.
         Content content = requireContent(contentId);
-        SecurityUtils.requireOrgAccess(content.getOrgId());
+        orgScope.require(content.getOrgId());
 
         // CORRECTNESS: a question with zero correct options can never be answered
         // correctly (grading requires the chosen set to equal a non-empty correct

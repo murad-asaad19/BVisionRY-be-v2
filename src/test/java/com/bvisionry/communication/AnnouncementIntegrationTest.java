@@ -1,12 +1,10 @@
 package com.bvisionry.communication;
 
-import com.bvisionry.auth.OrgAccessGuard;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.event.CommunicationEvents;
-import com.bvisionry.common.security.OrgHierarchyPort;
 import com.bvisionry.organization.OrganizationRepository;
 import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
@@ -76,7 +74,6 @@ class AnnouncementIntegrationTest extends AbstractPostgresIntegrationTest {
     @Autowired private JdbcTemplate jdbc;
     @Autowired private EntityManager entityManager;
     @Autowired private ApplicationEvents events;
-    @Autowired private OrgHierarchyPort orgHierarchyPort;
 
     private Organization orgA;
     private Organization subOrgA;   // child of orgA — the hierarchy case
@@ -97,12 +94,6 @@ class AnnouncementIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @BeforeEach
     void seed() {
-        // Re-pin OrgAccessGuard's static hierarchy port to THIS context's
-        // adapter (the SubOrganizationIntegrationTest precedent): other test
-        // classes create additional Spring contexts whose OrgAccessGuard
-        // constructor overwrites the shared static with an adapter bound to a
-        // different DataSource, which would 403 the parent-admin traversal.
-        new OrgAccessGuard(orgHierarchyPort);
         orgA = saveOrg("Announce Org A", null);
         subOrgA = saveOrg("Announce Sub A", orgA);
         orgB = saveOrg("Announce Org B", null);

@@ -3,6 +3,8 @@ package com.bvisionry.organization;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.security.OrgHierarchyPort;
+import com.bvisionry.common.security.OrgScope;
+import com.bvisionry.config.SecurityContextOrgScope;
 import com.bvisionry.organization.entity.Organization;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,6 +36,7 @@ class OrgAccessInterceptorTest {
 
     @Mock OrgHierarchyPort orgHierarchy;
     @Mock ObjectProvider<OrgHierarchyPort> orgHierarchyProvider;
+    @Mock ObjectProvider<OrgScope> orgScopeProvider;
     OrgAccessInterceptor interceptor;
 
     private final UUID parentOrgId = UUID.randomUUID();
@@ -43,7 +46,10 @@ class OrgAccessInterceptorTest {
     void setUp() {
         // Not every test path resolves the provider (super-admin short-circuits).
         lenient().when(orgHierarchyProvider.getIfAvailable()).thenReturn(orgHierarchy);
-        interceptor = new OrgAccessInterceptor(orgHierarchyProvider);
+        // The interceptor delegates to the ONE predicate owner (OrgScope).
+        lenient().when(orgScopeProvider.getIfAvailable())
+                .thenReturn(new SecurityContextOrgScope(orgHierarchyProvider));
+        interceptor = new OrgAccessInterceptor(orgScopeProvider);
     }
 
     @AfterEach

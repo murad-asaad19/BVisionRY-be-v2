@@ -10,17 +10,19 @@ import java.util.UUID;
 public interface ComparisonPillarMappingRepository
         extends JpaRepository<ComparisonPillarMapping, UUID> {
 
-    List<ComparisonPillarMapping> findByBaselinePipelineIdAndDistancePipelineId(
-            UUID baselinePipelineId, UUID distancePipelineId);
+    List<ComparisonPillarMapping> findByCohortIdAndBaselinePipelineIdAndDistancePipelineId(
+            UUID cohortId, UUID baselinePipelineId, UUID distancePipelineId);
 
-    boolean existsByBaselinePipelineIdAndDistancePipelineId(
-            UUID baselinePipelineId, UUID distancePipelineId);
-
-    Optional<ComparisonPillarMapping>
-            findByBaselinePipelineIdAndDistancePipelineIdAndBaselinePillarId(
-                    UUID baselinePipelineId, UUID distancePipelineId, UUID baselinePillarId);
+    boolean existsByCohortIdAndBaselinePipelineIdAndDistancePipelineId(
+            UUID cohortId, UUID baselinePipelineId, UUID distancePipelineId);
 
     Optional<ComparisonPillarMapping>
-            findByBaselinePipelineIdAndDistancePipelineIdAndDistancePillarId(
-                    UUID baselinePipelineId, UUID distancePipelineId, UUID distancePillarId);
+            findByCohortIdAndBaselinePipelineIdAndDistancePipelineIdAndBaselinePillarId(
+                    UUID cohortId, UUID baselinePipelineId, UUID distancePipelineId,
+                    UUID baselinePillarId);
+
+    Optional<ComparisonPillarMapping>
+            findByCohortIdAndBaselinePipelineIdAndDistancePipelineIdAndDistancePillarId(
+                    UUID cohortId, UUID baselinePipelineId, UUID distancePipelineId,
+                    UUID distancePillarId);
 }

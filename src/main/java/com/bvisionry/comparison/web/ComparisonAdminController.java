@@ -95,8 +95,8 @@ public class ComparisonAdminController {
         orgCohorts.cohortNameInOrg(orgId, cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
         return reads.designatedPair(cohortId)
-                .map(pair -> ResponseEntity.ok(
-                        mappingService.mappingForPair(pair.baselinePipelineId(), pair.distancePipelineId())))
+                .map(pair -> ResponseEntity.ok(mappingService.mappingForPair(
+                        cohortId, pair.baselinePipelineId(), pair.distancePipelineId())))
                 .orElseGet(() -> ResponseEntity.noContent().build());
     }
 }

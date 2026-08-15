@@ -481,8 +481,8 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
             insertPillarEval(distanceSubmission, baselineVision, "62.00", "Strong");
             insertPillarEval(distanceSubmission, baselineFocus, "78.00", "Strong");
 
-            PillarMappingResponse mapping =
-                    mappingService.mappingForPair(baselinePipelineId, baselinePipelineId);
+            PillarMappingResponse mapping = mappingService.mappingForPair(
+                    samePairCohortId, baselinePipelineId, baselinePipelineId);
             assertThat(mapping.baselinePipelineName()).isEqualTo("Baseline FRI");
             assertThat(mapping.distancePipelineName()).isEqualTo("Baseline FRI");
             assertThat(mapping.mappings()).hasSize(3)
@@ -551,7 +551,7 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
         @Test
         void firstRead_seedsByCaseInsensitiveNameMatch() {
             PillarMappingResponse mapping =
-                    mappingService.mappingForPair(baselinePipelineId, distancePipelineId);
+                    mappingService.mappingForPair(cohortId, baselinePipelineId, distancePipelineId);
 
             assertThat(mapping.mappings()).hasSize(4);
             var visionRow = row(mapping, baselineVision);
@@ -567,7 +567,7 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
         @Test
         void unmapThenRemap_keepsEveryPillarAccountedFor() {
             PillarMappingResponse seeded =
-                    mappingService.mappingForPair(baselinePipelineId, distancePipelineId);
+                    mappingService.mappingForPair(cohortId, baselinePipelineId, distancePipelineId);
             UUID actor = UUID.randomUUID();
 
             PillarMappingResponse afterUnmap =
@@ -582,7 +582,7 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                     .containsExactlyInAnyOrder(distanceVision, distanceResilience);
 
             // Name-mismatched manual mapping: Legacy → Resilience.
-            PillarMappingResponse afterMap = mappingService.map(baselinePipelineId,
+            PillarMappingResponse afterMap = mappingService.map(cohortId, baselinePipelineId,
                     distancePipelineId, baselineLegacy, distanceResilience, actor);
             var legacyRow = row(afterMap, baselineLegacy);
             assertThat(legacyRow.distancePillarId()).isEqualTo(distanceResilience);

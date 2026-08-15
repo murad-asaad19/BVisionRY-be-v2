@@ -26,11 +26,12 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * The GLOBAL pillar pair mapping per (baseline, distance) pipeline pair (spec
- * §5): auto-seeded by case-insensitive name match on first read; only
- * SUPER_ADMIN remaps/unmaps (the controllers gate that — org admins reach the
- * read path only). The invariant maintained by every write: each pillar of
- * either pipeline appears exactly once, on its own side, so one-sided rows
+ * The COHORT's pillar pair mapping (spec §5; cohort-scoped since V182): each
+ * cohort owns the mapping for its designated (baseline, distance) pair,
+ * auto-seeded by case-insensitive name match on first read; only SUPER_ADMIN
+ * remaps/unmaps (the controllers gate that — org admins reach the read path
+ * only). The invariant maintained by every write: each pillar of either
+ * pipeline appears exactly once per cohort, on its own side, so one-sided rows
  * are the complete record of what is newly measured / not re-measured.
  */
 @Service
@@ -42,9 +43,10 @@ public class ComparisonMappingService {
 
     /* ------------------------------------------------------------- reading */
 
-    /** The pair's mapping, seeding it from name matches on first read. */
+    /** The cohort's mapping for its pair, seeding it from name matches on first read. */
     @Transactional
-    public PillarMappingResponse mappingForPair(UUID baselinePipelineId, UUID distancePipelineId) {
+    public PillarMappingResponse mappingForPair(UUID cohortId, UUID baselinePipelineId,
+                                                UUID distancePipelineId) {
         List<PillarRow> base = reads.pillarsOf(baselinePipelineId);
         List<PillarRow> dist = reads.pillarsOf(distancePipelineId);
         // Set.copyOf, not Set.of: the same instrument may play BOTH roles
@@ -56,11 +58,11 @@ public class ComparisonMappingService {
             throw new ResourceNotFoundException("Pipeline", baselinePipelineId + " / " + distancePipelineId);
         }
 
-        if (!mappings.existsByBaselinePipelineIdAndDistancePipelineId(
-                baselinePipelineId, distancePipelineId)) {
-            seed(baselinePipelineId, distancePipelineId, base, dist);
+        if (!mappings.existsByCohortIdAndBaselinePipelineIdAndDistancePipelineId(
+                cohortId, baselinePipelineId, distancePipelineId)) {
+            seed(cohortId, baselinePipelineId, distancePipelineId, base, dist);
         } else {
-            reconcileNewPillars(baselinePipelineId, distancePipelineId, base, dist);
+            reconcileNewPillars(cohortId, baselinePipelineId, distancePipelineId, base, dist);
         }
 
         Map<UUID, String> names = new HashMap<>();
@@ -68,7 +70,8 @@ public class ComparisonMappingService {
         dist.forEach(p -> names.put(p.id(), p.name()));
 
         List<MappingRow> rows = mappings
-                .findByBaselinePipelineIdAndDistancePipelineId(baselinePipelineId, distancePipelineId)
+                .findByCohortIdAndBaselinePipelineIdAndDistancePipelineId(
+                        cohortId, baselinePipelineId, distancePipelineId)
                 .stream()
                 .map(m -> new MappingRow(m.getId(), m.getBaselinePillarId(),
                         names.get(m.getBaselinePillarId()), m.getDistancePillarId(),
@@ -114,17 +117,18 @@ public class ComparisonMappingService {
         return name == null ? "" : name.trim().toLowerCase(Locale.ROOT);
     }
 
-    private void seed(UUID baselinePipelineId, UUID distancePipelineId,
+    private void seed(UUID cohortId, UUID baselinePipelineId, UUID distancePipelineId,
                       List<PillarRow> base, List<PillarRow> dist) {
         Map<UUID, UUID> matched = autoMatch(base, dist);
         List<ComparisonPillarMapping> rows = new ArrayList<>();
         for (PillarRow b : base) {
-            rows.add(row(baselinePipelineId, distancePipelineId, b.id(), matched.get(b.id())));
+            rows.add(row(cohortId, baselinePipelineId, distancePipelineId,
+                    b.id(), matched.get(b.id())));
         }
         Set<UUID> mappedDistance = matched.values().stream().collect(Collectors.toSet());
         for (PillarRow d : dist) {
             if (!mappedDistance.contains(d.id())) {
-                rows.add(row(baselinePipelineId, distancePipelineId, null, d.id()));
+                rows.add(row(cohortId, baselinePipelineId, distancePipelineId, null, d.id()));
             }
         }
         mappings.saveAll(rows);
@@ -135,10 +139,12 @@ public class ComparisonMappingService {
      * row on read, so the mapping table never hides a pillar. Existing rows are
      * never touched here — that is the admin's call.
      */
-    private void reconcileNewPillars(UUID baselinePipelineId, UUID distancePipelineId,
+    private void reconcileNewPillars(UUID cohortId, UUID baselinePipelineId,
+                                     UUID distancePipelineId,
                                      List<PillarRow> base, List<PillarRow> dist) {
         List<ComparisonPillarMapping> existing = mappings
-                .findByBaselinePipelineIdAndDistancePipelineId(baselinePipelineId, distancePipelineId);
+                .findByCohortIdAndBaselinePipelineIdAndDistancePipelineId(
+                        cohortId, baselinePipelineId, distancePipelineId);
         Set<UUID> knownBase = existing.stream().map(ComparisonPillarMapping::getBaselinePillarId)
                 .filter(java.util.Objects::nonNull).collect(Collectors.toSet());
         Set<UUID> knownDist = existing.stream().map(ComparisonPillarMapping::getDistancePillarId)
@@ -146,12 +152,12 @@ public class ComparisonMappingService {
         List<ComparisonPillarMapping> fresh = new ArrayList<>();
         for (PillarRow b : base) {
             if (!knownBase.contains(b.id())) {
-                fresh.add(row(baselinePipelineId, distancePipelineId, b.id(), null));
+                fresh.add(row(cohortId, baselinePipelineId, distancePipelineId, b.id(), null));
             }
         }
         for (PillarRow d : dist) {
             if (!knownDist.contains(d.id())) {
-                fresh.add(row(baselinePipelineId, distancePipelineId, null, d.id()));
+                fresh.add(row(cohortId, baselinePipelineId, distancePipelineId, null, d.id()));
             }
         }
         if (!fresh.isEmpty()) {
@@ -159,9 +165,11 @@ public class ComparisonMappingService {
         }
     }
 
-    private static ComparisonPillarMapping row(UUID baselinePipelineId, UUID distancePipelineId,
+    private static ComparisonPillarMapping row(UUID cohortId, UUID baselinePipelineId,
+                                               UUID distancePipelineId,
                                                UUID baselinePillarId, UUID distancePillarId) {
         ComparisonPillarMapping m = new ComparisonPillarMapping();
+        m.setCohortId(cohortId);
         m.setBaselinePipelineId(baselinePipelineId);
         m.setDistancePipelineId(distancePipelineId);
         m.setBaselinePillarId(baselinePillarId);
@@ -173,24 +181,26 @@ public class ComparisonMappingService {
     /* ------------------------------------------------------------- writing */
 
     /**
-     * Link two pillars (SUPER_ADMIN). Reconciles whatever previously held
-     * either side: the old partners fall back to one-sided rows, and the two
-     * rows that named the pillars merge into one MANUAL row.
+     * Link two pillars within the cohort's pair (SUPER_ADMIN). Reconciles
+     * whatever previously held either side: the old partners fall back to
+     * one-sided rows, and the two rows that named the pillars merge into one
+     * MANUAL row.
      */
     @Transactional
-    public PillarMappingResponse map(UUID baselinePipelineId, UUID distancePipelineId,
+    public PillarMappingResponse map(UUID cohortId, UUID baselinePipelineId,
+                                     UUID distancePipelineId,
                                      UUID baselinePillarId, UUID distancePillarId, UUID actorId) {
         // Seed first so mapping an untouched pair works.
-        mappingForPair(baselinePipelineId, distancePipelineId);
+        mappingForPair(cohortId, baselinePipelineId, distancePipelineId);
 
         ComparisonPillarMapping baseRow = mappings
-                .findByBaselinePipelineIdAndDistancePipelineIdAndBaselinePillarId(
-                        baselinePipelineId, distancePipelineId, baselinePillarId)
+                .findByCohortIdAndBaselinePipelineIdAndDistancePipelineIdAndBaselinePillarId(
+                        cohortId, baselinePipelineId, distancePipelineId, baselinePillarId)
                 .orElseThrow(() -> new BadRequestException(
                         "Baseline pillar is not part of the baseline pipeline."));
         ComparisonPillarMapping distRow = mappings
-                .findByBaselinePipelineIdAndDistancePipelineIdAndDistancePillarId(
-                        baselinePipelineId, distancePipelineId, distancePillarId)
+                .findByCohortIdAndBaselinePipelineIdAndDistancePipelineIdAndDistancePillarId(
+                        cohortId, baselinePipelineId, distancePipelineId, distancePillarId)
                 .orElseThrow(() -> new BadRequestException(
                         "Distance pillar is not part of the distance pipeline."));
 
@@ -213,7 +223,7 @@ public class ComparisonMappingService {
             baseRow.setDistancePillarId(distancePillarId);
             if (oldPartner != null) {
                 ComparisonPillarMapping newlyMeasured =
-                        row(baselinePipelineId, distancePipelineId, null, oldPartner);
+                        row(cohortId, baselinePipelineId, distancePipelineId, null, oldPartner);
                 newlyMeasured.setSource(MappingSource.MANUAL);
                 newlyMeasured.setUpdatedBy(actorId);
                 mappings.save(newlyMeasured);
@@ -223,7 +233,7 @@ public class ComparisonMappingService {
         baseRow.setUpdatedBy(actorId);
         mappings.saveAndFlush(baseRow);
 
-        return mappingForPair(baselinePipelineId, distancePipelineId);
+        return mappingForPair(cohortId, baselinePipelineId, distancePipelineId);
     }
 
     /**
@@ -245,11 +255,11 @@ public class ComparisonMappingService {
         // Flush the update BEFORE inserting the one-sided half — Hibernate
         // orders inserts first, which would trip the partial unique index.
         mappings.saveAndFlush(m);
-        ComparisonPillarMapping newlyMeasured = row(m.getBaselinePipelineId(),
+        ComparisonPillarMapping newlyMeasured = row(m.getCohortId(), m.getBaselinePipelineId(),
                 m.getDistancePipelineId(), null, distancePillarId);
         newlyMeasured.setSource(MappingSource.MANUAL);
         newlyMeasured.setUpdatedBy(actorId);
         mappings.save(newlyMeasured);
-        return mappingForPair(m.getBaselinePipelineId(), m.getDistancePipelineId());
+        return mappingForPair(m.getCohortId(), m.getBaselinePipelineId(), m.getDistancePipelineId());
     }
 }

@@ -300,8 +300,9 @@ public class ComparisonComputeService {
     private List<FounderComparisonPillar> pillarRows(FounderComparison c, PairCohortRow pair,
                                                      UUID baselineSubmissionId, UUID distanceSubmissionId,
                                                      List<ScoringBands.Band> bands) {
-        // Ensure the pair's mapping exists (auto-seed on first use).
-        mappingService.mappingForPair(pair.baselinePipelineId(), pair.distancePipelineId());
+        // Ensure the cohort's mapping exists (auto-seed on first use).
+        mappingService.mappingForPair(pair.cohortId(), pair.baselinePipelineId(),
+                pair.distancePipelineId());
 
         Map<UUID, PillarEvalRow> baseEvals = reads.pillarEvaluations(baselineSubmissionId);
         Map<UUID, PillarEvalRow> distEvals = reads.pillarEvaluations(distanceSubmissionId);
@@ -310,8 +311,8 @@ public class ComparisonComputeService {
         reads.pillarsOf(pair.distancePipelineId()).forEach(p -> names.put(p.id(), p.name()));
 
         List<FounderComparisonPillar> rows = new ArrayList<>();
-        for (var m : mappingRepo.findByBaselinePipelineIdAndDistancePipelineId(
-                pair.baselinePipelineId(), pair.distancePipelineId())) {
+        for (var m : mappingRepo.findByCohortIdAndBaselinePipelineIdAndDistancePipelineId(
+                pair.cohortId(), pair.baselinePipelineId(), pair.distancePipelineId())) {
             PillarEvalRow before = m.getBaselinePillarId() == null
                     ? null : baseEvals.get(m.getBaselinePillarId());
             PillarEvalRow after = m.getDistancePillarId() == null

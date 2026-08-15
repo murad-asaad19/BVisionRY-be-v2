@@ -5,6 +5,7 @@ import com.bvisionry.aiconfig.service.OpenRouterChatService;
 import com.bvisionry.aiconfig.service.OpenRouterChatService.AIResponse;
 import com.bvisionry.common.audit.AuditLogger;
 import com.bvisionry.common.dto.ShiftNarrativeResult;
+import com.bvisionry.common.exception.AIServiceException;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.scoringconfig.NarrativeWording;
@@ -160,12 +161,15 @@ public class ShiftNarrativeService {
         int failed = 0;
         for (Candidate candidate : candidates) {
             String outcome;
+            String reason = null;
             try {
-                if (generateOne(ctx, candidate).isPresent()) {
+                Generation generation = generateOne(ctx, candidate);
+                if (generation.saved() != null) {
                     outcome = "GENERATED";
                     generated++;
                 } else {
                     outcome = "FAILED";
+                    reason = NarrativeGuardrails.reasonLabel(generation.rejection());
                     failed++;
                 }
             } catch (DataIntegrityViolationException e) {
@@ -173,10 +177,18 @@ public class ShiftNarrativeService {
                         candidate.pillar().getPillarNameSnapshot());
                 outcome = "SKIPPED";
                 skipped++;
+            } catch (AIServiceException e) {
+                // A provider outage on ONE pillar must not abort the rest of
+                // the batch — the pillar stays generatable and says why.
+                log.warn("Shift narrative for pillar '{}' hit a provider error: {}",
+                        candidate.pillar().getPillarNameSnapshot(), e.getMessage());
+                outcome = "FAILED";
+                reason = "The AI provider could not be reached.";
+                failed++;
             }
             outcomes.add(new GenerateAllNarrativesResponse.NarrativePillarOutcome(
                     candidate.distancePillarId(), candidate.pillar().getPillarNameSnapshot(),
-                    outcome));
+                    outcome, reason));
         }
         return new GenerateAllNarrativesResponse(generated, skipped, failed, outcomes);
     }
@@ -205,9 +217,13 @@ public class ShiftNarrativeService {
         }
         ShiftNarrative saved;
         try {
-            saved = generateOne(ctx, candidate)
-                    .orElseThrow(() -> new BadRequestException(
-                            "The narrative could not be generated for this pillar. Try again in a moment."));
+            Generation generation = generateOne(ctx, candidate);
+            if (generation.saved() == null) {
+                throw new BadRequestException(
+                        NarrativeGuardrails.reasonLabel(generation.rejection())
+                                + " Nothing was saved — try again in a moment.");
+            }
+            saved = generation.saved();
         } catch (DataIntegrityViolationException e) {
             // Lost a race with a concurrent generation (V169 unique constraint):
             // the pillar HAS a narrative now, which is the same refusal as above,
@@ -219,12 +235,17 @@ public class ShiftNarrativeService {
         return toDto(saved, names(List.of(saved)), false);
     }
 
+    /** One pillar's generation verdict: exactly one of the two is non-null. */
+    private record Generation(ShiftNarrative saved, NarrativeGuardrails.Rejection rejection) {
+    }
+
     /**
-     * One model call plus, at most, one corrective retry. Returns empty when the
-     * output still fails the guardrails — deliberately persisting NOTHING rather
-     * than a decline with no way forward or an unclassifiable kind.
+     * One model call plus, at most, one corrective retry. Returns the rejection
+     * (with NOTHING persisted) when the output still fails the guardrails —
+     * deliberately, rather than saving a decline with no way forward or an
+     * unclassifiable kind.
      */
-    private Optional<ShiftNarrative> generateOne(Context ctx, Candidate candidate) {
+    private Generation generateOne(Context ctx, Candidate candidate) {
         String userMessage = userMessage(candidate);
         CallMetadata metadata = new CallMetadata(ctx.comparison().getDistanceSubmissionId(), null,
                 candidate.pillar().getPillarNameSnapshot());
@@ -255,7 +276,7 @@ public class ShiftNarrativeService {
         if (rejection.isPresent()) {
             log.warn("Shift narrative for pillar '{}' failed the {} guardrail {} times — not persisted",
                     candidate.pillar().getPillarNameSnapshot(), rejection.get(), MAX_ATTEMPTS);
-            return Optional.empty();
+            return new Generation(null, rejection.get());
         }
 
         OpenRouterChatService.Provenance provenance = response.provenance();
@@ -283,7 +304,7 @@ public class ShiftNarrativeService {
             narrative.setStatus(NarrativeStatus.APPROVED);
             narrative.setApprovedAt(Instant.now());
         }
-        return Optional.of(narratives.save(narrative));
+        return new Generation(narratives.save(narrative), null);
     }
 
     /**

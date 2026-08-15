@@ -76,7 +76,7 @@ public class MyGrowthExportService {
      * filtered in the service, so neither export can leak a draft.
      */
     public record NarrativeRow(String pillarName, String kindLabel, String body,
-                               String closingAction, String approved) {}
+                               String closingAction) {}
 
     /**
      * @param staffVoice third-person copy for the two STAFF doors — "GROWTH
@@ -115,7 +115,7 @@ public class MyGrowthExportService {
             ctx.setVariable("computedAt", instant(c.computedAt(), dates));
             ctx.setVariable("pillars", pillarRows(c.pillars()));
         }
-        ctx.setVariable("narratives", narrativeRows(c, dates));
+        ctx.setVariable("narratives", narrativeRows(c));
         return pdfRenderer.renderTemplate("growth-report", ctx);
     }
 
@@ -160,13 +160,13 @@ public class MyGrowthExportService {
                 }
                 shifts.autoSize();
 
-                List<NarrativeRow> narratives = narrativeRows(c, dates);
+                List<NarrativeRow> narratives = narrativeRows(c);
                 if (!narratives.isEmpty()) {
                     ExcelWorkbookBuilder.SheetBuilder sheet = wb.newSheet("Shift narratives");
-                    sheet.headers("Pillar", "Kind", "Narrative", "Next step", "Approved");
+                    sheet.headers("Pillar", "Kind", "Narrative", "Next step");
                     for (NarrativeRow n : narratives) {
                         sheet.row(n.pillarName(), n.kindLabel(), n.body(),
-                                n.closingAction() == null ? "—" : n.closingAction(), n.approved());
+                                n.closingAction() == null ? "—" : n.closingAction());
                     }
                     sheet.autoSize();
                 }
@@ -233,15 +233,13 @@ public class MyGrowthExportService {
                 .toList();
     }
 
-    private List<NarrativeRow> narrativeRows(FounderComparisonDto c, DateTimeFormatter dates) {
+    private List<NarrativeRow> narrativeRows(FounderComparisonDto c) {
         if (c == null || c.narratives() == null) {
             return List.of();
         }
         return c.narratives().stream()
                 .map(n -> new NarrativeRow(n.pillarName(), kindLabel(n.kind()), n.body(),
-                        n.closingAction(),
-                        // §7b: the approval stamp travels onto the export too.
-                        n.approvedAt() == null ? "—" : "Approved " + instant(n.approvedAt(), dates)))
+                        n.closingAction()))
                 .toList();
     }
 

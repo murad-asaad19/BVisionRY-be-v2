@@ -25,7 +25,11 @@ public record GenerateAllNarrativesResponse(
         int failed,
         List<NarrativePillarOutcome> outcomes) {
 
-    /** {@code outcome}: {@code GENERATED} | {@code SKIPPED} | {@code FAILED}. */
-    public record NarrativePillarOutcome(UUID distancePillarId, String pillarName, String outcome) {
+    /**
+     * {@code outcome}: {@code GENERATED} | {@code SKIPPED} | {@code FAILED}.
+     * {@code reason} is a human-readable failure explanation, null unless FAILED.
+     */
+    public record NarrativePillarOutcome(UUID distancePillarId, String pillarName, String outcome,
+                                         String reason) {
     }
 }

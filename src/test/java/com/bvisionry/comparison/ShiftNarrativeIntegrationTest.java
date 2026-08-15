@@ -267,7 +267,8 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
             assertThatThrownBy(() -> narrativeService.generateForPillar(
                     founder.getId(), bigDecline, admin.getId()))
-                    .hasMessageContaining("could not be generated");
+                    // The refusal names WHY — the reason the review UI shows.
+                    .hasMessageContaining("did not include the next step");
 
             assertThat(narratives.findByCohortIdAndUserIdAndDistancePillarId(
                     cohortId, founder.getId(), bigDecline)).isEmpty();
@@ -285,7 +286,7 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
             assertThatThrownBy(() -> narrativeService.generateForPillar(
                     founder.getId(), bigGain, admin.getId()))
-                    .hasMessageContaining("could not be generated");
+                    .hasMessageContaining("could not classify the change");
             assertThat(narratives.findByCohortIdAndUserId(cohortId, founder.getId())).isEmpty();
         }
 

@@ -107,6 +107,16 @@ public final class NarrativeGuardrails {
         };
     }
 
+    /** Human-readable failure reason for the review UI — what went wrong, reader-facing. */
+    public static String reasonLabel(Rejection rejection) {
+        return switch (rejection) {
+            case BAD_KIND -> "The AI could not classify the change into one of the five kinds.";
+            case EMPTY_NARRATIVE -> "The AI returned an empty narrative.";
+            case MISSING_CLOSING_ACTION ->
+                    "The AI did not include the next step a declining pillar requires.";
+        };
+    }
+
     private static int length(List<String> values) {
         if (values == null) {
             return 0;

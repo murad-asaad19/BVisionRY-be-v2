@@ -148,6 +148,7 @@ public class CoachingReadRepository {
                 WHERE cm.user_id = u.id
                   AND %1$s
                   AND %2$s
+                  AND %5$s
             ) p ON true
             LEFT JOIN LATERAL (
                 SELECT count(*) AS taken,
@@ -172,12 +173,17 @@ public class CoachingReadRepository {
                   AND %2$s
                   AND EXISTS (SELECT 1 FROM program_tasks t
                               WHERE t.module_id = m.id AND t.status = 'LIVE'
-                                AND NOT COALESCE(%4$s, false))
+                                AND NOT COALESCE(%4$s, false)
+                                AND %5$s)
                 ORDER BY c.position, c.name, m.position, m.name
                 LIMIT 1
             ) cur ON true
             """.formatted(GRANTED_COHORT.formatted("u.id"), AUDIENCE.formatted("u.id"),
-                    LAST_ACTIVITY.formatted("u"), TASK_DONE.formatted("u.id"));
+                    LAST_ACTIVITY.formatted("u"), TASK_DONE.formatted("u.id"),
+                    // ProgramRules.gates in SQL: a COURSE task the founder's org
+                    // cannot see counts in neither side of the fraction and never
+                    // pins a module as "current".
+                    TaskCompletion.COUNTS_FOR_USER.formatted("u.id"));
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -405,12 +411,15 @@ public class CoachingReadRepository {
                 WHERE cm.user_id = :founderId
                   AND %s
                   AND %s
+                  AND %s
                   AND EXISTS (SELECT 1 FROM users u WHERE u.id = :founderId AND %s)
                 GROUP BY c.name, c.position, m.name, m.position
                 ORDER BY c.position, c.name, m.position, m.name
                 """.formatted(TASK_DONE.formatted(":founderId"),
                         GRANTED_COHORT.formatted(":founderId"),
-                        AUDIENCE.formatted("cm.user_id"), VISIBLE_FOUNDER),
+                        AUDIENCE.formatted("cm.user_id"),
+                        TaskCompletion.COUNTS_FOR_USER.formatted(":founderId"),
+                        VISIBLE_FOUNDER),
                 params(orgId, coachId).addValue("founderId", founderId),
                 (rs, i) -> new ModuleProgressRow(rs.getString("cohort_name"),
                         rs.getString("module_name"), rs.getInt("total"), rs.getInt("submitted")));

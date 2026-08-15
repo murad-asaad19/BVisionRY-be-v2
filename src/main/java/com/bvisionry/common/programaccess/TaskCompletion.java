@@ -1,5 +1,7 @@
 package com.bvisionry.common.programaccess;
 
+import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
+
 /**
  * The single SQL source of truth for "has this user DONE this program task?",
  * per task type of the typed spine (redesign spec §1).
@@ -29,14 +31,21 @@ package com.bvisionry.common.programaccess;
  * progress. COURSE is the deliberate exception — a course is per member, one
  * global enrollment, shared by every task that references it.
  *
- * <p>Four surfaces count completion against this rule — the engagement
+ * <p>Six surfaces count completion against this rule — the engagement
  * record's assignments row, the coach console's roster/module progress, the
- * ROI report's cohort completion and the due-reminder job's "already done"
- * filter — and if their predicates ever diverge, two org surfaces quote
- * different completion numbers for the same founder. Like
- * {@link ProgramAudience}, this lives in {@code common} because the ArchUnit
- * ratchet forbids feature→feature imports: the fragment depends on the schema
- * only, and callers compose it instead of restating it.
+ * cohort screen's roster/outline, the ROI report's cohort completion and the
+ * due-reminder job's "already done" filter — and if their predicates ever
+ * diverge, two org surfaces quote different completion numbers for the same
+ * founder. Like {@link ProgramAudience}, this lives in {@code common} because
+ * the ArchUnit ratchet forbids feature→feature imports: the fragment depends
+ * on the schema only, and callers compose it instead of restating it.
+ *
+ * <p>Every completion FRACTION must also apply {@link #COUNTS_FOR_USER} — the
+ * SQL twin of {@code programflow.web.ProgramRules#gates}. A COURSE task whose
+ * course the member's org can no longer SEE counts in neither side of any
+ * fraction (spec §3 downgrade policy); before this fragment existed, every
+ * SQL surface silently included such tasks while the learner journey
+ * excluded them, and org surfaces quoted lower completion than the journey.
  */
 public final class TaskCompletion {
 
@@ -101,4 +110,31 @@ public final class TaskCompletion {
                     WHERE dsr.program_task_id = t.id
                       AND dsr.respondent_user_id = %1$s)
             END)""";
+
+    /**
+     * Boolean SQL expression: the program task the composing query exposes as
+     * {@code t} counts in the completion fraction of the user given by
+     * {@code %1$s} — the SQL twin of {@code ProgramRules.gates} (change one,
+     * change the other; {@code TaskSpineIntegrationTest} asserts they agree).
+     *
+     * <p>A COURSE task whose course the user's org may not SEE
+     * ({@link CourseVisibilityAccess#VISIBLE_TO_ORG}) counts in NEITHER side
+     * of a fraction: apply this next to {@link #DONE_FOR_USER} wherever a
+     * done/total pair is computed. A user with no organization is never gated,
+     * matching {@code CourseVisibilityAccess.isVisibleToUser}. The Java rule's
+     * other arm — a task type not completable in-app — has no SQL twin because
+     * every current type is completable ({@code ProgramTaskType}).
+     *
+     * <p>The inner course alias must be {@code c} (VISIBLE_TO_ORG's contract);
+     * it deliberately shadows any composing query's own {@code c} inside the
+     * EXISTS only.
+     */
+    public static final String COUNTS_FOR_USER = """
+            (t.task_type <> 'COURSE'
+             OR t.ref_id IS NULL
+             OR EXISTS (
+                SELECT 1 FROM users dgu, course c
+                WHERE dgu.id = %%1$s AND c.id = t.ref_id
+                  AND (dgu.organization_id IS NULL OR %s)))"""
+            .formatted(CourseVisibilityAccess.VISIBLE_TO_ORG.formatted("dgu.organization_id"));
 }

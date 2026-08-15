@@ -244,12 +244,17 @@ public class CohortViewReadRepository {
                                  AND u.organization_id = :orgId
                                  AND u.role = 'MEMBER'
                                  AND %2$s
+                                 AND %3$s
                 WHERE m.cohort_id = :cohortId
                 GROUP BY m.id, m.position, t.id, t.name, t.task_type, t.milestone_role,
                          t.due_date, t.position
                 ORDER BY m.position, t.position
                 """.formatted(TaskCompletion.DONE_FOR_USER.formatted("u.id"),
-                        ProgramAudience.INCLUDES_USER.formatted("u.id")),
+                        ProgramAudience.INCLUDES_USER.formatted("u.id"),
+                        // ProgramRules.gates in SQL: a COURSE task blocked for this
+                        // org reads 0/0 here, so the outline's module aggregate
+                        // matches the journey's fraction.
+                        TaskCompletion.COUNTS_FOR_USER.formatted("u.id")),
                 params(orgId, cohortId),
                 (rs, i) -> new OutlineTaskRow(rs.getObject("module_id", UUID.class),
                         rs.getObject("id", UUID.class), rs.getString("name"),
@@ -357,8 +362,9 @@ public class CohortViewReadRepository {
         String audienceTasks = """
                 SELECT count(*) FROM program_modules m
                           JOIN program_tasks t ON t.module_id = m.id AND t.status = 'LIVE'
-                         WHERE m.cohort_id = :cohortId AND %s""".formatted(
-                        ProgramAudience.INCLUDES_USER.formatted("u.id"));
+                         WHERE m.cohort_id = :cohortId AND %s AND %s""".formatted(
+                        ProgramAudience.INCLUDES_USER.formatted("u.id"),
+                        TaskCompletion.COUNTS_FOR_USER.formatted("u.id"));
         String done = "COALESCE(" + TaskCompletion.DONE_FOR_USER.formatted("u.id") + ", FALSE)";
         String awaitingReview = """
                 SELECT count(*) FROM program_modules m

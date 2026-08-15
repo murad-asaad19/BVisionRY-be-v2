@@ -79,6 +79,10 @@ final class ProgramRules {
      * </ul>
      * The row still RENDERS, flagged unavailable; it just stops being a gate.
      *
+     * <p>SQL twin: {@code TaskCompletion.COUNTS_FOR_USER} — every SQL
+     * completion fraction applies it (change one, change the other;
+     * {@code TaskSpineIntegrationTest} asserts they agree).
+     *
      * @param blockedCourseIds course ids invisible to the cohort's org, from
      *        {@code CourseVisibilityAccess#invisibleCourseIds}. Empty = nothing blocked.
      */

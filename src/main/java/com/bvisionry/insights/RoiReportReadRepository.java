@@ -279,12 +279,13 @@ public class RoiReportReadRepository {
                            count(*) FILTER (WHERE %s) AS done
                     FROM program_modules m
                     JOIN program_tasks t ON t.module_id = m.id AND t.status = 'LIVE'
-                    WHERE m.cohort_id = c.id AND %s
+                    WHERE m.cohort_id = c.id AND %s AND %s
                 ) pr ON true
                 WHERE c.id = :cohortId
                 ORDER BY u.name, u.id
                 """.formatted(TaskCompletion.DONE_FOR_USER.formatted("u.id"),
-                        ProgramAudience.INCLUDES_USER.formatted("u.id")),
+                        ProgramAudience.INCLUDES_USER.formatted("u.id"),
+                        TaskCompletion.COUNTS_FOR_USER.formatted("u.id")),
                 params(orgId, cohortId, pipelineId),
                 (rs, i) -> new FounderRow(rs.getString("name"), rs.getInt("taken"),
                         rs.getObject("intake_on", LocalDate.class), rs.getBigDecimal("intake_score"),

@@ -123,6 +123,58 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         TestAuthentication.clear();
     }
 
+    /* ------------------------------------------------- gates: Java = SQL */
+
+    /**
+     * {@code ProgramRules.gates} and its SQL twin
+     * {@code TaskCompletion.COUNTS_FOR_USER} must agree: a COURSE task whose
+     * course the member's org may not SEE counts in neither side of ANY
+     * completion fraction — journey (Java) and engagement/roster (SQL) alike.
+     */
+    @Nested
+    class BlockedCourseGatesNowhere {
+
+        @BeforeEach
+        void blockTheCourse() {
+            // ORG_LIST with no listed orgs: invisible to every org.
+            jdbc.update("UPDATE course SET org_visibility = 'ORG_LIST' WHERE id = ?", courseId);
+        }
+
+        @Test
+        void journeyAndEngagementQuoteTheSameFraction() {
+            JourneyResponse journey = myProgramService.journey(cohortId);
+            var counts = engagementReads.assignmentCounts(cohortId, member.getId());
+
+            // 5, not 6 — the blocked COURSE task left both denominators.
+            assertThat(journey.progress().total()).isEqualTo(5);
+            assertThat(counts.total()).isEqualTo(5);
+
+            // The row still renders in the journey; it just stops counting.
+            assertThat(journey.modules().get(0).tasks()).hasSize(6);
+        }
+
+        @Test
+        void aCompletedBlockedCourseInflatesNeitherNumerator() {
+            jdbc.update("""
+                    INSERT INTO enrollment (user_id, course_id, status)
+                    VALUES (?, ?, 'COMPLETED')
+                    """, member.getId(), courseId);
+
+            assertThat(myProgramService.journey(cohortId).progress().done()).isZero();
+            assertThat(engagementReads.assignmentCounts(cohortId, member.getId()).done())
+                    .isZero();
+        }
+
+        @Test
+        void visibilityRestoredMeansItCountsAgain_bothSides() {
+            jdbc.update("UPDATE course SET org_visibility = 'EVERYONE' WHERE id = ?", courseId);
+
+            assertThat(myProgramService.journey(cohortId).progress().total()).isEqualTo(6);
+            assertThat(engagementReads.assignmentCounts(cohortId, member.getId()).total())
+                    .isEqualTo(6);
+        }
+    }
+
     /* ------------------------------------------------------ journey statuses */
 
     @Nested

@@ -157,8 +157,10 @@ public class EngagementReadRepository {
                 JOIN program_modules m ON m.id = t.module_id AND m.cohort_id = :cohortId
                 WHERE t.status = 'LIVE'
                   AND %s
+                  AND %s
                 """.formatted(TaskCompletion.DONE_FOR_USER.formatted(":memberId"),
-                        ProgramAudience.INCLUDES_USER.formatted(":memberId")),
+                        ProgramAudience.INCLUDES_USER.formatted(":memberId"),
+                        TaskCompletion.COUNTS_FOR_USER.formatted(":memberId")),
                 new MapSqlParameterSource("cohortId", cohortId).addValue("memberId", memberId),
                 (rs, i) -> new Counts(rs.getInt("total"), rs.getInt("done")));
         Counts exercises = jdbc.queryForObject("""

@@ -11,6 +11,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
 import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.programflow.domain.Cohort;
 import com.bvisionry.programflow.domain.CohortStatus;
@@ -58,6 +59,7 @@ public class ProgramNotificationJob {
     private final TaskSpineRepository spine;
     private final ProgramSettingsRepository settings;
     private final CohortRepository cohorts;
+    private final CourseVisibilityAccess courseVisibility;
     private final ApplicationEventPublisher events;
 
     @Transactional
@@ -102,8 +104,14 @@ public class ProgramNotificationJob {
             // Per-type done state (spine SQL) — a COURSE task's reminder skips
             // whoever completed the course, not whoever has a program submission.
             Set<UUID> alreadyDone = Set.copyOf(spine.usersDoneWithTask(task.getId()));
-            List<UUID> recipients = recipients(module).stream()
-                    .filter(id -> !alreadyDone.contains(id))
+            List<CohortMemberRow> roster = recipientRows(module);
+            Set<UUID> blockedOrgs = blockedOrgs(task, roster);
+            List<UUID> recipients = roster.stream()
+                    .filter(m -> !alreadyDone.contains(m.getId()))
+                    // ProgramRules.gates: a COURSE the member's org cannot see is
+                    // not actionable — never nag about it.
+                    .filter(m -> !blockedOrgs.contains(m.getOrgId()))
+                    .map(CohortMemberRow::getId)
                     .toList();
             if (!recipients.isEmpty()) {
                 events.publishEvent(new ProgramFlowEvents.TaskDueSoon(
@@ -119,6 +127,10 @@ public class ProgramNotificationJob {
     // learner hasn't unlocked yet is an admin scheduling quirk, not worth the
     // per-learner lockState pass here.
     private List<UUID> recipients(ProgramModule module) {
+        return recipientRows(module).stream().map(CohortMemberRow::getId).toList();
+    }
+
+    private List<CohortMemberRow> recipientRows(ProgramModule module) {
         // Only a LAUNCHED cohort notifies: drafts aren't visible to members yet,
         // completed/archived ones are done making noise.
         Cohort cohort = cohorts.findById(module.getCohortId()).orElse(null);
@@ -127,7 +139,24 @@ public class ProgramNotificationJob {
         }
         return cohorts.findRoster(cohort.getId()).stream()
                 .filter(member -> ProgramRules.includes(module, member.getId()))
-                .map(CohortMemberRow::getId)
                 .toList();
+    }
+
+    /**
+     * The roster orgs that may NOT see a COURSE task's course
+     * ({@code ProgramRules.gates}) — one visibility check per distinct org.
+     * Non-COURSE tasks block nothing; an org-less member is never gated.
+     */
+    private Set<UUID> blockedOrgs(ProgramTask task, List<CohortMemberRow> roster) {
+        if (task.getTaskType() != com.bvisionry.programflow.domain.ProgramTaskType.COURSE
+                || task.getRefId() == null) {
+            return Set.of();
+        }
+        return roster.stream()
+                .map(CohortMemberRow::getOrgId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .filter(orgId -> !courseVisibility.isVisibleToOrg(task.getRefId(), orgId))
+                .collect(java.util.stream.Collectors.toSet());
     }
 }

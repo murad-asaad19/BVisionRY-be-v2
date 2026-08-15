@@ -14,7 +14,7 @@ import java.util.UUID;
 /**
  * Assignment create request. {@code assignedBy} is intentionally absent — the
  * server derives it from the authenticated principal via
- * {@link com.bvisionry.auth.SecurityUtils#getCurrentUserId()} so a client
+ * {@link com.bvisionry.common.security.CurrentUserAccessor} so a client
  * can't ascribe the action to another user.
  */
 public record CreateAssignmentRequest(

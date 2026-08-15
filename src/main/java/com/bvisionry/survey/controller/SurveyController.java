@@ -1,6 +1,6 @@
 package com.bvisionry.survey.controller;
 
-import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.survey.dto.SurveyCreateRequest;
 import com.bvisionry.survey.dto.SurveyDto;
 import com.bvisionry.survey.dto.SurveyMetadataUpdateRequest;
@@ -34,11 +34,12 @@ import java.util.UUID;
 @PreAuthorize("hasAuthority('SUPER_ADMIN')")
 public class SurveyController {
 
+    private final CurrentUserAccessor currentUser;
     private final SurveyService surveyService;
 
     @PostMapping
     public ResponseEntity<SurveyDto> create(@Valid @RequestBody SurveyCreateRequest request) {
-        SurveyDto created = surveyService.create(request, SecurityUtils.getCurrentUserId());
+        SurveyDto created = surveyService.create(request, currentUser.require().userId());
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
@@ -80,7 +81,7 @@ public class SurveyController {
 
     @PostMapping("/{id}/duplicate")
     public ResponseEntity<SurveyDto> duplicate(@PathVariable UUID id) {
-        SurveyDto duplicated = surveyService.duplicate(id, SecurityUtils.getCurrentUserId());
+        SurveyDto duplicated = surveyService.duplicate(id, currentUser.require().userId());
         return ResponseEntity.status(HttpStatus.CREATED).body(duplicated);
     }
 

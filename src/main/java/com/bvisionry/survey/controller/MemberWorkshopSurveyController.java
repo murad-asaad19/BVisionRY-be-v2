@@ -1,6 +1,6 @@
 package com.bvisionry.survey.controller;
 
-import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.survey.dto.MemberSurveyDto;
 import com.bvisionry.survey.dto.SurveySubmitRequest;
 import com.bvisionry.survey.dto.SurveySubmitResponseDto;
@@ -32,12 +32,13 @@ import java.util.UUID;
 @PreAuthorize("isAuthenticated()")
 public class MemberWorkshopSurveyController {
 
+    private final CurrentUserAccessor currentUser;
     private final SurveyResponseService responseService;
 
     @GetMapping("/pre-survey")
     public ResponseEntity<MemberSurveyDto> get(@PathVariable UUID workshopId) {
         return ResponseEntity.ok(
-                responseService.getForWorkshop(workshopId, SecurityUtils.getCurrentUserId()));
+                responseService.getForWorkshop(workshopId, currentUser.require().userId()));
     }
 
     @PostMapping("/pre-survey")
@@ -47,7 +48,7 @@ public class MemberWorkshopSurveyController {
             HttpServletRequest request) {
         SurveySubmitResponseDto result = responseService.submitForWorkshop(
                 workshopId,
-                SecurityUtils.getCurrentUserId(),
+                currentUser.require().userId(),
                 body,
                 request.getHeader("User-Agent"));
         return ResponseEntity.ok(result);
@@ -57,7 +58,7 @@ public class MemberWorkshopSurveyController {
     public ResponseEntity<MemberSurveyDto> getTaskSurvey(@PathVariable UUID workshopId,
                                                          @PathVariable UUID taskId) {
         return ResponseEntity.ok(responseService.getForWorkshopTask(
-                workshopId, taskId, SecurityUtils.getCurrentUserId()));
+                workshopId, taskId, currentUser.require().userId()));
     }
 
     @PostMapping("/tasks/{taskId}/survey")
@@ -69,7 +70,7 @@ public class MemberWorkshopSurveyController {
         SurveySubmitResponseDto result = responseService.submitForWorkshopTask(
                 workshopId,
                 taskId,
-                SecurityUtils.getCurrentUserId(),
+                currentUser.require().userId(),
                 body,
                 request.getHeader("User-Agent"));
         return ResponseEntity.ok(result);

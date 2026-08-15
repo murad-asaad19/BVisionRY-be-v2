@@ -1,6 +1,6 @@
 package com.bvisionry.exercise;
 
-import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.exercise.dto.ExerciseColumnResponse;
@@ -41,6 +41,7 @@ import java.util.UUID;
 @Slf4j
 public class ExerciseTemplateService {
 
+    private final CurrentUserAccessor currentUser;
     private final ExerciseTemplateRepository templateRepository;
     private final ExerciseColumnRepository columnRepository;
     private final ExerciseAssignmentRepository assignmentRepository;
@@ -79,7 +80,7 @@ public class ExerciseTemplateService {
         template.setName(request.name());
         template.setDescription(request.description());
         template.setCoverImageUrl(request.coverImageUrl());
-        template.setCreatedBy(SecurityUtils.getCurrentUserId());
+        template.setCreatedBy(currentUser.require().userId());
         return detail(templateRepository.save(template), false);
     }
 

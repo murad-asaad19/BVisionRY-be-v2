@@ -1,5 +1,6 @@
 package com.bvisionry.auth;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.aiconfig.service.RateLimitService;
 import com.bvisionry.auth.dto.AuthResponse;
 import com.bvisionry.auth.dto.ChangePasswordRequest;
@@ -37,17 +38,20 @@ public class AuthController {
     private final RateLimitService rateLimitService;
     private final ClientIpResolver clientIpResolver;
     private final CookieService cookieService;
+    private final CurrentUserAccessor currentUser;
 
     public AuthController(AuthService authService,
                           PasswordResetService passwordResetService,
                           RateLimitService rateLimitService,
                           ClientIpResolver clientIpResolver,
-                          CookieService cookieService) {
+                          CookieService cookieService,
+                          CurrentUserAccessor currentUser) {
         this.authService = authService;
         this.passwordResetService = passwordResetService;
         this.rateLimitService = rateLimitService;
         this.clientIpResolver = clientIpResolver;
         this.cookieService = cookieService;
+        this.currentUser = currentUser;
     }
 
     // Reason states only what is true. Signup must be anonymous-reachable; it is
@@ -145,14 +149,14 @@ public class AuthController {
     @AuthorizedInSecurityConfig("authenticated(): any signed-in user, and only ever their own row — the DTO is name-only")
     @PatchMapping("/me")
     public ResponseEntity<UserResponse> updateMe(@Valid @RequestBody UpdateProfileRequest request) {
-        return ResponseEntity.ok(authService.updateProfile(SecurityUtils.getCurrentUserId(), request.name()));
+        return ResponseEntity.ok(authService.updateProfile(currentUser.require().userId(), request.name()));
     }
 
     @AuthorizedInSecurityConfig("authenticated(): self-service only, and the current password is re-verified")
     @PostMapping("/change-password")
     public ResponseEntity<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request, HttpServletRequest httpRequest) {
         rateLimitService.checkAuthLimit(clientIpResolver.resolve(httpRequest));
-        authService.changePassword(SecurityUtils.getCurrentUserId(), request.currentPassword(), request.newPassword());
+        authService.changePassword(currentUser.require().userId(), request.currentPassword(), request.newPassword());
         return ResponseEntity.noContent().build();
     }
 

@@ -1,8 +1,8 @@
 package com.bvisionry.reporting.service;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.assessment.entity.Submission;
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.common.security.PremiumFeatureGuard;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.exception.ResourceNotFoundException;
@@ -40,6 +40,7 @@ import java.util.stream.Collectors;
 @Transactional(readOnly = true)
 public class MemberResultsService {
 
+    private final CurrentUserAccessor currentUser;
     private final SubmissionRepository submissionRepository;
     private final PillarEvaluationRepository pillarEvaluationRepository;
     private final OverallSummaryRepository overallSummaryRepository;
@@ -80,7 +81,7 @@ public class MemberResultsService {
         }
         CachedMemberResults cached = self.getCachedResults(submissionId);
         boolean isPremium = premiumFeatureGuard.isPremiumOrSuperAdmin(cached.organizationId());
-        boolean isSuperAdmin = SecurityUtils.isSuperAdmin();
+        boolean isSuperAdmin = currentUser.require().isSuperAdmin();
         return applyViewerScope(cached.response(), isPremium, isSuperAdmin);
     }
 

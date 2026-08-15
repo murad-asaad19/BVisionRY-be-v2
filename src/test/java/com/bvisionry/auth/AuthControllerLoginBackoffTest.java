@@ -92,7 +92,8 @@ class AuthControllerLoginBackoffTest {
                 mock(PasswordResetService.class),
                 rateLimitService,
                 new ClientIpResolver(0, ""),
-                cookieService);
+                cookieService,
+                new com.bvisionry.config.SecurityContextCurrentUserAccessor());
 
         return MockMvcBuilders
                 .standaloneSetup(controller, new SsoHandshakeController(ssoRegistrations, frontendUrls))

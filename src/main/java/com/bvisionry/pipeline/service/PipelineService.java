@@ -1,12 +1,12 @@
 package com.bvisionry.pipeline.service;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.assessment.AnswerRepository;
 import com.bvisionry.assessment.AssignmentRepository;
 import com.bvisionry.assessment.PipelineAutoAssignmentRepository;
 import com.bvisionry.assessment.PipelineAutoAssignmentService;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.audit.AuditService;
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.common.enums.PillarType;
 import com.bvisionry.common.enums.PipelineStatus;
 import com.bvisionry.common.enums.QuestionType;
@@ -47,6 +47,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class PipelineService {
 
+    private final CurrentUserAccessor currentUser;
     private final PipelineRepository pipelineRepository;
     private final AuditService auditService;
     private final AssignmentRepository assignmentRepository;
@@ -60,7 +61,7 @@ public class PipelineService {
     public PipelineResponse create(PipelineCreateRequest request) {
         // Derive the creator from the authenticated principal — never trust a
         // client-supplied {@code createdBy} field for audit attribution.
-        UUID creatorId = SecurityUtils.getCurrentUserId();
+        UUID creatorId = currentUser.require().userId();
 
         Pipeline pipeline = new Pipeline();
         pipeline.setName(request.name());
@@ -398,13 +399,13 @@ public class PipelineService {
     @Transactional(readOnly = true)
     public List<PipelineSummaryResponse> getPublishedCatalog() {
         // Org admins only see assessments assigned to their org; super admins see all.
-        com.bvisionry.auth.entity.User caller = SecurityUtils.getCurrentUser();
-        if (caller.getRole() == com.bvisionry.common.enums.UserRole.ORG_ADMIN) {
-            if (caller.getOrganization() == null) {
+        com.bvisionry.common.security.CurrentUser caller = currentUser.require();
+        if (com.bvisionry.common.enums.UserRole.ORG_ADMIN.name().equals(caller.role())) {
+            if (caller.orgId() == null) {
                 return List.of();
             }
             List<UUID> assignedIds = assignmentRepository
-                    .findDistinctPipelineIdsByOrganizationId(caller.getOrganization().getId());
+                    .findDistinctPipelineIdsByOrganizationId(caller.orgId());
             if (assignedIds.isEmpty()) {
                 return List.of();
             }
@@ -547,9 +548,9 @@ public class PipelineService {
         );
     }
 
-    private static boolean isSuperAdminSafe() {
+    private boolean isSuperAdminSafe() {
         try {
-            return SecurityUtils.isSuperAdmin();
+            return currentUser.require().isSuperAdmin();
         } catch (RuntimeException ignored) {
             return false;
         }

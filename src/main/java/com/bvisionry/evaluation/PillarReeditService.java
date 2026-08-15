@@ -1,11 +1,11 @@
 package com.bvisionry.evaluation;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.assessment.AssignmentRepository;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.assessment.entity.Assignment;
 import com.bvisionry.assessment.entity.Submission;
 import com.bvisionry.audit.AuditService;
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
@@ -60,6 +60,7 @@ public class PillarReeditService {
     public static final String ARCHIVE_REASON_FULL_REEVAL = "FULL_REEVAL";
     public static final String ARCHIVE_REASON_DEGRADED_RETRY = "DEGRADED_RETRY";
 
+    private final CurrentUserAccessor currentUser;
     private final AssignmentRepository assignmentRepository;
     private final SubmissionRepository submissionRepository;
     private final SubmissionPillarUnlockRepository unlockRepository;
@@ -117,7 +118,7 @@ public class PillarReeditService {
             }
         }
 
-        UUID adminId = SecurityUtils.getCurrentUserId();
+        UUID adminId = currentUser.require().userId();
 
         Set<UUID> alreadyUnlocked = Set.copyOf(unlockRepository.findUnlockedPillarIds(submission.getId()));
         List<UUID> newlyUnlocked = requested.stream()
@@ -186,7 +187,7 @@ public class PillarReeditService {
         submission.setStatus(SubmissionStatus.EVALUATED);
         submissionRepository.save(submission);
 
-        UUID adminId = SecurityUtils.getCurrentUserId();
+        UUID adminId = currentUser.require().userId();
         auditService.log(adminId, orgId, OrgAuditActions.ASSESSMENT_PILLARS_RELOCKED,
                 OrgAuditActions.ENTITY_SUBMISSION, submission.getId(),
                 Map.of(
@@ -344,9 +345,9 @@ public class PillarReeditService {
         return t.isEmpty() ? null : t;
     }
 
-    private static UUID currentAdminIdOrNull() {
+    private UUID currentAdminIdOrNull() {
         try {
-            return SecurityUtils.getCurrentUserId();
+            return currentUser.require().userId();
         } catch (RuntimeException e) {
             // Called from an async re-eval thread without a security context.
             return null;

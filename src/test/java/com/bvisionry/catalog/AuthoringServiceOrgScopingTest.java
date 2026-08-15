@@ -61,7 +61,8 @@ class AuthoringServiceOrgScopingTest {
     @BeforeEach
     void setUp() {
         service = new AuthoringService(courses, sections, contents, tags, mapper,
-                new com.bvisionry.config.SecurityContextOrgScope(hierarchyProvider));
+                new com.bvisionry.config.SecurityContextOrgScope(hierarchyProvider),
+                new com.bvisionry.config.SecurityContextCurrentUserAccessor());
         lenient().when(sections.save(any(Section.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 

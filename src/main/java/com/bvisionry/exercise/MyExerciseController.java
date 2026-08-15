@@ -1,6 +1,6 @@
 package com.bvisionry.exercise;
 
-import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.exercise.dto.ExerciseCommentResponse;
 import com.bvisionry.exercise.dto.ExerciseSubmissionDetailResponse;
 import com.bvisionry.exercise.dto.MyExerciseSummaryResponse;
@@ -32,17 +32,18 @@ import java.util.UUID;
 @PreAuthorize("isAuthenticated()")
 public class MyExerciseController {
 
+    private final CurrentUserAccessor currentUser;
     private final ExerciseSubmissionService submissionService;
 
     @GetMapping
     public ResponseEntity<List<MyExerciseSummaryResponse>> listMine() {
-        return ResponseEntity.ok(submissionService.listMine(SecurityUtils.getCurrentUserId()));
+        return ResponseEntity.ok(submissionService.listMine(currentUser.require().userId()));
     }
 
     @GetMapping("/{submissionId}")
     public ResponseEntity<ExerciseSubmissionDetailResponse> get(@PathVariable UUID submissionId) {
         return ResponseEntity.ok(
-                submissionService.getForMember(submissionId, SecurityUtils.getCurrentUserId()));
+                submissionService.getForMember(submissionId, currentUser.require().userId()));
     }
 
     /** Debounced autosave target — replace-all rows, allowed in every status. */
@@ -51,13 +52,13 @@ public class MyExerciseController {
             @PathVariable UUID submissionId,
             @Valid @RequestBody SaveExerciseRowsRequest request) {
         return ResponseEntity.ok(
-                submissionService.saveRows(submissionId, SecurityUtils.getCurrentUserId(), request));
+                submissionService.saveRows(submissionId, currentUser.require().userId(), request));
     }
 
     @PostMapping("/{submissionId}/submit")
     public ResponseEntity<ExerciseSubmissionDetailResponse> submit(@PathVariable UUID submissionId) {
         return ResponseEntity.ok(
-                submissionService.submit(submissionId, SecurityUtils.getCurrentUserId()));
+                submissionService.submit(submissionId, currentUser.require().userId()));
     }
 
     @PostMapping("/{submissionId}/comments/{commentId}/reply")
@@ -66,6 +67,6 @@ public class MyExerciseController {
             @PathVariable UUID commentId,
             @Valid @RequestBody ReplyExerciseCommentRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(submissionService.reply(
-                submissionId, SecurityUtils.getCurrentUserId(), commentId, request.body()));
+                submissionId, currentUser.require().userId(), commentId, request.body()));
     }
 }

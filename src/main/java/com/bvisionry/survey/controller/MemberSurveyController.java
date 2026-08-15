@@ -1,6 +1,6 @@
 package com.bvisionry.survey.controller;
 
-import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.survey.dto.MemberSurveyDto;
 import com.bvisionry.survey.dto.SurveySubmitRequest;
 import com.bvisionry.survey.dto.SurveySubmitResponseDto;
@@ -30,12 +30,13 @@ import java.util.UUID;
 @PreAuthorize("isAuthenticated()")
 public class MemberSurveyController {
 
+    private final CurrentUserAccessor currentUser;
     private final SurveyResponseService responseService;
 
     @GetMapping
     public ResponseEntity<MemberSurveyDto> get(@PathVariable UUID submissionId) {
         return ResponseEntity.ok(
-                responseService.getForSubmission(submissionId, SecurityUtils.getCurrentUserId()));
+                responseService.getForSubmission(submissionId, currentUser.require().userId()));
     }
 
     @PostMapping
@@ -45,7 +46,7 @@ public class MemberSurveyController {
             HttpServletRequest request) {
         SurveySubmitResponseDto result = responseService.submitForSubmission(
                 submissionId,
-                SecurityUtils.getCurrentUserId(),
+                currentUser.require().userId(),
                 body,
                 request.getHeader("User-Agent"));
         return ResponseEntity.ok(result);

@@ -1,5 +1,6 @@
 package com.bvisionry.catalog.review;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.Optional;
@@ -9,7 +10,6 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.catalog.domain.Course;
 import com.bvisionry.catalog.domain.Review;
 import com.bvisionry.catalog.repository.CourseRepository;
@@ -34,13 +34,16 @@ public class ReviewService {
     private final CourseRepository courses;
     private final ReviewRepository reviews;
     private final EnrollmentRepository enrollments;
+    private final CurrentUserAccessor currentUser;
 
     public ReviewService(CourseRepository courses,
                          ReviewRepository reviews,
-                         EnrollmentRepository enrollments) {
+                         EnrollmentRepository enrollments,
+                         CurrentUserAccessor currentUser) {
         this.courses = courses;
         this.reviews = reviews;
         this.enrollments = enrollments;
+        this.currentUser = currentUser;
     }
 
     // -------------------------------------------------------------------------
@@ -58,7 +61,7 @@ public class ReviewService {
         Course course = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
 
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
 
         // Learner must be enrolled to leave a review.
         if (!enrollments.existsByUserIdAndCourseId(userId, course.getId())) {
@@ -75,7 +78,7 @@ public class ReviewService {
                     return r;
                 });
 
-        String authorName = SecurityUtils.getCurrentUser().getName();
+        String authorName = currentUser.require().name();
         review.setRating(rating);
         review.setComment(comment);
         review.setAuthorName(authorName);
@@ -102,7 +105,7 @@ public class ReviewService {
         Course course = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
 
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
 
         return reviews.findByCourse_IdAndUserId(course.getId(), userId)
                 .map(r -> toDto(r, course.getId()));

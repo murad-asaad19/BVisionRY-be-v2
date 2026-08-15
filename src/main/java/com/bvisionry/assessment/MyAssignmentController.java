@@ -1,7 +1,7 @@
 package com.bvisionry.assessment;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.assessment.dto.AssessmentSummaryResponse;
-import com.bvisionry.auth.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -24,12 +24,13 @@ import java.util.UUID;
 @PreAuthorize("isAuthenticated()")
 public class MyAssignmentController {
 
+    private final CurrentUserAccessor currentUser;
     private final AssignmentService assignmentService;
 
     @PostMapping("/{assignmentId}/check-ins")
     public ResponseEntity<AssessmentSummaryResponse> startNewCheckIn(@PathVariable UUID assignmentId) {
         AssessmentSummaryResponse summary =
-                assignmentService.startNewCheckIn(assignmentId, SecurityUtils.getCurrentUserId());
+                assignmentService.startNewCheckIn(assignmentId, currentUser.require().userId());
         return ResponseEntity.status(HttpStatus.CREATED).body(summary);
     }
 }

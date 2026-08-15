@@ -15,4 +15,8 @@ import java.util.UUID;
  * @param role   the {@code UserRole} name (e.g. {@code SUPER_ADMIN})
  */
 public record CurrentUser(UUID userId, UUID orgId, String name, String role) {
+
+    public boolean isSuperAdmin() {
+        return "SUPER_ADMIN".equals(role);
+    }
 }

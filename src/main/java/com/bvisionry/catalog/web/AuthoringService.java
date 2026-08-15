@@ -1,5 +1,6 @@
 package com.bvisionry.catalog.web;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -8,9 +9,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.common.security.OrgScope;
-import com.bvisionry.auth.entity.User;
 import com.bvisionry.catalog.domain.Content;
 import com.bvisionry.catalog.domain.ContentType;
 import com.bvisionry.catalog.domain.Course;
@@ -47,19 +46,22 @@ public class AuthoringService {
     private final TagRepository tags;
     private final CourseMapper mapper;
     private final OrgScope orgScope;
+    private final CurrentUserAccessor currentUser;
 
     public AuthoringService(CourseRepository courses,
                             SectionRepository sections,
                             ContentRepository contents,
                             TagRepository tags,
                             CourseMapper mapper,
-                            OrgScope orgScope) {
+                            OrgScope orgScope,
+                            CurrentUserAccessor currentUser) {
         this.courses = courses;
         this.sections = sections;
         this.contents = contents;
         this.tags = tags;
         this.mapper = mapper;
         this.orgScope = orgScope;
+        this.currentUser = currentUser;
     }
 
     // -------------------------------------------------------------------------
@@ -245,9 +247,9 @@ public class AuthoringService {
     /** Lists authorable courses incl. DRAFT/ARCHIVED: SUPER_ADMIN → all orgs, else the caller's org. */
     @Transactional(readOnly = true)
     public List<CourseAdminDto> listForAuthoring() {
-        List<Course> found = SecurityUtils.isSuperAdmin()
+        List<Course> found = currentUser.require().isSuperAdmin()
                 ? courses.findAllByOrderByUpdatedAtDesc()
-                : courses.findByOrgIdOrderByUpdatedAtDesc(orgIdOf(SecurityUtils.getCurrentUser()));
+                : courses.findByOrgIdOrderByUpdatedAtDesc(orgIdOf(currentUser.require()));
         return found.stream().map(this::toAdminDto).toList();
     }
 
@@ -261,7 +263,7 @@ public class AuthoringService {
             throw new IllegalArgumentException("A course with slug '" + slug + "' already exists");
         }
         Course c = new Course();
-        c.setOrgId(orgIdOf(SecurityUtils.getCurrentUser()));
+        c.setOrgId(orgIdOf(currentUser.require()));
         c.setState(CourseState.DRAFT); // new courses start unpublished
         applyCourseRequest(c, req, true);
         Course saved = courses.save(c);
@@ -320,8 +322,8 @@ public class AuthoringService {
         return mapper.toAdminDto(c, sectionCount, lessonCount);
     }
 
-    private static UUID orgIdOf(User user) {
-        return user.getOrganization() != null ? user.getOrganization().getId() : ACADEMY_ORG_ID;
+    private static UUID orgIdOf(com.bvisionry.common.security.CurrentUser user) {
+        return user.orgId() != null ? user.orgId() : ACADEMY_ORG_ID;
     }
 
     /**

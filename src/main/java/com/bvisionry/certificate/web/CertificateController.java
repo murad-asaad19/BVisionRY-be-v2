@@ -1,5 +1,6 @@
 package com.bvisionry.certificate.web;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import java.util.UUID;
 
 import org.springframework.http.ContentDisposition;
@@ -14,7 +15,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.bvisionry.aiconfig.service.RateLimitService;
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.catalog.domain.Course;
 import com.bvisionry.certificate.domain.Certificate;
 import com.bvisionry.certificate.dto.CertificateDto;
@@ -47,6 +47,7 @@ import lombok.RequiredArgsConstructor;
 @Tag(name = "Certificates", description = "Course completion certificates.")
 public class CertificateController {
 
+    private final CurrentUserAccessor currentUser;
     private final CertificateService certificateService;
     private final RateLimitService rateLimitService;
     private final ClientIpResolver clientIpResolver;
@@ -58,7 +59,7 @@ public class CertificateController {
     @GetMapping("/courses/{slug}/certificate")
     @PreAuthorize("isAuthenticated()")
     public CertificateDto getCertificate(@PathVariable String slug) {
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
         Course course = certificateService.resolveCourse(slug);
 
         Certificate cert = certificateService.findForUserAndCourse(userId, course.getId())
@@ -77,7 +78,7 @@ public class CertificateController {
      * @param showNames {@code true} (default) to show the real learner name;
      *                  {@code false} to show "Member"
      */
-    @NamesVisibleToSelf("findForUserAndCourse(SecurityUtils.getCurrentUserId(), ...) can only "
+    @NamesVisibleToSelf("findForUserAndCourse(currentUser.require().userId(), ...) can only "
             + "return the caller's own certificate, so the learner name on it is their own")
     @GetMapping(value = "/courses/{slug}/certificate/pdf",
                 produces = MediaType.APPLICATION_PDF_VALUE)
@@ -87,7 +88,7 @@ public class CertificateController {
             @RequestParam(defaultValue = "preview") String mode,
             @RequestParam(defaultValue = "true") boolean showNames) {
 
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
         Course course = certificateService.resolveCourse(slug);
 
         Certificate cert = certificateService.findForUserAndCourse(userId, course.getId())

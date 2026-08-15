@@ -1,5 +1,6 @@
 package com.bvisionry.enrollment.web;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -11,7 +12,6 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.catalog.domain.Content;
@@ -51,6 +51,7 @@ public class EnrollmentService {
     private final CertificateService certificateService;
     private final UserRepository users;
     private final CourseVisibilityAccess courseVisibility;
+    private final CurrentUserAccessor currentUser;
 
     public EnrollmentService(EnrollmentRepository enrollments,
                              ContentProgressRepository progresses,
@@ -60,7 +61,8 @@ public class EnrollmentService {
                              MediaService mediaService,
                              CertificateService certificateService,
                              UserRepository users,
-                             CourseVisibilityAccess courseVisibility) {
+                             CourseVisibilityAccess courseVisibility,
+                             CurrentUserAccessor currentUser) {
         this.enrollments = enrollments;
         this.progresses = progresses;
         this.courses = courses;
@@ -70,6 +72,7 @@ public class EnrollmentService {
         this.certificateService = certificateService;
         this.users = users;
         this.courseVisibility = courseVisibility;
+        this.currentUser = currentUser;
     }
 
     // -------------------------------------------------------------------------
@@ -89,7 +92,7 @@ public class EnrollmentService {
      */
     @Transactional
     public EnrollmentDto enroll(String slug) {
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
         var course = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
 
@@ -174,7 +177,7 @@ public class EnrollmentService {
 
     @Transactional(readOnly = true)
     public List<EnrollmentDto> myEnrollments() {
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
         List<Enrollment> list = enrollments.findByUserId(userId);
         // Batch-load the courses (incl. DRAFT/ARCHIVED) so each DTO carries its
         // title/slug — the catalog endpoint is published-only, so client joins
@@ -198,7 +201,7 @@ public class EnrollmentService {
      */
     @Transactional(readOnly = true)
     public LearnViewDto learnView(String slug) {
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
         var course = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
 
@@ -240,7 +243,7 @@ public class EnrollmentService {
                 .orElseThrow(() -> new IllegalArgumentException("Enrollment not found: " + enrollmentId));
 
         // Ownership check
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
         if (!enrollment.getUserId().equals(userId)) {
             throw new org.springframework.security.access.AccessDeniedException("Not your enrollment");
         }
@@ -322,7 +325,7 @@ public class EnrollmentService {
         // OR the content is explicitly preview-enabled on a PUBLISHED course. The
         // allowPreview flag is HONORED (gates access), not merely echoed. An unenrolled
         // user of ANY org still cannot read locked content.
-        UUID viewerId = SecurityUtils.getCurrentUserId();
+        UUID viewerId = currentUser.require().userId();
         UUID openCourseId = course.getId();
         boolean enrolled = enrollments.existsByUserIdAndCourseId(viewerId, openCourseId);
         boolean previewable = content.isAllowPreview() && course.getState() == CourseState.PUBLISHED;

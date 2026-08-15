@@ -1,7 +1,7 @@
 package com.bvisionry.exercise;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.audit.AuditService;
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.exception.BadRequestException;
@@ -48,6 +48,7 @@ import java.util.UUID;
 @Slf4j
 public class ExerciseReviewService {
 
+    private final CurrentUserAccessor currentUser;
     private final ExerciseAssignmentService assignmentService;
     private final ExerciseSubmissionService submissionService;
     private final ExerciseSubmissionRepository submissionRepository;
@@ -102,9 +103,10 @@ public class ExerciseReviewService {
     public ExerciseCommentResponse addComment(UUID orgId, UUID assignmentId,
                                               CreateExerciseCommentRequest request) {
         ExerciseSubmission submission = requireMemberSubmission(orgId, assignmentId);
-        User author = userRepository.findById(SecurityUtils.getCurrentUserId())
+        UUID authorId = currentUser.require().userId();
+        User author = userRepository.findById(authorId)
                 .orElseThrow(() -> new ResourceNotFoundException("User",
-                        String.valueOf(SecurityUtils.getCurrentUserId())));
+                        String.valueOf(authorId)));
 
         ExerciseComment comment = new ExerciseComment();
         comment.setSubmission(submission);
@@ -184,7 +186,7 @@ public class ExerciseReviewService {
             throw new BadRequestException("Only root comments can be resolved.");
         }
         comment.setStatus(ExerciseCommentStatus.RESOLVED);
-        comment.setResolvedBy(SecurityUtils.getCurrentUserId());
+        comment.setResolvedBy(currentUser.require().userId());
         comment.setResolvedAt(Instant.now());
         return ExerciseCommentResponse.from(comment, true);
     }
@@ -284,7 +286,7 @@ public class ExerciseReviewService {
     private void notifyStatus(ExerciseSubmission submission, String auditAction,
                               String title, String body) {
         UUID orgId = submission.getAssignment().getOrganization().getId();
-        auditService.log(SecurityUtils.getCurrentUserId(), orgId, auditAction,
+        auditService.log(currentUser.require().userId(), orgId, auditAction,
                 OrgAuditActions.ENTITY_EXERCISE_SUBMISSION, submission.getId(),
                 Map.of("exerciseName", templateName(submission),
                        "memberName", submission.getUser().getName()));

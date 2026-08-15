@@ -1,6 +1,5 @@
 package com.bvisionry.organization;
 
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.organization.dto.BulkChangeMemberStatusRequest;
 import com.bvisionry.organization.dto.BulkMemberIdsRequest;
@@ -50,7 +49,7 @@ public class MemberController {
     public ResponseEntity<MemberResponse> changeStatus(@PathVariable UUID orgId,
                                                         @PathVariable UUID memberId,
                                                         @Valid @RequestBody ChangeMemberStatusRequest request) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         return ResponseEntity.ok(memberService.changeStatus(orgId, memberId, request, actorId));
     }
 
@@ -58,7 +57,7 @@ public class MemberController {
     public ResponseEntity<MemberResponse> changeRole(@PathVariable UUID orgId,
                                                       @PathVariable UUID memberId,
                                                       @Valid @RequestBody ChangeMemberRoleRequest request) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         return ResponseEntity.ok(memberService.changeRole(orgId, memberId, request, actorId));
     }
 
@@ -71,7 +70,7 @@ public class MemberController {
     public ResponseEntity<MemberResponse> updateProfile(@PathVariable UUID orgId,
                                                          @PathVariable UUID memberId,
                                                          @Valid @RequestBody UpdateMemberProfileRequest request) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         return ResponseEntity.ok(memberService.updateProfile(orgId, memberId, request, actorId));
     }
 
@@ -109,7 +108,7 @@ public class MemberController {
     @DeleteMapping("/{memberId}/responses")
     public ResponseEntity<Void> clearResponses(@PathVariable UUID orgId,
                                                 @PathVariable UUID memberId) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         memberService.clearResponses(orgId, memberId, actorId);
         return ResponseEntity.noContent().build();
     }
@@ -117,14 +116,14 @@ public class MemberController {
     @PostMapping("/bulk/status")
     public ResponseEntity<List<MemberResponse>> bulkChangeStatus(@PathVariable UUID orgId,
                                                                   @Valid @RequestBody BulkChangeMemberStatusRequest request) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         return ResponseEntity.ok(memberService.bulkChangeStatus(orgId, request.memberIds(), request.status(), actorId));
     }
 
     @PostMapping("/bulk/clear-responses")
     public ResponseEntity<Void> bulkClearResponses(@PathVariable UUID orgId,
                                                     @Valid @RequestBody BulkMemberIdsRequest request) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         memberService.bulkClearResponses(orgId, request.memberIds(), actorId);
         return ResponseEntity.noContent().build();
     }
@@ -134,7 +133,7 @@ public class MemberController {
             @PathVariable UUID orgId,
             @PathVariable UUID memberId,
             @RequestParam(name = "wipeAssessments", defaultValue = "false") boolean wipeAssessments) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         return ResponseEntity.ok(
                 memberService.removeMember(orgId, memberId, wipeAssessments, actorId));
     }
@@ -148,7 +147,7 @@ public class MemberController {
     @DeleteMapping("/{memberId}/permanent")
     public ResponseEntity<Void> deleteMemberPermanently(@PathVariable UUID orgId,
                                                          @PathVariable UUID memberId) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         memberService.deleteMemberPermanently(orgId, memberId, actorId);
         return ResponseEntity.noContent().build();
     }

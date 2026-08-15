@@ -1,7 +1,7 @@
 package com.bvisionry.organization;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.aiconfig.service.RateLimitService;
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.common.web.ClientIpResolver;
 import com.bvisionry.organization.dto.AcceptJoinLinkRequest;
 import com.bvisionry.organization.dto.GenerateJoinLinkRequest;
@@ -21,6 +21,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class JoinLinkController {
 
+    private final CurrentUserAccessor currentUser;
     private final JoinLinkService joinLinkService;
     private final RateLimitService rateLimitService;
     private final ClientIpResolver clientIpResolver;
@@ -32,7 +33,7 @@ public class JoinLinkController {
             @Valid @RequestBody GenerateJoinLinkRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(joinLinkService.generate(orgId, request.expiryDays(), request.workshopId(),
-                        SecurityUtils.getCurrentUserId()));
+                        currentUser.require().userId()));
     }
 
     @GetMapping("/api/organizations/{orgId}/join-link")
@@ -50,7 +51,7 @@ public class JoinLinkController {
     public ResponseEntity<Void> revoke(
             @PathVariable UUID orgId,
             @RequestParam(required = false) UUID workshopId) {
-        joinLinkService.revoke(orgId, workshopId, SecurityUtils.getCurrentUserId());
+        joinLinkService.revoke(orgId, workshopId, currentUser.require().userId());
         return ResponseEntity.noContent().build();
     }
 

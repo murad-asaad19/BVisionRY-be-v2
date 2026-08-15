@@ -46,7 +46,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @WebMvcTest(AssessmentController.class)
 @AutoConfigureMockMvc(addFilters = false)
-@Import({JacksonAutoConfiguration.class, HttpMessageConvertersAutoConfiguration.class})
+@Import({JacksonAutoConfiguration.class, HttpMessageConvertersAutoConfiguration.class,
+        com.bvisionry.config.SecurityContextCurrentUserAccessor.class})
 class AssessmentControllerTest {
 
     @Autowired

@@ -19,6 +19,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
+import com.bvisionry.config.SecurityContextCurrentUserAccessor;
+import com.bvisionry.common.security.CurrentUserAccessor;
+import org.mockito.Spy;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -77,6 +80,11 @@ class EnrollmentServiceTest {
     @Mock private CertificateService certificateService;
     @Mock private UserRepository users;
     @Mock private com.bvisionry.common.coursevisibility.CourseVisibilityAccess courseVisibility;
+
+    // The service resolves the caller through this port; the spy delegates to
+    // the real adapter, which reads the same SecurityContextHolder the tests set.
+    @Spy
+    private CurrentUserAccessor currentUserAccessor = new SecurityContextCurrentUserAccessor();
 
     @InjectMocks
     private EnrollmentService service;

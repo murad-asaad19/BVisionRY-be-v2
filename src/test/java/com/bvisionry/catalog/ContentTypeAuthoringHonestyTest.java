@@ -71,7 +71,8 @@ class ContentTypeAuthoringHonestyTest {
     void setUp() {
         // Real mapper: the hydration test asserts what a retired row maps to.
         service = new AuthoringService(courses, sections, contents, tags, new CourseMapper(),
-                new com.bvisionry.config.SecurityContextOrgScope(hierarchyProvider));
+                new com.bvisionry.config.SecurityContextOrgScope(hierarchyProvider),
+                new com.bvisionry.config.SecurityContextCurrentUserAccessor());
         User admin = new User();
         admin.setId(UUID.randomUUID());
         admin.setRole(UserRole.SUPER_ADMIN);

@@ -26,6 +26,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
+import com.bvisionry.config.SecurityContextCurrentUserAccessor;
+import com.bvisionry.common.security.CurrentUserAccessor;
+import org.mockito.Spy;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -57,6 +60,11 @@ class AssignmentServiceTest {
     @Mock private AuditService auditService;
     @Mock private com.bvisionry.membertype.MemberTypeService memberTypeService;
     @Mock private PipelineAutoAssignmentService pipelineAutoAssignmentService;
+
+    // The service resolves the caller through this port; the spy delegates to
+    // the real adapter, which reads the same SecurityContextHolder the tests set.
+    @Spy
+    private CurrentUserAccessor currentUser = new SecurityContextCurrentUserAccessor();
 
     @InjectMocks
     private AssignmentService assignmentService;

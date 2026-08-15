@@ -1,7 +1,9 @@
 package com.bvisionry.exercise;
 
+
+import com.bvisionry.common.security.CurrentUser;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.audit.AuditService;
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserStatus;
@@ -57,6 +59,7 @@ public class ExerciseAssignmentService {
         ALL
     }
 
+    private final CurrentUserAccessor currentUser;
     private final ExerciseAssignmentRepository assignmentRepository;
     private final ExerciseSubmissionRepository submissionRepository;
     private final ExerciseRowRepository rowRepository;
@@ -85,7 +88,8 @@ public class ExerciseAssignmentService {
         ExerciseAssignment provision = assignmentRepository
                 .findProvision(orgId, template.getId())
                 .orElse(null);
-        if (!SecurityUtils.isSuperAdmin() && provision == null) {
+        CurrentUser me = currentUser.require();
+        if (!me.isSuperAdmin() && provision == null) {
             throw new BadRequestException(
                     "This exercise has not been provisioned to your organization. "
                             + "Contact your platform administrator.");
@@ -107,7 +111,7 @@ public class ExerciseAssignmentService {
                     "All selected members already have this exercise assigned in this organization.");
         }
 
-        UUID assignerId = SecurityUtils.getCurrentUserId();
+        UUID assignerId = me.userId();
         Instant deadline = request.deadline() != null
                 ? request.deadline()
                 : (provision != null ? provision.getDeadline() : null);
@@ -125,7 +129,8 @@ public class ExerciseAssignmentService {
 
     private ExerciseAssignmentResponse createOrganizationProvision(UUID orgId,
                                                                    CreateExerciseAssignmentRequest request) {
-        if (!SecurityUtils.isSuperAdmin()) {
+        CurrentUser me = currentUser.require();
+        if (!me.isSuperAdmin()) {
             throw new BadRequestException("Only super admins can provision exercises to organizations.");
         }
         if (!request.isAssignAll()) {
@@ -141,7 +146,7 @@ public class ExerciseAssignmentService {
         }
 
         ExerciseAssignment saved = provisionTemplate(
-                org, template, SecurityUtils.getCurrentUserId(), request.deadline());
+                org, template, me.userId(), request.deadline());
         log.info("Provisioned exercise template {} to org {}", template.getId(), orgId);
         return toResponse(saved, null, 0);
     }
@@ -248,7 +253,7 @@ public class ExerciseAssignmentService {
     public void cancelAssignment(UUID orgId, UUID assignmentId) {
         ExerciseAssignment assignment = requireAssignmentInOrg(orgId, assignmentId);
 
-        if (assignment.getUser() == null && !SecurityUtils.isSuperAdmin()) {
+        if (assignment.getUser() == null && !currentUser.require().isSuperAdmin()) {
             throw new BadRequestException("Only super admins can remove an organization provision.");
         }
 

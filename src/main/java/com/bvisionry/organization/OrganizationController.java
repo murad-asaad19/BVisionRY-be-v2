@@ -1,6 +1,6 @@
 package com.bvisionry.organization;
 
-import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.organization.dto.ActivityFeedResponse;
 import com.bvisionry.organization.dto.BrandingResponse;
@@ -31,6 +31,7 @@ import java.util.UUID;
 @PreAuthorize("hasAuthority('SUPER_ADMIN')")
 public class OrganizationController {
 
+    private final CurrentUserAccessor currentUser;
     private final OrganizationService organizationService;
     private final SubOrganizationService subOrganizationService;
     private final TrialService trialService;
@@ -50,7 +51,7 @@ public class OrganizationController {
 
     @PostMapping
     public ResponseEntity<OrganizationResponse> create(@Valid @RequestBody CreateOrganizationRequest request) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         // Root orgs are created together with their default "General" sub-org —
         // members live in sub-orgs only.
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -84,21 +85,21 @@ public class OrganizationController {
     @PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#id))")
     public ResponseEntity<OrganizationResponse> update(@PathVariable UUID id,
                                                         @Valid @RequestBody UpdateOrganizationRequest request) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         return ResponseEntity.ok(organizationService.update(id, request, actorId));
     }
 
     @PatchMapping("/{id}/tier")
     public ResponseEntity<OrganizationResponse> changeTier(@PathVariable UUID id,
                                                             @Valid @RequestBody ChangeTierRequest request) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         return ResponseEntity.ok(organizationService.changeTier(id, request, actorId));
     }
 
     @PatchMapping("/{id}/active")
     public ResponseEntity<OrganizationResponse> toggleActive(@PathVariable UUID id,
                                                               @RequestParam boolean active) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         return ResponseEntity.ok(organizationService.toggleActive(id, active, actorId));
     }
 
@@ -111,7 +112,7 @@ public class OrganizationController {
     @PostMapping("/{id}/trial")
     public ResponseEntity<OrganizationResponse> startTrial(@PathVariable UUID id,
                                                             @Valid @RequestBody(required = false) StartTrialRequest request) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         int days = request == null ? 7 : request.durationDaysOrDefault();
         return ResponseEntity.ok(trialService.startTrial(id, days, actorId));
     }
@@ -119,13 +120,13 @@ public class OrganizationController {
     @PatchMapping("/{id}/trial")
     public ResponseEntity<OrganizationResponse> extendTrial(@PathVariable UUID id,
                                                              @Valid @RequestBody ExtendTrialRequest request) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         return ResponseEntity.ok(trialService.extendTrial(id, request.additionalDays(), actorId));
     }
 
     @DeleteMapping("/{id}/trial")
     public ResponseEntity<OrganizationResponse> endTrialEarly(@PathVariable UUID id) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         return ResponseEntity.ok(trialService.endTrialEarly(id, actorId));
     }
 

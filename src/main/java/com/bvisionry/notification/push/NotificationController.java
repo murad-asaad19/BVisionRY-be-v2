@@ -1,7 +1,7 @@
 package com.bvisionry.notification.push;
 
-import com.bvisionry.auth.SecurityUtils;
-import com.bvisionry.auth.entity.User;
+import com.bvisionry.common.enums.UserRole;
+import com.bvisionry.common.security.CurrentUser;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.notification.push.dto.NotificationItem;
 import com.bvisionry.notification.push.dto.PreferencesResponse;
@@ -38,16 +38,7 @@ public class NotificationController {
 
     private final NotificationSettingsService settingsService;
     private final NotificationHistoryService historyService;
-    /**
-     * The feature-neutral "who is calling" port, NOT {@link SecurityUtils}.
-     * Both answer the same question, but every call to SecurityUtils from this
-     * package is a cross-feature ArchUnit violation pinned in the frozen store,
-     * and that store may only shrink — so the paged handler below would have had
-     * to ADD a line to build. {@code CurrentUserAccessor} lives in
-     * {@code common} (the shared kernel, exempt from rule 1) and exists for
-     * exactly this. The remaining SecurityUtils call sites are left alone: this
-     * ticket does not own them.
-     */
+    /** The feature-neutral "who is calling" port ({@code common}, exempt from the ArchUnit ratchet). */
     private final CurrentUserAccessor currentUser;
     private final String vapidPublicKey;
 
@@ -79,18 +70,18 @@ public class NotificationController {
     @GetMapping("/unread-count")
     public ResponseEntity<UnreadCountResponse> unreadCount() {
         return ResponseEntity.ok(new UnreadCountResponse(
-                historyService.unreadCount(SecurityUtils.getCurrentUserId())));
+                historyService.unreadCount(currentUser.require().userId())));
     }
 
     @PostMapping("/{id}/read")
     public ResponseEntity<Void> markRead(@PathVariable UUID id) {
-        historyService.markRead(SecurityUtils.getCurrentUserId(), id);
+        historyService.markRead(currentUser.require().userId(), id);
         return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/read-all")
     public ResponseEntity<Void> markAllRead() {
-        historyService.markAllRead(SecurityUtils.getCurrentUserId());
+        historyService.markAllRead(currentUser.require().userId());
         return ResponseEntity.noContent().build();
     }
 
@@ -102,29 +93,29 @@ public class NotificationController {
 
     @PostMapping("/subscriptions")
     public ResponseEntity<Void> subscribe(@Valid @RequestBody SubscribeRequest request) {
-        settingsService.subscribe(SecurityUtils.getCurrentUserId(),
+        settingsService.subscribe(currentUser.require().userId(),
                 request.endpoint(), request.p256dh(), request.auth());
         return ResponseEntity.noContent().build();
     }
 
     @DeleteMapping("/subscriptions")
     public ResponseEntity<Void> unsubscribe(@RequestParam String endpoint) {
-        settingsService.unsubscribe(SecurityUtils.getCurrentUserId(), endpoint);
+        settingsService.unsubscribe(currentUser.require().userId(), endpoint);
         return ResponseEntity.noContent().build();
     }
 
     @GetMapping("/preferences")
     public ResponseEntity<PreferencesResponse> preferences() {
-        User user = SecurityUtils.getCurrentUser();
+        CurrentUser me = currentUser.require();
         return ResponseEntity.ok(new PreferencesResponse(
-                settingsService.preferencesFor(user.getId(), user.getRole())));
+                settingsService.preferencesFor(me.userId(), UserRole.valueOf(me.role()))));
     }
 
     @PutMapping("/preferences/{type}")
     public ResponseEntity<Void> updatePreference(@PathVariable NotificationType type,
                                                  @Valid @RequestBody UpdatePreferenceRequest request) {
-        User user = SecurityUtils.getCurrentUser();
-        settingsService.setPreference(user.getId(), user.getRole(), type, request.enabled());
+        CurrentUser me = currentUser.require();
+        settingsService.setPreference(me.userId(), UserRole.valueOf(me.role()), type, request.enabled());
         return ResponseEntity.noContent().build();
     }
 }

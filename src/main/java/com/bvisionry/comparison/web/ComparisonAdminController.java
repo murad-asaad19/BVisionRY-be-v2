@@ -8,6 +8,7 @@ import com.bvisionry.comparison.dto.FounderComparisonDto;
 import com.bvisionry.comparison.dto.PillarMappingResponse;
 import com.bvisionry.comparison.dto.RecomputeResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import com.bvisionry.common.programaccess.OrgCohortAccess;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -42,6 +43,7 @@ public class ComparisonAdminController {
     private final ComparisonComputeService computeService;
     private final CurrentUserAccessor currentUser;
     private final com.bvisionry.comparison.repository.ComparisonReadRepository reads;
+    private final OrgCohortAccess orgCohorts;
 
     @GetMapping("/comparisons")
     public List<ComparisonSummaryDto> list(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
@@ -78,7 +80,7 @@ public class ComparisonAdminController {
      */
     @PostMapping("/comparisons/recompute")
     public RecomputeResponse recompute(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
-        reads.cohortNameInOrg(orgId, cohortId)
+        orgCohorts.cohortNameInOrg(orgId, cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
         return computeService.recomputeCohortForOrg(orgId, cohortId, currentUser.require().userId());
     }
@@ -90,7 +92,7 @@ public class ComparisonAdminController {
      */
     @GetMapping("/comparison-mapping")
     public ResponseEntity<PillarMappingResponse> mapping(@PathVariable UUID orgId, @PathVariable UUID cohortId) {
-        reads.cohortNameInOrg(orgId, cohortId)
+        orgCohorts.cohortNameInOrg(orgId, cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
         return reads.designatedPair(cohortId)
                 .map(pair -> ResponseEntity.ok(

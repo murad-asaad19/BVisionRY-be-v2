@@ -27,6 +27,7 @@ import com.bvisionry.communication.dto.MyAnnouncementResponse;
 import com.bvisionry.communication.repository.AnnouncementReadRepository;
 import com.bvisionry.communication.repository.AnnouncementRepository;
 
+import com.bvisionry.common.programaccess.OrgCohortAccess;
 import lombok.RequiredArgsConstructor;
 
 /**
@@ -63,6 +64,7 @@ public class AnnouncementService {
 
     private final AnnouncementRepository announcements;
     private final AnnouncementReadRepository reads;
+    private final OrgCohortAccess orgCohorts;
     private final CoachAccess coachAccess;
     private final CurrentUserAccessor currentUser;
     private final AuditLogger auditLogger;
@@ -190,7 +192,7 @@ public class AnnouncementService {
      * @return the cohort's display name
      */
     private String requireBroadcastableCohort(UUID orgId, UUID cohortId, CurrentUser caller) {
-        String name = reads.cohortNameInOrg(orgId, cohortId)
+        String name = orgCohorts.cohortNameInOrg(orgId, cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
         if (isCoach(caller) && !coachAccess.coachHoldsCohort(orgId, caller.userId(), cohortId)) {
             // 404, not 403: a coach may not learn which cohort ids exist outside

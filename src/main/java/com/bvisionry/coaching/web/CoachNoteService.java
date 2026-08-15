@@ -37,16 +37,13 @@ public class CoachNoteService {
 
     @Transactional
     public CoachNoteResponse create(UUID founderId, CoachNoteRequest request) {
-        CurrentUser coach = currentUser.require();
-        if (!coachAccess.coachSees(coach.orgId(), coach.userId(), founderId)) {
-            throw new ResourceNotFoundException("Founder", founderId.toString());
-        }
+        CoachAccess.ViewedFounder view = coachAccess.requireSees(founderId);
         CoachNote note = new CoachNote();
-        note.setOrgId(coach.orgId());
-        note.setCoachId(coach.userId());
-        note.setMemberId(founderId);
+        note.setOrgId(view.orgId());
+        note.setCoachId(view.viewerId());
+        note.setMemberId(view.founderId());
         note.setBody(request.body().trim());
-        return CoachNoteResponse.from(notes.saveAndFlush(note), coach.name());
+        return CoachNoteResponse.from(notes.saveAndFlush(note), currentUser.require().name());
     }
 
     @Transactional

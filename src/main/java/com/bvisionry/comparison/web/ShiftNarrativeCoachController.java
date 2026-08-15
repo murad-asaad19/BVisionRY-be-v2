@@ -56,37 +56,33 @@ public class ShiftNarrativeCoachController {
     public ShiftNarrativeDto generate(@PathVariable UUID founderId,
                                       @Valid @RequestBody GenerateNarrativeRequest request) {
         return narratives.generateForPillar(founderId, request.distancePillarId(),
-                requireSeen(founderId).userId());
+                requireSeen(founderId).viewerId());
     }
 
     /** One click, every remaining eligible pillar — the staff "Generate narratives" button. */
     @PostMapping("/generate-all")
     public GenerateAllNarrativesResponse generateAll(@PathVariable UUID founderId) {
-        return narratives.generateAllForFounder(founderId, requireSeen(founderId).userId());
+        return narratives.generateAllForFounder(founderId, requireSeen(founderId).viewerId());
     }
 
     @PatchMapping(path = "/{narrativeId}", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ShiftNarrativeDto update(@PathVariable UUID founderId, @PathVariable UUID narrativeId,
                                     @Valid @RequestBody UpdateNarrativeRequest request) {
-        return narratives.update(founderId, narrativeId, request, requireSeen(founderId).userId());
+        return narratives.update(founderId, narrativeId, request, requireSeen(founderId).viewerId());
     }
 
     @PostMapping("/{narrativeId}/approve")
     public ShiftNarrativeDto approve(@PathVariable UUID founderId, @PathVariable UUID narrativeId) {
-        return narratives.approve(founderId, narrativeId, requireSeen(founderId).userId());
+        return narratives.approve(founderId, narrativeId, requireSeen(founderId).viewerId());
     }
 
     @DeleteMapping("/{narrativeId}")
     public void delete(@PathVariable UUID founderId, @PathVariable UUID narrativeId) {
-        narratives.delete(founderId, narrativeId, requireSeen(founderId).userId());
+        narratives.delete(founderId, narrativeId, requireSeen(founderId).viewerId());
     }
 
     /** The coach must currently see this founder — a revoked assignment locks them out. */
-    private CurrentUser requireSeen(UUID founderId) {
-        CurrentUser coach = currentUser.require();
-        if (!coachAccess.coachSees(coach.orgId(), coach.userId(), founderId)) {
-            throw new ResourceNotFoundException("Founder", founderId.toString());
-        }
-        return coach;
+    private CoachAccess.ViewedFounder requireSeen(UUID founderId) {
+        return coachAccess.requireSees(founderId);
     }
 }

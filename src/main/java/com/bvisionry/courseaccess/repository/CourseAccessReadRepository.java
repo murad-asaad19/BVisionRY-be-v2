@@ -272,11 +272,6 @@ public class CourseAccessReadRepository {
         return n == null ? 0 : n;
     }
 
-    public boolean isMemberOf(UUID orgId, UUID userId) {
-        return Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT EXISTS (SELECT 1 FROM users WHERE id = :userId AND organization_id = :orgId)",
-                new MapSqlParameterSource("orgId", orgId).addValue("userId", userId), Boolean.class));
-    }
 
     /* ---------------------------------------------- the platform's visibility screen */
 

@@ -5,6 +5,7 @@ import com.bvisionry.common.enums.EnrollmentSource;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.orgmember.OrgMemberAccess;
 import com.bvisionry.courseaccess.domain.OrgCourseRule;
 import com.bvisionry.courseaccess.dto.AssignCourseRequest;
 import com.bvisionry.courseaccess.dto.CatalogCourseView;
@@ -47,6 +48,7 @@ public class OrgCourseService {
 
     private final OrgCourseRuleRepository rules;
     private final CourseAccessReadRepository reads;
+    private final OrgMemberAccess members;
     private final CourseAssignmentWriteRepository writes;
     private final CourseAccessService courseAccess;
     private final CourseVisibilityAccess visibility;
@@ -284,9 +286,7 @@ public class OrgCourseService {
     }
 
     private void requireMember(UUID orgId, UUID memberId) {
-        if (!reads.isMemberOf(orgId, memberId)) {
-            throw new ResourceNotFoundException("Member", memberId.toString());
-        }
+        members.requireMemberOf(orgId, memberId);
     }
 
     private static String audienceOf(OrgSourceAggregate agg) {

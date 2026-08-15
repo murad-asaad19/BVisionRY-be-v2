@@ -19,6 +19,7 @@ import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.security.CurrentUserAccessor;
 
+import com.bvisionry.common.programaccess.OrgCohortAccess;
 import lombok.RequiredArgsConstructor;
 
 /**
@@ -32,6 +33,7 @@ public class CoachAssignmentAdminService {
 
     private final CoachAssignmentRepository assignments;
     private final CoachingReadRepository reads;
+    private final OrgCohortAccess orgCohorts;
     private final CurrentUserAccessor currentUser;
 
     @Transactional(readOnly = true)
@@ -68,7 +70,7 @@ public class CoachAssignmentAdminService {
         String cohortName = null;
         OrgUserRow member = null;
         if (request.cohortId() != null) {
-            cohortName = reads.cohortNameInOrg(orgId, request.cohortId())
+            cohortName = orgCohorts.cohortNameInOrg(orgId, request.cohortId())
                     .orElseThrow(() -> new ResourceNotFoundException("Cohort",
                             request.cohortId().toString()));
             if (assignments.existsByOrgIdAndCoachIdAndCohortId(orgId, coach.id(),

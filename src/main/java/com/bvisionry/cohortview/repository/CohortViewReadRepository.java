@@ -451,16 +451,6 @@ public class CohortViewReadRepository {
 
     /* ------------------------------------------------------- course progress */
 
-    /** True when {@code memberId} is an ACTIVE-or-not MEMBER of {@code orgId} — the 404 anchor. */
-    public boolean isOrgMember(UUID orgId, UUID memberId) {
-        return Boolean.TRUE.equals(jdbc.queryForObject("""
-                SELECT EXISTS (SELECT 1 FROM users u
-                               WHERE u.id = :memberId AND u.organization_id = :orgId
-                                 AND u.role = 'MEMBER')
-                """,
-                new MapSqlParameterSource("orgId", orgId).addValue("memberId", memberId),
-                Boolean.class));
-    }
 
     public record CourseRow(UUID courseId, String title, String status, Integer progressPct,
                             Instant enrolledAt, Instant completedAt, boolean certificateIssued) {}

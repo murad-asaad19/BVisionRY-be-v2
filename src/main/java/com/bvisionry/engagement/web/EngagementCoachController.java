@@ -38,10 +38,7 @@ public class EngagementCoachController {
 
     @GetMapping
     public EngagementRecordResponse founderEngagement(@PathVariable UUID founderId) {
-        CurrentUser coach = currentUser.require();
-        if (!coachAccess.coachSees(coach.orgId(), coach.userId(), founderId)) {
-            throw new ResourceNotFoundException("Founder", founderId.toString());
-        }
+        CoachAccess.ViewedFounder coach = coachAccess.requireSees(founderId);
         return service.record(coach.orgId(), founderId);
     }
 }

@@ -82,12 +82,8 @@ public class ComparisonCoachController {
                 exports.reportFilename(founderId, "xlsx", false), mode);
     }
 
-    private CurrentUser requireCoachSees(UUID founderId) {
-        CurrentUser coach = currentUser.require();
-        if (!coachAccess.coachSees(coach.orgId(), coach.userId(), founderId)) {
-            throw new ResourceNotFoundException("Founder", founderId.toString());
-        }
-        return coach;
+    private CoachAccess.ViewedFounder requireCoachSees(UUID founderId) {
+        return coachAccess.requireSees(founderId);
     }
 
     /** Assignment union first (an unassigned founder is a 404, never a 402), then the plan. */

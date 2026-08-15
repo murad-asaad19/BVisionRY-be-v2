@@ -61,16 +61,6 @@ public class EngagementReadRepository {
                 .stream().findFirst();
     }
 
-    /** True when the id is an org-scoped MEMBER — the engagement read's 404 anchor. */
-    public boolean isOrgMember(UUID orgId, UUID memberId) {
-        Boolean exists = jdbc.queryForObject("""
-                SELECT EXISTS (SELECT 1 FROM users
-                               WHERE id = :memberId AND organization_id = :orgId
-                                 AND role = 'MEMBER')
-                """,
-                params(orgId, memberId), Boolean.class);
-        return Boolean.TRUE.equals(exists);
-    }
 
     public boolean isCohortMember(UUID cohortId, UUID memberId) {
         Boolean exists = jdbc.queryForObject("""

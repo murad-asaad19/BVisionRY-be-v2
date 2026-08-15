@@ -41,10 +41,7 @@ public class MemberJourneyController {
     @PreAuthorize("hasAuthority('COACH')")
     public JourneyResponse coachFounderJourney(@PathVariable UUID founderId,
             @RequestParam(required = false) UUID cohortId) {
-        CurrentUser coach = currentUser.require();
-        if (!coachAccess.coachSees(coach.orgId(), coach.userId(), founderId)) {
-            throw new ResourceNotFoundException("Founder", founderId.toString());
-        }
+        CoachAccess.ViewedFounder coach = coachAccess.requireSees(founderId);
         return service.journeyOfMember(coach.orgId(), founderId, cohortId);
     }
 

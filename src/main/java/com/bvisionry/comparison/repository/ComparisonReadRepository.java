@@ -104,17 +104,6 @@ public class ComparisonReadRepository {
 
     /* ------------------------------------------------- cohorts and tenancy */
 
-    /** The cohort constrained to the org's ASSIGNMENTS (spec §13) — empty when absent or foreign → 404. */
-    public Optional<String> cohortNameInOrg(UUID orgId, UUID cohortId) {
-        return jdbc.query("""
-                SELECT c.name FROM cohorts c
-                JOIN cohort_orgs cox ON cox.cohort_id = c.id AND cox.org_id = :orgId
-                WHERE c.id = :cohortId
-                """,
-                new MapSqlParameterSource("orgId", orgId).addValue("cohortId", cohortId),
-                (rs, i) -> rs.getString("name"))
-                .stream().findFirst();
-    }
 
     /** The user's own org — comparisons are stamped with the MEMBER's org (spec §13). */
     public Optional<UUID> userOrg(UUID userId) {
@@ -146,15 +135,6 @@ public class ComparisonReadRepository {
                 (rs, i) -> rs.getObject("user_id", UUID.class));
     }
 
-    /** Whether the user belongs to the org — the admin-side member gate (404 when false). */
-    public boolean userInOrg(UUID orgId, UUID userId) {
-        return Boolean.TRUE.equals(jdbc.queryForObject("""
-                SELECT EXISTS (SELECT 1 FROM users
-                               WHERE id = :userId AND organization_id = :orgId)
-                """,
-                new MapSqlParameterSource("orgId", orgId).addValue("userId", userId),
-                Boolean.class));
-    }
 
     public Map<UUID, String> userNames(Collection<UUID> userIds) {
         if (userIds.isEmpty()) {

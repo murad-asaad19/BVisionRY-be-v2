@@ -42,10 +42,7 @@ public class MemberTaskViewController {
     @PreAuthorize("hasAuthority('COACH')")
     public PlayerResponse coachFounderTaskPlayer(@PathVariable UUID founderId,
             @PathVariable UUID taskId) {
-        CurrentUser coach = currentUser.require();
-        if (!coachAccess.coachSees(coach.orgId(), coach.userId(), founderId)) {
-            throw new ResourceNotFoundException("Founder", founderId.toString());
-        }
+        CoachAccess.ViewedFounder coach = coachAccess.requireSees(founderId);
         return service.playerOfMember(founderId, taskId);
     }
 

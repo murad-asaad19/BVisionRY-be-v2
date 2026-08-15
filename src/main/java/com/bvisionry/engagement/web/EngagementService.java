@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.orgmember.OrgMemberAccess;
 import com.bvisionry.common.scoringconfig.ParticipationFormula;
 import com.bvisionry.common.scoringconfig.ScoringBands;
 import com.bvisionry.engagement.domain.SessionType;
@@ -56,11 +57,10 @@ public class EngagementService {
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     private final EngagementReadRepository reads;
+    private final OrgMemberAccess members;
 
     public EngagementRecordResponse record(UUID orgId, UUID memberId) {
-        if (!reads.isOrgMember(orgId, memberId)) {
-            throw new ResourceNotFoundException("Member", memberId.toString());
-        }
+        members.requireMemberOf(orgId, memberId);
         List<ParticipationFormula.Category> categories = currentCategories();
         List<ScoringBands.Band> bands = currentBands();
         return new EngagementRecordResponse(reads.memberCohorts(orgId, memberId).stream()

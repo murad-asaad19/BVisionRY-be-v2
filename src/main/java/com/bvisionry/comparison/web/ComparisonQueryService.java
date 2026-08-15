@@ -1,6 +1,7 @@
 package com.bvisionry.comparison.web;
 
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.orgmember.OrgMemberAccess;
 import com.bvisionry.comparison.domain.FounderComparison;
 import com.bvisionry.comparison.domain.PillarComparisonState;
 import com.bvisionry.comparison.dto.CohortComparisonStatus;
@@ -13,6 +14,7 @@ import com.bvisionry.comparison.repository.ComparisonReadRepository;
 import com.bvisionry.comparison.repository.ComparisonReadRepository.PairCohortRow;
 import com.bvisionry.comparison.repository.FounderComparisonPillarRepository;
 import com.bvisionry.comparison.repository.FounderComparisonRepository;
+import com.bvisionry.common.programaccess.OrgCohortAccess;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,6 +40,8 @@ public class ComparisonQueryService {
     private final FounderComparisonRepository comparisons;
     private final FounderComparisonPillarRepository pillars;
     private final ComparisonReadRepository reads;
+    private final OrgMemberAccess members;
+    private final OrgCohortAccess orgCohorts;
     private final ShiftNarrativeService narratives;
     private final ComparisonComputeService compute;
 
@@ -155,9 +159,7 @@ public class ComparisonQueryService {
 
     /** The org-admin member gate, shared with the narrative review endpoints. */
     public void requireMemberInOrg(UUID orgId, UUID userId) {
-        if (!reads.userInOrg(orgId, userId)) {
-            throw new ResourceNotFoundException("Member", userId.toString());
-        }
+        members.requireMemberOf(orgId, userId);
     }
 
     /* ----------------------------------------------------------- coach view */
@@ -174,7 +176,7 @@ public class ComparisonQueryService {
     /* -------------------------------------------------------------- helpers */
 
     private void requireCohortInOrg(UUID orgId, UUID cohortId) {
-        reads.cohortNameInOrg(orgId, cohortId)
+        orgCohorts.cohortNameInOrg(orgId, cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
     }
 

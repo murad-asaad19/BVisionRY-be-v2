@@ -115,9 +115,38 @@ public class CoachAccess {
             )""";
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final com.bvisionry.common.security.CurrentUserAccessor currentUser;
 
-    public CoachAccess(NamedParameterJdbcTemplate jdbc) {
+    public CoachAccess(NamedParameterJdbcTemplate jdbc,
+            com.bvisionry.common.security.CurrentUserAccessor currentUser) {
         this.jdbc = jdbc;
+        this.currentUser = currentUser;
+    }
+
+    /**
+     * The proven "who is viewing whom" triple {@link #requireSees} returns —
+     * the token that stops a caller passing the viewer's id where the
+     * founder's belongs.
+     */
+    public record ViewedFounder(UUID orgId, UUID founderId, UUID viewerId) {}
+
+    /**
+     * The coach viewing door — resolves the CALLING coach and proves they see
+     * {@code founderId}, or 404s (a founder outside the coach's grants must be
+     * indistinguishable from a nonexistent one). Replaces the four-line
+     * resolve + {@link #coachSees} + throw ritual that was hand-copied at nine
+     * sites across six features.
+     */
+    // ponytail: services still take (orgId, founderId) rather than the token;
+    // move them to ViewedFounder on touch and the CALLERS-AUTHORIZE-FIRST
+    // precondition becomes unrepresentable instead of documented.
+    public ViewedFounder requireSees(UUID founderId) {
+        com.bvisionry.common.security.CurrentUser coach = currentUser.require();
+        if (!coachSees(coach.orgId(), coach.userId(), founderId)) {
+            throw new com.bvisionry.common.exception.ResourceNotFoundException(
+                    "Founder", String.valueOf(founderId));
+        }
+        return new ViewedFounder(coach.orgId(), founderId, coach.userId());
     }
 
     /**

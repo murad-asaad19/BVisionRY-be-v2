@@ -43,10 +43,7 @@ public class MemberSurveyResponseViewController {
     @PreAuthorize("hasAuthority('COACH')")
     public SurveyResponseDetailDto coachFounderSurveyResponse(@PathVariable UUID founderId,
             @PathVariable UUID taskId) {
-        CurrentUser coach = currentUser.require();
-        if (!coachAccess.coachSees(coach.orgId(), coach.userId(), founderId)) {
-            throw new ResourceNotFoundException("Founder", founderId.toString());
-        }
+        CoachAccess.ViewedFounder coach = coachAccess.requireSees(founderId);
         return resultsService.responseDetailForProgramTask(taskId, founderId);
     }
 

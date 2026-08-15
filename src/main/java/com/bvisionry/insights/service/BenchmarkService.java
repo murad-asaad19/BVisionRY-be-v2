@@ -15,6 +15,7 @@ import com.bvisionry.insights.dto.BenchmarkResponse;
 import com.bvisionry.insights.dto.BenchmarkSegmentDto;
 import com.bvisionry.insights.dto.PillarBenchmarkDto;
 
+import com.bvisionry.common.programaccess.OrgCohortAccess;
 import lombok.RequiredArgsConstructor;
 
 /**
@@ -28,6 +29,7 @@ import lombok.RequiredArgsConstructor;
 public class BenchmarkService {
 
     private final BenchmarkReadRepository repository;
+    private final OrgCohortAccess orgCohorts;
 
     /**
      * One read transaction across the segment queries — under autocommit the
@@ -44,7 +46,7 @@ public class BenchmarkService {
         }
         String cohortName = null;
         if (cohortId != null) {
-            cohortName = repository.cohortNameInOrg(orgId, cohortId)
+            cohortName = orgCohorts.cohortNameInOrg(orgId, cohortId)
                     .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
         }
         return assemble(pipelineId, cohortId, cohortName,

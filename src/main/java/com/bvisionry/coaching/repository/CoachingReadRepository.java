@@ -463,17 +463,6 @@ public class CoachingReadRepository {
                 .stream().findFirst();
     }
 
-    /** The cohort's name, constrained to the org — empty when absent or foreign. */
-    public Optional<String> cohortNameInOrg(UUID orgId, UUID cohortId) {
-        return jdbc.query("""
-                SELECT c.name FROM cohorts c
-                JOIN cohort_orgs cox ON cox.cohort_id = c.id AND cox.org_id = :orgId
-                WHERE c.id = :cohortId
-                """,
-                new MapSqlParameterSource("orgId", orgId).addValue("cohortId", cohortId),
-                (rs, i) -> rs.getString("name"))
-                .stream().findFirst();
-    }
 
     /** Batch name lookup for the assignment list, org-constrained. */
     public Map<UUID, OrgUserRow> usersInOrg(UUID orgId, Set<UUID> userIds) {

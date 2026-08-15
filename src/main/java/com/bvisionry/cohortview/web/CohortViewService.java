@@ -28,6 +28,7 @@ import com.bvisionry.cohortview.repository.CohortViewReadRepository.CohortRow;
 import com.bvisionry.cohortview.repository.CohortViewReadRepository.CourseRow;
 import com.bvisionry.cohortview.repository.CohortViewReadRepository.LessonRow;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.orgmember.OrgMemberAccess;
 
 /**
  * Assembles the dedicated cohort view (redesign spec §13.7). The controller
@@ -40,9 +41,11 @@ import com.bvisionry.common.exception.ResourceNotFoundException;
 public class CohortViewService {
 
     private final CohortViewReadRepository reads;
+    private final OrgMemberAccess members;
 
-    public CohortViewService(CohortViewReadRepository reads) {
+    public CohortViewService(CohortViewReadRepository reads, OrgMemberAccess members) {
         this.reads = reads;
+        this.members = members;
     }
 
     public CohortOverviewResponse overview(UUID orgId, UUID cohortId) {
@@ -116,9 +119,7 @@ public class CohortViewService {
     public CohortMemberReadinessResponse memberReadiness(UUID orgId, UUID cohortId, UUID memberId) {
         reads.cohort(orgId, cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
-        if (!reads.isOrgMember(orgId, memberId)) {
-            throw new ResourceNotFoundException("Member", memberId.toString());
-        }
+        members.requireMemberOf(orgId, memberId);
         return reads.readiness(cohortId, memberId)
                 .map(r -> new CohortMemberReadinessResponse(r.friLatest(), r.friDelta(),
                         r.evaluatedAt(),
@@ -135,9 +136,7 @@ public class CohortViewService {
      * course gets a 404 unless the member is already enrolled in it.
      */
     public CourseProgressDetailResponse courseProgress(UUID orgId, UUID memberId, UUID courseId) {
-        if (!reads.isOrgMember(orgId, memberId)) {
-            throw new ResourceNotFoundException("Member", memberId.toString());
-        }
+        members.requireMemberOf(orgId, memberId);
         CourseRow course = reads.course(orgId, memberId, courseId)
                 .orElseThrow(() -> new ResourceNotFoundException("Course", courseId.toString()));
 

@@ -170,6 +170,25 @@ public class OrgStorageQuotaService implements MediaQuotaPort {
         return override != null ? override : props.getOrgDefaultQuotaBytes();
     }
 
+    /**
+     * Deletes the org's own replaced/cleared object — see
+     * {@link MediaQuotaPort#releaseReplaced}. The marker is CALLER-SUPPLIED,
+     * so the {@code org/<orgId>/} prefix check is mandatory: without it a
+     * forged marker would turn a branding save into a delete of any object in
+     * the shared bucket (the same reasoning as
+     * {@code OrganizationBrandingService.OWN_ORG_MARKER}). Best-effort — a
+     * failed delete leaves one orphan, never a failed branding write.
+     */
+    @Override
+    public void releaseReplaced(UUID orgId, String marker) {
+        String bucketPrefix = MINIO_SCHEME + props.getBucket() + "/";
+        if (marker == null || !marker.startsWith(bucketPrefix + "org/" + orgId + "/")) {
+            log.warn("Refusing to release marker outside org {}'s own prefix: {}", orgId, marker);
+            return;
+        }
+        deleteObject(marker);
+    }
+
     private void deleteObject(String marker) {
         String prefix = MINIO_SCHEME + props.getBucket() + "/";
         if (marker == null || !marker.startsWith(prefix)) {

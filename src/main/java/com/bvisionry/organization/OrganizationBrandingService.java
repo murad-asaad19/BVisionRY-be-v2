@@ -6,6 +6,7 @@ import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.media.MediaQuotaPort;
 import com.bvisionry.common.media.MediaUrlPort;
 import com.bvisionry.common.security.CurrentUserAccessor;
+import com.bvisionry.common.tx.AfterCommit;
 import com.bvisionry.organization.dto.BrandingResponse;
 import com.bvisionry.organization.dto.UpdateBrandingRequest;
 import com.bvisionry.organization.entity.Organization;
@@ -126,7 +127,8 @@ public class OrganizationBrandingService {
         String color = normalizeColor(request.brandColor());
         String marker = validateMarker(request.logoMarker(), orgId);
 
-        boolean logoChanged = !java.util.Objects.equals(org.getBrandLogoMarker(), marker);
+        String previous = org.getBrandLogoMarker();
+        boolean logoChanged = !java.util.Objects.equals(previous, marker);
         if (logoChanged && marker != null) {
             // CONSUME-TIME quota reconciliation: this write is the first (and, in
             // this flow, only) point after the org-scoped upload where the server
@@ -148,6 +150,13 @@ public class OrganizationBrandingService {
         org.setBrandColor(color);
         org.setBrandLogoMarker(marker);
         Organization saved = organizationRepository.save(org);
+        if (logoChanged && previous != null) {
+            // Release the object this org no longer references, or replacing a
+            // logo consumes quota forever with no self-service way to free it.
+            // After commit so a rolled-back write can never delete a
+            // still-referenced object; the delete itself is best-effort.
+            AfterCommit.run(() -> mediaQuota.releaseReplaced(orgId, previous));
+        }
         if (!changes.isEmpty()) {
             auditLogger.log(currentUser.require().userId(), orgId,
                     OrgAuditActions.ORGANIZATION_BRANDING_UPDATED,

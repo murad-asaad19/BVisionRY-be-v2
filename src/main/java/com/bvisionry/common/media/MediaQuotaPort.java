@@ -42,4 +42,15 @@ public interface MediaQuotaPort {
      *         when persisting this marker would leave the org over quota.
      */
     void reconcileAfterUpload(UUID orgId, String marker);
+
+    /**
+     * Releases an object this org is no longer referencing — called when a
+     * business record's marker is replaced or cleared, so iterating on a logo
+     * does not monotonically consume the org's quota with no self-service way
+     * to free it. Best-effort and it never throws: a failed delete leaves one
+     * orphan object for a later pass, it must not fail the business write. The
+     * implementation refuses (log-and-return) any marker outside
+     * {@code org/<orgId>/}, since the marker is caller-supplied.
+     */
+    void releaseReplaced(UUID orgId, String marker);
 }

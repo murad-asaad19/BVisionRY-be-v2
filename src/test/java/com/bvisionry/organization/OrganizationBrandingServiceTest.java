@@ -305,6 +305,38 @@ class OrganizationBrandingServiceTest {
         service.update(ORG, new UpdateBrandingRequest("#0a5cff", marker));
 
         verify(mediaQuota, never()).reconcileAfterUpload(any(), any());
+        verify(mediaQuota, never()).releaseReplaced(any(), any());
+    }
+
+    // ------------------------------------------------------- object release
+    //
+    // The counterpart of reconciliation: replacing or clearing a logo must
+    // release the object it orphans, or iterating on a logo monotonically
+    // consumes quota with no self-service way to free it. AfterCommit.run
+    // executes immediately here (no transaction synchronization in a unit
+    // test), so the calls are directly observable.
+
+    @Test
+    void replacingTheLogoReleasesThePreviousObject() {
+        String previous = ownMarker();
+        String replacement = ownMarker();
+        org.setBrandLogoMarker(previous);
+
+        service.update(ORG, new UpdateBrandingRequest(null, replacement));
+
+        verify(mediaQuota).reconcileAfterUpload(ORG, replacement);
+        verify(mediaQuota).releaseReplaced(ORG, previous);
+    }
+
+    @Test
+    void clearingTheLogoReleasesThePreviousObject() {
+        String previous = ownMarker();
+        org.setBrandLogoMarker(previous);
+
+        service.update(ORG, new UpdateBrandingRequest(null, null));
+
+        verify(mediaQuota).releaseReplaced(ORG, previous);
+        verify(mediaQuota, never()).reconcileAfterUpload(any(), any());
     }
 
     @Test

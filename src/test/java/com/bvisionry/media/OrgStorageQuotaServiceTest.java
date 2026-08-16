@@ -175,6 +175,37 @@ class OrgStorageQuotaServiceTest {
                 .isInstanceOf(IllegalOperationException.class);
     }
 
+    // ------------------------------------------------------------- release path
+
+    @Test
+    void releaseReplacedRemovesTheOrgsOwnObject() throws Exception {
+        service.releaseReplaced(ORG, "minio://" + BUCKET + "/org/" + ORG + "/branding/old-logo.png");
+
+        ArgumentCaptor<RemoveObjectArgs> removed = ArgumentCaptor.forClass(RemoveObjectArgs.class);
+        verify(internalClient).removeObject(removed.capture());
+        assertThat(removed.getValue().object()).isEqualTo("org/" + ORG + "/branding/old-logo.png");
+    }
+
+    /** The marker is caller-supplied, so a delete outside the org's own prefix is refused. */
+    @Test
+    void releaseReplacedRefusesAMarkerOutsideTheOrgsOwnPrefix() throws Exception {
+        service.releaseReplaced(ORG,
+                "minio://" + BUCKET + "/org/" + OTHER_ORG + "/branding/victim-logo.png");
+        service.releaseReplaced(ORG, "minio://" + BUCKET + "/pdf/secret.pdf");
+        service.releaseReplaced(ORG, null);
+
+        verify(internalClient, never()).removeObject(any(RemoveObjectArgs.class));
+    }
+
+    /** Best-effort: a MinIO failure leaves one orphan, never a failed branding write. */
+    @Test
+    void releaseReplacedSwallowsADeleteFailure() throws Exception {
+        doThrow(new RuntimeException("minio unreachable"))
+                .when(internalClient).removeObject(any(RemoveObjectArgs.class));
+
+        service.releaseReplaced(ORG, "minio://" + BUCKET + "/org/" + ORG + "/branding/old-logo.png");
+    }
+
     // ------------------------------------------------------------- scan short-circuit
 
     /**

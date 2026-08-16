@@ -2,6 +2,7 @@ package com.bvisionry.auth;
 
 import com.bvisionry.audit.AuditService;
 import com.bvisionry.auth.dto.AuthResponse;
+import com.bvisionry.auth.dto.LoginRequest;
 import com.bvisionry.auth.dto.RefreshTokenRequest;
 import com.bvisionry.auth.entity.RefreshToken;
 import com.bvisionry.auth.entity.User;
@@ -9,8 +10,10 @@ import com.bvisionry.auth.jwt.JwtProvider;
 import com.bvisionry.auth.jwt.TokenType;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.common.exception.AccountNotActiveException;
 import com.bvisionry.common.exception.AuthenticationException;
 import com.bvisionry.common.exception.SsoFlowException;
+import com.bvisionry.organization.entity.Organization;
 import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +30,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -206,6 +210,30 @@ class AuthServiceTest {
         verify(userRepository, never()).save(any());
     }
 
+    // ---------- updateProfile ----------
+
+    @Test
+    void updateProfile_trimsAndSavesName_returningUpdatedResponse() {
+        when(userRepository.findById(userId)).thenReturn(Optional.of(user));
+        when(userRepository.save(user)).thenReturn(user);
+
+        var response = authService.updateProfile(userId, "  Grace Hopper  ");
+
+        assertThat(user.getName()).isEqualTo("Grace Hopper");
+        assertThat(response.name()).isEqualTo("Grace Hopper");
+        verify(userRepository).save(user);
+    }
+
+    @Test
+    void updateProfile_unknownUser_throws() {
+        when(userRepository.findById(userId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.updateProfile(userId, "Anyone"))
+                .isInstanceOf(AuthenticationException.class);
+
+        verify(userRepository, never()).save(any());
+    }
+
     // ---------- logout ----------
 
     @Test
@@ -256,7 +284,173 @@ class AuthServiceTest {
                         ex -> assertThat(ex.getErrorCode()).isEqualTo("sso_provider_mismatch"));
     }
 
+    // ---------- suspended organization: every mint path ----------
+
+    /**
+     * A suspended ORGANIZATION must be refused where tokens are MINTED, not only where
+     * they are used. {@link com.bvisionry.auth.jwt.JwtAuthenticationFilter} already
+     * refuses such a principal per-request (via {@code AuthenticationEligibility}), so
+     * the guards below were not exploitable — but mint and accept disagreeing is the
+     * asymmetry that becomes a hole the moment the filter is relaxed or a new consumer
+     * trusts a freshly minted token without re-checking. All three guards shipped
+     * untested; these pin them.
+     *
+     * <p>Each also asserts NOTHING was minted. Asserting only the throw would stay green
+     * if the guard moved below {@code issueTokens} — the token would already exist.
+     */
+    /**
+     * ENUMERATION TIMING ORACLE. A known address pays a bcrypt compare (~60-80ms by
+     * design); an unknown one used to return the instant the lookup missed. That
+     * latency gap answers "does this address have an account here?" — the very
+     * question the single "Invalid email or password" message and the always-204
+     * forgot-password endpoint exist to refuse.
+     *
+     * <p>Asserts the compare HAPPENS, not that it succeeds: delete the dummy compare
+     * and this fails, which is the only thing a mock can honestly pin about timing.
+     */
+    @Test
+    void login_unknownEmail_stillPaysAPasswordCompare() {
+        when(userRepository.findByEmail("ghost@example.com")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("ghost@example.com", "pw")))
+                .isInstanceOf(AuthenticationException.class)
+                .hasMessage("Invalid email or password");
+
+        ArgumentCaptor<String> hash = ArgumentCaptor.forClass(String.class);
+        verify(passwordEncoder).matches(eq("pw"), hash.capture());
+        assertThat(hash.getValue())
+                .as("must be a real bcrypt hash, or the compare is free and the oracle survives")
+                .startsWith("$2a$10$")
+                .hasSize(60);
+    }
+
+    /**
+     * Same hole, second door: an SSO-only account has no password hash, and
+     * {@code matches(raw, null)} short-circuits for free. It must cost the same as a
+     * password account, or latency separates those two populations instead.
+     */
+    @Test
+    void login_ssoOnlyAccountWithNoPasswordHash_stillPaysAPasswordCompare() {
+        user.setPasswordHash(null);
+        when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("ada@example.com", "pw")))
+                .isInstanceOf(AuthenticationException.class)
+                .hasMessage("Invalid email or password");
+
+        ArgumentCaptor<String> hash = ArgumentCaptor.forClass(String.class);
+        verify(passwordEncoder).matches(eq("pw"), hash.capture());
+        assertThat(hash.getValue()).isNotNull().startsWith("$2a$10$");
+    }
+
+    /**
+     * ENUMERATION UNIFORMITY, ON THE REAL SERVICE. The two ways a password sign-in can
+     * be rejected — no such address, and a wrong password for a real one — must be
+     * indistinguishable, or the response itself answers "does this address have an
+     * account here?" and the whole backoff/always-204 apparatus around it is decoration.
+     *
+     * <p>The two refusals are compared to EACH OTHER, not to a literal, so the test
+     * fails whichever side of the pair someone changes — including a later refactor
+     * that splits the single {@code user == null || !matched} guard into two throws and
+     * gives the not-found branch its own wording. The controller-level backoff test
+     * asserts a similar property against a mocked AuthService, which can only ever
+     * restate its own stub; this drives the production method.
+     */
+    @Test
+    void login_unknownEmailAndWrongPassword_areRefusedIdentically() {
+        when(userRepository.findByEmail("ghost@example.com")).thenReturn(Optional.empty());
+        when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches(eq("pw"), any())).thenReturn(false);
+
+        Throwable unknownEmail = catchThrowable(
+                () -> authService.login(new LoginRequest("ghost@example.com", "pw")));
+        Throwable wrongPassword = catchThrowable(
+                () -> authService.login(new LoginRequest("ada@example.com", "pw")));
+
+        assertThat(unknownEmail).isInstanceOf(AuthenticationException.class);
+        assertThat(wrongPassword)
+                .hasSameClassAs(unknownEmail)
+                .hasMessage(unknownEmail.getMessage());
+    }
+
+    /**
+     * The CONCRETE type is load-bearing on both refusals below: the controller
+     * exempts {@link AccountNotActiveException} from the login backoff, so a
+     * plain {@link AuthenticationException} here would let a CORRECT password
+     * advance the guess counter and lock the legitimate owner out of their own
+     * account once it (or the org) is restored.
+     */
+    @Test
+    void login_inactiveAccount_isRefusedAsAccountNotActive_andMintsNothing() {
+        user.setStatus(UserStatus.SUSPENDED);
+        when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("pw", "hash")).thenReturn(true);
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("ada@example.com", "pw")))
+                .isInstanceOf(AccountNotActiveException.class)
+                .hasMessage("Account is not active");
+
+        assertNothingWasMinted();
+    }
+
+    @Test
+    void login_suspendedOrganization_isRefusedAndMintsNothing() {
+        user.setOrganization(suspendedOrg());
+        when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("pw", "hash")).thenReturn(true);
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("ada@example.com", "pw")))
+                .isInstanceOf(AccountNotActiveException.class)
+                .hasMessageContaining("organization has been suspended");
+
+        assertNothingWasMinted();
+    }
+
+    @Test
+    void refresh_suspendedOrganization_isRefusedAndRotatesNothing() {
+        user.setOrganization(suspendedOrg());
+        UUID jti = UUID.randomUUID();
+        Claims claims = claimsWithJti(jti);
+        RefreshToken stored = activeStoredToken(jti, Instant.now().plusSeconds(3600));
+        when(jwtProvider.parseAndValidate("rt", TokenType.REFRESH)).thenReturn(Optional.of(claims));
+        when(refreshTokenRepository.findByJti(jti)).thenReturn(Optional.of(stored));
+
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest("rt")))
+                .isInstanceOf(AuthenticationException.class)
+                .hasMessageContaining("organization has been suspended");
+
+        assertNothingWasMinted();
+        // The presented token must also survive: refusing a suspended org is not theft,
+        // so it must not revoke or rotate the row.
+        verify(refreshTokenRepository, never()).save(any());
+        verify(refreshTokenRepository, never()).revokeAllForUser(any(), any());
+    }
+
+    /** The Google/OAuth2 path. Enterprise SSO has its own guard, covered in SsoLoginServiceTest. */
+    @Test
+    void resolveSsoUser_suspendedOrganization_isRefusedWithCode() {
+        user.setOrganization(suspendedOrg());
+        when(userRepository.findByEmail("ada@example.com")).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> authService.resolveSsoUser("ada@example.com", null, "GOOGLE"))
+                .isInstanceOfSatisfying(SsoFlowException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo("sso_org_suspended"));
+
+        assertNothingWasMinted();
+    }
+
     // ---------- helpers ----------
+
+    private static Organization suspendedOrg() {
+        Organization org = new Organization();
+        org.setActive(false);
+        return org;
+    }
+
+    private void assertNothingWasMinted() {
+        verify(jwtProvider, never()).generateAccessToken(any());
+        verify(jwtProvider, never()).generateRefreshToken(any());
+    }
 
     private RefreshToken activeStoredToken(UUID jti, Instant expiresAt) {
         RefreshToken rt = new RefreshToken();

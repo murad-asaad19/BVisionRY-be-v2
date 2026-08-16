@@ -304,4 +304,77 @@ class EndpointAuthorizationMatrixIntegrationTest extends AbstractPostgresIntegra
                     UUID.randomUUID(), UUID.randomUUID()));
         }
     }
+
+    // -------------------------------------------------------------------------
+    // /api/organizations/{orgId}/workshops — the workshop console (SUPER_ADMIN
+    // only). Product ruling: an org admin gets no workshop authoring or detail
+    // access whatsoever, not even for their OWN org. They keep seeing member
+    // workshop progress through cohort Pulse / the member profile Work tab
+    // (which read the spine repositories, not this API), and an org admin who
+    // is themselves assigned plays via /api/my/workshops.
+    // -------------------------------------------------------------------------
+
+    @Nested
+    class WorkshopConsole {
+
+        @Test
+        void workshopList_orgAdminOwnOrg_returns403() throws Exception {
+            TestAuthentication.authenticateAsOrgAdmin(userRepository, ownOrg);
+            expectForbidden(get("/api/organizations/{orgId}/workshops", ownOrg.getId()));
+        }
+
+        @Test
+        void workshopBuilder_orgAdminOwnOrg_returns403() throws Exception {
+            TestAuthentication.authenticateAsOrgAdmin(userRepository, ownOrg);
+            expectForbidden(get("/api/organizations/{orgId}/workshops/{workshopId}/builder",
+                    ownOrg.getId(), UUID.randomUUID()));
+        }
+
+        @Test
+        void workshopTeams_orgAdminOwnOrg_returns403() throws Exception {
+            TestAuthentication.authenticateAsOrgAdmin(userRepository, ownOrg);
+            expectForbidden(get("/api/organizations/{orgId}/workshops/{workshopId}/teams",
+                    ownOrg.getId(), UUID.randomUUID()));
+        }
+
+        @Test
+        void workshopAnalytics_orgAdminOwnOrg_returns403() throws Exception {
+            TestAuthentication.authenticateAsOrgAdmin(userRepository, ownOrg);
+            expectForbidden(get("/api/organizations/{orgId}/workshops/{workshopId}/analytics",
+                    ownOrg.getId(), UUID.randomUUID()));
+        }
+
+        @Test
+        void workshopList_member_returns403() throws Exception {
+            TestAuthentication.authenticateAsMember(userRepository, ownOrg);
+            expectForbidden(get("/api/organizations/{orgId}/workshops", ownOrg.getId()));
+        }
+
+        @Test
+        void workshopList_superAdmin_clearsGate() throws Exception {
+            TestAuthentication.authenticateAsSuperAdmin(userRepository);
+            expectGateCleared(get("/api/organizations/{orgId}/workshops", ownOrg.getId()));
+        }
+
+        @Test
+        void workshopBuilder_superAdmin_clearsGate() throws Exception {
+            TestAuthentication.authenticateAsSuperAdmin(userRepository);
+            expectGateCleared(get("/api/organizations/{orgId}/workshops/{workshopId}/builder",
+                    ownOrg.getId(), UUID.randomUUID()));
+        }
+
+        @Test
+        void workshopTeams_superAdmin_clearsGate() throws Exception {
+            TestAuthentication.authenticateAsSuperAdmin(userRepository);
+            expectGateCleared(get("/api/organizations/{orgId}/workshops/{workshopId}/teams",
+                    ownOrg.getId(), UUID.randomUUID()));
+        }
+
+        /** The participant path stays open — that is the "himself if assigned" case. */
+        @Test
+        void myWorkshops_orgAdmin_clearsGate() throws Exception {
+            TestAuthentication.authenticateAsOrgAdmin(userRepository, ownOrg);
+            expectGateCleared(get("/api/my/workshops"));
+        }
+    }
 }

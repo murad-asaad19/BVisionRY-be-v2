@@ -76,7 +76,7 @@ class PipelineSimulationServiceTest {
         when(cfg.getPublicAssessmentModel()).thenReturn("public-haiku");
         when(aiConfigService.getConfigEntity()).thenReturn(cfg);
 
-        service.simulate(pipelineId, request(SubscriptionTier.PREMIUM, true));
+        service.simulate(pipelineId, request(SubscriptionTier.GROWTH, true));
 
         // Public mirrors the real QR-link flow: the overall-summary prompt, the public
         // model override, and publicAssessment=true. Generation is tier-agnostic now.
@@ -87,7 +87,7 @@ class PipelineSimulationServiceTest {
 
     @Test
     void simulate_premium_noPublicFlagNoModelOverride() {
-        var result = service.simulate(pipelineId, request(SubscriptionTier.PREMIUM, false));
+        var result = service.simulate(pipelineId, request(SubscriptionTier.GROWTH, false));
 
         verify(evaluationEngine).evaluatePipeline(
                 any(), isNull(), any(),

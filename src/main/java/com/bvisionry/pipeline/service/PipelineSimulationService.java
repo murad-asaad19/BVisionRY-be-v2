@@ -49,12 +49,16 @@ public class PipelineSimulationService {
 
         List<Answer> answers = buildTransientAnswers(pipeline, request.answers());
 
-        // Public (QR-link) assessments always evaluate at PREMIUM gating in the real
-        // flow (EvaluationService: tier is PREMIUM when there is no assignment), so a
+        // Public (QR-link) assessments always evaluate at PAID gating in the real
+        // flow (EvaluationService: tier is GROWTH when there is no assignment), so a
         // public simulation mirrors premium output but with the public system prompt
         // and the configured public-assessment model.
+        //
+        // The simulator only ever needs the FREE / paid split — result depth is a
+        // binary display scope, not a per-plan one — so any paid tier the caller
+        // sends behaves identically. isPaid() keeps that true as plans are added.
         boolean publicAssessment = request.publicAssessment();
-        boolean isPremium = publicAssessment || request.tier() == SubscriptionTier.PREMIUM;
+        boolean isPremium = publicAssessment || request.tier().isPaid();
 
         // Generation is tier-agnostic now (always the full premium summary); the
         // free/premium distinction is applied below as a DISPLAY scope, mirroring the

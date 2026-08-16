@@ -1,6 +1,5 @@
 package com.bvisionry.config;
 
-import com.bvisionry.auth.jwt.DownloadTokenAuthenticationFilter;
 import com.bvisionry.auth.jwt.JwtAuthenticationFilter;
 import com.bvisionry.businesscard.ratelimit.BusinessCardRateLimitFilter;
 import com.bvisionry.common.web.ProblemDetailResponseWriter;
@@ -40,7 +39,7 @@ public class SecurityConfig {
     private final SurveySubmitRateLimitFilter surveySubmitRateLimitFilter;
     private final PublicAssessmentRateLimitFilter publicAssessmentRateLimitFilter;
     private final BusinessCardRateLimitFilter businessCardRateLimitFilter;
-    private final DownloadTokenAuthenticationFilter downloadTokenAuthenticationFilter;
+    private final ErrorEventRateLimitFilter errorEventRateLimitFilter;
 
     @Value("${bvisionry.cors.allowed-origins:http://localhost:5173,http://localhost:4173,http://localhost:3000,http://localhost:5174}")
     private String allowedOrigins;
@@ -88,6 +87,9 @@ public class SecurityConfig {
                                 "/api/v1/contact",
                                 // Public marketing POST — lead-magnet (science PDF) modal
                                 "/api/v1/lead-magnet",
+                                // Web-tier error reports — server-side POST, no CSRF cookie in
+                                // flight; authenticated by the BFF proxy shared secret instead.
+                                "/api/v1/error-events",
                                 // Player POST endpoints called through BFF (server-side, no CSRF cookie)
                                 "/api/v1/courses/*/enroll",
                                 "/api/v1/enrollments/*/content/*/complete",
@@ -132,6 +134,13 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/contact").permitAll()
                         // Lead magnet — public POST from the "science behind the pillars" modal
                         .requestMatchers(HttpMethod.POST, "/api/v1/lead-magnet").permitAll()
+                        // Error ingest — anonymous by necessity (a crashing browser has no
+                        // session, and the server reports crashes too). Bounded exactly like
+                        // the other anonymous writes above: ErrorEventRateLimitFilter caps it
+                        // per real client IP and every DTO field is @Size-capped. The GET on
+                        // the same path stays SUPER_ADMIN-only via @PreAuthorize +
+                        // anyRequest().authenticated().
+                        .requestMatchers(HttpMethod.POST, "/api/v1/error-events").permitAll()
                         // LMS catalog + health: public, read-only.
                         .requestMatchers("/api/v1/health").permitAll()
                         // Public catalog — keep permitAll for list + detail.
@@ -146,6 +155,65 @@ public class SecurityConfig {
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
                         .requestMatchers("/actuator/**").hasAuthority("SUPER_ADMIN")
+                        // Coach console — HTTP layer of the three-layer defense.
+                        // The controller re-asserts COACH via @PreAuthorize and
+                        // every query carries the assignment-union predicate.
+                        .requestMatchers("/api/v1/coach/**").hasAuthority("COACH")
+                        // Coach-grant management is an admin surface; @orgAccess
+                        // pins the caller to the path org at the method layer.
+                        .requestMatchers("/api/organizations/*/coach-assignments/**")
+                                .hasAnyAuthority("SUPER_ADMIN", "ORG_ADMIN")
+                        // Announcements (roadmap §7 item 20). Authoring is closed to
+                        // the three broadcast roles at the HTTP layer; @orgAccess pins
+                        // the org and the service re-checks the coach's cohort grant.
+                        // The `/**` tails are load-bearing, not future-proofing: without
+                        // them a subpath added later (say .../announcements/{id}) falls
+                        // through to anyRequest().authenticated() and is open to every
+                        // signed-in member. `/**` matches the bare collection path too —
+                        // AnnouncementRouteSecurityIntegrationTest posts to it and would
+                        // fail here first if that ever stopped being true.
+                        .requestMatchers("/api/organizations/*/announcement-cohorts/**",
+                                "/api/organizations/*/cohorts/*/announcements/**")
+                                .hasAnyAuthority("SUPER_ADMIN", "ORG_ADMIN", "COACH")
+                        // Flagging a post is the one announcement route a recipient
+                        // may call; the service refuses posts they never received.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/announcements/*/report")
+                                .authenticated()
+                        // Pillar + question AUTHORING — the route floor under
+                        // /api/pipelines, which otherwise falls to
+                        // anyRequest().authenticated() and leaves @PreAuthorize as
+                        // the ONLY role gate on the instrument's own definition.
+                        //
+                        // Audited before adding: every handler this pattern reaches
+                        // is already SUPER_ADMIN-only, so it closes a gap without
+                        // 403ing a legitimate surface —
+                        //   PillarController   /api/pipelines/{id}/pillars/**
+                        //                      class @PreAuthorize SUPER_ADMIN,
+                        //                      restated on both /course-mappings methods
+                        //   QuestionController /api/pipelines/{id}/pillars/{pid}/questions/**
+                        //                      class @PreAuthorize SUPER_ADMIN
+                        // Nothing else maps under it: the member-readable pipeline
+                        // routes are siblings, NOT descendants — /published,
+                        // /{id}/bands and /{id}/simulate contain no `/pillars`
+                        // segment and are untouched by this matcher. Adding it here,
+                        // above them, keeps that visible in one screen.
+                        //
+                        // The `/**` tail is load-bearing exactly as on the
+                        // announcement rules above: it also matches the bare
+                        // collection path, and PillarRouteSecurityIntegrationTest
+                        // pins that rather than trusting it.
+                        .requestMatchers("/api/pipelines/*/pillars/**").hasAuthority("SUPER_ADMIN")
+                        // Enterprise SSO registrations. A registration declares which
+                        // email domain an identity provider may speak for, so whoever
+                        // can write one can decide whose accounts a customer's IdP
+                        // reaches — the highest-value write surface added by that
+                        // feature. SUPER_ADMIN at the route layer as well as the
+                        // controller's class-level @PreAuthorize, so losing the
+                        // annotation degrades to "platform admins only", not to "any
+                        // signed-in user". The handshake endpoints are NOT here: they
+                        // are pre-auth by nature and live on their own filter chain
+                        // (SsoSecurityConfig), which matches them before this one.
+                        .requestMatchers("/api/admin/sso-registrations/**").hasAuthority("SUPER_ADMIN")
                         .requestMatchers("/api/pipelines/published").authenticated()
                         .requestMatchers("/api/pipelines/*/simulate").authenticated()
                         .anyRequest().authenticated()
@@ -158,14 +226,11 @@ public class SecurityConfig {
                                 ProblemDetailResponseWriter.write(response, HttpStatus.UNAUTHORIZED,
                                         "Authentication is required to access this resource."))
                 )
-                // Order: download-token (?token= URL auth) → cookie/Bearer JWT → rate-limit.
-                // The download filter is a no-op when there's no ?token, so cookie auth
-                // continues to work for everything else.
-                .addFilterBefore(downloadTokenAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterAfter(jwtAuthenticationFilter, DownloadTokenAuthenticationFilter.class)
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(surveySubmitRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(publicAssessmentRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterBefore(businessCardRateLimitFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(businessCardRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(errorEventRateLimitFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 

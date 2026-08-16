@@ -19,6 +19,9 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.security.CurrentUserAccessor;
+
 import io.minio.BucketExistsArgs;
 import io.minio.GetObjectArgs;
 import io.minio.GetObjectResponse;
@@ -45,10 +48,20 @@ import jakarta.annotation.PostConstruct;
  * upload so uploads succeed once MinIO becomes reachable.</p>
  */
 @Service
-public class MediaService {
+public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
 
     private static final Logger log = LoggerFactory.getLogger(MediaService.class);
     private static final String MINIO_SCHEME = "minio://";
+    /**
+     * Key prefix for org-scoped (white-label branding) uploads:
+     * {@code org/<orgId>/branding/…}. The organization feature validates a
+     * persisted marker against this shape for its OWN org id before storing it,
+     * which is what stops an ORG_ADMIN persisting a marker that would presign a
+     * GET for another tenant's objects. Shared with that validation only as a
+     * FORMAT — no code crosses the feature line.
+     */
+    static final String ORG_KEY_PREFIX = "org/";
+    static final String ORG_BRANDING_SEGMENT = "/branding";
     /** Redirect-hop ceiling for external fetches; each hop is re-validated against the SSRF guard. */
     private static final int MAX_EXTERNAL_REDIRECTS = 5;
     /** Shared, thread-safe client for {@link #fetchExternal(String)} — keeps connection reuse across fetches. */
@@ -60,15 +73,21 @@ public class MediaService {
     private final MinioClient internalClient;
     private final MinioClient publicClient;
     private final MediaProperties props;
+    private final OrgStorageQuotaService orgStorageQuota;
+    private final CurrentUserAccessor currentUser;
     private final AtomicBoolean bucketEnsured = new AtomicBoolean(false);
 
     public MediaService(
             @Qualifier("minioInternal") MinioClient internalClient,
             @Qualifier("minioPublic")   MinioClient publicClient,
-            MediaProperties props) {
-        this.internalClient = internalClient;
-        this.publicClient   = publicClient;
-        this.props          = props;
+            MediaProperties props,
+            OrgStorageQuotaService orgStorageQuota,
+            CurrentUserAccessor currentUser) {
+        this.internalClient  = internalClient;
+        this.publicClient    = publicClient;
+        this.props           = props;
+        this.orgStorageQuota = orgStorageQuota;
+        this.currentUser     = currentUser;
     }
 
     // -------------------------------------------------------------------------
@@ -92,16 +111,28 @@ public class MediaService {
     /**
      * Uploads a multipart file to MinIO.
      *
-     * @param file the uploaded file
-     * @param kind a path prefix / folder name (e.g. {@code "video"}, {@code "asset"})
+     * @param file  the uploaded file
+     * @param kind  a path prefix / folder name (e.g. {@code "video"}, {@code "asset"})
+     * @param orgId when non-null the upload is ORG-SCOPED: it must be
+     *              {@code kind=image} and it lands under
+     *              {@code org/<orgId>/branding/}. This is the only shape an
+     *              ORG_ADMIN is authorized to reach (see MediaController).
      * @return the {@code minio://bucket/objectKey} marker to persist in the database
      */
-    public String upload(MultipartFile file, String kind) {
+    public String upload(MultipartFile file, String kind, UUID orgId) {
+        MediaUploadPolicy.requireOrgScopedKindIsImage(kind, orgId);
+        MediaUploadPolicy.requireCoachKindIsImage(kind, currentUser.require().role());
         String contentType = MediaUploadPolicy.validate(
                 kind, file.getContentType(), file.getOriginalFilename(), file.getSize());
+        if (orgId != null) {
+            // The server received the real bytes on this path, so the declared
+            // size IS the real size — no reconciliation is needed afterwards,
+            // unlike the presigned path (see presignUpload/reconcileAfterUpload).
+            orgStorageQuota.requireCapacity(orgId, file.getSize());
+        }
         lazyEnsureBucket();
 
-        String objectKey = buildObjectKey(kind, file.getOriginalFilename());
+        String objectKey = buildObjectKey(kind, file.getOriginalFilename(), orgId);
 
         try (InputStream is = file.getInputStream()) {
             internalClient.putObject(
@@ -121,11 +152,21 @@ public class MediaService {
     /**
      * Browser-direct upload coordinates returned by {@link #presignUpload}.
      *
-     * @param uploadUrl  short-lived presigned PUT URL the browser uploads bytes to directly
-     * @param marker     the {@code minio://bucket/objectKey} value to persist in the DB
-     * @param previewUrl a presigned GET URL usable for preview once the PUT completes
+     * @param uploadUrl   short-lived presigned PUT URL the browser uploads bytes to directly
+     * @param marker      the {@code minio://bucket/objectKey} value to persist in the DB
+     * @param previewUrl  a presigned GET URL usable for preview once the PUT completes
+     * @param contentType the NORMALIZED content type the server validated. On an
+     *                    org-scoped presign this value is bound into the
+     *                    signature, so the browser's PUT must send exactly it or
+     *                    the upload is refused by the object store; returning it
+     *                    is what lets a client comply (its own {@code File.type}
+     *                    can be blank or differently-cased). The declared
+     *                    {@code sizeBytes} is bound the same way on that path —
+     *                    nothing is returned for it because the client already
+     *                    knows the number it sent, and every HTTP client sets
+     *                    {@code Content-Length} from the body automatically.
      */
-    public record PresignedUpload(String uploadUrl, String marker, String previewUrl) {}
+    public record PresignedUpload(String uploadUrl, String marker, String previewUrl, String contentType) {}
 
     /**
      * Issues a presigned PUT URL so the browser uploads a file <strong>directly</strong> to
@@ -144,33 +185,108 @@ public class MediaService {
      *
      * @param kind        path prefix / folder (e.g. {@code "pdf"}, {@code "video"}); defaults to {@code "asset"} when blank
      * @param filename    original filename, used only to build a readable object key
-     * @param contentType the file's MIME type; not bound into the signature — the browser applies it on PUT
-     * @return the presigned PUT URL, the {@code minio://} marker to persist, and a presigned GET preview URL
+     * @param contentType the file's MIME type
+     * @param orgId       when non-null the presign is ORG-SCOPED: it must be
+     *                    {@code kind=image}, it lands under
+     *                    {@code org/<orgId>/branding/}, and the normalized
+     *                    content type is BOUND INTO THE SIGNATURE (see below)
+     * @return the presigned PUT URL, the {@code minio://} marker to persist, a presigned GET
+     *         preview URL, and the content type the signature was computed with
      */
-    public PresignedUpload presignUpload(String kind, String filename, String contentType) {
+    public PresignedUpload presignUpload(String kind, String filename, String contentType, UUID orgId) {
+        return presignUpload(kind, filename, contentType, null, orgId);
+    }
+
+    /**
+     * Same as {@link #presignUpload(String, String, String, UUID)}, plus a
+     * CLIENT-DECLARED {@code sizeBytes} the org-scoped path ({@code orgId != null})
+     * budgets against the org's storage quota — required there, since a presign with
+     * no declared size gives the quota nothing to check; ignored otherwise.
+     *
+     * <p>On the org-scoped path that declaration is also BOUND INTO THE SIGNATURE as
+     * {@code Content-Length}, exactly the way {@code Content-Type} is, so it stops
+     * being a claim: the object store refuses any PUT whose body length differs.
+     * Without that binding the quota was decorative — an ORG_ADMIN calling the API
+     * directly could presign N times declaring one byte each, PUT arbitrary bytes
+     * against every URL, and never consume the markers that would trigger
+     * {@link OrgStorageQuotaService#reconcileAfterUpload}. Reconciliation stays as
+     * the second line of defence (it also catches objects written before this bound).
+     *
+     * @param sizeBytes declared upload size; required and must be positive
+     *                  when {@code orgId != null}, otherwise unused
+     */
+    public PresignedUpload presignUpload(
+            String kind, String filename, String contentType, Long sizeBytes, UUID orgId) {
         String resolvedKind = (kind == null || kind.isBlank()) ? "asset" : kind;
-        // ponytail: size is unenforceable here — a presigned PUT doesn't bind
-        // Content-Length, so only kind + content type are validated on this path.
-        MediaUploadPolicy.validate(resolvedKind, contentType, filename, -1);
+        String callerRole = currentUser.require().role();
+        MediaUploadPolicy.requireOrgScopedKindIsImage(resolvedKind, orgId);
+        MediaUploadPolicy.requireCoachKindIsImage(resolvedKind, callerRole);
+        // Which callers must have their upload SIZE-BOUND: the org-scoped branding
+        // path (quota) AND the COACH profile-photo path. Both are lower-trust than
+        // the historical SUPER_ADMIN/INSTRUCTOR lesson-media dropzone, which alone
+        // keeps the unbound platform path (its client sends no declared size and
+        // its files are legitimately large). For a bound caller the declared size
+        // is (a) checked against the per-kind cap here and (b) signed into the PUT
+        // as Content-Length below, so the object store refuses a body of any other
+        // length — without which a coach could presign kind=image and PUT an
+        // arbitrarily large object into the shared platform bucket, unmetered.
+        boolean bindSize = orgId != null || MediaUploadPolicy.COACH_ROLE.equals(callerRole);
+        if (bindSize && (sizeBytes == null || sizeBytes <= 0)) {
+            throw new BadRequestException(
+                    "A positive declared size (sizeBytes) is required to presign this upload");
+        }
+        String normalizedType = MediaUploadPolicy.validate(
+                resolvedKind, contentType, filename, bindSize ? sizeBytes : -1);
+        if (orgId != null) {
+            orgStorageQuota.requireCapacity(orgId, sizeBytes);
+        }
         lazyEnsureBucket();
 
-        String objectKey    = buildObjectKey(resolvedKind, filename);
+        String objectKey    = buildObjectKey(resolvedKind, filename, orgId);
         String marker       = MINIO_SCHEME + props.getBucket() + "/" + objectKey;
 
         final String uploadUrl;
         try {
-            uploadUrl = publicClient.getPresignedObjectUrl(
-                    GetPresignedObjectUrlArgs.builder()
-                            .method(Method.PUT)
-                            .bucket(props.getBucket())
-                            .object(objectKey)
-                            .expiry(props.getPresignedExpiryMinutes() * 60, TimeUnit.SECONDS)
-                            .build());
+            GetPresignedObjectUrlArgs.Builder args = GetPresignedObjectUrlArgs.builder()
+                    .method(Method.PUT)
+                    .bucket(props.getBucket())
+                    .object(objectKey)
+                    .expiry(props.getPresignedExpiryMinutes() * 60, TimeUnit.SECONDS);
+            if (bindSize) {
+                // CONTENT-TYPE AND CONTENT-LENGTH PINNING, size-bound paths only
+                // (org-scoped branding + coach profile photo). Both go into
+                // extraHeaders, which makes them SIGNED headers, so the PUT is
+                // refused unless it carries exactly these values.
+                //
+                // Content-Type: without it the validated "image/png" is only ever a
+                // claim in the presign REQUEST — the browser could PUT the same object
+                // as text/html and the object store would serve stored markup from the
+                // object-store origin off a presigned GET, the same stored-XSS channel
+                // image/svg+xml is excluded to avoid.
+                //
+                // Content-Length: without it the declared sizeBytes the quota was
+                // budgeted against is likewise only a claim. Signing it makes the
+                // quota decision binding on the bytes actually written, instead of
+                // resting entirely on a reconciliation that only fires if the caller
+                // later chooses to persist the marker.
+                //
+                // Scoped to org-scoped presigns rather than applied globally because
+                // the existing lesson-media client PUTs its own raw File.type (and
+                // omits the header entirely when that is blank) and sends no declared
+                // size on that path, so pinning either for every caller would break
+                // uploads that work today. That gap is real but pre-existing and
+                // SUPER_ADMIN/INSTRUCTOR-only; closing it means changing the shared
+                // dropzone, which is outside this ticket.
+                args.extraHeaders(com.google.common.collect.ImmutableMultimap.of(
+                        "Content-Type", normalizedType,
+                        "Content-Length", String.valueOf(sizeBytes)));
+            }
+            uploadUrl = publicClient.getPresignedObjectUrl(args.build());
         } catch (Exception ex) {
             throw new MediaUploadException("Failed to presign upload URL: " + ex.getMessage(), ex);
         }
 
-        return new PresignedUpload(uploadUrl, marker, resolveUrl(marker));
+        return new PresignedUpload(uploadUrl, marker, resolveUrl(marker), normalizedType);
     }
 
     // -------------------------------------------------------------------------
@@ -190,6 +306,7 @@ public class MediaService {
      * <p>This method is intentionally {@code public} so the orchestrator can call it from
      * {@code CatalogService} and {@code EnrollmentService} without this class being edited.</p>
      */
+    @Override
     public String resolveUrl(String stored) {
         if (stored == null || !stored.startsWith(MINIO_SCHEME)) {
             return stored;
@@ -475,12 +592,20 @@ public class MediaService {
     }
 
     /**
-     * Builds the {@code kind/uuid-filename} object key shared by the server-proxied
-     * ({@link #upload}) and browser-direct ({@link #presignUpload}) upload paths, so the key
-     * format and filename sanitisation can never drift between them.
+     * Builds the object key shared by the server-proxied ({@link #upload}) and
+     * browser-direct ({@link #presignUpload}) upload paths, so the key format
+     * and filename sanitisation can never drift between them.
+     *
+     * <p>Platform uploads keep the historical {@code kind/uuid-filename} shape.
+     * ORG-SCOPED uploads instead land under {@code org/<orgId>/branding/…} —
+     * the tenant prefix that makes the stored marker checkable against the
+     * caller's own org, which is the whole IDOR defence for white-label logos.
      */
-    private String buildObjectKey(String kind, String filename) {
-        return kind + "/" + UUID.randomUUID() + "-" + sanitizeFilename(filename);
+    private String buildObjectKey(String kind, String filename, UUID orgId) {
+        String folder = orgId == null
+                ? kind
+                : ORG_KEY_PREFIX + orgId + ORG_BRANDING_SEGMENT;
+        return folder + "/" + UUID.randomUUID() + "-" + sanitizeFilename(filename);
     }
 
     /**

@@ -98,6 +98,45 @@ class PushNotificationServiceTest {
     }
 
     @Test
+    void notifyUsersMutesOptedOutRecipientsInsideOneBatch() {
+        // A cohort broadcast reaches its whole audience through THIS call, so
+        // "existing opt-out respected" is this assertion and nothing extra: the
+        // muted member gets neither a push nor a history row, while the member
+        // next to them in the cohort still does — and it costs one opt-out
+        // query and one history batch for the cohort, not one per recipient.
+        UUID mutedId = UUID.randomUUID();
+        NotificationOptOut optOut = new NotificationOptOut();
+        optOut.setUserId(mutedId);
+        optOut.setType(NotificationType.ANNOUNCEMENT);
+        when(optOutRepository.findByTypeAndUserIdIn(eq(NotificationType.ANNOUNCEMENT), anyCollection()))
+                .thenReturn(List.of(optOut));
+
+        service.notifyUsers(List.of(mutedId, userId), NotificationType.ANNOUNCEMENT,
+                "Announcement · Spring", "Demo day is Friday.", "/app/program?announcement=1");
+
+        verify(optOutRepository).findByTypeAndUserIdIn(eq(NotificationType.ANNOUNCEMENT), anyCollection());
+        ArgumentCaptor<List<UserNotification>> rows = ArgumentCaptor.forClass(List.class);
+        verify(notificationRepository).saveAll(rows.capture());
+        assertThat(rows.getValue()).singleElement()
+                .satisfies(row -> assertThat(row.getUserId()).isEqualTo(userId));
+    }
+
+    @Test
+    void notifyUsersWithAnEntirelyMutedAudienceTouchesNothing() {
+        NotificationOptOut optOut = new NotificationOptOut();
+        optOut.setUserId(userId);
+        optOut.setType(NotificationType.ANNOUNCEMENT);
+        when(optOutRepository.findByTypeAndUserIdIn(eq(NotificationType.ANNOUNCEMENT), anyCollection()))
+                .thenReturn(List.of(optOut));
+
+        service.notifyUsers(List.of(userId), NotificationType.ANNOUNCEMENT, "T", "B", "/app/program");
+
+        verify(notificationRepository, never()).saveAll(any());
+        verify(sender, never()).send(any(), any());
+        verify(subscriptionRepository, never()).findByUserIdIn(anyCollection());
+    }
+
+    @Test
     void notifyUserWritesHistoryRow() {
         service.notifyUser(userId, NotificationType.ASSESSMENT_ASSIGNED, "Title", "Body", "/my/x");
 
@@ -166,11 +205,35 @@ class PushNotificationServiceTest {
                         NotificationType.PROGRAM_TASK_DUE,
                         NotificationType.WORKSHOP_RESULTS_SHARED,
                         NotificationType.EXERCISE_ASSIGNED,
-                        NotificationType.EXERCISE_FEEDBACK)
+                        NotificationType.EXERCISE_FEEDBACK,
+                        NotificationType.ANNOUNCEMENT,
+                        // The inactivity nudge is ABOUT the member, so it is
+                        // theirs to switch off — policy nudge_channels:
+                        // RESPECT_EXISTING_PREFERENCES means the founder's
+                        // existing opt-out is the only mute that exists.
+                        NotificationType.INACTIVITY_NUDGE)
                 .noneMatch(NotificationType::isAdminOnly);
         assertThat(NotificationType.visibleTo(UserRole.ORG_ADMIN))
                 .containsExactlyInAnyOrder(NotificationType.values());
         assertThat(NotificationType.visibleTo(UserRole.SUPER_ADMIN))
                 .containsExactlyInAnyOrder(NotificationType.values());
+    }
+
+    @Test
+    void aCoachSeesTheSubmissionTypesAndNothingElseFromTheAdminSet() {
+        // Spec §2.2 makes the coach a review target for submissions, so the
+        // three submission types must appear in their preferences — a type you
+        // receive but cannot mute is a bug. Everything else admin-only is org
+        // administration and stays out, and INSTRUCTOR is unchanged: the coach
+        // grant model says nothing about them.
+        assertThat(NotificationType.visibleTo(UserRole.COACH))
+                .contains(NotificationType.MEMBER_SUBMITTED,
+                        NotificationType.PROGRAM_TASK_SUBMITTED,
+                        NotificationType.EXERCISE_ACTIVITY)
+                .doesNotContain(NotificationType.MEMBER_JOINED)
+                .filteredOn(NotificationType::isAdminOnly)
+                .allMatch(NotificationType::isCoachVisible);
+        assertThat(NotificationType.visibleTo(UserRole.INSTRUCTOR))
+                .noneMatch(NotificationType::isAdminOnly);
     }
 }

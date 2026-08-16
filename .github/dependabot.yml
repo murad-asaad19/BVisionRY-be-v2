@@ -1,0 +1,54 @@
+# Dependabot is the REMEDIATION half of supply-chain security; the OSV scan in
+# ci.yml is only the DETECTION half. A scanner that blocks new vulnerabilities
+# without anything that removes the old ones just accumulates baseline entries in
+# osv-scanner.toml, which is how a ratchet quietly becomes a landfill.
+#
+# Free on private repositories, but version updates are the only part of this a
+# committed file can switch on. Dependabot ALERTS (and the security-update PRs
+# that follow from them) additionally need two repository settings enabled by an
+# administrator — see the operator checklist at the top of ci.yml.
+version: 2
+
+updates:
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+    # One grouped PR a week for everything non-breaking, rather than fifteen.
+    # The grouping is the point: measured on the tree when scanning was switched
+    # on, roughly fifty of the sixty-seven baselined advisories are cleared by a
+    # single patch bump of spring-boot-starter-parent, because the parent
+    # re-manages spring-*, tomcat-embed-*, jackson-*, netty-*, logback and
+    # thymeleaf together. Splitting that into per-artifact PRs would produce
+    # fifty PRs that individually do nothing, since the versions are BOM-managed
+    # and not declared here. Majors stay ungrouped — those need reading.
+    groups:
+      maven-non-major:
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+    ignore:
+      # THE SHIBBOLETH ARTIFACTS ARE DELIBERATELY NOT AUTO-BUMPED.
+      # Dependabot runs its own resolver and does not read .mvn/maven.config, so
+      # it cannot know that every artifact from build.shibboleth.net is pinned by
+      # sha1 in .mvn/checksums/checksums-shibboleth-releases.sha1. A Dependabot PR
+      # that raises ${opensaml.version} therefore resolves jars whose checksums
+      # are not in that file, and Resolver fails the build — a PR that can only
+      # ever be red, reopened weekly. Bumping OpenSAML is a manual job because it
+      # carries a re-record step; .mvn/maven.config holds the exact command.
+      #
+      # This is not a monitoring gap: the OSV scan reads the RESOLVED tree, so a
+      # published OpenSAML vulnerability still fails CI. Only the automatic PR is
+      # suppressed, not the detection.
+      - dependency-name: "org.opensaml:*"
+      - dependency-name: "net.shibboleth:*"
+
+  # Workflow actions are the supply chain nobody audits: a third-party action
+  # runs arbitrary code with the repository checked out, on every pull request.
+  # Monthly, because these move slowly and each PR is a two-line diff.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

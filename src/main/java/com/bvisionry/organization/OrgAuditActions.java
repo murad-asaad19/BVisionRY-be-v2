@@ -13,6 +13,8 @@ public final class OrgAuditActions {
     public static final String ORGANIZATION_SUSPENDED   = "ORGANIZATION_SUSPENDED";
     public static final String ORGANIZATION_REACTIVATED = "ORGANIZATION_REACTIVATED";
     public static final String ORGANIZATION_DELETED     = "ORGANIZATION_DELETED";
+    /** An org admin set or cleared the white-label logo / brand colour. */
+    public static final String ORGANIZATION_BRANDING_UPDATED = "ORGANIZATION_BRANDING_UPDATED";
     public static final String TIER_CHANGE              = "TIER_CHANGE";
 
     // Sub-organization lifecycle — logged against the PARENT org id so the
@@ -38,6 +40,11 @@ public final class OrgAuditActions {
     public static final String MEMBER_DELETED           = "MEMBER_DELETED";
     /** Platform-level role change (promote to / demote from SUPER_ADMIN) via /api/users. */
     public static final String USER_ROLE_CHANGED        = "USER_ROLE_CHANGED";
+    /**
+     * An admin overrode an auto-enrolment: the member was taken off a course and
+     * will not be re-enrolled in it by a later assessment (roadmap §7 item 10).
+     */
+    public static final String MEMBER_COURSE_REMOVED    = "MEMBER_COURSE_REMOVED";
     public static final String JOIN_LINK_USED           = "JOIN_LINK_USED";
     public static final String CLEAR_RESPONSES          = "CLEAR_RESPONSES";
 

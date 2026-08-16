@@ -11,6 +11,7 @@ import com.bvisionry.auth.jwt.JwtProvider;
 import com.bvisionry.auth.jwt.TokenType;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.common.exception.AccountNotActiveException;
 import com.bvisionry.common.exception.AuthenticationException;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.DuplicateResourceException;
@@ -33,6 +34,21 @@ import java.util.UUID;
 public class AuthService {
 
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
+
+    /**
+     * A real bcrypt hash, at the same cost factor the application encodes with, of a
+     * 32-byte random string that was generated once, hashed, and never written down.
+     * It is NOT any account's credential and no submitted password can ever match it.
+     *
+     * <p>It exists solely so {@link #login} pays the SAME ~60-80ms bcrypt cost whether
+     * or not the address resolves to a user. Returning early on "no such user" — or on
+     * an SSO-only account with no password hash, where {@code matches(raw, null)} is
+     * free — makes response latency answer "does this address have an account here?",
+     * which is precisely the question the always-204 forgot-password endpoint and the
+     * single "Invalid email or password" message are built to refuse.
+     */
+    private static final String DUMMY_PASSWORD_HASH =
+            "$2a$10$oo9M8tMQ1ekJvDHwyUq4fuY/rdrMuwrC/iHiHwJwPIbua3ULOXJeW";
 
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
@@ -68,19 +84,30 @@ public class AuthService {
     public AuthResponse login(LoginRequest request, ClientContext context) {
         String email = request.email().toLowerCase();
 
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new AuthenticationException("Invalid email or password"));
+        User user = userRepository.findByEmail(email).orElse(null);
 
-        if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
+        // One bcrypt compare on EVERY path, against the real hash when there is one and
+        // against DUMMY_PASSWORD_HASH otherwise, so an unknown address costs the same
+        // as a known one. Deliberately NOT short-circuited — `matched` is computed
+        // before it is combined with the lookup result.
+        boolean matched = passwordEncoder.matches(
+                request.password(),
+                user != null && user.getPasswordHash() != null
+                        ? user.getPasswordHash()
+                        : DUMMY_PASSWORD_HASH);
+        if (user == null || !matched) {
             throw new AuthenticationException("Invalid email or password");
         }
 
+        // Correct password past this point — these are AccountNotActiveException
+        // (not a credential failure) so the login backoff does not advance and a
+        // legitimate user is not locked out by their own password.
         if (user.getStatus() != UserStatus.ACTIVE) {
-            throw new AuthenticationException("Account is not active");
+            throw new AccountNotActiveException("Account is not active");
         }
 
         if (user.getOrganization() != null && !user.getOrganization().isActive()) {
-            throw new AuthenticationException("Your organization has been suspended. Contact support for assistance.");
+            throw new AccountNotActiveException("Your organization has been suspended. Contact support for assistance.");
         }
 
         user.setLastLoginAt(Instant.now());
@@ -293,6 +320,29 @@ public class AuthService {
 
         // Any session predating the password change must die.
         refreshTokenRepository.revokeAllForUser(userId, Instant.now());
+    }
+
+    /**
+     * Self-service display-name change. Name is the only field a user may edit
+     * on their own account — everything else on the {@code users} row is an
+     * admin concern. The row save triggers the principal-cache eviction
+     * listener, so the new name is visible on the next request.
+     */
+    @Transactional
+    public UserResponse updateProfile(UUID userId, String name) {
+        User user = requireOwnAccount(userId);
+        user.setName(name.trim());
+        return UserResponse.from(userRepository.save(user));
+    }
+
+    /**
+     * Guard for self-service account loads: the id has already been proven to be
+     * the caller's own (it comes from the authenticated principal), so ownership
+     * IS the tenant scope here — no org check applies to a user editing themself.
+     */
+    private User requireOwnAccount(UUID userId) {
+        return userRepository.findById(userId)
+                .orElseThrow(() -> new AuthenticationException("User not found"));
     }
 
     /**

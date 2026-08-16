@@ -44,5 +44,13 @@ public class ExerciseAssignment extends BaseEntity {
     @Column(name = "assigned_by", nullable = false)
     private UUID assignedBy;
 
+    /**
+     * Non-null means this row was spawned by a cohort task (V173) and is
+     * written ONLY by TaskSpineRepository.ensureExerciseSubmission's raw SQL;
+     * the org exercise console owns untagged (null) rows.
+     */
+    @Column(name = "program_task_id")
+    private UUID programTaskId;
+
     private Instant deadline;
 }

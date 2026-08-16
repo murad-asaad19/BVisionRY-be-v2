@@ -7,6 +7,7 @@ import com.bvisionry.auth.dto.AuthResponse;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.common.event.OrganizationEvents;
 import com.bvisionry.common.event.WorkshopEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
@@ -17,7 +18,6 @@ import com.bvisionry.organization.dto.JoinLinkInfoResponse;
 import com.bvisionry.organization.dto.JoinLinkResponse;
 import com.bvisionry.organization.entity.JoinLink;
 import com.bvisionry.organization.entity.Organization;
-import com.bvisionry.organization.event.MemberJoinedEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -167,7 +167,7 @@ public class JoinLinkService {
                 OrgAuditActions.ENTITY_JOIN_LINK, link.getId(),
                 Map.of("email", normalizedEmail));
 
-        eventPublisher.publishEvent(new MemberJoinedEvent(
+        eventPublisher.publishEvent(new OrganizationEvents.MemberJoined(
                 org.getId(), savedUser.getId(), savedUser.getUserType()));
         publishWorkshopJoin(link, savedUser.getId());
 
@@ -245,7 +245,7 @@ public class JoinLinkService {
             auditService.log(savedUser.getId(), org.getId(), OrgAuditActions.JOIN_LINK_USED,
                     OrgAuditActions.ENTITY_JOIN_LINK, link.getId(),
                     Map.of("email", savedUser.getEmail()));
-            eventPublisher.publishEvent(new MemberJoinedEvent(
+            eventPublisher.publishEvent(new OrganizationEvents.MemberJoined(
                     org.getId(), savedUser.getId(), savedUser.getUserType()));
             publishWorkshopJoin(link, savedUser.getId());
         }

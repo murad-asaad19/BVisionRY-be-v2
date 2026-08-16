@@ -24,11 +24,16 @@ import com.bvisionry.workshops.dto.WorkshopTeamsResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 
-/** Admin management of a workshop's teams, membership and team leads. */
+/**
+ * Admin management of a workshop's teams, membership and team leads.
+ *
+ * <p>SUPER_ADMIN only, for the same reason as {@link WorkshopAdminController}:
+ * the workshop console is a platform surface, not an org-admin one.
+ */
 @RestController
 @RequestMapping(path = "/api/organizations/{orgId}/workshops/{workshopId}/teams",
         produces = MediaType.APPLICATION_JSON_VALUE)
-@PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId))")
+@PreAuthorize("hasAuthority('SUPER_ADMIN')")
 @Tag(name = "Workshop teams (admin)", description = "Per-workshop teams, membership, leads.")
 public class WorkshopTeamController {
 

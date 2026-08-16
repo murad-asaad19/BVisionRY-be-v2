@@ -55,4 +55,35 @@ public interface UserRepository extends JpaRepository<User, UUID> {
 
     @org.springframework.data.jpa.repository.Query("SELECT MAX(u.lastLoginAt) FROM User u WHERE u.organization.id = :orgId")
     Instant findMaxLastLoginByOrganizationId(@org.springframework.data.repository.query.Param("orgId") UUID orgId);
+
+    /**
+     * The org a user belongs to, or {@code null} for an org-less (or absent) user.
+     *
+     * <p>Exists so {@code auth.sso} can enforce "this assertion may not name a user
+     * who belongs to a different organization" without calling
+     * {@code user.getOrganization()} — which would create a new
+     * {@code auth -> organization} type dependency the ArchUnit ratchet rejects.
+     * Native and column-level on purpose: it reads auth's OWN table and needs the
+     * FK value, not the aggregate.
+     */
+    @org.springframework.data.jpa.repository.Query(
+            value = "SELECT organization_id FROM users WHERE id = :userId", nativeQuery = true)
+    UUID findOrganizationIdByUserId(@org.springframework.data.repository.query.Param("userId") UUID userId);
+
+    /**
+     * Bind a user to an organization by id — the JIT-provisioning write for
+     * enterprise SSO, where the caller holds an org UUID and must not import the
+     * organization aggregate to set the association.
+     *
+     * <p>{@code clearAutomatically} is required, not decorative: this bypasses the
+     * persistence context, so the caller MUST re-read (see
+     * {@link #findByIdWithOrganization}) or it would keep handing out a User whose
+     * {@code organization} is still null — and the access token embeds
+     * {@code orgId} from exactly that field.
+     */
+    @org.springframework.data.jpa.repository.Modifying(flushAutomatically = true, clearAutomatically = true)
+    @org.springframework.data.jpa.repository.Query(
+            value = "UPDATE users SET organization_id = :orgId WHERE id = :userId", nativeQuery = true)
+    int assignOrganization(@org.springframework.data.repository.query.Param("userId") UUID userId,
+                           @org.springframework.data.repository.query.Param("orgId") UUID orgId);
 }

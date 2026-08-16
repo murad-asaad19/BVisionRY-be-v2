@@ -56,8 +56,12 @@ public class NotificationSettingsService {
     }
 
     public void setPreference(UUID userId, UserRole role, NotificationType type, boolean enabled) {
-        if (type.isAdminOnly() && !NotificationType.isAdminRole(role)) {
-            throw new AccessDeniedException("This notification type is admin-only.");
+        // Derived from the SAME predicate that built the list above, not a
+        // second copy of it: COACH now sees the submission types and must be
+        // able to switch them off, and a guard restated here would have kept
+        // rejecting exactly the toggles the preferences page offers them.
+        if (!type.isVisibleTo(role)) {
+            throw new AccessDeniedException("This notification type is not available for your role.");
         }
         if (enabled) {
             optOutRepository.deleteByUserIdAndType(userId, type);

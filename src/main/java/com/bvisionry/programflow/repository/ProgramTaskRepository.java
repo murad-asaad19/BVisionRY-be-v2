@@ -18,8 +18,10 @@ public interface ProgramTaskRepository extends JpaRepository<ProgramTask, UUID> 
     Optional<ProgramTask> findWithModule(@Param("id") UUID id);
 
     /**
-     * Live tasks that may need a due-soon reminder: due inside [from, to] and
-     * never reminded. The caller narrows to each cohort's own due-soon window.
+     * Live tasks of ANY type that may need a due-soon reminder: due inside
+     * [from, to] and never reminded. The caller narrows to each cohort's own
+     * due-soon window and filters out learners whose per-type done state says
+     * the work is already done ({@code TaskSpineRepository#usersDoneWithTask}).
      */
     @Query("""
             select t from ProgramTask t join fetch t.module
@@ -30,4 +32,16 @@ public interface ProgramTaskRepository extends JpaRepository<ProgramTask, UUID> 
             @Param("status") ProgramTaskStatus status,
             @Param("from") LocalDate from,
             @Param("to") LocalDate to);
+
+    /**
+     * Every task of the cohort holding the given milestone role, any publish
+     * status — drafts count too, so two admins can't stage two baselines.
+     */
+    @Query("""
+            select t from ProgramTask t join fetch t.module m
+            where m.cohortId = :cohortId and t.milestoneRole = :role
+            """)
+    List<ProgramTask> findByCohortAndMilestoneRole(
+            @Param("cohortId") UUID cohortId,
+            @Param("role") com.bvisionry.programflow.domain.MilestoneRole role);
 }

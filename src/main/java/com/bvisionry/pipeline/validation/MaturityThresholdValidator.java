@@ -9,6 +9,26 @@ import java.util.Map;
 @Component
 public class MaturityThresholdValidator {
 
+    /**
+     * The one platform default band set for a new STANDARD pillar, mirroring the
+     * {@code pillars.maturity_thresholds_json} column default (V3).
+     *
+     * <p>Maturity bands are per-pillar CONFIGURABLE data — this validator
+     * deliberately accepts any contiguous 1..N-band partition of 0-100 with
+     * free-text labels, and customers run bespoke vocabularies. There is no
+     * platform-wide band set; this is only where a pillar STARTS when the
+     * request omits thresholds, applied in exactly one place
+     * ({@code PillarService#create}) so the default cannot drift between
+     * callers again.
+     *
+     * <p>Key order is not meaningful: the column is {@code jsonb}, which
+     * normalises key order on write.
+     */
+    public static final Map<String, List<Integer>> PLATFORM_DEFAULT = Map.of(
+            "Emerging", List.of(0, 59),
+            "Strong", List.of(60, 79),
+            "Elite", List.of(80, 100));
+
     public void validate(Map<String, List<Integer>> thresholds) {
         if (thresholds == null || thresholds.isEmpty()) {
             throw new BadRequestException("Maturity thresholds cannot be empty");

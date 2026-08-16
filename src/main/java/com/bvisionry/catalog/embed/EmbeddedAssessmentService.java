@@ -1,11 +1,11 @@
 package com.bvisionry.catalog.embed;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.assessment.AssignmentRepository;
 import com.bvisionry.assessment.AssignmentService;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.assessment.entity.Assignment;
 import com.bvisionry.assessment.entity.Submission;
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.catalog.domain.Content;
@@ -44,6 +44,7 @@ import java.util.UUID;
 @Slf4j
 public class EmbeddedAssessmentService {
 
+    private final CurrentUserAccessor currentUser;
     private final ContentRepository contentRepository;
     private final PipelineRepository pipelineRepository;
     private final AssignmentRepository assignmentRepository;
@@ -67,7 +68,7 @@ public class EmbeddedAssessmentService {
         Content content = resolveContent(slug, contentId);
         Pipeline pipeline = resolvePipeline(content);
 
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
 
         // Security: starting an assessment lazily spawns a real Assignment+Submission
         // and triggers the evaluation/email machinery. Gate it on course enrollment so
@@ -130,7 +131,7 @@ public class EmbeddedAssessmentService {
         Content content = resolveContent(slug, contentId);
         Pipeline pipeline = resolvePipeline(content);
 
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
         List<Submission> existing =
                 submissionRepository.findByUserIdAndPipelineIdOrderByCreatedAtDesc(userId, pipeline.getId());
 

@@ -1,5 +1,6 @@
 package com.bvisionry.quiz.web;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -13,7 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.OrgScope;
 import com.bvisionry.catalog.domain.Content;
 import com.bvisionry.catalog.repository.ContentRepository;
 import com.bvisionry.enrollment.domain.Enrollment;
@@ -49,17 +50,23 @@ public class QuizService {
     private final EnrollmentService enrollmentService;
     private final ContentRepository contents;
     private final EnrollmentRepository enrollments;
+    private final OrgScope orgScope;
+    private final CurrentUserAccessor currentUser;
 
     public QuizService(QuizRepository quizzes,
                        QuizAttemptRepository attempts,
                        EnrollmentService enrollmentService,
                        ContentRepository contents,
-                       EnrollmentRepository enrollments) {
+                       EnrollmentRepository enrollments,
+                       OrgScope orgScope,
+                       CurrentUserAccessor currentUser) {
         this.quizzes = quizzes;
         this.attempts = attempts;
         this.enrollmentService = enrollmentService;
         this.contents = contents;
         this.enrollments = enrollments;
+        this.orgScope = orgScope;
+        this.currentUser = currentUser;
     }
 
     // -------------------------------------------------------------------------
@@ -76,7 +83,7 @@ public class QuizService {
         // from one org could otherwise read another org's answer keys. Bind the
         // request to the content's org before exposing correct-answer flags.
         Content content = requireContent(contentId);
-        SecurityUtils.requireOrgAccess(content.getOrgId());
+        orgScope.require(content.getOrgId());
 
         Quiz quiz = quizzes.findByContentIdWithQuestionsAndOptions(contentId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
@@ -95,7 +102,7 @@ public class QuizService {
         // foreign org's quiz. Bind the destructive full-replace write to the
         // content's org before mutating anything.
         Content content = requireContent(contentId);
-        SecurityUtils.requireOrgAccess(content.getOrgId());
+        orgScope.require(content.getOrgId());
 
         // CORRECTNESS: a question with zero correct options can never be answered
         // correctly (grading requires the chosen set to equal a non-empty correct
@@ -170,7 +177,7 @@ public class QuizService {
                     "Quiz not found for course: " + slug);
         }
 
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
         if (!enrollments.existsByUserIdAndCourseId(userId, course.getId())) {
             throw new AccessDeniedException("Not enrolled in this course");
         }
@@ -202,7 +209,7 @@ public class QuizService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "Enrollment not found: " + enrollmentId));
 
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
         if (!enrollment.getUserId().equals(userId)) {
             throw new AccessDeniedException("Not your enrollment");
         }

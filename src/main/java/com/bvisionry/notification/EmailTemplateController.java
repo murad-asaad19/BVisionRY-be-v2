@@ -1,6 +1,6 @@
 package com.bvisionry.notification;
 
-import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.notification.dto.EmailTemplateDto;
 import com.bvisionry.notification.dto.EmailTemplatePreviewRequest;
 import com.bvisionry.notification.dto.EmailTemplatePreviewResponse;
@@ -29,6 +29,7 @@ import java.util.List;
 @PreAuthorize("hasAuthority('SUPER_ADMIN')")
 public class EmailTemplateController {
 
+    private final CurrentUserAccessor currentUser;
     private final EmailTemplateService service;
 
     @GetMapping
@@ -44,7 +45,7 @@ public class EmailTemplateController {
     @PutMapping("/{key}")
     public ResponseEntity<EmailTemplateDto> update(@PathVariable EmailTemplateKey key,
                                                     @Valid @RequestBody EmailTemplateUpdateRequest request) {
-        return ResponseEntity.ok(service.update(key, request, SecurityUtils.getCurrentUserId()));
+        return ResponseEntity.ok(service.update(key, request, currentUser.require().userId()));
     }
 
     @DeleteMapping("/{key}")

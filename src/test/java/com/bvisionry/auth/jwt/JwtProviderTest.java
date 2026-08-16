@@ -20,7 +20,6 @@ class JwtProviderTest {
     private static final String SECRET = "test-secret-key-must-be-32-bytes-minimum-for-hmac-sha-256!!";
     private static final long ACCESS_TTL_MS = 60_000L;
     private static final long REFRESH_TTL_MS = 24L * 60 * 60 * 1000;
-    private static final long DOWNLOAD_TTL_MS = 60_000L;
 
     private JwtProvider provider;
     private SecretKey signingKey;
@@ -28,7 +27,7 @@ class JwtProviderTest {
 
     @BeforeEach
     void setUp() {
-        provider = new JwtProvider(SECRET, ACCESS_TTL_MS, REFRESH_TTL_MS, DOWNLOAD_TTL_MS, "bvisionry-api", "bvisionry-app");
+        provider = new JwtProvider(SECRET, ACCESS_TTL_MS, REFRESH_TTL_MS, "bvisionry-api", "bvisionry-app");
         signingKey = Keys.hmacShaKeyFor(SECRET.getBytes(StandardCharsets.UTF_8));
 
         user = new User();
@@ -96,32 +95,6 @@ class JwtProviderTest {
 
         assertThat(provider.getUserIdFromToken(access)).isEqualTo(user.getId());
         assertThat(provider.getUserIdFromToken(refresh.token())).isEqualTo(user.getId());
-    }
-
-    @Test
-    void downloadToken_carriesTypAndJti() {
-        String token = provider.generateDownloadToken(user);
-
-        Claims claims = parse(token);
-        assertThat(claims.get(JwtProvider.CLAIM_TYP, String.class)).isEqualTo("DOWNLOAD");
-        assertThat(claims.getId()).isNotBlank();
-        assertThat(claims.getSubject()).isEqualTo(user.getId().toString());
-    }
-
-    @Test
-    void validateToken_rejectsDownloadPresentedAsAccess() {
-        // Strict typ-claim namespacing is the security boundary — a leaked
-        // download token must not be usable as an access token.
-        String download = provider.generateDownloadToken(user);
-        assertThat(provider.validateToken(download, TokenType.ACCESS)).isFalse();
-        assertThat(provider.validateToken(download, TokenType.REFRESH)).isFalse();
-        assertThat(provider.validateToken(download, TokenType.DOWNLOAD)).isTrue();
-    }
-
-    @Test
-    void validateToken_rejectsAccessPresentedAsDownload() {
-        String access = provider.generateAccessToken(user);
-        assertThat(provider.validateToken(access, TokenType.DOWNLOAD)).isFalse();
     }
 
     private Claims parse(String token) {

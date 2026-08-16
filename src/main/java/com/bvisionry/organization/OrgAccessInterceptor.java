@@ -2,12 +2,15 @@ package com.bvisionry.organization;
 
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
-import com.bvisionry.common.security.OrgHierarchyPort;
+import com.bvisionry.common.security.OrgScope;
+import com.bvisionry.common.web.ProblemDetailResponseWriter;
+import com.bvisionry.common.web.RequestPaths;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -31,26 +34,41 @@ public class OrgAccessInterceptor implements HandlerInterceptor {
     /**
      * Lazily resolved: this interceptor is instantiated in {@code @WebMvcTest}
      * slices (HandlerInterceptors are part of the web slice) where the
-     * {@code OrgHierarchyAdapter} @Component is not — a hard constructor
-     * dependency would fail every slice context. When absent, the traversal
-     * check degrades to plain same-org equality (mirrors OrgAccessGuard's
-     * null-safe static fallback).
+     * {@code config} adapter @Component is not — a hard constructor dependency
+     * would fail every slice context. When absent, the check degrades to
+     * SUPER_ADMIN-or-same-org equality (the pre-hierarchy predicate).
      */
-    private final ObjectProvider<OrgHierarchyPort> orgHierarchy;
+    private final ObjectProvider<OrgScope> orgScope;
 
-    // Case-insensitive: UUIDs may arrive upper- or mixed-case in the path. A
-    // lowercase-only class let an uppercase-UUID request slip past the membership
-    // check entirely (the path no longer matched, so preHandle returned true).
-    private static final Pattern ORG_PATH_PATTERN =
-            Pattern.compile("^/api/organizations/([A-Fa-f0-9-]{36})(/.*)?$");
+    // The interceptor must see every path the @PathVariable binder can resolve to
+    // an org id, so the admission test IS the binder's: take the first segment as-is
+    // and parse it with the same UUID.fromString the binder uses. Earlier attempts
+    // to pre-filter with a shape regex were strictly narrower than UUID.fromString
+    // (which also accepts short-group forms like "0-0-0-0-1" and truncates
+    // over-long groups in 36-char spellings), so a non-canonical spelling reached
+    // the handler with a REAL org id while this tenancy check silently abstained.
+    // A segment UUID.fromString rejects (e.g. 36 dashes) abstains here and is
+    // answered 400 by the binder's MethodArgumentTypeMismatchException mapping —
+    // never a 500 out of this interceptor.
+    private static final Pattern ORG_PATH_PATTERN = Pattern.compile(
+            "^/api/organizations/([^/]+)(/.*)?$");
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response,
                               Object handler) throws Exception {
-        String path = request.getRequestURI();
+        // Decoded like MVC matches it — a percent-encoded spelling of an org path
+        // must not skip the tenancy check.
+        String path = RequestPaths.decoded(request);
         Matcher matcher = ORG_PATH_PATTERN.matcher(path);
 
         if (!matcher.matches()) return true; // Not an org-scoped request
+
+        UUID requestedOrgId;
+        try {
+            requestedOrgId = UUID.fromString(matcher.group(1));
+        } catch (IllegalArgumentException notAnOrgId) {
+            return true; // Not resolvable to an org id — the binder answers 400
+        }
 
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null || !(auth.getPrincipal() instanceof User user)) {
@@ -61,27 +79,24 @@ public class OrgAccessInterceptor implements HandlerInterceptor {
         // cross-feature edges per origin method + target, and a second
         // occurrence of the same call would register as a new violation.
         UserRole role = user.getRole();
-
-        // Super admin bypasses org isolation
-        if (role == UserRole.SUPER_ADMIN) return true;
-
-        UUID requestedOrgId = UUID.fromString(matcher.group(1));
         UUID userOrgId = user.getOrganization() != null ? user.getOrganization().getId() : null;
 
-        // A parent org's ORG_ADMIN manages its sub-orgs through the same
-        // org-scoped endpoints — mirror OrgAccessGuard.callerHasAccess.
-        OrgHierarchyPort hierarchy = orgHierarchy.getIfAvailable();
-        boolean parentAdminOfRequestedOrg = userOrgId != null
-                && role == UserRole.ORG_ADMIN
-                && hierarchy != null
-                && hierarchy.isParentOf(userOrgId, requestedOrgId);
+        // ONE tenancy predicate, owned by OrgScope — the same rule the
+        // @orgAccess SpEL bean and the service-layer checks ask. This
+        // interceptor is defence-in-depth over @PreAuthorize, not a second rule.
+        OrgScope scope = orgScope.getIfAvailable();
+        boolean allowed = scope != null
+                ? scope.mayAccess(requestedOrgId)
+                // Sliced-context fallback (no config beans): the pre-hierarchy
+                // predicate, so @WebMvcTest behaviour matches the old inline check.
+                : role == UserRole.SUPER_ADMIN
+                        || (userOrgId != null && userOrgId.equals(requestedOrgId));
 
-        if ((userOrgId == null || !userOrgId.equals(requestedOrgId)) && !parentAdminOfRequestedOrg) {
+        if (!allowed) {
             log.warn("Org access denied: user {} (org {}) tried to access org {}",
                     user.getId(), userOrgId, requestedOrgId);
-            response.setContentType("application/json");
-            response.setStatus(403);
-            response.getWriter().write("{\"status\":403,\"message\":\"Access denied: you do not belong to this organization\"}");
+            ProblemDetailResponseWriter.write(response, HttpStatus.FORBIDDEN,
+                    "Access denied: you do not belong to this organization");
             return false;
         }
 

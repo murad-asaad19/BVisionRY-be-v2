@@ -28,7 +28,8 @@ public record PulseResponse(
     public record PulseRow(
             UUID userId,
             String name,
-            String teamName,
+            /** The founder's org — a cross-org roster's grouping label (spec §13). */
+            String orgName,
             List<CellState> cells,
             int completionPct) {
     }

@@ -81,14 +81,18 @@ class UpgradeRequestServiceTest {
         when(userRepo.findByIdWithOrganization(memberId)).thenReturn(Optional.of(member));
     }
 
-    /** The sub-org row is FREE, but the plan that matters is the parent's PREMIUM. */
+    /**
+     * The sub-org row is FREE, but the plan that matters is the parent's.
+     * Since the cohort launch quota (redesign spec §8) any tier below the top
+     * one may request an upgrade — only Founder Success has nothing above it.
+     */
     @Test
-    void create_subOrgMemberUnderPremiumParent_rejectedAsAlreadyPremium() {
-        parent.setSubscriptionTier(SubscriptionTier.PREMIUM);
+    void create_subOrgMemberUnderTopTierParent_rejectedAsAlreadyOnTopPlan() {
+        parent.setSubscriptionTier(SubscriptionTier.FOUNDER_SUCCESS);
 
         assertThatThrownBy(() -> service.create(memberId, new UpgradeRequestCreateRequest(null, null)))
                 .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("already on the PREMIUM plan");
+                .hasMessageContaining("already on the Founder Success plan");
     }
 
     @Test

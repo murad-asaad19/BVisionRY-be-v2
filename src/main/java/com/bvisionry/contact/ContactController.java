@@ -1,6 +1,7 @@
 package com.bvisionry.contact;
 
 import com.bvisionry.aiconfig.service.RateLimitService;
+import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import com.bvisionry.common.web.ClientIpResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -33,6 +34,7 @@ public class ContactController {
      * Exceeding the limit raises {@code RateLimitExceededException}, which the
      * global handler maps to 429.
      */
+    @AuthorizedInSecurityConfig("permitAll: public marketing Contact Us form")
     @PostMapping
     public ResponseEntity<Void> submit(
             @Valid @RequestBody ContactRequest request,

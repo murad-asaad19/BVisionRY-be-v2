@@ -1,11 +1,13 @@
 package com.bvisionry.config;
 
+import io.micrometer.observation.ObservationRegistry;
 import net.javacrumbs.shedlock.core.LockProvider;
 import net.javacrumbs.shedlock.provider.jdbctemplate.JdbcTemplateLockProvider;
 import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.SchedulingConfigurer;
 
 import javax.sql.DataSource;
 
@@ -46,5 +48,29 @@ public class SchedulerLockConfig {
                         .withJdbcTemplate(new JdbcTemplate(dataSource))
                         .usingDbTime()
                         .build());
+    }
+
+    /**
+     * Turns on Spring's own {@code @Scheduled} instrumentation, so every
+     * execution becomes a timed observation tagged SUCCESS or ERROR and is
+     * exported through the actuator's existing Prometheus endpoint. The registry
+     * is opt-in by design (framework docs: "Observability > @Scheduled tasks
+     * instrumentation"), so it has to be handed to the registrar explicitly.
+     *
+     * <p>This is for METRICS ONLY. It is deliberately not what
+     * {@link com.bvisionry.common.scheduling.ScheduledJobMonitor} reads — that
+     * uses {@code Task.getLastExecutionOutcome()}, which Spring maintains whether
+     * or not this line exists. Keeping the health verdict independent of the
+     * observation pipeline means the in-box signal cannot be switched off by an
+     * unrelated observability change, and it needs nobody to have provisioned a
+     * scrape.
+     *
+     * <p>Lives here rather than in its own config class because this is already
+     * the file that owns scheduler-wide wiring; the jobs it instruments are the
+     * same ones {@code @EnableSchedulerLock} above coordinates.
+     */
+    @Bean
+    public SchedulingConfigurer scheduledTaskObservations(ObservationRegistry observationRegistry) {
+        return taskRegistrar -> taskRegistrar.setObservationRegistry(observationRegistry);
     }
 }

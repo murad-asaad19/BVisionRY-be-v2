@@ -1,6 +1,7 @@
 package com.bvisionry.leadmagnet;
 
 import com.bvisionry.aiconfig.service.RateLimitService;
+import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import com.bvisionry.common.web.ClientIpResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -34,6 +35,7 @@ public class LeadMagnetController {
      * CSRF-exempt, so it is rate-limited per real client IP (namespaced
      * {@code "lead-magnet:"}) to stop a bot flooding the table or the mailer.
      */
+    @AuthorizedInSecurityConfig("permitAll: public lead-magnet modal on the marketing site")
     @PostMapping
     public ResponseEntity<Map<String, UUID>> create(
             @Valid @RequestBody CreateLeadMagnetRequest request,

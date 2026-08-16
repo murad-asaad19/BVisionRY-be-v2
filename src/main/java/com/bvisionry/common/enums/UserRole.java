@@ -7,7 +7,7 @@ public enum UserRole {
     SUPER_ADMIN,
     ORG_ADMIN,
     INSTRUCTOR,
-    MANAGER,
+    COACH,
     MEMBER;
 
     @JsonValue

@@ -10,6 +10,7 @@ import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.gdpr.PersonalDataRepository;
 import com.bvisionry.common.tx.AfterCommit;
 import com.bvisionry.membertype.MemberTypeService;
 import com.bvisionry.organization.dto.ChangeMemberRoleRequest;
@@ -43,6 +44,23 @@ public class MemberService {
     private final AssignmentRepository assignmentRepository;
     private final RefreshTokenRepository refreshTokenRepository;
     private final CacheInvalidationService cacheInvalidationService;
+
+    /**
+     * Setter-injected on purpose, and this is the one place in the codebase that
+     * needs the trick. ArchUnit freezes cross-feature violations by their full
+     * dependency description, and for a constructor parameter that description
+     * embeds the WHOLE constructor signature — so adding a ninth parameter here
+     * would re-report all eight existing frozen ones as new and fail the build,
+     * with the only "fix" being to rewrite the frozen store. Field injection is
+     * banned by the same test. A setter changes no existing signature, and the
+     * dependency itself is on `common`, which the rules exempt.
+     */
+    private PersonalDataRepository personalData;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setPersonalData(PersonalDataRepository personalData) {
+        this.personalData = personalData;
+    }
 
     /**
      * Domain placeholder used for the email of removed members. Anonymising
@@ -256,6 +274,25 @@ public class MemberService {
      * relaxed to SET NULL in V135, plus V34's pipelines/audit rows) survives
      * without attribution. Same guards as {@link #removeMember}: never a
      * SUPER_ADMIN, never the org's last active ORG_ADMIN.
+     *
+     * <p>The FK actions alone are not the whole erasure, and this path used to
+     * assume they were: it aborted outright on any member with a survey response
+     * (their CHECK constraints forbid the null the FK writes) and left the
+     * member's name and email behind in certificates, reviews and audit details.
+     * {@link PersonalDataRepository#erasePersonalDataFor} is the single definition
+     * of what erasure means, shared with the data subject's own Art. 17 flow so
+     * the two cannot drift apart, and run identically on both paths.
+     *
+     * <p>Some of its statements do reach across organisations — a user id is
+     * global, so an audit row in another org that names this member by id is
+     * scrubbed from here too. That is intended: the accurate property is not
+     * "never touches another org's rows" but that no statement keys on anything
+     * an actor can choose. Every predicate is a user id, a row the member owns,
+     * or the member's own exact name; none is an email or other free value that
+     * an admin could aim at a row belonging to someone else.
+     *
+     * <p>The user row itself is still deleted through the repository here, so
+     * the JPA listener that evicts the principal cache fires.
      */
     @Transactional
     public void deleteMemberPermanently(UUID orgId, UUID memberId, UUID actorId) {
@@ -263,6 +300,7 @@ public class MemberService {
         User user = requireRemovableMember(organization, memberId);
         String email = user.getEmail();
 
+        personalData.erasePersonalDataFor(memberId);
         userRepository.delete(user);
 
         // The email lands in the audit details on purpose: after a hard delete it is

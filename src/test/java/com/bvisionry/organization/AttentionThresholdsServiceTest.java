@@ -43,6 +43,7 @@ class AttentionThresholdsServiceTest {
         assertThat(resp.trialJustExpiredWindowDays()).isEqualTo(AttentionThresholdsService.DEFAULT_TRIAL_JUST_EXPIRED_WINDOW_DAYS);
         assertThat(resp.idleDays()).isEqualTo(AttentionThresholdsService.DEFAULT_IDLE_DAYS);
         assertThat(resp.onboardingStalledHours()).isEqualTo(AttentionThresholdsService.DEFAULT_ONBOARDING_STALLED_HOURS);
+        assertThat(resp.pillarThreshold()).isEqualTo(AttentionThresholdsService.DEFAULT_PILLAR_THRESHOLD);
     }
 
     @Test
@@ -68,16 +69,16 @@ class AttentionThresholdsServiceTest {
     @Test
     void setAll_persistsEachValueAndAudits() {
         UUID actor = UUID.randomUUID();
-        AttentionThresholdsRequest req = new AttentionThresholdsRequest(10, 5, 45, 21, 36);
+        AttentionThresholdsRequest req = new AttentionThresholdsRequest(10, 5, 45, 21, 36, 55);
 
         // For new rows the service constructs a fresh entity.
         when(repo.findById(any())).thenReturn(Optional.empty());
 
         AttentionThresholdsResponse resp = service.setAll(req, actor);
 
-        // One save per key (5 keys total).
+        // One save per key (6 keys total).
         ArgumentCaptor<PlatformSetting> saved = ArgumentCaptor.forClass(PlatformSetting.class);
-        verify(repo, org.mockito.Mockito.times(5)).save(saved.capture());
+        verify(repo, org.mockito.Mockito.times(6)).save(saved.capture());
 
         Map<String, Integer> persisted = new HashMap<>();
         for (PlatformSetting s : saved.getAllValues()) {
@@ -90,7 +91,8 @@ class AttentionThresholdsServiceTest {
                 .containsEntry(AttentionThresholdsService.KEY_TRIAL_EXPIRY_WINDOW_DAYS, 5)
                 .containsEntry(AttentionThresholdsService.KEY_TRIAL_JUST_EXPIRED_WINDOW_DAYS, 45)
                 .containsEntry(AttentionThresholdsService.KEY_IDLE_DAYS, 21)
-                .containsEntry(AttentionThresholdsService.KEY_ONBOARDING_STALLED_HOURS, 36);
+                .containsEntry(AttentionThresholdsService.KEY_ONBOARDING_STALLED_HOURS, 36)
+                .containsEntry(AttentionThresholdsService.KEY_PILLAR_THRESHOLD, 55);
 
         // One audit row with the action constant.
         verify(auditService).log(eq(actor), eq(null), eq(OrgAuditActions.ATTENTION_THRESHOLDS_UPDATED),
@@ -131,6 +133,26 @@ class AttentionThresholdsServiceTest {
                 m.getAnnotation(org.springframework.cache.annotation.Cacheable.class);
         assertThat(cacheable).as("get must read from the platformSettings cache region").isNotNull();
         assertThat(cacheable.value()).contains("platformSettings");
+    }
+
+    @Test
+    void anAbsentPillarThresholdIsAViolation_notASilentZero() {
+        // pillarThreshold=0 is the OFF value for the needs-attention pillar rule,
+        // so a primitive int binding an absent field to 0 would let an
+        // incomplete request shut the rule down platform-wide.
+        try (jakarta.validation.ValidatorFactory factory =
+                     jakarta.validation.Validation.buildDefaultValidatorFactory()) {
+            jakarta.validation.Validator validator = factory.getValidator();
+
+            var violations = validator.validate(
+                    new AttentionThresholdsRequest(7, 7, 30, 14, 24, null));
+            assertThat(violations).hasSize(1);
+            assertThat(violations.iterator().next().getPropertyPath().toString())
+                    .isEqualTo("pillarThreshold");
+
+            assertThat(validator.validate(
+                    new AttentionThresholdsRequest(10, 5, 45, 21, 36, 55))).isEmpty();
+        }
     }
 
     private PlatformSetting setting(String key, int value) {

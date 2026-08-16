@@ -2,12 +2,14 @@ package com.bvisionry.notification.push;
 
 import com.bvisionry.notification.push.dto.NotificationItem;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Limit;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -22,13 +24,24 @@ public class NotificationHistoryService {
 
     private final UserNotificationRepository repository;
 
+    /** Upper bound on a caller-supplied page size — the bell asks for 20. */
+    private static final int MAX_SIZE = 100;
+
+    /**
+     * One page of the caller's history, newest first, optionally narrowed to
+     * unread. Page and size are clamped here rather than trusted: they arrive
+     * straight off the query string, and a negative page or a size of 10_000 is
+     * a table scan per request.
+     */
     @Transactional(readOnly = true)
-    public List<NotificationItem> list(UUID userId, int limit) {
-        return repository.findByUserIdOrderByCreatedAtDesc(userId, Limit.of(Math.clamp(limit, 1, 100)))
-                .stream()
-                .map(n -> new NotificationItem(n.getId(), n.getType().name(), n.getTitle(),
-                        n.getBody(), n.getUrl(), n.getReadAt(), n.getCreatedAt()))
-                .toList();
+    public Page<NotificationItem> page(UUID userId, int page, int size, boolean unreadOnly) {
+        Pageable pageable = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_SIZE),
+                Sort.by(Sort.Direction.DESC, "createdAt"));
+        Page<UserNotification> rows = unreadOnly
+                ? repository.findByUserIdAndReadAtIsNull(userId, pageable)
+                : repository.findByUserId(userId, pageable);
+        return rows.map(n -> new NotificationItem(n.getId(), n.getType().name(), n.getTitle(),
+                n.getBody(), n.getUrl(), n.getReadAt(), n.getCreatedAt()));
     }
 
     @Transactional(readOnly = true)

@@ -7,6 +7,7 @@ import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.insights.InsightReportRepository;
 import com.bvisionry.organization.dto.ChangeTierRequest;
+import com.bvisionry.organization.dto.NudgeSettingsDto;
 import com.bvisionry.organization.dto.OrganizationResponse;
 import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.reporting.service.CacheInvalidationService;
@@ -28,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -76,9 +78,9 @@ class OrganizationServiceTest {
                 .thenReturn(List.<Object[]>of(new Object[]{orgId, 0L, null}));
 
         OrganizationResponse resp =
-                organizationService.changeTier(orgId, new ChangeTierRequest(SubscriptionTier.PREMIUM), actorId);
+                organizationService.changeTier(orgId, new ChangeTierRequest(SubscriptionTier.GROWTH), actorId);
 
-        assertThat(resp.subscriptionTier()).isEqualTo(SubscriptionTier.PREMIUM);
+        assertThat(resp.subscriptionTier()).isEqualTo(SubscriptionTier.GROWTH);
         // The leftover trial marker must be gone — this is what keeps the sweep from downgrading it.
         assertThat(org.getTrialEndsAt()).isNull();
         assertThat(resp.trialEndsAt()).isNull();
@@ -89,7 +91,7 @@ class OrganizationServiceTest {
     /** Direct downgrade to FREE also clears any leftover trial marker (kept consistent with tier). */
     @Test
     void changeTier_toFree_clearsStaleTrialEndsAt() {
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         org.setTrialEndsAt(Instant.now().plus(5, ChronoUnit.DAYS));
         when(organizationRepository.findById(orgId)).thenReturn(Optional.of(org));
         when(organizationRepository.save(any(Organization.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -105,13 +107,13 @@ class OrganizationServiceTest {
 
     @Test
     void changeTier_alreadyOnTargetTier_throws() {
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         when(organizationRepository.findById(orgId)).thenReturn(Optional.of(org));
 
         assertThatThrownBy(() -> organizationService.changeTier(
-                orgId, new ChangeTierRequest(SubscriptionTier.PREMIUM), actorId))
+                orgId, new ChangeTierRequest(SubscriptionTier.GROWTH), actorId))
                 .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("already on the PREMIUM tier");
+                .hasMessageContaining("already on the GROWTH tier");
     }
 
     // --- Sub-organizations --------------------------------------------------
@@ -133,7 +135,7 @@ class OrganizationServiceTest {
         when(organizationRepository.findById(subOrgId)).thenReturn(Optional.of(subOrg));
 
         assertThatThrownBy(() -> organizationService.changeTier(
-                subOrgId, new ChangeTierRequest(SubscriptionTier.PREMIUM), actorId))
+                subOrgId, new ChangeTierRequest(SubscriptionTier.GROWTH), actorId))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("parent organization");
     }
@@ -159,6 +161,51 @@ class OrganizationServiceTest {
         assertThat(org.isActive()).isFalse();
         assertThat(subOrg.isActive()).isFalse();
         assertThat(childMember.getStatus()).isEqualTo(com.bvisionry.common.enums.UserStatus.SUSPENDED);
+    }
+
+    // --- Inactivity nudge window (roadmap §7 items 7 + 18) -------------------
+
+    @Test
+    void getNudgeSettings_returnsTheOrgsOwnWindow() {
+        org.setInactivityNudgeDays(21);
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(org));
+
+        assertThat(organizationService.getNudgeSettings(orgId).inactivityNudgeDays()).isEqualTo(21);
+    }
+
+    @Test
+    void updateNudgeSettings_persistsTheNewWindow() {
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(org));
+
+        var result = organizationService.updateNudgeSettings(orgId, new NudgeSettingsDto(30));
+
+        assertThat(result.inactivityNudgeDays()).isEqualTo(30);
+        assertThat(org.getInactivityNudgeDays()).isEqualTo(30);
+        verify(organizationRepository).save(org);
+    }
+
+    /**
+     * Zero is the org's off switch, not a missing value — it must persist rather
+     * than fall back to the default, or an org that asked for silence keeps
+     * being nudged.
+     */
+    @Test
+    void updateNudgeSettings_zeroDisablesNudging() {
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(org));
+
+        assertThat(organizationService.updateNudgeSettings(orgId, new NudgeSettingsDto(0))
+                .inactivityNudgeDays()).isZero();
+        assertThat(org.getInactivityNudgeDays()).isZero();
+        verify(organizationRepository).save(org);
+    }
+
+    @Test
+    void updateNudgeSettings_writesNothingWhenTheValueIsUnchanged() {
+        when(organizationRepository.findById(orgId)).thenReturn(Optional.of(org));
+
+        organizationService.updateNudgeSettings(orgId, new NudgeSettingsDto(14));
+
+        verify(organizationRepository, never()).save(any(Organization.class));
     }
 
     @Test

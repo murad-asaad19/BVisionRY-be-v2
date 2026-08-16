@@ -63,11 +63,10 @@ public class ProgramAiService {
 
     // --------------------------------------------------------------- composer
 
-    public SseEmitter compose(UUID orgId, UUID cohortId, String prompt) {
-        // Tenant guard: the cohort must belong to the org in the path (mirrors
-        // every other admin program endpoint) so a foreign cohortId can't leak
-        // another org's curriculum into the composer prompt.
-        cohortService.require(orgId, cohortId);
+    public SseEmitter compose(UUID cohortId, String prompt) {
+        // The cohort must exist (spec §13: platform-scoped, super-admin only —
+        // the controller's authority check is the tenancy story now).
+        cohortService.require(cohortId);
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         AtomicBoolean drafting = new AtomicBoolean(false);
 

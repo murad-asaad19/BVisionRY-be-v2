@@ -88,8 +88,7 @@ The schema is **Flyway-owned**: `spring.jpa.hibernate.ddl-auto=none`, so Hiberna
 never creates or alters tables — every schema change is a versioned migration in
 `src/main/resources/db/migration` (`V1__…` … `V113__…`, ~112 files;
 `baseline-on-migrate=true`). The canonical database is `bvisionry`; on a fresh data dir
-the compose `db` service restores `docker/db/bvisionry-baseline.sql`, and the LMS
-migrations fold on top.
+the DB starts empty and Flyway builds the full schema on first boot.
 
 **Migrations are immutable and append-only. Never delete, edit, or renumber an
 applied migration** — its checksum is recorded in every database's

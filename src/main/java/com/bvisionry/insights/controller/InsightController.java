@@ -5,7 +5,7 @@ import com.bvisionry.insights.dto.InsightGenerateResponse;
 import com.bvisionry.insights.dto.InsightListResponse;
 import com.bvisionry.insights.dto.InsightReportResponse;
 import com.bvisionry.insights.service.InsightService;
-import com.bvisionry.reporting.service.PremiumFeatureGuard;
+import com.bvisionry.common.security.PremiumFeatureGuard;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;

@@ -2,6 +2,8 @@ package com.bvisionry.organization;
 
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.common.enums.SubscriptionTier;
+import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.organization.dto.NudgeSettingsDto;
 import com.bvisionry.organization.entity.Organization;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
 import com.bvisionry.testsupport.EnabledIfDockerAvailable;
@@ -13,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.mock.env.MockEnvironment;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -32,6 +35,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
     @Autowired private MockMvc mockMvc;
     @Autowired private OrganizationRepository organizationRepository;
     @Autowired private UserRepository userRepository;
+    @Autowired private OrganizationService organizationService;
 
     @BeforeEach
     void setUp() {
@@ -118,6 +122,79 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
                 .andExpect(status().isNotFound());
     }
 
+    /**
+     * Redesign F-11 ruling (2026-08-10): the sub-org Settings tab opens to that
+     * sub-org's own admins, split by decision ownership — the ORG PROFILE (name
+     * + description) is theirs. The class-level guard is SUPER_ADMIN-only, so
+     * the method-level in-org override on PUT /{id} is the whole defense and is
+     * asserted in both directions.
+     */
+    @Test
+    void update_orgAdminRenamesOwnOrg_butNotAForeignOne() throws Exception {
+        Organization own = new Organization(); own.setName("Own"); own.setActive(true);
+        own = organizationRepository.save(own);
+        Organization other = new Organization(); other.setName("Other"); other.setActive(true);
+        other = organizationRepository.save(other);
+        TestAuthentication.authenticateAsOrgAdmin(userRepository, own);
+
+        mockMvc.perform(put("/api/organizations/" + own.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name": "Renamed by its admin", "description": "New blurb"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name", is("Renamed by its admin")))
+                .andExpect(jsonPath("$.description", is("New blurb")))
+                // §7b: the Settings profile card stamps this moment, so the
+                // response has to carry it.
+                .andExpect(jsonPath("$.updatedAt", notNullValue()));
+
+        mockMvc.perform(put("/api/organizations/" + other.getId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name": "Hijacked", "description": null}
+                                """))
+                .andExpect(status().isForbidden());
+    }
+
+    /**
+     * The other half of the same ruling: everything a PLAN decides stays with
+     * Bvisionry. Opening the profile PUT must not leak into tier, trial or
+     * lifecycle — those keep the class-level SUPER_ADMIN-only guard, on the org
+     * admin's OWN org (the strongest case they could make).
+     */
+    @Test
+    void update_orgAdminCannotChangeTierTrialOrLifecycleOfTheirOwnOrg() throws Exception {
+        Organization own = new Organization(); own.setName("Own"); own.setActive(true);
+        own = organizationRepository.save(own);
+        TestAuthentication.authenticateAsOrgAdmin(userRepository, own);
+        String base = "/api/organizations/" + own.getId();
+
+        mockMvc.perform(patch(base + "/tier")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"tier": "FOUNDER_SUCCESS"}
+                                """))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(post(base + "/trial")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"durationDays": 30}
+                                """))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(patch(base + "/active?active=false"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(delete(base))
+                .andExpect(status().isForbidden());
+
+        // …and nothing moved.
+        Organization after = organizationRepository.findById(own.getId()).orElseThrow();
+        org.assertj.core.api.Assertions.assertThat(after.getSubscriptionTier())
+                .isEqualTo(SubscriptionTier.FREE);
+        org.assertj.core.api.Assertions.assertThat(after.isActive()).isTrue();
+        org.assertj.core.api.Assertions.assertThat(after.getTrialEndsAt()).isNull();
+    }
+
     @Test
     void changeTier_returns200() throws Exception {
         Organization org = new Organization();
@@ -128,10 +205,10 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
         mockMvc.perform(patch("/api/organizations/" + org.getId() + "/tier")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"tier": "PREMIUM"}
+                                {"tier": "GROWTH"}
                                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.subscriptionTier", is("PREMIUM")));
+                .andExpect(jsonPath("$.subscriptionTier", is("GROWTH")));
     }
 
     @Test
@@ -146,7 +223,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
     }
 
     @Test
-    void startTrial_returns200_setsPremium() throws Exception {
+    void startTrial_returns200_setsGrowth() throws Exception {
         Organization org = new Organization();
         org.setName("TrialOrg"); org.setActive(true);
         org = organizationRepository.save(org);
@@ -155,7 +232,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"durationDays\": 14}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.subscriptionTier", is("PREMIUM")))
+                .andExpect(jsonPath("$.subscriptionTier", is("GROWTH")))
                 .andExpect(jsonPath("$.trialEndsAt", notNullValue()))
                 .andExpect(jsonPath("$.displayState", is("TRIAL")));
     }
@@ -176,7 +253,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
     void startTrial_alreadyOnTrial_returns400() throws Exception {
         Organization org = new Organization();
         org.setName("DupTrial"); org.setActive(true);
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         org.setTrialEndsAt(Instant.now().plus(2, ChronoUnit.DAYS));
         org = organizationRepository.save(org);
 
@@ -189,7 +266,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
     void extendTrial_addsDays() throws Exception {
         Organization org = new Organization();
         org.setName("ExtendOrg"); org.setActive(true);
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         org.setTrialEndsAt(Instant.now().plus(2, ChronoUnit.DAYS));
         org = organizationRepository.save(org);
 
@@ -204,7 +281,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
     void endTrialEarly_returnsFree() throws Exception {
         Organization org = new Organization();
         org.setName("EndEarly"); org.setActive(true);
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         org.setTrialEndsAt(Instant.now().plus(2, ChronoUnit.DAYS));
         org = organizationRepository.save(org);
 
@@ -216,7 +293,7 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
     @Test
     void dashboard_returnsKpisAndTierMix() throws Exception {
         Organization a = new Organization(); a.setName("A"); a.setActive(true);
-        a.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        a.setSubscriptionTier(SubscriptionTier.GROWTH);
         organizationRepository.save(a);
         Organization b = new Organization(); b.setName("B"); b.setActive(false);
         organizationRepository.save(b);
@@ -226,8 +303,15 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
                 .andExpect(jsonPath("$.kpis.totalOrgs", is(2)))
                 .andExpect(jsonPath("$.kpis.activeCount", is(1)))
                 .andExpect(jsonPath("$.kpis.suspendedCount", is(1)))
-                .andExpect(jsonPath("$.tierMix.premium", is(1)))
-                .andExpect(jsonPath("$.tierMix.free", is(1)))
+                // Per tier by NAME. This used to assert `tierMix.premium`, a bucket
+                // derived by subtraction — which is exactly why the console kept
+                // printing the tier name V156 deleted: with no `== PREMIUM`
+                // anywhere, removing the constant had nothing to flag.
+                .andExpect(jsonPath("$.tierMix.byTier.GROWTH", is(1)))
+                .andExpect(jsonPath("$.tierMix.byTier.FREE", is(1)))
+                .andExpect(jsonPath("$.tierMix.byTier.STARTER", is(0)))
+                .andExpect(jsonPath("$.tierMix.byTier.FOUNDER_SUCCESS", is(0)))
+                .andExpect(jsonPath("$.tierMix.onTrial", is(0)))
                 .andExpect(jsonPath("$.attention", isA(java.util.List.class)));
     }
 
@@ -239,5 +323,172 @@ class OrganizationControllerIntegrationTest extends AbstractPostgresIntegrationT
         mockMvc.perform(get("/api/organizations/" + org.getId() + "/activity"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items", isA(java.util.List.class)));
+    }
+
+    // --- inactivity nudge window (roadmap §7 items 7 + 18) -------------------
+
+    @Test
+    void nudgeSettings_defaultToThePolicyWindowAndRoundTrip() throws Exception {
+        Organization org = new Organization(); org.setName("Nudge Org"); org.setActive(true);
+        org = organizationRepository.save(org);
+
+        // Every existing org gets 14 from the migration's DEFAULT — no backfill,
+        // no null-means-default branch (policy defaults.inactivity_threshold_days).
+        mockMvc.perform(get("/api/organizations/" + org.getId() + "/nudge-settings"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inactivityNudgeDays", is(14)));
+
+        mockMvc.perform(put("/api/organizations/" + org.getId() + "/nudge-settings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"inactivityNudgeDays": 30}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inactivityNudgeDays", is(30)));
+
+        mockMvc.perform(get("/api/organizations/" + org.getId() + "/nudge-settings"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inactivityNudgeDays", is(30)));
+    }
+
+    @Test
+    void nudgeSettings_zeroIsAcceptedAsTheOrgsOffSwitch() throws Exception {
+        Organization org = new Organization(); org.setName("Quiet Org"); org.setActive(true);
+        org = organizationRepository.save(org);
+
+        mockMvc.perform(put("/api/organizations/" + org.getId() + "/nudge-settings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"inactivityNudgeDays": 0}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inactivityNudgeDays", is(0)));
+    }
+
+    /**
+     * The 90 cap is load-bearing: send-once is decided by reading the
+     * notification history, which retention purges at 90 days, so a longer
+     * window would silently re-nudge once the evidence was gone. Rejected at
+     * the DTO (400) as well as by the V149 CHECK.
+     */
+    @Test
+    void nudgeSettings_rejectsAWindowLongerThanNotificationRetention() throws Exception {
+        Organization org = new Organization(); org.setName("Too Long"); org.setActive(true);
+        org = organizationRepository.save(org);
+
+        mockMvc.perform(put("/api/organizations/" + org.getId() + "/nudge-settings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"inactivityNudgeDays": 91}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(put("/api/organizations/" + org.getId() + "/nudge-settings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"inactivityNudgeDays": -1}
+                                """))
+                .andExpect(status().isBadRequest());
+    }
+
+    /**
+     * The silent-disable hole: with a primitive {@code int} an absent field
+     * binds to 0, which passes {@code @Min(0)} AND is the org-wide off switch —
+     * so {@code PUT {}} returned 200 and killed an org's nudges with nothing in
+     * the request saying so. Turning nudges off must be asked for.
+     */
+    @Test
+    void nudgeSettings_emptyBody_isRefusedRatherThanReadAsZero() throws Exception {
+        Organization org = new Organization(); org.setName("No Body"); org.setActive(true);
+        org = organizationRepository.save(org);
+
+        mockMvc.perform(put("/api/organizations/" + org.getId() + "/nudge-settings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(put("/api/organizations/" + org.getId() + "/nudge-settings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"inactivityNudgeDays": null}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        // …and the org still nudges.
+        mockMvc.perform(get("/api/organizations/" + org.getId() + "/nudge-settings"))
+                .andExpect(jsonPath("$.inactivityNudgeDays", is(14)));
+    }
+
+    /**
+     * The binding cap is DERIVED from notification retention, not the DTO's
+     * static {@code @Max(90)}. Send-once reads the notification history, which
+     * NotificationRetentionJob purges at that property, so a window longer than
+     * retention reads as "never nudged" once the evidence is gone and re-nudges
+     * early. Tighten retention and this tightens with it.
+     *
+     * <p>Driven as a POJO with a {@link MockEnvironment} rather than a second
+     * {@code @TestPropertySource} context: only {@code environment} is read
+     * before the refusal, so the collaborators this path never reaches are left
+     * null deliberately.
+     */
+    @Test
+    void nudgeSettings_capDerivesFromNotificationRetention() {
+        // NOT named `org` — that would shadow the `org.*` package below.
+        Organization target = new Organization();
+        target.setName("Tight Retention");
+        target.setActive(true);
+        java.util.UUID id = organizationRepository.save(target).getId();
+
+        OrganizationController tightened = new OrganizationController(
+                new com.bvisionry.config.SecurityContextCurrentUserAccessor(),
+                organizationService, null, null, null, null,
+                new MockEnvironment().withProperty("bvisionry.notifications.retention-days", "30"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        tightened.updateNudgeSettings(id, new NudgeSettingsDto(45)))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("30");
+
+        // 45 clears the DTO's static @Max(90) — the derived cap is what refused
+        // it. Non-positive retention disables the purge, so history is kept
+        // forever and the same 45 is then perfectly safe.
+        OrganizationController noPurge = new OrganizationController(
+                new com.bvisionry.config.SecurityContextCurrentUserAccessor(),
+                organizationService, null, null, null, null,
+                new MockEnvironment().withProperty("bvisionry.notifications.retention-days", "0"));
+        org.assertj.core.api.Assertions.assertThat(
+                        noPurge.updateNudgeSettings(id, new NudgeSettingsDto(45))
+                                .getBody().inactivityNudgeDays())
+                .isEqualTo(45);
+    }
+
+    @Test
+    void nudgeSettings_unknownOrg_returns404() throws Exception {
+        mockMvc.perform(get("/api/organizations/" + java.util.UUID.randomUUID() + "/nudge-settings"))
+                .andExpect(status().isNotFound());
+    }
+
+    /**
+     * The knob is deliberately NOT super-admin-only — an org admin owns their
+     * own org's nudge cadence — so the org gate is the whole defense at the
+     * method layer and has to be asserted, not assumed.
+     */
+    @Test
+    void nudgeSettings_orgAdminOfAnotherOrg_isRefused() throws Exception {
+        Organization own = new Organization(); own.setName("Own"); own.setActive(true);
+        own = organizationRepository.save(own);
+        Organization other = new Organization(); other.setName("Other"); other.setActive(true);
+        other = organizationRepository.save(other);
+        TestAuthentication.authenticateAsOrgAdmin(userRepository, own);
+
+        mockMvc.perform(get("/api/organizations/" + own.getId() + "/nudge-settings"))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/organizations/" + other.getId() + "/nudge-settings"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(put("/api/organizations/" + other.getId() + "/nudge-settings")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"inactivityNudgeDays": 1}
+                                """))
+                .andExpect(status().isForbidden());
     }
 }

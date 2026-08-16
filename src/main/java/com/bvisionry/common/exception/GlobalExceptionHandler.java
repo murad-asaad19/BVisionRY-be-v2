@@ -1,6 +1,9 @@
 package com.bvisionry.common.exception;
 
+import com.bvisionry.common.errortracking.ErrorEventRecorder;
 import com.bvisionry.common.web.ProblemDetails;
+import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -12,8 +15,17 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 @RestControllerAdvice
+@RequiredArgsConstructor
 @Slf4j
 public class GlobalExceptionHandler {
+
+    /**
+     * Aggregates the 500 catch-all into the queryable in-box error store. Only
+     * {@link #handleGeneral} feeds it: every other handler here maps a KNOWN,
+     * expected condition (404, 403, validation, …) to a deliberate status, and
+     * recording those would bury real regressions in routine traffic.
+     */
+    private final ErrorEventRecorder errorEventRecorder;
 
     @ExceptionHandler(AuthenticationException.class)
     public ProblemDetail handleAuthentication(AuthenticationException ex) {
@@ -56,6 +68,19 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Cohort-launch quota spent (spec §8): 409 with the machine-readable half
+     * the UI needs — {@code nextAvailableDate} (null when no date helps:
+     * trial lifetime cap / FREE) and {@code tier}.
+     */
+    @ExceptionHandler(LaunchQuotaExceededException.class)
+    public ProblemDetail handleLaunchQuotaExceeded(LaunchQuotaExceededException ex) {
+        ProblemDetail problem = problem(HttpStatus.CONFLICT, ex.getMessage());
+        problem.setProperty("nextAvailableDate", ex.getNextAvailableDate());
+        problem.setProperty("tier", ex.getTier());
+        return problem;
+    }
+
+    /**
      * A unique/foreign-key constraint collision — most notably two concurrent
      * autosaves racing to insert the first answer for the same
      * (submission, question) pair past the V86 unique index. Without this it falls
@@ -68,6 +93,14 @@ public class GlobalExceptionHandler {
             org.springframework.dao.DataIntegrityViolationException ex) {
         log.warn("Data integrity violation: {}", ex.getMostSpecificCause().getMessage());
         return problem(HttpStatus.CONFLICT, "This change conflicts with a concurrent update. Please retry.");
+    }
+
+    /** Service-layer structural validation — same wire shape as bean validation below. */
+    @ExceptionHandler(FieldValidationException.class)
+    public ProblemDetail handleFieldValidation(FieldValidationException ex) {
+        ProblemDetail problem = problem(HttpStatus.BAD_REQUEST, ex.getMessage());
+        problem.setProperty("fieldErrors", ex.getFieldErrors());
+        return problem;
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -166,8 +199,11 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public ProblemDetail handleGeneral(Exception ex) {
+    public ProblemDetail handleGeneral(Exception ex, HttpServletRequest request) {
         log.error("Unhandled exception", ex);
+        // Best effort — the recorder swallows its own failures, so a store outage
+        // can never turn one 500 into two.
+        errorEventRecorder.recordBackendException(ex, request);
         return problem(HttpStatus.INTERNAL_SERVER_ERROR, "An unexpected error occurred. Please try again later.");
     }
 

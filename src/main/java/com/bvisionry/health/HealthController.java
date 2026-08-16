@@ -1,5 +1,6 @@
 package com.bvisionry.health;
 
+import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import java.util.Map;
 
 import org.springframework.web.bind.annotation.GetMapping;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class HealthController {
 
+    @AuthorizedInSecurityConfig("permitAll: liveness probe for the Docker Compose healthcheck")
     @GetMapping("/api/v1/health")
     public Map<String, String> health() {
         return Map.of("status", "ok");

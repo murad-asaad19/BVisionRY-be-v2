@@ -19,13 +19,71 @@ import com.bvisionry.common.exception.BadRequestException;
  * presigned GET URLs, so allowing markup would open a stored-XSS channel on
  * the object-store origin.</p>
  *
- * <p>Size caps apply to the server-proxied multipart path only: a presigned
- * PUT does not bind Content-Length, so the presign path cannot enforce a size
- * server-side (the fronting proxy and MinIO quotas are the bounds there).</p>
+ * <p>Size caps apply to the server-proxied multipart path always, and to the
+ * presign path wherever the declared size is signed into the PUT as
+ * Content-Length — the org-scoped branding and COACH profile-photo paths (see
+ * {@code MediaService.presignUpload}). The historical SUPER_ADMIN/INSTRUCTOR
+ * lesson-media presign alone stays unbound (its client sends no size and its
+ * files are legitimately large); the fronting proxy and MinIO quotas bound it.</p>
  */
 final class MediaUploadPolicy {
 
     private MediaUploadPolicy() {}
+
+    /** The only kind an org-scoped (white-label branding) upload may carry. */
+    static final String ORG_SCOPED_KIND = "image";
+
+    /**
+     * Org-scoped uploads are branding logos and nothing else.
+     *
+     * <p>This is the enforcement half of widening {@code MediaController} to
+     * admit ORG_ADMIN. Authorization admits an ORG_ADMIN <em>only</em> with an
+     * {@code orgId} they pass {@code @orgAccess.isInOrg} for; this method
+     * refuses any org-scoped upload whose kind is not {@code image}. Composed,
+     * the two mean an ORG_ADMIN can upload images and nothing else — no videos,
+     * no PDFs, no generic assets — on BOTH the multipart and the presign path,
+     * because both call it.
+     *
+     * <p>Enforced here rather than in the {@code @PreAuthorize} expression on
+     * purpose: the presign path carries {@code kind} in the request BODY, and
+     * SpEL property access on a record is not something to bet an authorization
+     * rule on. A plain Java guard behaves identically on both paths.
+     */
+    static void requireOrgScopedKindIsImage(String kind, java.util.UUID orgId) {
+        if (orgId != null && !ORG_SCOPED_KIND.equals(kind)) {
+            throw new BadRequestException(
+                    "Org-scoped uploads must use kind '" + ORG_SCOPED_KIND + "', not '" + kind + "'");
+        }
+    }
+
+    /**
+     * A COACH's only legitimate upload is their own profile photo.
+     *
+     * <p>The enforcement half of admitting COACH to the platform path in
+     * {@code MediaController}. Authorization admits a coach only when no
+     * {@code orgId} is present; this refuses any such upload whose kind is not
+     * {@code image}. Composed, a coach can upload images and nothing else — no
+     * videos, no PDFs, no generic assets — on BOTH the multipart and the
+     * presign path, exactly as {@link #requireOrgScopedKindIsImage} bounds an
+     * ORG_ADMIN.
+     *
+     * <p>Enforced in Java rather than SpEL for the same reason: {@code kind}
+     * rides in the request BODY on the presign path, and an authorization rule
+     * that reads a record component through SpEL fails open when the property
+     * reference is wrong.
+     *
+     * @param callerRole the authenticated caller's role name
+     */
+    static void requireCoachKindIsImage(String kind, String callerRole) {
+        if (COACH_ROLE.equals(callerRole) && !ORG_SCOPED_KIND.equals(kind)) {
+            throw new BadRequestException(
+                    "Coaches may only upload their profile photo (kind '" + ORG_SCOPED_KIND
+                            + "'), not '" + kind + "'");
+        }
+    }
+
+    /** Role name whose uploads are bounded to a profile photo. */
+    static final String COACH_ROLE = "COACH";
 
     private record KindPolicy(Set<String> contentTypes, long maxUploadBytes) {}
 

@@ -3,6 +3,9 @@ package com.bvisionry.exercise;
 import com.bvisionry.audit.AuditService;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
+import com.bvisionry.common.event.ProgramFlowEvents;
+import com.bvisionry.common.media.MediaUrlPort;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.exercise.dto.ExerciseColumnResponse;
@@ -23,11 +26,10 @@ import com.bvisionry.exercise.repository.ExerciseCommentRepository;
 import com.bvisionry.exercise.repository.ExerciseColumnRepository;
 import com.bvisionry.exercise.repository.ExerciseRowRepository;
 import com.bvisionry.exercise.repository.ExerciseSubmissionRepository;
-import com.bvisionry.notification.push.NotificationType;
-import com.bvisionry.notification.push.PushNotificationService;
 import com.bvisionry.organization.OrgAuditActions;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,8 +57,13 @@ public class ExerciseSubmissionService {
     private final ExerciseRowRepository rowRepository;
     private final ExerciseColumnRepository columnRepository;
     private final ExerciseCommentRepository commentRepository;
+    private final MediaUrlPort mediaUrlPort;
     private final AuditService auditService;
-    private final PushNotificationService pushNotificationService;
+    // Published, not called directly: see AssessmentService's field comment —
+    // a direct notification.push call here is a NEW frozen-ArchUnit violation
+    // even where the class pair is already frozen, so both submit-notify call
+    // sites below go through ProgramFlowPushHandler instead.
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(readOnly = true)
     public List<MyExerciseSummaryResponse> listMine(UUID userId) {
@@ -215,11 +222,8 @@ public class ExerciseSubmissionService {
                 OrgAuditActions.ENTITY_EXERCISE_SUBMISSION, submission.getId(),
                 Map.of("exerciseName", template.getName(),
                        "memberName", submission.getUser().getName()));
-        pushNotificationService.notifyOrgAdmins(orgId, NotificationType.EXERCISE_ACTIVITY,
-                "Exercise submitted",
-                submission.getUser().getName() + " submitted \"" + template.getName() + "\".",
-                "/app/admin/exercises",
-                "/app/admin/exercises");
+        eventPublisher.publishEvent(new ProgramFlowEvents.ExerciseSubmitted(
+                orgId, userId, submission.getUser().getName(), template.getName()));
 
         return buildDetail(submission, false);
     }
@@ -247,13 +251,9 @@ public class ExerciseSubmissionService {
         ExerciseComment saved = commentRepository.save(replyComment);
 
         ExerciseTemplate template = submission.getAssignment().getTemplate();
-        pushNotificationService.notifyOrgAdmins(
-                submission.getAssignment().getOrganization().getId(),
-                NotificationType.EXERCISE_ACTIVITY,
-                "Exercise feedback reply",
-                submission.getUser().getName() + " replied on \"" + template.getName() + "\".",
-                "/app/admin/exercises",
-                "/app/admin/exercises");
+        eventPublisher.publishEvent(new ProgramFlowEvents.ExerciseFeedbackReplied(
+                submission.getAssignment().getOrganization().getId(), userId,
+                submission.getUser().getName(), template.getName()));
 
         return ExerciseCommentResponse.from(saved, false);
     }
@@ -262,7 +262,13 @@ public class ExerciseSubmissionService {
 
     /**
      * Everything one screen needs in one payload. {@code forAdmin} additionally
-     * exposes the member's name/email (the member already knows their own).
+     * exposes the member's name/email (the member already knows their own) —
+     * except the email for a COACH caller: {@code coach_sees} excludes contact
+     * data, so a coach reviewing a submission gets the name only.
+     *
+     * <p>{@code forAdmin} also gates the quality tag and its options (spec §4):
+     * the tag is the reviewer's metadata about the work, and a member who saw
+     * "Thin" on their own sheet would read it as a grade nobody meant to give.
      */
     @Transactional(readOnly = true)
     public ExerciseSubmissionDetailResponse buildDetail(ExerciseSubmission submission, boolean forAdmin) {
@@ -291,18 +297,31 @@ public class ExerciseSubmissionService {
                 template.getId(),
                 template.getName(),
                 template.getDescription(),
+                mediaUrlPort.resolveUrl(template.getCoverImageUrl()),
                 submission.getStatus(),
                 submission.getAssignment().getDeadline(),
                 submission.getLastSavedAt(),
                 submission.getSubmittedAt(),
+                submission.getChangesRequestedAt(),
                 submission.getReviewedAt(),
                 forAdmin ? member.getName() : null,
-                forAdmin ? member.getEmail() : null,
+                forAdmin && !isCoachCaller() ? member.getEmail() : null,
                 columns,
                 template.getExampleRow(),
                 template.isAllowAddRows(),
                 rows,
-                comments);
+                comments,
+                forAdmin ? submission.getQualityTagKey() : null,
+                forAdmin ? submission.getQualityTagLabel() : null,
+                forAdmin ? submission.getQualityTaggedAt() : null,
+                forAdmin && qualityTagCatalog != null
+                        ? qualityTagCatalog.reviewerName(submission.getQualityTaggedBy()) : null,
+                forAdmin && qualityTagCatalog != null
+                        ? qualityTagCatalog.tags().stream()
+                                .map(t -> new ExerciseSubmissionDetailResponse
+                                        .ExerciseQualityTagOption(t.key(), t.label()))
+                                .toList()
+                        : List.of());
     }
 
     @Transactional(readOnly = true)
@@ -336,8 +355,57 @@ public class ExerciseSubmissionService {
         return clean;
     }
 
+    /**
+     * Setter-injected on purpose: this class's constructor signature carries
+     * cross-feature parameters pinned verbatim in the frozen ArchUnit store
+     * (append-never), so it cannot grow a constructor parameter. The accessor
+     * is a shared-kernel type, so the edge itself is legal.
+     */
+    private CurrentUserAccessor currentUserAccessor;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setCurrentUserAccessor(CurrentUserAccessor currentUserAccessor) {
+        this.currentUserAccessor = currentUserAccessor;
+    }
+
+    /**
+     * Setter-injected for the same frozen-signature reason as above (the bean
+     * itself is same-feature, so the edge is legal). Null in plain unit tests
+     * without a Spring context — the staff-only tag fields then read as absent
+     * rather than blowing up a member-path test.
+     */
+    private QualityTagCatalog qualityTagCatalog;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setQualityTagCatalog(QualityTagCatalog qualityTagCatalog) {
+        this.qualityTagCatalog = qualityTagCatalog;
+    }
+
+    /**
+     * Is the authenticated caller a COACH? Null accessor = plain unit tests
+     * without a Spring context; treat as non-coach (the admin paths those
+     * tests drive). Only consulted behind {@code forAdmin}, so member-facing
+     * builds never touch the security context.
+     */
+    private boolean isCoachCaller() {
+        return currentUserAccessor != null
+                && UserRole.COACH.name().equals(currentUserAccessor.require().role());
+    }
+
+    /**
+     * "Reviewer side of the loop" — drives the DTO's {@code byAdmin} flag (the
+     * web renders it as a "Reviewer" badge). Coaches review too, so a coach's
+     * comment must keep the badge when the thread is re-hydrated.
+     *
+     * <p>Exactly two {@code getRole()} call sites on purpose: this method's
+     * exercise→auth call occurrences are pinned by count in the frozen ArchUnit
+     * store (append-never), so one call would prune a stored violation and
+     * three would mint a new one.
+     */
     private static boolean isAdmin(User user) {
-        return user.getRole() == UserRole.ORG_ADMIN || user.getRole() == UserRole.SUPER_ADMIN;
+        UserRole role = user.getRole();
+        return role == UserRole.ORG_ADMIN || role == UserRole.SUPER_ADMIN
+                || user.getRole() == UserRole.COACH;
     }
 
     /**

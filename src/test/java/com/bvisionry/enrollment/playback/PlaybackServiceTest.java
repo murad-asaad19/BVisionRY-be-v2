@@ -19,6 +19,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
+import com.bvisionry.config.SecurityContextCurrentUserAccessor;
+import com.bvisionry.common.security.CurrentUserAccessor;
+import org.mockito.Spy;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.access.AccessDeniedException;
@@ -48,6 +51,11 @@ class PlaybackServiceTest {
     @Mock private EnrollmentRepository enrollments;
     @Mock private ContentProgressRepository progresses;
     @Mock private EnrollmentService enrollmentService;
+
+    // The service resolves the caller through this port; the spy delegates to
+    // the real adapter, which reads the same SecurityContextHolder the tests set.
+    @Spy
+    private CurrentUserAccessor currentUserAccessor = new SecurityContextCurrentUserAccessor();
 
     @InjectMocks
     private PlaybackService service;

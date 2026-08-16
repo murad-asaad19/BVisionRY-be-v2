@@ -5,13 +5,13 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
 import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.programflow.domain.Cohort;
 import com.bvisionry.programflow.domain.CohortStatus;
@@ -19,14 +19,12 @@ import com.bvisionry.programflow.domain.ModuleLockMode;
 import com.bvisionry.programflow.domain.ProgramModule;
 import com.bvisionry.programflow.domain.ProgramTask;
 import com.bvisionry.programflow.domain.ProgramTaskStatus;
-import com.bvisionry.programflow.domain.SubmissionStatus;
+import com.bvisionry.programflow.repository.CohortMemberRow;
 import com.bvisionry.programflow.repository.CohortRepository;
-import com.bvisionry.programflow.repository.OrgMemberRow;
 import com.bvisionry.programflow.repository.ProgramModuleRepository;
 import com.bvisionry.programflow.repository.ProgramSettingsRepository;
-import com.bvisionry.programflow.repository.ProgramSubmissionRepository;
+import com.bvisionry.programflow.repository.TaskSpineRepository;
 import com.bvisionry.programflow.repository.ProgramTaskRepository;
-import com.bvisionry.programflow.repository.TeamRepository;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -39,14 +37,16 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
  *
  * <ul>
  *   <li><b>Module unlocked</b> — a SCHEDULED module's {@code unlockAt} passed.</li>
- *   <li><b>Task due soon</b> — a LIVE task enters its cohort's due-soon window
- *       and the learner hasn't submitted.</li>
+ *   <li><b>Task due soon</b> — a LIVE task of any type enters its cohort's due-soon
+ *       window and the learner's per-type done state says it is not done.</li>
  * </ul>
  *
  * Both are send-once: the row is stamped ({@code unlock_notified_at} /
  * {@code due_reminder_sent_at}) in the same transaction that publishes, so
  * restarts and overlapping schedules can't double-send. Recipients are always
- * the module's cohort enrolment ∩ its audience; FINISHED cohorts stay silent.
+ * the module's cohort enrolment ∩ its audience; a cohort that is not LAUNCHED
+ * is skipped without consuming its stamp, so an unlaunch/relaunch defers
+ * rather than swallows the notification.
  */
 @Component
 @RequiredArgsConstructor
@@ -58,10 +58,10 @@ public class ProgramNotificationJob {
 
     private final ProgramModuleRepository modules;
     private final ProgramTaskRepository tasks;
-    private final ProgramSubmissionRepository submissions;
+    private final TaskSpineRepository spine;
     private final ProgramSettingsRepository settings;
     private final CohortRepository cohorts;
-    private final TeamRepository teams;
+    private final CourseVisibilityAccess courseVisibility;
     private final ApplicationEventPublisher events;
 
     @Transactional
@@ -74,6 +74,9 @@ public class ProgramNotificationJob {
         for (ProgramModule module : modules
                 .findByLockModeAndUnlockAtLessThanEqualAndUnlockNotifiedAtIsNull(
                         ModuleLockMode.SCHEDULED, now)) {
+            if (!memberVisible(module.getCohortId())) {
+                continue; // hidden right now — defer, don't burn the one-shot stamp
+            }
             // Stamp first — even with zero recipients this unlock is now handled.
             module.setUnlockNotifiedAt(now);
             List<UUID> recipients = recipients(module);
@@ -96,6 +99,9 @@ public class ProgramNotificationJob {
         for (ProgramTask task : tasks.findDueForReminder(
                 ProgramTaskStatus.LIVE, today, today.plusDays(MAX_DUE_SOON_DAYS))) {
             ProgramModule module = task.getModule();
+            if (!memberVisible(module.getCohortId())) {
+                continue; // hidden right now — defer, don't burn the one-shot stamp
+            }
             int dueSoonDays = ProgramMapper
                     .toDto(settings.findById(module.getCohortId()).orElse(null))
                     .dueSoonDays();
@@ -103,12 +109,17 @@ public class ProgramNotificationJob {
                 continue; // not inside this cohort's own window yet — retried next run
             }
             task.setDueReminderSentAt(now);
-            Set<UUID> alreadySubmitted = submissions.findByTaskIdIn(List.of(task.getId())).stream()
-                    .filter(s -> s.getStatus() == SubmissionStatus.SUBMITTED)
-                    .map(s -> s.getUserId())
-                    .collect(Collectors.toSet());
-            List<UUID> recipients = recipients(module).stream()
-                    .filter(id -> !alreadySubmitted.contains(id))
+            // Per-type done state (spine SQL) — a COURSE task's reminder skips
+            // whoever completed the course, not whoever has a program submission.
+            Set<UUID> alreadyDone = Set.copyOf(spine.usersDoneWithTask(task.getId()));
+            List<CohortMemberRow> roster = recipientRows(module);
+            Set<UUID> blockedOrgs = blockedOrgs(task, roster);
+            List<UUID> recipients = roster.stream()
+                    .filter(m -> !alreadyDone.contains(m.getId()))
+                    // ProgramRules.gates: a COURSE the member's org cannot see is
+                    // not actionable — never nag about it.
+                    .filter(m -> !blockedOrgs.contains(m.getOrgId()))
+                    .map(CohortMemberRow::getId)
                     .toList();
             if (!recipients.isEmpty()) {
                 events.publishEvent(new ProgramFlowEvents.TaskDueSoon(
@@ -124,15 +135,49 @@ public class ProgramNotificationJob {
     // learner hasn't unlocked yet is an admin scheduling quirk, not worth the
     // per-learner lockState pass here.
     private List<UUID> recipients(ProgramModule module) {
+        return recipientRows(module).stream().map(CohortMemberRow::getId).toList();
+    }
+
+    /**
+     * Whether members can see the cohort right now (LAUNCHED). Checked BEFORE
+     * either send-once stamp is written: a DRAFT window must defer the
+     * notification, not consume it. A cohort that never launches keeps its
+     * rows in the candidate scans forever — harmless, the queries are indexed
+     * on the null stamp and the set is small.
+     */
+    private boolean memberVisible(UUID cohortId) {
+        return cohorts.findById(cohortId)
+                .map(c -> c.getStatus() == CohortStatus.LAUNCHED)
+                .orElse(false);
+    }
+
+    private List<CohortMemberRow> recipientRows(ProgramModule module) {
+        // The loops skip non-LAUNCHED cohorts before stamping (memberVisible);
+        // re-checked here harmlessly so a new caller cannot notify a draft.
         Cohort cohort = cohorts.findById(module.getCohortId()).orElse(null);
-        if (cohort == null || cohort.getStatus() == CohortStatus.FINISHED) {
+        if (cohort == null || cohort.getStatus() != CohortStatus.LAUNCHED) {
             return List.of();
         }
-        Set<UUID> enrolled = cohort.getMemberIds();
-        return teams.findOrgMembers(module.getOrgId()).stream()
-                .filter(member -> enrolled.contains(member.getId()))
-                .filter(member -> ProgramRules.includes(module, member.getId(), member.getTeamId()))
-                .map(OrgMemberRow::getId)
+        return cohorts.findRoster(cohort.getId()).stream()
+                .filter(member -> ProgramRules.includes(module, member.getId()))
                 .toList();
+    }
+
+    /**
+     * The roster orgs that may NOT see a COURSE task's course
+     * ({@code ProgramRules.gates}) — one visibility check per distinct org.
+     * Non-COURSE tasks block nothing; an org-less member is never gated.
+     */
+    private Set<UUID> blockedOrgs(ProgramTask task, List<CohortMemberRow> roster) {
+        if (task.getTaskType() != com.bvisionry.programflow.domain.ProgramTaskType.COURSE
+                || task.getRefId() == null) {
+            return Set.of();
+        }
+        return roster.stream()
+                .map(CohortMemberRow::getOrgId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .filter(orgId -> !courseVisibility.isVisibleToOrg(task.getRefId(), orgId))
+                .collect(java.util.stream.Collectors.toSet());
     }
 }

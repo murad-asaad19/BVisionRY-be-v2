@@ -449,6 +449,24 @@ public class SurveyResultsService {
     }
 
     /**
+     * A member's response to a SURVEY journey task (unique per V173) for the
+     * founder profile's Work-tab view (spec §2.4). CALLERS AUTHORIZE FIRST —
+     * the org guard stack or {@code CoachAccess} has already proved the caller
+     * may see this member's work; keying on (task, member) then leaks nothing.
+     */
+    @Transactional(readOnly = true)
+    public SurveyResponseDetailDto responseDetailForProgramTask(UUID taskId, UUID memberId) {
+        SurveyResponse r = responseRepository
+                .findByProgramTaskIdAndRespondentUserId(taskId, memberId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Survey response", taskId.toString()));
+        return new SurveyResponseDetailDto(
+                r.getId(), r.getSubmittedAt(), r.getSource(),
+                r.getRespondentEmail(), r.getRespondentName(),
+                buildAnswerDetailsForResponse(r.getId()));
+    }
+
+    /**
      * Permanently remove a single response (and, via DB cascade, its answers).
      * Scoped to the survey so a response id from another survey 404s instead
      * of deleting across surveys. A post-assessment response is embedded in

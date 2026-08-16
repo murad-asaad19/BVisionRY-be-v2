@@ -64,10 +64,21 @@ public class AIModelCatalogService {
         return factory;
     }
 
+    /**
+     * The provider's model list, or an EMPTY list when no API key is configured.
+     *
+     * <p>"No key yet" is the normal first-run state of every install, not an
+     * outage — and this read is on the page load of the admin AI-config console
+     * and the pillar editor's model picker. Throwing here mapped to a 503 and
+     * made a fresh platform look broken. Same degradation
+     * {@code aiengine.transport.ModelCapabilityRegistry} already applies for the
+     * same reason. A REAL upstream failure (key present, fetch fails) still
+     * throws {@link AIServiceException} — see the two fetch methods below.
+     */
     public List<OpenRouterModel> getAvailableModels() {
         String apiKey = configService.getDecryptedApiKey();
         if (apiKey == null || apiKey.isBlank()) {
-            throw new AIServiceException("AI provider API key is not configured");
+            return List.of();
         }
 
         AIProvider provider = configService.getConfigEntity().getProvider();

@@ -21,6 +21,7 @@ import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.organization.entity.Organization;
 
 import io.jsonwebtoken.Claims;
 
@@ -41,6 +42,10 @@ import static org.mockito.Mockito.when;
  *       forces a reload, so a suspension takes effect on the next request.</li>
  *   <li>TTL 0 disables caching entirely; an expired entry reloads.</li>
  * </ul>
+ *
+ * <p>Also pins this filter's use of {@link AuthenticationEligibility}: the
+ * organization-active read lives at each call site (see that class for why), so the
+ * only thing stopping this filter from passing the wrong value is this test.
  */
 @ExtendWith(MockitoExtension.class)
 class JwtAuthenticationFilterCacheTest {
@@ -101,6 +106,17 @@ class JwtAuthenticationFilterCacheTest {
 
         assertThat(runRequest(filter)).isNull();
         verify(userRepository, times(2)).findByIdWithOrganization(userId);
+    }
+
+    @Test
+    void inactiveOrganization_doesNotAuthenticate() throws Exception {
+        Organization org = new Organization();
+        org.setActive(false);
+        user.setOrganization(org);
+        var filter = filterWith(new UserPrincipalCache(Duration.ZERO));
+        when(userRepository.findByIdWithOrganization(userId)).thenReturn(Optional.of(user));
+
+        assertThat(runRequest(filter)).isNull();
     }
 
     @Test

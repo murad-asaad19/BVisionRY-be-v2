@@ -24,9 +24,12 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * A cohort: one program instance within an org. Owns its modules and settings
- * (both FK cohort_id), carries the enrolled learner set and an ACTIVE / FINISHED
- * lifecycle. Soft-coupled to identity by UUID, like the rest of the slice.
+ * A cohort: a platform-level program run (spec §13). Authored by super admins
+ * and ASSIGNED to organizations via {@link CohortOrgAssignment}; owns its
+ * modules and settings (both FK cohort_id), carries the enrolled learner set
+ * (accumulated across assigned orgs) and the DRAFT ⇄ LAUNCHED lifecycle
+ * (spec §8, two-state since V183). Soft-coupled to identity by UUID, like the
+ * rest of the slice.
  */
 @Entity
 @Table(name = "cohorts")
@@ -40,9 +43,6 @@ public class Cohort {
     @Column(name = "id", nullable = false, updatable = false, insertable = false)
     private UUID id;
 
-    @Column(name = "org_id", nullable = false, updatable = false)
-    private UUID orgId;
-
     @Column(name = "name", nullable = false, length = 200)
     private String name;
 
@@ -51,12 +51,34 @@ public class Cohort {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
-    private CohortStatus status = CohortStatus.ACTIVE;
+    private CohortStatus status = CohortStatus.DRAFT;
+
+    /**
+     * Stamped by the FIRST launch and never cleared — the floor for milestone
+     * adoption ({@code TaskSpineRepository.ADOPTABLE_SITTINGS}). Null only for
+     * a cohort that has never been launched; an unlaunched cohort keeps it.
+     */
+    @Column(name = "launched_at")
+    private OffsetDateTime launchedAt;
 
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(name = "cohort_members", joinColumns = @JoinColumn(name = "cohort_id"))
     @Column(name = "user_id", nullable = false)
     private Set<UUID> memberIds = new LinkedHashSet<>();
+
+    /**
+     * Optimistic concurrency for the curriculum (V175). Bumped by the ONE
+     * writer of modules/tasks/fields — the Curriculum builder's whole-board Save
+     * — and echoed on every board read, so a Save built against a stale board is
+     * refused instead of deleting whatever the other admin added meanwhile.
+     *
+     * <p>Not a JPA {@code @Version}: this tracks the BOARD, and the board lives
+     * in other tables entirely. Hibernate would bump it on any cohort-row write
+     * (a rename, a launch) and leave it untouched when a module changed, which
+     * is exactly backwards.
+     */
+    @Column(name = "board_version", nullable = false)
+    private long boardVersion;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;

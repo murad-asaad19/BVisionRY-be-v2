@@ -1,5 +1,8 @@
 package com.bvisionry.assessment;
 
+
+import com.bvisionry.common.security.CurrentUser;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.assessment.dto.AssessmentDetailResponse;
 import com.bvisionry.assessment.dto.AssessmentSummaryResponse;
 import com.bvisionry.assessment.dto.AssignmentDetailResponse;
@@ -13,9 +16,9 @@ import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.PipelineStatus;
 import com.bvisionry.common.enums.SubmissionStatus;
+import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.audit.AuditService;
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.config.FrontendUrls;
@@ -64,6 +67,7 @@ public class AssignmentService {
         ALL
     }
 
+    private final CurrentUserAccessor currentUser;
     private final AssignmentRepository assignmentRepository;
     private final SubmissionRepository submissionRepository;
     private final AnswerRepository answerRepository;
@@ -119,7 +123,8 @@ public class AssignmentService {
         Assignment provision = assignmentRepository
                 .findProvision(orgId, pipeline.getId())
                 .orElse(null);
-        if (!SecurityUtils.isSuperAdmin() && provision == null) {
+        CurrentUser me = currentUser.require();
+        if (!me.isSuperAdmin() && provision == null) {
             throw new BadRequestException(
                     "This pipeline has not been provisioned to your organization. "
                             + "Contact your platform administrator.");
@@ -156,7 +161,7 @@ public class AssignmentService {
 
         // Derive the assigner from the authenticated principal — never trust a
         // client-supplied {@code assignedBy} field for audit attribution.
-        UUID assignerId = SecurityUtils.getCurrentUserId();
+        UUID assignerId = me.userId();
 
         // Members inherit the provision's defaults: an org admin's explicit
         // deadline still wins, but when they leave it blank the super admin's
@@ -184,7 +189,8 @@ public class AssignmentService {
 
         if (request.autoAssignFutureMembers()) {
             pipelineAutoAssignmentService.upsertRule(
-                    org, pipeline, request.userType(), deadline, assignerId, maxCheckIns);
+                    org, pipeline, request.userType(), deadline, assignerId, maxCheckIns,
+                    request.targetRolesOrDefault());
         }
 
         return responses;
@@ -195,7 +201,8 @@ public class AssignmentService {
      * picking members. Org admins see the provision and distribute it to members.
      */
     private AssignmentResponse createOrganizationProvision(UUID orgId, CreateAssignmentRequest request) {
-        if (!SecurityUtils.isSuperAdmin()) {
+        CurrentUser me = currentUser.require();
+        if (!me.isSuperAdmin()) {
             throw new BadRequestException("Only super admins can provision pipelines to organizations.");
         }
         if (request.autoAssignFutureMembers()) {
@@ -222,7 +229,7 @@ public class AssignmentService {
                     "This pipeline is already provisioned to this organization.");
         }
 
-        UUID assignerId = SecurityUtils.getCurrentUserId();
+        UUID assignerId = me.userId();
         int maxCheckIns = resolveMaxCheckIns(request, null);
 
         Assignment saved = provisionPipeline(org, pipeline, assignerId, request.deadline(), maxCheckIns);
@@ -353,6 +360,18 @@ public class AssignmentService {
                 || !member.getOrganization().getId().equals(rule.getOrganization().getId())) {
             return;
         }
+        // Role scope (V158). Checked HERE rather than in findApplicableForMember
+        // because this is the one point both entry paths (member-joined and
+        // member-moved) funnel through with the User entity already loaded —
+        // the events carry only userType, so filtering in the query would mean
+        // threading a role through four publishers and two event records.
+        //
+        // Without this, an "applies to all members" rule assigned founder
+        // assessments to every coach and org admin who joined, and they were
+        // then counted as measured subjects in the cohort's completion stats.
+        if (!rule.appliesToRole(member.getRole())) {
+            return;
+        }
 
         if (assignmentRepository.existsByOrganizationIdAndPipelineIdAndUserId(
                 rule.getOrganization().getId(), rule.getPipeline().getId(), userId)) {
@@ -375,7 +394,7 @@ public class AssignmentService {
      * there is no provision yet).
      */
     private int resolveMaxCheckIns(CreateAssignmentRequest request, Assignment provision) {
-        if (SecurityUtils.isSuperAdmin()) {
+        if (currentUser.require().isSuperAdmin()) {
             return request.maxCheckInsOrDefault();
         }
         if (request.maxCheckIns() != null && request.maxCheckIns() != 1) {
@@ -390,12 +409,22 @@ public class AssignmentService {
         // of silently seeing "No eligible members" from a typo.
         memberTypeService.requireExists(userType);
         if (request.isAssignAll()) {
-            if (userType != null) {
-                return userRepository.findByOrganizationIdAndStatusAndUserType(
-                        orgId, UserStatus.ACTIVE, userType);
-            }
-            return userRepository.findByOrganizationIdAndStatus(orgId, UserStatus.ACTIVE);
+            List<User> all = userType != null
+                    ? userRepository.findByOrganizationIdAndStatusAndUserType(
+                            orgId, UserStatus.ACTIVE, userType)
+                    : userRepository.findByOrganizationIdAndStatus(orgId, UserStatus.ACTIVE);
+            // Role scope (V158). "All members" reads every ACTIVE user in the
+            // org, which includes its coaches and org admins — so this bulk mode
+            // handed founder assessments to staff exactly as the auto-assign
+            // listener did. Filtering here keeps the immediate batch and the
+            // rule that follows it targeting the same people; without it the
+            // first batch would include staff and only later joiners would be
+            // scoped, which is incoherent.
+            Set<UserRole> roles = request.targetRolesOrDefault();
+            return all.stream().filter(u -> roles.contains(u.getRole())).toList();
         }
+        // NOT role-filtered: hand-picking members is an explicit decision, and
+        // assigning an assessment to a specific coach on purpose stays possible.
         List<User> byIds = requireActiveOrgMembers(orgId, request.memberIds());
         if (userType != null) {
             return byIds.stream()
@@ -443,7 +472,7 @@ public class AssignmentService {
     public List<AssignmentResponse> listAssignments(UUID orgId, AssignmentListScope scope) {
         AssignmentListScope effectiveScope = scope != null
                 ? scope
-                : (SecurityUtils.isSuperAdmin() ? AssignmentListScope.ALL : AssignmentListScope.PROVISIONS);
+                : (currentUser.require().isSuperAdmin() ? AssignmentListScope.ALL : AssignmentListScope.PROVISIONS);
 
         List<Assignment> assignments = switch (effectiveScope) {
             case PROVISIONS -> assignmentRepository.findProvisionsByOrganizationIdOrderByCreatedAtDesc(orgId);
@@ -509,7 +538,7 @@ public class AssignmentService {
         // Removing an org-level provision (user == null) is a super-admin act:
         // the provision is the platform's grant to the org. Org admins may only
         // cancel their own member assignments, not undo the provision itself.
-        if (assignment.getUser() == null && !SecurityUtils.isSuperAdmin()) {
+        if (assignment.getUser() == null && !currentUser.require().isSuperAdmin()) {
             throw new BadRequestException(
                     "Only super admins can remove an organization provision.");
         }
@@ -571,7 +600,7 @@ public class AssignmentService {
         // exists or has been submitted, so we skip the lookup entirely for
         // non-super-admin viewers and let `surveySummary` stay null.
         SurveySummary surveySummary = null;
-        if (SecurityUtils.isSuperAdmin() && pipeline.getPostCompletionSurveyId() != null) {
+        if (currentUser.require().isSuperAdmin() && pipeline.getPostCompletionSurveyId() != null) {
             SurveyResponse surveyResponse = submission != null
                     ? surveyResponseRepository
                             .findFirstBySubmissionIdOrderBySubmittedAtDesc(submission.getId())

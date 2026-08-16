@@ -1,6 +1,6 @@
 package com.bvisionry.platform;
 
-import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.contact.ContactRecipientService;
 import com.bvisionry.contact.dto.ContactRecipientsRequest;
 import com.bvisionry.contact.dto.ContactRecipientsResponse;
@@ -34,6 +34,7 @@ import org.springframework.web.bind.annotation.RestController;
 @PreAuthorize("hasAuthority('SUPER_ADMIN')")
 public class PlatformSettingsController {
 
+    private final CurrentUserAccessor currentUser;
     private final AttentionThresholdsService attentionThresholdsService;
     private final UpgradeRequestRecipientService upgradeRequestRecipientService;
     private final ContactRecipientService contactRecipientService;
@@ -49,7 +50,7 @@ public class PlatformSettingsController {
     @PutMapping("/attention-thresholds")
     public ResponseEntity<AttentionThresholdsResponse> update(
             @Valid @RequestBody AttentionThresholdsRequest req) {
-        return ResponseEntity.ok(attentionThresholdsService.setAll(req, SecurityUtils.getCurrentUserId()));
+        return ResponseEntity.ok(attentionThresholdsService.setAll(req, currentUser.require().userId()));
     }
 
     @GetMapping("/upgrade-request-recipients")
@@ -63,7 +64,7 @@ public class PlatformSettingsController {
     public ResponseEntity<UpgradeRequestRecipientsResponse> setUpgradeRequestRecipients(
             @Valid @RequestBody UpgradeRequestRecipientsRequest req) {
         var view = upgradeRequestRecipientService.setRecipients(
-                req.recipients(), SecurityUtils.getCurrentUserId());
+                req.recipients(), currentUser.require().userId());
         return ResponseEntity.ok(
                 new UpgradeRequestRecipientsResponse(view.recipients(), view.fallbackToSuperAdmins()));
     }
@@ -79,7 +80,7 @@ public class PlatformSettingsController {
     public ResponseEntity<ContactRecipientsResponse> setContactRecipients(
             @Valid @RequestBody ContactRecipientsRequest req) {
         var view = contactRecipientService.setRecipients(
-                req.recipients(), SecurityUtils.getCurrentUserId());
+                req.recipients(), currentUser.require().userId());
         return ResponseEntity.ok(
                 new ContactRecipientsResponse(view.recipients(), view.fallbackToSuperAdmins()));
     }
@@ -95,7 +96,7 @@ public class PlatformSettingsController {
     public ResponseEntity<LeadRecipientsResponse> setLeadRecipients(
             @Valid @RequestBody LeadRecipientsRequest req) {
         var view = leadRecipientService.setRecipients(
-                req.recipients(), SecurityUtils.getCurrentUserId());
+                req.recipients(), currentUser.require().userId());
         return ResponseEntity.ok(
                 new LeadRecipientsResponse(view.recipients(), view.fallbackToSuperAdmins()));
     }
@@ -107,12 +108,12 @@ public class PlatformSettingsController {
 
     @PutMapping("/upgrade-prompt")
     public ResponseEntity<UpgradePrompt> setUpgradePrompt(@RequestBody UpgradePrompt prompt) {
-        return ResponseEntity.ok(upgradePromptService.set(prompt, SecurityUtils.getCurrentUserId()));
+        return ResponseEntity.ok(upgradePromptService.set(prompt, currentUser.require().userId()));
     }
 
     @DeleteMapping("/upgrade-prompt")
     public ResponseEntity<UpgradePrompt> resetUpgradePrompt() {
-        return ResponseEntity.ok(upgradePromptService.reset(SecurityUtils.getCurrentUserId()));
+        return ResponseEntity.ok(upgradePromptService.reset(currentUser.require().userId()));
     }
 
     @GetMapping("/lead-magnet")
@@ -124,6 +125,6 @@ public class PlatformSettingsController {
     public ResponseEntity<LeadMagnetPdfResponse> setLeadMagnet(
             @Valid @RequestBody LeadMagnetPdfRequest req) {
         return ResponseEntity.ok(
-                leadMagnetSettingsService.save(req.marker(), SecurityUtils.getCurrentUserId()));
+                leadMagnetSettingsService.save(req.marker(), currentUser.require().userId()));
     }
 }

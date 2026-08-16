@@ -1,9 +1,10 @@
 package com.bvisionry.exercise;
 
-import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.exercise.dto.ExerciseColumnResponse;
+import com.bvisionry.common.media.MediaUrlPort;
 import com.bvisionry.exercise.dto.ExerciseTemplateDetailResponse;
 import com.bvisionry.exercise.dto.ExerciseTemplateResponse;
 import com.bvisionry.exercise.dto.ReorderColumnsRequest;
@@ -40,9 +41,11 @@ import java.util.UUID;
 @Slf4j
 public class ExerciseTemplateService {
 
+    private final CurrentUserAccessor currentUser;
     private final ExerciseTemplateRepository templateRepository;
     private final ExerciseColumnRepository columnRepository;
     private final ExerciseAssignmentRepository assignmentRepository;
+    private final MediaUrlPort mediaUrlPort;
 
     @Transactional(readOnly = true)
     public List<ExerciseTemplateResponse> list(ExerciseTemplateStatus status) {
@@ -68,7 +71,7 @@ public class ExerciseTemplateService {
 
     @Transactional(readOnly = true)
     public ExerciseTemplateDetailResponse get(UUID id) {
-        return ExerciseTemplateDetailResponse.from(requireTemplateWithColumns(id), isStructureLocked(id));
+        return detail(requireTemplateWithColumns(id), isStructureLocked(id));
     }
 
     @Transactional
@@ -76,8 +79,9 @@ public class ExerciseTemplateService {
         ExerciseTemplate template = new ExerciseTemplate();
         template.setName(request.name());
         template.setDescription(request.description());
-        template.setCreatedBy(SecurityUtils.getCurrentUserId());
-        return ExerciseTemplateDetailResponse.from(templateRepository.save(template), false);
+        template.setCoverImageUrl(request.coverImageUrl());
+        template.setCreatedBy(currentUser.require().userId());
+        return detail(templateRepository.save(template), false);
     }
 
     @Transactional
@@ -86,10 +90,21 @@ public class ExerciseTemplateService {
         requireNotArchived(template);
         template.setName(request.name());
         template.setDescription(request.description());
+        template.setCoverImageUrl(request.coverImageUrl());
         template.setExampleRow(request.exampleRow());
         template.setStarterRows(request.starterRows());
         template.setAllowAddRows(request.allowAddRows());
-        return ExerciseTemplateDetailResponse.from(template, isStructureLocked(id));
+        return detail(template, isStructureLocked(id));
+    }
+
+    /**
+     * The single place a template becomes a detail response, so the cover
+     * marker is resolved exactly once and no new caller can ship a raw
+     * {@code minio://} URL to the browser.
+     */
+    private ExerciseTemplateDetailResponse detail(ExerciseTemplate template, boolean structureLocked) {
+        return ExerciseTemplateDetailResponse.from(template, structureLocked,
+                mediaUrlPort.resolveUrl(template.getCoverImageUrl()));
     }
 
     @Transactional
@@ -121,7 +136,7 @@ public class ExerciseTemplateService {
             throw new BadRequestException("Add at least one column before publishing.");
         }
         template.setStatus(target);
-        return ExerciseTemplateDetailResponse.from(template, isStructureLocked(id));
+        return detail(template, isStructureLocked(id));
     }
 
     @Transactional

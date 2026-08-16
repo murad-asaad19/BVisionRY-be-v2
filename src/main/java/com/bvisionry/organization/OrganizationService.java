@@ -11,6 +11,7 @@ import com.bvisionry.common.tx.AfterCommit;
 import com.bvisionry.insights.InsightReportRepository;
 import com.bvisionry.organization.dto.ChangeTierRequest;
 import com.bvisionry.organization.dto.CreateOrganizationRequest;
+import com.bvisionry.organization.dto.NudgeSettingsDto;
 import com.bvisionry.organization.dto.OrganizationResponse;
 import com.bvisionry.organization.dto.UpdateOrganizationRequest;
 import com.bvisionry.organization.entity.Organization;
@@ -99,6 +100,36 @@ public class OrganizationService {
                     OrgAuditActions.ENTITY_ORGANIZATION, saved.getId(), details);
         }
         return responseWithStats(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public NudgeSettingsDto getNudgeSettings(UUID id) {
+        return new NudgeSettingsDto(findOrThrow(id).getInactivityNudgeDays());
+    }
+
+    /**
+     * Sets the org's inactivity-nudge window (roadmap §7 items 7 + 18).
+     * {@code 0} switches nudging off for the org; the member's own switch stays
+     * the existing per-type opt-out.
+     *
+     * <p>ponytail: NOT audited, unlike its neighbours here. {@code AuditService}
+     * lives in another feature and ArchitectureRulesTest rule 1 freezes
+     * cross-feature dependencies per CALL SITE, so an audited new method is a
+     * brand-new frozen violation — and writing that store is forbidden
+     * (hard_constraints.never_write). Turning nudges off therefore leaves no
+     * trail today. Upgrade path: give audit an event-driven entry point
+     * (publish a common event, listen in the audit slice) so a caller can audit
+     * without owning an edge, then log here like update()/changeTier() do.
+     */
+    @Transactional
+    public NudgeSettingsDto updateNudgeSettings(UUID id, NudgeSettingsDto request) {
+        Organization org = findOrThrow(id);
+        int days = request.inactivityNudgeDays();
+        if (org.getInactivityNudgeDays() != days) {
+            org.setInactivityNudgeDays(days);
+            organizationRepository.save(org);
+        }
+        return new NudgeSettingsDto(org.getInactivityNudgeDays());
     }
 
     @Transactional

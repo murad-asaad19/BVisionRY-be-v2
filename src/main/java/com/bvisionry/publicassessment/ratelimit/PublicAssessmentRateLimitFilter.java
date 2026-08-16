@@ -4,6 +4,7 @@ import com.bvisionry.aiconfig.service.RateLimitService;
 import com.bvisionry.common.exception.RateLimitExceededException;
 import com.bvisionry.common.web.ClientIpResolver;
 import com.bvisionry.common.web.ProblemDetailResponseWriter;
+import com.bvisionry.common.web.RequestPaths;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -48,7 +49,7 @@ public class PublicAssessmentRateLimitFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        String uri = request.getRequestURI();
+        String uri = RequestPaths.decoded(request);
         String method = request.getMethod();
         boolean post = "POST".equalsIgnoreCase(method);
 

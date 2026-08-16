@@ -72,6 +72,28 @@ public interface OrganizationRepository extends JpaRepository<Organization, UUID
     long countByIsActiveTrueAndParentOrganizationIsNull();
     long countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier tier);
 
+    /**
+     * Root-org counts grouped by tier — one row per tier that actually occurs.
+     *
+     * <p>A GROUP BY rather than one count per {@link SubscriptionTier} constant
+     * on purpose. The platform dashboard previously derived "paying" by
+     * subtraction ({@code totalOrgs - free}) specifically because, as its
+     * comment said, an enumerated query "cannot miss a tier the way an
+     * enumerated query can" — but subtraction cost the breakdown, which is how
+     * the panel ended up reporting the removed {@code PREMIUM} name for every
+     * paid org. Grouping keeps both properties: no tier can be missed, because
+     * the database reports whichever tiers exist, and each is still named.
+     *
+     * @return {@code [SubscriptionTier, Long]} pairs; tiers with no orgs are absent.
+     */
+    @Query("""
+            SELECT o.subscriptionTier, COUNT(o)
+            FROM Organization o
+            WHERE o.parentOrganization IS NULL
+            GROUP BY o.subscriptionTier
+            """)
+    List<Object[]> countRootOrgsByTier();
+
     /** Root orgs only — the attention rules evaluate customers, not their subdivisions. */
     List<Organization> findByParentOrganizationIsNull();
 
@@ -112,19 +134,19 @@ public interface OrganizationRepository extends JpaRepository<Organization, UUID
     List<Object[]> findOrgStatsByIds(@Param("orgIds") List<UUID> orgIds);
     // Page<Organization> findAll(Pageable pageable) is inherited from JpaRepository.
 
-    /** Orgs whose trial has lapsed but are still tier=PREMIUM — used by TrialExpiryJob. */
+    /** Orgs whose trial has lapsed but are still on a PAID tier — used by TrialExpiryJob. */
     @Query("""
         SELECT o FROM Organization o
         WHERE o.trialEndsAt IS NOT NULL
           AND o.trialEndsAt < :now
-          AND o.subscriptionTier = com.bvisionry.common.enums.SubscriptionTier.PREMIUM
+          AND o.subscriptionTier <> com.bvisionry.common.enums.SubscriptionTier.FREE
         """)
     List<Organization> findLapsedTrials(@Param("now") Instant now);
 
     /** Count orgs currently on an active Premium trial. */
     @Query("""
         SELECT COUNT(o) FROM Organization o
-        WHERE o.subscriptionTier = com.bvisionry.common.enums.SubscriptionTier.PREMIUM
+        WHERE o.subscriptionTier <> com.bvisionry.common.enums.SubscriptionTier.FREE
           AND o.trialEndsAt IS NOT NULL
           AND o.trialEndsAt > :now
         """)
@@ -133,7 +155,7 @@ public interface OrganizationRepository extends JpaRepository<Organization, UUID
     /** Count trials whose end date falls in [now, cutoff]. */
     @Query("""
         SELECT COUNT(o) FROM Organization o
-        WHERE o.subscriptionTier = com.bvisionry.common.enums.SubscriptionTier.PREMIUM
+        WHERE o.subscriptionTier <> com.bvisionry.common.enums.SubscriptionTier.FREE
           AND o.trialEndsAt IS NOT NULL
           AND o.trialEndsAt BETWEEN :now AND :cutoff
         """)
@@ -142,7 +164,7 @@ public interface OrganizationRepository extends JpaRepository<Organization, UUID
     /** Active Premium trials whose end date falls in [now, cutoff] — used by the heads-up notifier. */
     @Query("""
         SELECT o FROM Organization o
-        WHERE o.subscriptionTier = com.bvisionry.common.enums.SubscriptionTier.PREMIUM
+        WHERE o.subscriptionTier <> com.bvisionry.common.enums.SubscriptionTier.FREE
           AND o.trialEndsAt IS NOT NULL
           AND o.trialEndsAt BETWEEN :now AND :cutoff
         """)

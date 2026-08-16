@@ -1,5 +1,6 @@
 package com.bvisionry.testimonial;
 
+import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import com.bvisionry.testimonial.dto.CreateTestimonialRequest;
 import com.bvisionry.testimonial.dto.PublicTestimonialResponse;
 import com.bvisionry.testimonial.dto.TestimonialResponse;
@@ -29,6 +30,7 @@ public class TestimonialController {
     private final TestimonialService testimonialService;
 
     /** Public homepage marquee — published testimonials only. Open to anyone. */
+    @AuthorizedInSecurityConfig("permitAll: published testimonials only, for the anonymous homepage marquee")
     @GetMapping
     public ResponseEntity<List<PublicTestimonialResponse>> listPublished() {
         return ResponseEntity.ok(testimonialService.listPublished());

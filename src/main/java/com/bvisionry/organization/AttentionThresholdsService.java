@@ -35,12 +35,15 @@ public class AttentionThresholdsService {
     static final String KEY_TRIAL_JUST_EXPIRED_WINDOW_DAYS  = "attention.trial_just_expired_window_days";
     static final String KEY_IDLE_DAYS                       = "attention.idle_days";
     static final String KEY_ONBOARDING_STALLED_HOURS        = "attention.onboarding_stalled_hours";
+    /** Cohort-board needs-attention pillar cutoff (%); read cross-slice by SQL in programflow. */
+    static final String KEY_PILLAR_THRESHOLD                = "attention.pillar_threshold";
 
     static final int DEFAULT_SUSPENDED_DAYS                  = 7;
     static final int DEFAULT_TRIAL_EXPIRY_WINDOW_DAYS        = 7;
     static final int DEFAULT_TRIAL_JUST_EXPIRED_WINDOW_DAYS  = 30;
     static final int DEFAULT_IDLE_DAYS                       = 14;
     static final int DEFAULT_ONBOARDING_STALLED_HOURS        = 24;
+    static final int DEFAULT_PILLAR_THRESHOLD                = 40;
 
     private final PlatformSettingRepository repo;
     private final AuditService auditService;
@@ -53,7 +56,8 @@ public class AttentionThresholdsService {
                 read(KEY_TRIAL_EXPIRY_WINDOW_DAYS,       DEFAULT_TRIAL_EXPIRY_WINDOW_DAYS),
                 read(KEY_TRIAL_JUST_EXPIRED_WINDOW_DAYS, DEFAULT_TRIAL_JUST_EXPIRED_WINDOW_DAYS),
                 read(KEY_IDLE_DAYS,                      DEFAULT_IDLE_DAYS),
-                read(KEY_ONBOARDING_STALLED_HOURS,       DEFAULT_ONBOARDING_STALLED_HOURS)
+                read(KEY_ONBOARDING_STALLED_HOURS,       DEFAULT_ONBOARDING_STALLED_HOURS),
+                read(KEY_PILLAR_THRESHOLD,               DEFAULT_PILLAR_THRESHOLD)
         );
     }
 
@@ -62,6 +66,7 @@ public class AttentionThresholdsService {
     public int trialJustExpiredWindowDays() { return get().trialJustExpiredWindowDays(); }
     public int idleDays()                   { return get().idleDays(); }
     public int onboardingStalledHours()     { return get().onboardingStalledHours(); }
+    public int pillarThreshold()            { return get().pillarThreshold(); }
 
     @Caching(evict = {
             // The thresholds themselves changed — drop the cached read.
@@ -78,6 +83,7 @@ public class AttentionThresholdsService {
         write(KEY_TRIAL_JUST_EXPIRED_WINDOW_DAYS, req.trialJustExpiredWindowDays(),    actorId, now);
         write(KEY_IDLE_DAYS,                      req.idleDays(),                      actorId, now);
         write(KEY_ONBOARDING_STALLED_HOURS,       req.onboardingStalledHours(),        actorId, now);
+        write(KEY_PILLAR_THRESHOLD,               req.pillarThreshold(),               actorId, now);
 
         Map<String, Object> details = new LinkedHashMap<>();
         details.put("suspendedDays",                 req.suspendedDays());
@@ -85,6 +91,7 @@ public class AttentionThresholdsService {
         details.put("trialJustExpiredWindowDays",    req.trialJustExpiredWindowDays());
         details.put("idleDays",                      req.idleDays());
         details.put("onboardingStalledHours",        req.onboardingStalledHours());
+        details.put("pillarThreshold",               req.pillarThreshold());
         auditService.log(actorId, null, OrgAuditActions.ATTENTION_THRESHOLDS_UPDATED,
                 OrgAuditActions.ENTITY_PLATFORM, null, details);
 
@@ -93,7 +100,8 @@ public class AttentionThresholdsService {
                 req.trialExpiryWindowDays(),
                 req.trialJustExpiredWindowDays(),
                 req.idleDays(),
-                req.onboardingStalledHours()
+                req.onboardingStalledHours(),
+                req.pillarThreshold()
         );
     }
 

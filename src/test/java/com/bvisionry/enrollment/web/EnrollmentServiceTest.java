@@ -19,6 +19,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
+import com.bvisionry.config.SecurityContextCurrentUserAccessor;
+import com.bvisionry.common.security.CurrentUserAccessor;
+import org.mockito.Spy;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -76,6 +79,12 @@ class EnrollmentServiceTest {
     @Mock private MediaService mediaService;
     @Mock private CertificateService certificateService;
     @Mock private UserRepository users;
+    @Mock private com.bvisionry.common.coursevisibility.CourseVisibilityAccess courseVisibility;
+
+    // The service resolves the caller through this port; the spy delegates to
+    // the real adapter, which reads the same SecurityContextHolder the tests set.
+    @Spy
+    private CurrentUserAccessor currentUserAccessor = new SecurityContextCurrentUserAccessor();
 
     @InjectMocks
     private EnrollmentService service;
@@ -99,6 +108,14 @@ class EnrollmentServiceTest {
         currentUser.setStatus(UserStatus.ACTIVE);
 
         authenticate(currentUser);
+
+        // Spec §3 visibility is a new gate in front of enroll() and
+        // lessonContent(); these tests are about the enrolment rules, so the
+        // course is visible. The refusal has its own coverage in
+        // CourseWiringIntegrationTest.
+        org.mockito.Mockito.lenient().when(courseVisibility.isVisibleToUser(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(true);
     }
 
     @AfterEach
@@ -168,7 +185,7 @@ class EnrollmentServiceTest {
     void enroll_newLearner_createsActiveEnrollment() {
         Course course = course(courseId, SLUG, "Java 101");
         when(courses.findBySlug(SLUG)).thenReturn(Optional.of(course));
-        when(enrollments.findByUserIdAndCourseId(currentUserId, courseId)).thenReturn(Optional.empty());
+        when(enrollments.findAnyByUserIdAndCourseId(currentUserId, courseId)).thenReturn(Optional.empty());
         when(enrollments.saveAndFlush(any(Enrollment.class))).thenAnswer(inv -> {
             Enrollment e = inv.getArgument(0);
             e.setId(UUID.randomUUID());
@@ -196,7 +213,7 @@ class EnrollmentServiceTest {
         Enrollment existing = enrollment(UUID.randomUUID(), currentUserId, courseId);
         existing.setProgressPct(42);
         when(courses.findBySlug(SLUG)).thenReturn(Optional.of(course));
-        when(enrollments.findByUserIdAndCourseId(currentUserId, courseId)).thenReturn(Optional.of(existing));
+        when(enrollments.findAnyByUserIdAndCourseId(currentUserId, courseId)).thenReturn(Optional.of(existing));
 
         EnrollmentDto dto = service.enroll(SLUG);
 
@@ -215,9 +232,13 @@ class EnrollmentServiceTest {
         Enrollment winner = enrollment(UUID.randomUUID(), currentUserId, courseId);
         winner.setProgressPct(7);
         when(courses.findBySlug(SLUG)).thenReturn(Optional.of(course));
+        // The initial lookup sees every status (it must, to reactivate a removed
+        // row); the post-violation re-read is the status-filtered one, because a
+        // row that just won an INSERT race is by definition a live enrolment.
+        when(enrollments.findAnyByUserIdAndCourseId(currentUserId, courseId))
+                .thenReturn(Optional.empty());
         when(enrollments.findByUserIdAndCourseId(currentUserId, courseId))
-                .thenReturn(Optional.empty())          // initial miss
-                .thenReturn(Optional.of(winner));       // re-read after the violation
+                .thenReturn(Optional.of(winner));
         when(enrollments.saveAndFlush(any(Enrollment.class)))
                 .thenThrow(new DataIntegrityViolationException("uq_enrollment_user_course"));
 
@@ -247,7 +268,7 @@ class EnrollmentServiceTest {
         gated.setEnrollPolicy(EnrollPolicy.INVITATION);
         gated.setState(CourseState.DRAFT);
         when(courses.findBySlug(SLUG)).thenReturn(Optional.of(gated));
-        when(enrollments.findByUserIdAndCourseId(currentUserId, courseId)).thenReturn(Optional.empty());
+        when(enrollments.findAnyByUserIdAndCourseId(currentUserId, courseId)).thenReturn(Optional.empty());
         when(enrollments.saveAndFlush(any(Enrollment.class))).thenAnswer(inv -> {
             Enrollment e = inv.getArgument(0);
             e.setId(UUID.randomUUID());
@@ -378,6 +399,72 @@ class EnrollmentServiceTest {
 
         assertThatThrownBy(() -> service.learnView(SLUG))
                 .isInstanceOf(CourseNotFoundException.class);
+    }
+
+    // =========================================================================
+    // Admin removal (enrolment_override, roadmap §7 item 10)
+    //
+    // CANCELLED is what an admin removal writes. The repository's status filter
+    // covers every (user, course) read — these pin the two paths it cannot: the
+    // deliberate opt-out in enroll(), and the by-ID load in markComplete().
+    // =========================================================================
+
+    @Test
+    void enroll_afterAnAdminRemovedThem_reactivatesTheRowAndKeepsTheirProgress() {
+        Course course = course(courseId, SLUG, "Java 101");
+        Enrollment removed = enrollment(UUID.randomUUID(), currentUserId, courseId);
+        removed.setStatus(EnrollmentStatus.CANCELLED);
+        removed.setProgressPct(42);
+        when(courses.findBySlug(SLUG)).thenReturn(Optional.of(course));
+        when(enrollments.findAnyByUserIdAndCourseId(currentUserId, courseId))
+                .thenReturn(Optional.of(removed));
+        when(enrollments.save(any(Enrollment.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        EnrollmentDto dto = service.enroll(SLUG);
+
+        // The override blocks the ENGINE, not the founder's own hand — and the row
+        // was only ever status-flipped, so their 42% comes back with it.
+        assertThat(dto.status()).isEqualTo("ACTIVE");
+        assertThat(dto.progressPct()).isEqualTo(42);
+        // Never re-inserted: the row still holds its uq_enrollment_user_course slot.
+        verify(enrollments, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void enroll_afterRemovalOfACourseTheyHadFinished_comesBackCompletedNotActive() {
+        Course course = course(courseId, SLUG, "Java 101");
+        Enrollment removed = enrollment(UUID.randomUUID(), currentUserId, courseId);
+        removed.setStatus(EnrollmentStatus.CANCELLED);
+        removed.setProgressPct(100);
+        removed.setCompletedAt(java.time.OffsetDateTime.now());
+        when(courses.findBySlug(SLUG)).thenReturn(Optional.of(course));
+        when(enrollments.findAnyByUserIdAndCourseId(currentUserId, courseId))
+                .thenReturn(Optional.of(removed));
+        when(enrollments.save(any(Enrollment.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // Removal only ever touched `status`, so completion is still derivable —
+        // restoring blindly to ACTIVE would demote a finished course and contradict
+        // the certificate the founder already holds.
+        assertThat(service.enroll(SLUG).status()).isEqualTo("COMPLETED");
+    }
+
+    @Test
+    void markComplete_onARemovedEnrollment_isRefused() {
+        UUID enrollmentId = UUID.randomUUID();
+        UUID contentId = UUID.randomUUID();
+        Enrollment removed = enrollment(enrollmentId, currentUserId, courseId);
+        removed.setStatus(EnrollmentStatus.CANCELLED);
+        when(enrollments.findById(enrollmentId)).thenReturn(Optional.of(removed));
+
+        // A player tab open when the admin removed them still holds a valid
+        // enrollment id. This is the only enrolment read keyed by ID rather than
+        // by (user, course), so the repository's filter cannot cover it — without
+        // this guard that tab could drive progress to 100% and mint a certificate
+        // for a course the founder is no longer on.
+        assertThatThrownBy(() -> service.markComplete(enrollmentId, contentId))
+                .isInstanceOf(NotEnrolledException.class);
+
+        verifyNoInteractions(progresses, certificateService);
     }
 
     // =========================================================================

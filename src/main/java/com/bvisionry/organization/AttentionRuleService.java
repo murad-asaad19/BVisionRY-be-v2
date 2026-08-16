@@ -82,7 +82,7 @@ public class AttentionRuleService {
             }
 
             // 2. Trial expiring (only if active)
-            if (o.getSubscriptionTier() == SubscriptionTier.PREMIUM
+            if (o.getSubscriptionTier().isPaid()
                     && o.getTrialEndsAt() != null
                     && o.getTrialEndsAt().isAfter(now)
                     && o.getTrialEndsAt().isBefore(trialExpiryCutoff)) {

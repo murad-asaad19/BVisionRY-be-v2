@@ -3,6 +3,7 @@ package com.bvisionry.programflow.web;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDate;
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.security.CurrentUser;
 import com.bvisionry.common.security.CurrentUserAccessor;
@@ -33,12 +35,10 @@ import com.bvisionry.programflow.domain.SubmissionStatus;
 import com.bvisionry.programflow.dto.GamificationDto;
 import com.bvisionry.programflow.dto.SubmitResponse;
 import com.bvisionry.programflow.repository.CohortRepository;
-import com.bvisionry.programflow.repository.OrgMemberRow;
 import com.bvisionry.programflow.repository.ProgramModuleRepository;
 import com.bvisionry.programflow.repository.ProgramSettingsRepository;
 import com.bvisionry.programflow.repository.ProgramSubmissionRepository;
 import com.bvisionry.programflow.repository.ProgramTaskRepository;
-import com.bvisionry.programflow.repository.TeamRepository;
 
 @ExtendWith(MockitoExtension.class)
 class MyProgramServiceTest {
@@ -54,7 +54,8 @@ class MyProgramServiceTest {
     @Mock
     private ProgramSettingsRepository settings;
     @Mock
-    private TeamRepository teams;
+    private com.bvisionry.programflow.repository.TaskSpineRepository spine;
+    @Mock private com.bvisionry.common.coursevisibility.CourseVisibilityAccess courseVisibility;
     @Mock
     private CurrentUserAccessor currentUser;
     @Mock
@@ -72,18 +73,16 @@ class MyProgramServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new MyProgramService(cohorts, modules, tasks, submissions, settings, teams,
-                currentUser, eventPublisher);
+        service = new MyProgramService(cohorts, modules, tasks, submissions, settings,
+                spine, courseVisibility, currentUser, eventPublisher);
 
         cohort = new Cohort();
         cohort.setId(cohortId);
-        cohort.setOrgId(orgId);
-        cohort.setStatus(CohortStatus.ACTIVE);
+        cohort.setStatus(CohortStatus.LAUNCHED);
         cohort.getMemberIds().add(userId);
 
         module = new ProgramModule();
         module.setId(UUID.randomUUID());
-        module.setOrgId(orgId);
         module.setCohortId(cohortId);
         module.setLockMode(ModuleLockMode.UNLOCKED);
 
@@ -106,35 +105,10 @@ class MyProgramServiceTest {
         // A DRAFT-task path bails before resolving the cohort/board, so keep these
         // shared stubs lenient — not every test exercises them.
         org.mockito.Mockito.lenient().when(cohorts.findEnrolled(userId)).thenReturn(List.of(cohort));
-        org.mockito.Mockito.lenient().when(teams.findOrgMembers(orgId)).thenReturn(List.of(memberRow(userId, "Yousef Amin")));
         org.mockito.Mockito.lenient().when(modules.findByCohortIdOrderByPositionAsc(cohortId)).thenReturn(List.of(module));
         org.mockito.Mockito.lenient().when(submissions.findByUserId(userId)).thenReturn(List.of());
         org.mockito.Mockito.lenient().when(tasks.findWithModule(task.getId())).thenReturn(Optional.of(task));
         org.mockito.Mockito.lenient().when(settings.findById(cohortId)).thenReturn(Optional.empty());
-    }
-
-    private static OrgMemberRow memberRow(UUID id, String name) {
-        return new OrgMemberRow() {
-            @Override
-            public UUID getId() {
-                return id;
-            }
-
-            @Override
-            public String getName() {
-                return name;
-            }
-
-            @Override
-            public String getEmail() {
-                return "user@example.com";
-            }
-
-            @Override
-            public UUID getTeamId() {
-                return null;
-            }
-        };
     }
 
     @Test
@@ -157,6 +131,14 @@ class MyProgramServiceTest {
         assertThat(response.submittedAt()).isNotNull();
         assertThat(response.answered()).isEqualTo(1);
         assertThat(response.answerable()).isEqualTo(1);
+
+        // First submit publishes TaskSubmitted carrying the SUBMITTING learner's
+        // id — ProgramFlowPushHandler needs it to find their coaches.
+        org.mockito.ArgumentCaptor<ProgramFlowEvents.TaskSubmitted> captor =
+                org.mockito.ArgumentCaptor.forClass(ProgramFlowEvents.TaskSubmitted.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().orgId()).isEqualTo(orgId);
+        assertThat(captor.getValue().learnerId()).isEqualTo(userId);
     }
 
     @Test
@@ -187,6 +169,23 @@ class MyProgramServiceTest {
 
         assertThat(response.pointsEarned()).isZero();
         assertThat(existing.getPointsAwarded()).isEqualTo(55);
+    }
+
+    @Test
+    void nonLessonTasksRejectThePlayerAndSubmitPaths() {
+        task.setTaskType(com.bvisionry.programflow.domain.ProgramTaskType.COURSE);
+        task.setRefId(UUID.randomUUID());
+        task.getFields().clear();
+
+        assertThatThrownBy(() -> service.player(task.getId()))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("open it instead");
+        assertThatThrownBy(() -> service.submit(task.getId(), Map.of()))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("open it instead");
+        assertThatThrownBy(() -> service.saveAnswers(task.getId(), Map.of()))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("open it instead");
     }
 
     @Test

@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.programaccess.Learner;
 
 /**
  * "Is this member one of THIS org's founders?" — the re-anchor every org-scoped
@@ -43,20 +44,21 @@ public class OrgMemberAccess {
     }
 
     /**
-     * True when {@code memberId} is an ACTIVE MEMBER row of {@code orgId} —
-     * THE one answer to "is this user a member of this org" (operator decision
-     * 2026-08-15, matching {@code CoachAccess}): a suspended member is not a
-     * learner, so learner surfaces 404 them like they 404 a foreign id. The
-     * deliberate exceptions are the admin member console (which lists every
-     * role and status on purpose) and coaching's {@code userInOrg} (which
-     * resolves coaches for assignment, not learners).
+     * True when {@code memberId} is an ACTIVE learner row of {@code orgId}
+     * ({@link Learner#ROLE_IN}) — THE one answer to "is this user a member of
+     * this org" (operator decision 2026-08-15, matching {@code CoachAccess}):
+     * a suspended member is not a learner, so learner surfaces 404 them like
+     * they 404 a foreign id. The deliberate exceptions are the admin member
+     * console (which lists every role and status on purpose) and coaching's
+     * {@code userInOrg} (which resolves coaches for assignment, not learners).
      */
     public boolean isMemberOf(UUID orgId, UUID memberId) {
         return Boolean.TRUE.equals(jdbc.queryForObject("""
                 SELECT EXISTS (SELECT 1 FROM users u
                                WHERE u.id = :memberId
                                  AND u.organization_id = :orgId
-                                 AND u.role = 'MEMBER'
+                                 AND u.""" + Learner.ROLE_IN + """
+
                                  AND u.status = 'ACTIVE')
                 """,
                 new MapSqlParameterSource("orgId", orgId).addValue("memberId", memberId),

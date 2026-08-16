@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import com.bvisionry.common.programaccess.Learner;
 import com.bvisionry.programflow.domain.Cohort;
 
 public interface CohortRepository extends JpaRepository<Cohort, UUID> {
@@ -46,28 +47,29 @@ public interface CohortRepository extends JpaRepository<Cohort, UUID> {
             """, nativeQuery = true)
     List<CohortProgressRow> findAssignedProgressStats(@Param("orgId") UUID orgId);
 
-    /** Active members (role MEMBER) of an org — enrollment pickers and roster validation. */
+    /** Active learners ({@link Learner#ROLE_IN}) of an org — enrollment pickers and roster validation. */
     @Query(value = """
             SELECT u.id AS id, u.name AS name, u.email AS email
             FROM users u
             WHERE u.organization_id = :orgId
               AND u.status = 'ACTIVE'
-              AND u.role = 'MEMBER'
+              AND u.""" + Learner.ROLE_IN + """
+
             ORDER BY u.name
             """, nativeQuery = true)
     List<OrgMemberRow> findOrgMembers(@Param("orgId") UUID orgId);
 
     /**
      * Whether the user is an enrollable member of the org — the single-id form of
-     * {@link #findOrgMembers}'s predicate (active MEMBER), so the auto-enroll hook
-     * can test one id without materialising the whole roster. Keep this WHERE in
-     * sync with {@code findOrgMembers}.
+     * {@link #findOrgMembers}'s predicate (active {@link Learner}), so the
+     * auto-enroll hook can test one id without materialising the whole roster.
+     * Keep this WHERE in sync with {@code findOrgMembers}.
      */
     @Query(value = """
             SELECT EXISTS (SELECT 1 FROM users u
                            WHERE u.id = :userId AND u.organization_id = :orgId
-                             AND u.status = 'ACTIVE' AND u.role = 'MEMBER')
-            """, nativeQuery = true)
+                             AND u.status = 'ACTIVE' AND u.""" + Learner.ROLE_IN + ")",
+            nativeQuery = true)
     boolean isActiveOrgMember(@Param("orgId") UUID orgId, @Param("userId") UUID userId);
 
     /**
@@ -83,7 +85,8 @@ public interface CohortRepository extends JpaRepository<Cohort, UUID> {
             JOIN organizations o ON o.id = u.organization_id
             WHERE cm.cohort_id = :cohortId
               AND u.status = 'ACTIVE'
-              AND u.role = 'MEMBER'
+              AND u.""" + Learner.ROLE_IN + """
+
             ORDER BY u.name
             """, nativeQuery = true)
     List<CohortMemberRow> findRoster(@Param("cohortId") UUID cohortId);
@@ -128,7 +131,8 @@ public interface CohortRepository extends JpaRepository<Cohort, UUID> {
             SELECT o.id AS id, o.name AS name, o.description AS description,
                    p.name AS parentName,
                    (SELECT count(*) FROM users u WHERE u.organization_id = o.id
-                     AND u.role = 'MEMBER' AND u.status = 'ACTIVE') AS memberCount,
+                     AND u.status = 'ACTIVE' AND u.""" + Learner.ROLE_IN + """
+            ) AS memberCount,
                    (SELECT count(*) FROM cohort_orgs co WHERE co.org_id = o.id) AS cohortCount,
                    (SELECT count(*) FROM workshops w WHERE w.org_id = o.id) AS workshopCount,
                    EXISTS (SELECT 1 FROM program_surface_orgs s

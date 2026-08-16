@@ -72,10 +72,12 @@ public class CohortService {
 
     /**
      * Enrollment is learners-only: {@link #orgMemberIds} is
-     * {@code role = 'MEMBER' AND status = 'ACTIVE'}, so a coach, instructor or
-     * admin fails this check even though they DO belong to the org — the old
-     * "do not belong to this organization" wording sent admins hunting for the
-     * wrong problem.
+     * {@code Learner.ROLE_IN AND status = 'ACTIVE'} — MEMBER, ORG_ADMIN and
+     * SUPER_ADMIN (an org-scoped admin takes the program like a founder does,
+     * matching the assessment slice's targetRoles), while COACH and
+     * INSTRUCTOR still fail it even though they DO belong to the org: they
+     * staff the program. The old "do not belong to this organization" wording
+     * sent admins hunting for the wrong problem.
      */
     static final String NOT_ENROLLABLE =
             "One or more of the selected people are not active learners in this organization";
@@ -322,7 +324,7 @@ public class CohortService {
      * {@link #enrollForAssignment} enforce ({@link #NOT_ENROLLABLE}). The check
      * lives HERE, on the one entry point both auto-enroll listeners call, and
      * tests the one id via {@link CohortRepository#isActiveOrgMember} — the
-     * single-id form of the same active-MEMBER predicate — rather than
+     * single-id form of the same active-learner predicate — rather than
      * materialising the whole org roster to check one member. It deliberately
      * does NOT filter the event's
      * {@code userType}: that is the member-type code (FOUNDER / LEADER / …),
@@ -333,7 +335,7 @@ public class CohortService {
      * cosmetic: {@code findRoster} is role-filtered, so a staffing coach in
      * {@code memberIds} would make the raw count disagree with every
      * roster-derived surface forever, and {@link #setOrgMembers}'s
-     * {@code removeAll(mine)} — mine being MEMBERs only — could never clear it.
+     * {@code removeAll(mine)} — mine being learners only — could never clear it.
      */
     public void autoEnroll(UUID orgId, UUID userId) {
         if (!cohorts.isActiveOrgMember(orgId, userId)) {

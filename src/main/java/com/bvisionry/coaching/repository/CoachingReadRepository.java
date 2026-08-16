@@ -45,7 +45,8 @@ public class CoachingReadRepository {
     /** WHO: the coach may see founder {@code u} at all. Binds {@code :orgId}, {@code :coachId}. */
     private static final String VISIBLE_FOUNDER = """
             u.organization_id = :orgId
-              AND u.role = 'MEMBER'
+              AND\s""" + com.bvisionry.common.programaccess.Learner.ROLE_PREDICATE.formatted("u") + """
+
               AND u.status = 'ACTIVE'
               AND\s""" + CoachAccess.VISIBLE_MEMBER_PREDICATE.formatted("u.id");
 

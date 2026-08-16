@@ -16,6 +16,7 @@ import org.springframework.stereotype.Repository;
 
 import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
 import com.bvisionry.common.programaccess.CohortInstruments;
+import com.bvisionry.common.programaccess.Learner;
 import com.bvisionry.common.programaccess.MemberActivity;
 import com.bvisionry.common.programaccess.ProgramAudience;
 import com.bvisionry.common.programaccess.TaskCompletion;
@@ -31,7 +32,7 @@ import com.bvisionry.common.progress.CourseProgressSql;
  *
  * <p><strong>The org slice is the unit (§13.7).</strong> A cohort spans orgs
  * since V171, so "the roster" here always means
- * {@code cohort_members × users(organization_id = :orgId, role = 'MEMBER')} —
+ * {@code cohort_members × users(organization_id = :orgId, Learner.ROLE_IN)} —
  * never the cohort's whole membership. Every count, every activity row and
  * every milestone denominator in this class goes through that join; a number
  * that skipped it would quote another org's founders back to this one.
@@ -43,7 +44,8 @@ public class CohortViewReadRepository {
     private static final String ORG_SLICE = """
             JOIN users u ON u.id = cm.user_id
                         AND u.organization_id = :orgId
-                        AND u.role = 'MEMBER'""";
+                        AND u.status = 'ACTIVE'
+                        AND\s""" + Learner.ROLE_PREDICATE.formatted("u");
 
     /**
      * Scalar sub-select: the member's Nth-latest (0 = latest, 1 = previous)
@@ -165,7 +167,7 @@ public class CohortViewReadRepository {
      * leaves behind.
      */
     public List<MilestoneRow> milestones(UUID orgId, UUID cohortId) {
-        return jdbc.query("""
+        return jdbc.query(("""
                 SELECT t.id, t.name, t.milestone_role, t.due_date,
                        count(u.id) AS total_members,
                        count(u.id) FILTER (WHERE %1$s) AS done_count
@@ -176,12 +178,14 @@ public class CohortViewReadRepository {
                 LEFT JOIN cohort_members cm ON cm.cohort_id = m.cohort_id
                 LEFT JOIN users u ON u.id = cm.user_id
                                  AND u.organization_id = :orgId
-                                 AND u.role = 'MEMBER'
+                                 AND u.status = 'ACTIVE'
+                                 AND u.""" + Learner.ROLE_IN + """
+
                                  AND %2$s
                 WHERE m.cohort_id = :cohortId
                 GROUP BY t.id, t.name, t.milestone_role, t.due_date, m.position, t.position
                 ORDER BY m.position, t.position
-                """.formatted(TaskCompletion.DONE_FOR_USER.formatted("u.id"),
+                """).formatted(TaskCompletion.DONE_FOR_USER.formatted("u.id"),
                         ProgramAudience.INCLUDES_USER.formatted("u.id")),
                 params(orgId, cohortId),
                 (rs, i) -> new MilestoneRow(rs.getObject("id", UUID.class), rs.getString("name"),
@@ -233,7 +237,7 @@ public class CohortViewReadRepository {
      * curriculum. DRAFT tasks are the builder's business and never appear here.
      */
     public List<OutlineTaskRow> outlineTasks(UUID orgId, UUID cohortId) {
-        return jdbc.query("""
+        return jdbc.query(("""
                 SELECT m.id AS module_id, t.id, t.name, t.task_type, t.milestone_role,
                        t.due_date, t.position,
                        count(u.id) AS total_members,
@@ -243,14 +247,16 @@ public class CohortViewReadRepository {
                 LEFT JOIN cohort_members cm ON cm.cohort_id = m.cohort_id
                 LEFT JOIN users u ON u.id = cm.user_id
                                  AND u.organization_id = :orgId
-                                 AND u.role = 'MEMBER'
+                                 AND u.status = 'ACTIVE'
+                                 AND u.""" + Learner.ROLE_IN + """
+
                                  AND %2$s
                                  AND %3$s
                 WHERE m.cohort_id = :cohortId
                 GROUP BY m.id, m.position, t.id, t.name, t.task_type, t.milestone_role,
                          t.due_date, t.position
                 ORDER BY m.position, t.position
-                """.formatted(TaskCompletion.DONE_FOR_USER.formatted("u.id"),
+                """).formatted(TaskCompletion.DONE_FOR_USER.formatted("u.id"),
                         ProgramAudience.INCLUDES_USER.formatted("u.id"),
                         // ProgramRules.gates in SQL: a COURSE task blocked for this
                         // org reads 0/0 here, so the outline's module aggregate

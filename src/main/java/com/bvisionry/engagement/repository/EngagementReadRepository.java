@@ -89,7 +89,10 @@ public class EngagementReadRepository {
         return jdbc.query("""
                 SELECT u.id, u.name, u.email
                 FROM cohort_members cm
-                JOIN users u ON u.id = cm.user_id AND u.role = 'MEMBER'
+                JOIN users u ON u.id = cm.user_id
+                            AND u.status = 'ACTIVE'
+                            AND\s""" + com.bvisionry.common.programaccess.Learner.ROLE_PREDICATE.formatted("u") + """
+
                 WHERE cm.cohort_id = :cohortId
                   AND (CAST(:orgId AS uuid) IS NULL OR u.organization_id = CAST(:orgId AS uuid))
                 ORDER BY u.name, u.email

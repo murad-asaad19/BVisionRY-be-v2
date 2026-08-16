@@ -632,6 +632,22 @@ public class TaskSpineRepository {
                 new MapSqlParameterSource("id", refId), Boolean.class));
     }
 
+    /**
+     * The DISTANCE pillars this cohort's mapping names — the only ids a board
+     * task may be tagged with (spec §1: a tag lines up 1:1 with the narrative it
+     * feeds). Raw SQL for this class's usual reason: the mapping belongs to the
+     * comparison slice and the ArchUnit ratchet forbids a new
+     * programflow→comparison import.
+     */
+    public List<UUID> mappedDistancePillarIds(UUID cohortId) {
+        return jdbc.query("""
+                SELECT distance_pillar_id FROM comparison_pillar_mappings
+                WHERE cohort_id = :cohortId AND distance_pillar_id IS NOT NULL
+                """,
+                new MapSqlParameterSource("cohortId", cohortId),
+                (rs, i) -> rs.getObject("distance_pillar_id", UUID.class));
+    }
+
     /** Any submission carries this task's milestone tag → the ref is frozen (review #7b). */
     public boolean hasTaggedSubmissions(UUID taskId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(

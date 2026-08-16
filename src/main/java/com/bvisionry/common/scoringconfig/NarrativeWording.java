@@ -21,6 +21,14 @@ package com.bvisionry.common.scoringconfig;
  *                                approval required, every narrative lands
  *                                DRAFT. ON = generated narratives land
  *                                APPROVED, stamped by the system.
+ *                                <p>Governs BOTH review-gated member-visible
+ *                                artifacts — the per-pillar shift narratives
+ *                                ({@code ShiftNarrativeService}) and the
+ *                                member-level growth summary written from them
+ *                                ({@code MemberGrowthSummaryService}). An edit
+ *                                still returns either to draft. The cohort
+ *                                summary is staff-only and has no gate to
+ *                                govern.
  */
 public record NarrativeWording(String notEnoughDataSentence, String declineCloseInstruction,
                                Boolean autoApprove) {

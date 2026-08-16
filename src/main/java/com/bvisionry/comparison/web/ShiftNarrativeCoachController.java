@@ -5,7 +5,9 @@ import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.security.CurrentUser;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.comparison.dto.GenerateAllNarrativesResponse;
+import com.bvisionry.comparison.dto.MemberGrowthSummaryDto;
 import com.bvisionry.comparison.dto.NarrativeRequests.GenerateNarrativeRequest;
+import com.bvisionry.comparison.dto.NarrativeRequests.UpdateGrowthSummaryRequest;
 import com.bvisionry.comparison.dto.NarrativeRequests.UpdateNarrativeRequest;
 import com.bvisionry.comparison.dto.NarrativeReviewResponse;
 import com.bvisionry.comparison.dto.ShiftNarrativeDto;
@@ -13,6 +15,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -43,6 +46,7 @@ import java.util.UUID;
 public class ShiftNarrativeCoachController {
 
     private final ShiftNarrativeService narratives;
+    private final MemberGrowthSummaryService summaries;
     private final CoachAccess coachAccess;
     private final CurrentUserAccessor currentUser;
 
@@ -79,6 +83,38 @@ public class ShiftNarrativeCoachController {
     @DeleteMapping("/{narrativeId}")
     public void delete(@PathVariable UUID founderId, @PathVariable UUID narrativeId) {
         narratives.delete(founderId, narrativeId, requireSeen(founderId).viewerId());
+    }
+
+    /* ------------------------------------------- the member growth summary */
+
+    /** 204 when the founder has no summary yet — an expected state, not a 404. */
+    @GetMapping("/summary")
+    public ResponseEntity<MemberGrowthSummaryDto> summary(@PathVariable UUID founderId) {
+        requireSeen(founderId);
+        return summaries.forReview(founderId)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    @PostMapping("/summary/generate")
+    public MemberGrowthSummaryDto generateSummary(@PathVariable UUID founderId) {
+        return summaries.generate(founderId, requireSeen(founderId).viewerId());
+    }
+
+    @PatchMapping(path = "/summary", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public MemberGrowthSummaryDto updateSummary(@PathVariable UUID founderId,
+                                                @Valid @RequestBody UpdateGrowthSummaryRequest request) {
+        return summaries.update(founderId, request, requireSeen(founderId).viewerId());
+    }
+
+    @PostMapping("/summary/approve")
+    public MemberGrowthSummaryDto approveSummary(@PathVariable UUID founderId) {
+        return summaries.approve(founderId, requireSeen(founderId).viewerId());
+    }
+
+    @DeleteMapping("/summary")
+    public void deleteSummary(@PathVariable UUID founderId) {
+        summaries.delete(founderId, requireSeen(founderId).viewerId());
     }
 
     /** The coach must currently see this founder — a revoked assignment locks them out. */

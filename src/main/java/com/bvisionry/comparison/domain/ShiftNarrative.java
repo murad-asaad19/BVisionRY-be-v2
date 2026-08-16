@@ -15,6 +15,7 @@ import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -54,11 +55,26 @@ public class ShiftNarrative extends BaseEntity {
     @Column(name = "pillar_name_snapshot", nullable = false)
     private String pillarNameSnapshot;
 
+    /**
+     * The observation breakdown (spec §2) — the shape everything generated or
+     * edited since V189 carries.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "items", columnDefinition = "jsonb")
+    private List<Item> items;
+
+    /**
+     * Legacy single classification. Null on every row written since V189 —
+     * pre-breakdown rows keep theirs rather than being rewritten by a data
+     * migration, and every read path renders both shapes (V189's CHECK
+     * guarantees a row carries one of them).
+     */
     @Enumerated(EnumType.STRING)
-    @Column(name = "kind", nullable = false)
+    @Column(name = "kind")
     private NarrativeKind kind;
 
-    @Column(name = "body", nullable = false, columnDefinition = "TEXT")
+    /** Legacy single-paragraph prose — see {@link #kind}. */
+    @Column(name = "body", columnDefinition = "TEXT")
     private String body;
 
     /** The forward-looking next step — mandatory while {@link #decline} is true. */
@@ -114,5 +130,9 @@ public class ShiftNarrative extends BaseEntity {
 
     /** What this narrative was generated with — config edits apply forward only. */
     public record Snapshot(NarrativeWording wording, String bandKey, String bandLabel) {
+    }
+
+    /** One observation of the breakdown: its kind, and the sentence or two describing it. */
+    public record Item(NarrativeKind kind, String text) {
     }
 }

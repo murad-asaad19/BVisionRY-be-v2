@@ -43,6 +43,7 @@ public class ComparisonQueryService {
     private final OrgMemberAccess members;
     private final OrgCohortAccess orgCohorts;
     private final ShiftNarrativeService narratives;
+    private final MemberGrowthSummaryService growthSummaries;
     private final ComparisonComputeService compute;
 
     /* ---------------------------------------------------------- member view */
@@ -218,6 +219,8 @@ public class ComparisonQueryService {
                 // along so the member can be told "2 more are coming" — a
                 // number, never a word of unapproved prose.
                 narratives.approvedFor(c.getCohortId(), c.getUserId(), mappedDistancePillarIds),
-                narratives.draftCountFor(c.getCohortId(), c.getUserId(), mappedDistancePillarIds));
+                narratives.draftCountFor(c.getCohortId(), c.getUserId(), mappedDistancePillarIds),
+                growthSummaries.approvedBodyFor(c.getCohortId(), c.getUserId()),
+                growthSummaries.approvedItemsFor(c.getCohortId(), c.getUserId()));
     }
 }

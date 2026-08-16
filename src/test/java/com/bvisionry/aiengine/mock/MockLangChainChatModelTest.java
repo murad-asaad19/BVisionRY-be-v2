@@ -50,8 +50,11 @@ class MockLangChainChatModelTest {
                 then write the narrative and a closing action.""");
 
         ShiftNarrativeResult result = JSON.readValue(body, ShiftNarrativeResult.class);
-        assertThat(result.kind()).isNotBlank();
-        assertThat(result.narrative()).isNotBlank();
+        assertThat(result.items()).isNotEmpty();
+        assertThat(result.items()).allSatisfy(item -> {
+            assertThat(item.kind()).isNotBlank();
+            assertThat(item.text()).isNotBlank();
+        });
         // The one that mattered: §6 makes closingAction MANDATORY for a pillar
         // in the decline band. A blank here would make every mocked decline
         // read as a generation failure on a sandbox lane.

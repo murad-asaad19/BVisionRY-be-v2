@@ -10,9 +10,12 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -24,6 +27,7 @@ import org.thymeleaf.context.Context;
 import com.bvisionry.common.excel.ExcelWorkbookBuilder;
 import com.bvisionry.common.excel.XlsxResponse;
 import com.bvisionry.common.pdf.PdfRenderer;
+import com.bvisionry.comparison.domain.NarrativeKind;
 import com.bvisionry.comparison.dto.FounderComparisonDto;
 import com.bvisionry.comparison.dto.FounderComparisonDto.ComparisonPillarDto;
 import com.bvisionry.comparison.dto.MyComparisonResponse;
@@ -71,12 +75,16 @@ public class MyGrowthExportService {
     public record TrajectoryRow(String assessment, String evaluated, String score) {}
 
     /**
-     * Display-ready approved narrative (spec §5 layout item 4). Only APPROVED
-     * narratives ever reach here — {@code FounderComparisonDto.narratives} is
-     * filtered in the service, so neither export can leak a draft.
+     * Display-ready approved narrative (spec §5 layout item 4, §2 breakdown).
+     * Only APPROVED narratives ever reach here —
+     * {@code FounderComparisonDto.narratives} is filtered in the service, so
+     * neither export can leak a draft.
      */
-    public record NarrativeRow(String pillarName, String kindLabel, String body,
+    public record NarrativeRow(String pillarName, List<NarrativeItemRow> items,
                                String closingAction) {}
+
+    /** One observation of the breakdown — or the whole of a pre-V189 narrative. */
+    public record NarrativeItemRow(String kindLabel, String text) {}
 
     /**
      * @param staffVoice third-person copy for the two STAFF doors — "GROWTH
@@ -115,6 +123,10 @@ public class MyGrowthExportService {
             ctx.setVariable("computedAt", instant(c.computedAt(), dates));
             ctx.setVariable("pillars", pillarRows(c.pillars()));
         }
+        // Spec §3: the overall summary leads the report. Approved-only already,
+        // straight off the member payload.
+        ctx.setVariable("growthSummary", c == null ? null : c.growthSummary());
+        ctx.setVariable("growthSummaryItems", summaryItemRows(c));
         ctx.setVariable("narratives", narrativeRows(c));
         return pdfRenderer.renderTemplate("growth-report", ctx);
     }
@@ -149,6 +161,14 @@ public class MyGrowthExportService {
                 overview.labeledRow("Baseline evaluated", instant(c.baselineEvaluatedAt(), dates));
                 overview.labeledRow("Distance evaluated", instant(c.distanceEvaluatedAt(), dates));
                 overview.labeledRow("Computed at", instant(c.computedAt(), dates));
+                if (c.growthSummary() != null) {
+                    overview.labeledRow("Growth summary", c.growthSummary());
+                }
+                // The V193 breakdown: one labelled row per kind, so the overall
+                // story reads the same way the pillar sheet does.
+                for (NarrativeItemRow item : summaryItemRows(c)) {
+                    overview.labeledRow("Growth summary · " + item.kindLabel(), item.text());
+                }
             }
             overview.autoSize();
 
@@ -162,13 +182,7 @@ public class MyGrowthExportService {
 
                 List<NarrativeRow> narratives = narrativeRows(c);
                 if (!narratives.isEmpty()) {
-                    ExcelWorkbookBuilder.SheetBuilder sheet = wb.newSheet("Shift narratives");
-                    sheet.headers("Pillar", "Kind", "Narrative", "Next step");
-                    for (NarrativeRow n : narratives) {
-                        sheet.row(n.pillarName(), n.kindLabel(), n.body(),
-                                n.closingAction() == null ? "—" : n.closingAction());
-                    }
-                    sheet.autoSize();
+                    writeNarrativeSheet(wb, narratives);
                 }
             }
 
@@ -233,12 +247,81 @@ public class MyGrowthExportService {
                 .toList();
     }
 
+    /**
+     * The overall summary's breakdown (V193), display-ready. Empty on a
+     * pre-V193 summary — that one is a paragraph, rendered as {@code
+     * growthSummary} instead, so the two never both appear.
+     */
+    private static List<NarrativeItemRow> summaryItemRows(FounderComparisonDto c) {
+        if (c == null || c.growthSummaryItems() == null) {
+            return List.of();
+        }
+        return c.growthSummaryItems().stream()
+                .map(i -> new NarrativeItemRow(kindLabel(i.kind()), i.text()))
+                .toList();
+    }
+
+    /**
+     * One row per PILLAR, one column per kind.
+     *
+     * <p>The long shape (a row per observation) repeated the pillar name on
+     * every row and repeated the closing action — which is per pillar, not per
+     * observation — beside each one, so a five-kind breakdown read as five
+     * near-duplicate rows. Wide, the pillar is the row key the reader scans
+     * for and each kind is answerable at a glance across pillars.
+     *
+     * <p>A pillar may carry more than one observation of a kind; those share
+     * the cell, blank-line separated. Columns are the five kinds in enum order
+     * plus — defensively — any unknown kind present in the data, so a corrupt
+     * row loses its column heading rather than its text.
+     */
+    private static void writeNarrativeSheet(ExcelWorkbookBuilder wb, List<NarrativeRow> narratives) {
+        List<String> kinds = new ArrayList<>(Arrays.stream(NarrativeKind.values())
+                .map(k -> kindLabel(k.name())).toList());
+        narratives.stream().flatMap(n -> n.items().stream())
+                .map(NarrativeItemRow::kindLabel)
+                .filter(label -> !label.isBlank() && !kinds.contains(label))
+                .forEach(kinds::add);
+
+        List<String> headers = new ArrayList<>();
+        headers.add("Pillar");
+        headers.addAll(kinds);
+        headers.add("Next step");
+        ExcelWorkbookBuilder.SheetBuilder sheet = wb.newSheet("Shift narratives")
+                .headers(headers.toArray(String[]::new));
+
+        for (NarrativeRow n : narratives) {
+            List<Object> cells = new ArrayList<>();
+            cells.add(n.pillarName());
+            for (String kind : kinds) {
+                cells.add(n.items().stream()
+                        .filter(item -> kind.equals(item.kindLabel()))
+                        .map(NarrativeItemRow::text)
+                        .collect(Collectors.joining("\n\n")));
+            }
+            cells.add(n.closingAction() == null ? "—" : n.closingAction());
+            sheet.row(cells.toArray());
+        }
+        sheet.autoSize();
+    }
+
+    /**
+     * The two shapes a narrative can arrive in, flattened to one. A pre-V189
+     * row has no {@code items} and its single kind + paragraph IS the whole
+     * breakdown — rendering it as one observation keeps every export honest
+     * without a data migration that would invent a split nobody made.
+     */
     private List<NarrativeRow> narrativeRows(FounderComparisonDto c) {
         if (c == null || c.narratives() == null) {
             return List.of();
         }
         return c.narratives().stream()
-                .map(n -> new NarrativeRow(n.pillarName(), kindLabel(n.kind()), n.body(),
+                .map(n -> new NarrativeRow(n.pillarName(),
+                        n.items() == null || n.items().isEmpty()
+                                ? List.of(new NarrativeItemRow(kindLabel(n.kind()), n.body()))
+                                : n.items().stream()
+                                        .map(i -> new NarrativeItemRow(kindLabel(i.kind()), i.text()))
+                                        .toList(),
                         n.closingAction()))
                 .toList();
     }

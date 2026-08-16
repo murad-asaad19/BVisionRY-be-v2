@@ -33,6 +33,7 @@ final class ProgramMapper {
                 t.getTaskType(),
                 t.getRefId(),
                 t.getMilestoneRole(),
+                List.copyOf(t.getPillarIds()),
                 t.getFields().stream().map(ProgramMapper::toDto).toList());
     }
 

@@ -6,5 +6,7 @@ public enum ExerciseColumnType {
     LONG_TEXT,
     NUMBER,
     DATE,
-    SELECT
+    SELECT,
+    /** Multiple free-text entries in one cell (stored as a JSON string array). */
+    LIST
 }

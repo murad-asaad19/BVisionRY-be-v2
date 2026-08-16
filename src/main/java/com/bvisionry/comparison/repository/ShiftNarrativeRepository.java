@@ -19,6 +19,9 @@ public interface ShiftNarrativeRepository extends JpaRepository<ShiftNarrative, 
     List<ShiftNarrative> findByCohortIdAndUserIdAndStatus(UUID cohortId, UUID userId,
                                                           NarrativeStatus status);
 
+    /** The whole cohort's approved narratives in one read — the §4 summary's input. */
+    List<ShiftNarrative> findByOrgIdAndCohortIdAndStatus(UUID orgId, UUID cohortId, NarrativeStatus status);
+
     Optional<ShiftNarrative> findByCohortIdAndUserIdAndDistancePillarId(
             UUID cohortId, UUID userId, UUID distancePillarId);
 

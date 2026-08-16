@@ -59,8 +59,26 @@ public class MockLangChainChatModel implements ChatModel {
     private static String defaultFor(String systemPrompt) {
         // Order matters: the pillar schema's scorePercentage is a substring of
         // overallScorePercentage, so check the more specific keys first.
+        // The member growth summary (§3). Checked BEFORE the shift-narrative
+        // arm: since V193 both prompts name the five kinds, so CARRIED_FORWARD
+        // no longer tells them apart — "overall growth breakdown" does, and it
+        // appears only here.
+        if (systemPrompt.contains("overall growth breakdown")) {
+            return MEMBER_GROWTH_BREAKDOWN_DEFAULT;
+        }
+        // Its pre-V193 contract, still shipped by installations that customised
+        // the template — {"summary" appears only there.
+        if (systemPrompt.contains("{\"summary\"")) {
+            return MEMBER_GROWTH_SUMMARY_DEFAULT;
+        }
         if (systemPrompt.contains("teamThemes")) {
             return TEAM_INSIGHT_DEFAULT;
+        }
+        // The cohort growth report (§4). Without this arm it fell through to
+        // PILLAR_DEFAULT and every mocked report FAILED schema validation, so
+        // the report could never be seen locally. "sharedWins" is its own.
+        if (systemPrompt.contains("sharedWins")) {
+            return COHORT_GROWTH_SUMMARY_DEFAULT;
         }
         if (systemPrompt.contains("overallScorePercentage")) {
             return OVERALL_SUMMARY_DEFAULT;
@@ -94,13 +112,75 @@ public class MockLangChainChatModel implements ChatModel {
      */
     private static final String SHIFT_NARRATIVE_DEFAULT = """
             {
-              "kind": "PERSISTED",
-              "narrative": "The earlier assessment named ownership of outcomes as the strength here, \
-            and the later text still leans on it, but the follow-through it described has thinned. \
-            Where the first read showed decisions being closed out, the second describes them being \
-            revisited. The pattern is the same one named before, showing up later in the cycle.",
+              "items": [
+                {"kind": "PERSISTED",
+                 "text": "The earlier assessment named ownership of outcomes as the strength here, \
+            and the later text still leans on it, but the follow-through it described has thinned."},
+                {"kind": "CARRIED_FORWARD",
+                 "text": "Structured reflection shows up in both readings, and the later one describes \
+            it running on a fixed cadence rather than when time allowed."},
+                {"kind": "RESOLVED",
+                 "text": "The hesitation about asking for help that the earlier text described no longer \
+            appears; the later reading treats it as something already handled."},
+                {"kind": "NEW",
+                 "text": "Naming a decision owner before a discussion starts appears only in the later \
+            reading, with no equivalent earlier."},
+                {"kind": "FADED",
+                 "text": "The appetite for open-ended exploration that the earlier text singled out is \
+            absent from the later reading."}
+              ],
               "closingAction": "Pick the one decision currently being revisited and close it this week, \
             writing down what would have to be true to reopen it."
+            }
+            """;
+
+    /**
+     * The member-level growth breakdown (V193) — all five kinds, so a mocked
+     * generation exercises every badge the card renders.
+     */
+    private static final String MEMBER_GROWTH_BREAKDOWN_DEFAULT = """
+            {
+              "items": [
+                {"kind": "CARRIED_FORWARD",
+                 "text": "The ownership you described at intake still runs through most of your \
+            work, and across Discipline and Focus & Flow it now shows up as a fixed cadence \
+            rather than something you reach for when time allows."},
+                {"kind": "PERSISTED",
+                 "text": "The distance between deciding and acting is still the recurring edge, \
+            and it surfaces in the same pillars it did before."},
+                {"kind": "RESOLVED",
+                 "text": "The hesitation about asking for help that ran through the earlier \
+            readings no longer appears anywhere in the later ones."},
+                {"kind": "NEW",
+                 "text": "Naming a decision owner before a discussion starts appears across \
+            several pillars with no equivalent earlier."},
+                {"kind": "FADED",
+                 "text": "The appetite for open-ended exploration the earlier readings singled \
+            out is absent from the later ones."}
+              ]
+            }
+            """;
+
+    /** The member-level growth summary's pre-V193 single-paragraph contract. */
+    private static final String MEMBER_GROWTH_SUMMARY_DEFAULT = """
+            {
+              "summary": "The ownership described at intake is still the spine of the later \
+            reading, and the reflection habit around it now runs on a fixed cadence rather than \
+            when time allowed. What has not moved is the distance between deciding and acting."
+            }
+            """;
+
+    /** The cohort-level growth report (redesign spec §4) — staff-facing, so it may cite figures. */
+    private static final String COHORT_GROWTH_SUMMARY_DEFAULT = """
+            {
+              "overview": "The cohort moved up on average, but the gains are concentrated: a \
+            few members carried most of the movement while the rest stayed close to where they started.",
+              "sharedWins": ["Reflection habits are now on a cadence for most of the group",
+                             "Ownership language shows up across the later readings"],
+              "sharedRisks": ["Follow-through thins mid-cycle in several members",
+                              "The lowest-scoring pillar did not move for anyone"],
+              "recommendations": ["Run one working session on closing decisions rather than revisiting them",
+                                  "Pair the members who moved most with those who stayed flat"]
             }
             """;
 

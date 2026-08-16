@@ -15,5 +15,9 @@ public enum PromptType {
     /** System prompt for the admin AI-use detector (was a submission's free-text AI-written?). */
     AI_USE_DETECTION,
     /** System prompt for the Qualitative Shift Narrative job (redesign spec §6). */
-    SHIFT_NARRATIVE
+    SHIFT_NARRATIVE,
+    /** System prompt for the member-level growth summary (redesign spec §3). */
+    MEMBER_GROWTH_SUMMARY,
+    /** System prompt for the cohort-level growth summary (redesign spec §4). */
+    COHORT_GROWTH_SUMMARY
 }

@@ -2,7 +2,9 @@ package com.bvisionry.comparison.web;
 
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.comparison.dto.GenerateAllNarrativesResponse;
+import com.bvisionry.comparison.dto.MemberGrowthSummaryDto;
 import com.bvisionry.comparison.dto.NarrativeRequests.GenerateNarrativeRequest;
+import com.bvisionry.comparison.dto.NarrativeRequests.UpdateGrowthSummaryRequest;
 import com.bvisionry.comparison.dto.NarrativeRequests.UpdateNarrativeRequest;
 import com.bvisionry.comparison.dto.NarrativeReviewResponse;
 import com.bvisionry.comparison.dto.ShiftNarrativeDto;
@@ -10,6 +12,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -43,6 +46,7 @@ import java.util.UUID;
 public class ShiftNarrativeAdminController {
 
     private final ShiftNarrativeService narratives;
+    private final MemberGrowthSummaryService summaries;
     private final ComparisonQueryService queries;
     private final CurrentUserAccessor currentUser;
 
@@ -88,5 +92,42 @@ public class ShiftNarrativeAdminController {
                        @PathVariable UUID narrativeId) {
         queries.requireMemberInOrg(orgId, userId);
         narratives.delete(userId, narrativeId, currentUser.require().userId());
+    }
+
+    /* ------------------------------------------- the member growth summary */
+
+    /** 204 when the member has no summary yet — an expected state, not a 404. */
+    @GetMapping("/summary")
+    public ResponseEntity<MemberGrowthSummaryDto> summary(@PathVariable UUID orgId,
+                                                          @PathVariable UUID userId) {
+        queries.requireMemberInOrg(orgId, userId);
+        return summaries.forReview(userId)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    @PostMapping("/summary/generate")
+    public MemberGrowthSummaryDto generateSummary(@PathVariable UUID orgId, @PathVariable UUID userId) {
+        queries.requireMemberInOrg(orgId, userId);
+        return summaries.generate(userId, currentUser.require().userId());
+    }
+
+    @PatchMapping(path = "/summary", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public MemberGrowthSummaryDto updateSummary(@PathVariable UUID orgId, @PathVariable UUID userId,
+                                                @Valid @RequestBody UpdateGrowthSummaryRequest request) {
+        queries.requireMemberInOrg(orgId, userId);
+        return summaries.update(userId, request, currentUser.require().userId());
+    }
+
+    @PostMapping("/summary/approve")
+    public MemberGrowthSummaryDto approveSummary(@PathVariable UUID orgId, @PathVariable UUID userId) {
+        queries.requireMemberInOrg(orgId, userId);
+        return summaries.approve(userId, currentUser.require().userId());
+    }
+
+    @DeleteMapping("/summary")
+    public void deleteSummary(@PathVariable UUID orgId, @PathVariable UUID userId) {
+        queries.requireMemberInOrg(orgId, userId);
+        summaries.delete(userId, currentUser.require().userId());
     }
 }

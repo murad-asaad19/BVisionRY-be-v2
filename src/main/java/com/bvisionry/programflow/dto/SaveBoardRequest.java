@@ -66,6 +66,16 @@ public record SaveBoardRequest(
             @NotNull ProgramTaskType taskType,
             UUID refId,
             MilestoneRole milestoneRole,
+            /**
+             * The cohort's mapped DISTANCE pillar ids this task grows (spec §1).
+             * Optional, and refused on an ASSESSMENT task — a pipeline
+             * assessment is already pillar-linked through its pipeline.
+             */
+            List<UUID> pillarIds,
             @NotNull @Valid List<FieldUpsert> fields) {
+
+        public TaskUpsert {
+            pillarIds = pillarIds == null ? List.of() : pillarIds;
+        }
     }
 }

@@ -17,8 +17,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class NarrativeGuardrailsTest {
 
-    private static ShiftNarrativeResult result(String kind, String narrative, String closing) {
-        return new ShiftNarrativeResult(kind, narrative, closing);
+    private static ShiftNarrativeResult result(String kind, String text, String closing) {
+        return new ShiftNarrativeResult(List.of(new ShiftNarrativeResult.Item(kind, text)), closing);
     }
 
     /* ------------------------------------------- (a) the before-text floor */
@@ -48,6 +48,32 @@ class NarrativeGuardrailsTest {
     void missingBeforeTextEntirely_isNotEnoughData() {
         assertThat(NarrativeGuardrails.hasEnoughBeforeText(null, null)).isFalse();
         assertThat(NarrativeGuardrails.hasEnoughBeforeText(List.of(), List.of())).isFalse();
+    }
+
+    /* ------------------------------------- (a') something to compare against */
+
+    @Test
+    void noLaterTextAndNoTaggedWork_isNothingToCompareAgainst() {
+        assertThat(NarrativeGuardrails.hasComparableAfter(List.of(), List.of(), false)).isFalse();
+        assertThat(NarrativeGuardrails.hasComparableAfter(null, null, false)).isFalse();
+        assertThat(NarrativeGuardrails.hasComparableAfter(
+                List.of("Fine."), List.of("Meh."), false)).isFalse();
+    }
+
+    @Test
+    void taggedWorkAloneIsEnoughToCompareAgainst() {
+        // §2's whole point: the programme work IS post-baseline evidence. A
+        // blanket after-TEXT floor would suppress exactly the calls the activity
+        // section exists to improve.
+        assertThat(NarrativeGuardrails.hasComparableAfter(List.of(), List.of(), true)).isTrue();
+    }
+
+    @Test
+    void laterTextAloneIsEnoughToCompareAgainst() {
+        String forty = "x".repeat(NarrativeGuardrails.MIN_BEFORE_TEXT_CHARS);
+        assertThat(NarrativeGuardrails.hasComparableAfter(List.of(forty), List.of(), false)).isTrue();
+        assertThat(NarrativeGuardrails.hasAfterText(List.of(forty), List.of())).isTrue();
+        assertThat(NarrativeGuardrails.hasAfterText(List.of("Fine."), List.of())).isFalse();
     }
 
     /* ------------------------------------------------ (b) the decline close */
@@ -112,6 +138,99 @@ class NarrativeGuardrailsTest {
         assertThat(NarrativeGuardrails.validate(null, false)).contains(Rejection.EMPTY_NARRATIVE);
     }
 
+    /* ------------------------------------------------- (d) the no-numbers rule */
+
+    @Test
+    void aScoreShapedFigureInAnObservation_isRejected() {
+        // The rule §2 states and the prompt cannot enforce: the input is full of
+        // figures ("scored at 100%", "rated Easy (4/5)"), so the only place to
+        // hold the line is the output.
+        for (String leak : List.of(
+                "Your focus score moved to 80%.",
+                "You rated it Easy (4/5) this time.",
+                "Restorative sleep now runs 6 out of 7 nights.",
+                "The pillar scored at 100 on the later reading.",
+                "It landed in the 90 percentile.")) {
+            assertThat(NarrativeGuardrails.validate(result("NEW", leak, ""), false))
+                    .as(leak).contains(Rejection.CONTAINS_NUMBER);
+        }
+    }
+
+    @Test
+    void ordinalsAndDurationsAreNotScores_andPassUntouched() {
+        // Three quarters of the digit-bearing lines in the real source text look
+        // like these, and the prompt tells the model to quote the founder's own
+        // wording — rejecting them would burn the single retry on compliant prose.
+        for (String fine : List.of(
+                "Statement 3 is where the shift shows up.",
+                "You now protect the habit 7 days a week.",
+                "The block runs 31-60 minutes rather than whenever time allowed.",
+                "You describe a team of 3 with clearer ownership.",
+                "Dimension 1 reads differently now.")) {
+            assertThat(NarrativeGuardrails.validate(result("NEW", fine, ""), false))
+                    .as(fine).isEmpty();
+        }
+    }
+
+    @Test
+    void theClosingActionIsHeldToTheSameRule() {
+        // It is member-facing prose too — a next step is not exempt.
+        assertThat(NarrativeGuardrails.validate(
+                result("FADED", "The cadence slipped.", "Get back to 80% completion this month."),
+                true))
+                .contains(Rejection.CONTAINS_NUMBER);
+    }
+
+    @Test
+    void aBlankDeclineReportsTheMissingClose_notTheNumberRule() {
+        // Order matters for the corrective retry: the reviewer needs the
+        // rejection they can act on, and an empty string has no number in it.
+        assertThat(NarrativeGuardrails.validate(result("FADED", "It slipped.", ""), true))
+                .contains(Rejection.MISSING_CLOSING_ACTION);
+    }
+
+    @Test
+    void numberCorrection_asksForWordsRatherThanAnotherFigure() {
+        assertThat(NarrativeGuardrails.correction(Rejection.CONTAINS_NUMBER, "ignored"))
+                .contains("score").contains("words");
+        assertThat(NarrativeGuardrails.reasonLabel(Rejection.CONTAINS_NUMBER))
+                .contains("score");
+    }
+
+    /* ------------------------------------------------- (e) the breakdown */
+
+    @Test
+    void aBreakdownWithNoObservations_isRejected() {
+        // §2 replaced one paragraph with a LIST, and an empty list is the new
+        // way to return nothing at all — it must fail exactly like empty prose.
+        assertThat(NarrativeGuardrails.validate(new ShiftNarrativeResult(List.of(), "Next."), false))
+                .contains(Rejection.EMPTY_NARRATIVE);
+        assertThat(NarrativeGuardrails.validate(new ShiftNarrativeResult(null, ""), false))
+                .contains(Rejection.EMPTY_NARRATIVE);
+    }
+
+    @Test
+    void everyItemIsChecked_notJustTheFirst() {
+        assertThat(NarrativeGuardrails.validate(new ShiftNarrativeResult(List.of(
+                new ShiftNarrativeResult.Item("RESOLVED", "The gap closed."),
+                new ShiftNarrativeResult.Item("Improved", "And it kept going.")), ""), false))
+                .contains(Rejection.BAD_KIND);
+        assertThat(NarrativeGuardrails.validate(new ShiftNarrativeResult(List.of(
+                new ShiftNarrativeResult.Item("RESOLVED", "The gap closed."),
+                new ShiftNarrativeResult.Item("NEW", "   ")), ""), false))
+                .contains(Rejection.EMPTY_NARRATIVE);
+    }
+
+    @Test
+    void aMultiItemBreakdown_passesEveryCheck() {
+        assertThat(NarrativeGuardrails.validate(new ShiftNarrativeResult(List.of(
+                new ShiftNarrativeResult.Item("PERSISTED", "The edge is still there."),
+                new ShiftNarrativeResult.Item("carried forward", "And the strength deepened."),
+                new ShiftNarrativeResult.Item("NEW", "A cadence appeared.")),
+                "Keep the cadence."), true))
+                .isEqualTo(Optional.empty());
+    }
+
     @Test
     void goodResponse_passesEveryCheck() {
         assertThat(NarrativeGuardrails.validate(
@@ -134,5 +253,13 @@ class NarrativeGuardrailsTest {
         assertThat(NarrativeGuardrails.correction(Rejection.BAD_KIND, "ignored"))
                 .contains("RESOLVED").contains("CARRIED_FORWARD").contains("NEW")
                 .contains("PERSISTED").contains("FADED");
+    }
+
+    @Test
+    void emptyCorrection_namesTheItemsContract() {
+        // The re-ask has to describe the shape the model actually broke — the
+        // pre-§2 wording ("2-4 sentences") would send it back to one paragraph.
+        assertThat(NarrativeGuardrails.correction(Rejection.EMPTY_NARRATIVE, "ignored"))
+                .contains("items").contains("text");
     }
 }

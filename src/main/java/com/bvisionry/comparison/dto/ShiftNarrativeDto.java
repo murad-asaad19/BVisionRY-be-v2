@@ -1,6 +1,7 @@
 package com.bvisionry.comparison.dto;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -12,16 +13,26 @@ import java.util.UUID;
  * GDPR erasure (the FK is SET NULL) — the same stance as the cohort launch
  * ledger.
  *
- * <p>{@code closingAction} is separate from {@code body} so the member card can
+ * <p>{@code closingAction} is separate from the prose so the member card can
  * render the mandatory "Next step:" footer on a decline without string-slicing
- * the prose (which is exactly what the design prototype had to do).
+ * it (which is exactly what the design prototype had to do).
+ *
+ * <p><strong>Two shapes, forever.</strong> {@code items} is the breakdown
+ * (spec §2); {@code kind} + {@code body} are the pre-V189 single-paragraph
+ * form, still carried by rows generated before it. Exactly one side is
+ * populated on any row, so a reader falls back: {@code items ?? [{kind,
+ * body}]}.
  */
 public record ShiftNarrativeDto(
         UUID id,
         UUID baselinePillarId,
         UUID distancePillarId,
         String pillarName,
+        /** The observation breakdown — null on a legacy row (read {@code kind}/{@code body}). */
+        List<NarrativeItemDto> items,
+        /** Legacy single classification — null on everything written since V189. */
         String kind,
+        /** Legacy single-paragraph prose — null on everything written since V189. */
         String body,
         String closingAction,
         /** Declining pillar (delta &lt; 0) — the structural fact §6's close rule keys on. */
@@ -42,4 +53,8 @@ public record ShiftNarrativeDto(
         UUID editedBy,
         String editedByName,
         Instant editedAt) {
+
+    /** One observation of the breakdown: one of the five kinds + its 1-2 sentences. */
+    public record NarrativeItemDto(String kind, String text) {
+    }
 }

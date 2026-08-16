@@ -3,6 +3,7 @@ package com.bvisionry.comparison.web;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.comparison.dto.CohortComparisonStatus;
+import com.bvisionry.comparison.dto.CohortGrowthAggregateDto;
 import com.bvisionry.comparison.dto.ComparisonSummaryDto;
 import com.bvisionry.comparison.dto.FounderComparisonDto;
 import com.bvisionry.comparison.dto.PillarMappingResponse;
@@ -41,6 +42,7 @@ public class ComparisonAdminController {
     private final ComparisonQueryService queries;
     private final ComparisonMappingService mappingService;
     private final ComparisonComputeService computeService;
+    private final CohortGrowthAggregateService aggregates;
     private final CurrentUserAccessor currentUser;
     private final com.bvisionry.comparison.repository.ComparisonReadRepository reads;
     private final OrgCohortAccess orgCohorts;
@@ -61,6 +63,17 @@ public class ComparisonAdminController {
         return queries.cohortComparisonForUser(orgId, cohortId, userId)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    /**
+     * The cohort's per-pillar growth rollup — average before/after/shift per
+     * mapped pillar plus approved-narrative kind counts. One payload behind the
+     * cohort pillar table, its charts and the growth report export.
+     */
+    @GetMapping("/growth-aggregate")
+    public CohortGrowthAggregateDto growthAggregate(@PathVariable UUID orgId,
+                                                    @PathVariable UUID cohortId) {
+        return aggregates.aggregate(orgId, cohortId);
     }
 
     /**

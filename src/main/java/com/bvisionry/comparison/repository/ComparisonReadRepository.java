@@ -188,11 +188,6 @@ public class ComparisonReadRepository {
                 .stream().findFirst();
     }
 
-    /** The user's latest cleanly-evaluated submission for a pipeline (distance side). */
-    public Optional<SubmissionRow> latestEvaluatedSubmission(UUID userId, UUID pipelineId) {
-        return evaluatedSubmission(userId, pipelineId, "DESC");
-    }
-
     public record MilestoneTaskRow(UUID taskId, UUID refId) {}
 
     /**
@@ -251,6 +246,39 @@ public class ComparisonReadRepository {
      */
     public Optional<SubmissionRow> earliestEvaluatedSubmission(UUID userId, UUID pipelineId) {
         return evaluatedSubmission(userId, pipelineId, "ASC");
+    }
+
+    /**
+     * The user's EARLIEST cleanly-evaluated UNTAGGED sitting of a pipeline
+     * strictly after {@code floor} — the comparison's twin of the journey's
+     * own-instrument DISTANCE adoption ({@code TaskSpineRepository}'s
+     * {@code ADOPTABLE_SITTINGS} — change one, change the other). Untagged,
+     * because a tagged sitting already belongs to whatever task claimed it (a
+     * check-in, another cohort's milestone); earliest, because that is the
+     * sitting the journey tags on open — resolving a different one here would
+     * persist a comparison the journey later contradicts; {@code evaluated_at}
+     * required, because a reading without a time cannot sit on a timeline.
+     * A null floor means there is no baseline reading to be after.
+     */
+    public Optional<SubmissionRow> earliestEvaluatedUntaggedSubmissionAfter(
+            UUID userId, UUID pipelineId, Instant floor) {
+        return jdbc.query("""
+                SELECT s.id, s.user_id, a.pipeline_id, s.evaluated_at
+                FROM submissions s
+                JOIN assignments a ON a.id = s.assignment_id
+                WHERE s.user_id = :userId
+                  AND a.pipeline_id = :pipelineId
+                  AND s.status = 'EVALUATED'
+                  AND s.program_task_id IS NULL
+                  AND s.evaluated_at IS NOT NULL
+                  AND (CAST(:floor AS timestamptz) IS NULL OR s.evaluated_at > :floor)
+                ORDER BY s.evaluated_at, s.created_at
+                LIMIT 1
+                """,
+                new MapSqlParameterSource("userId", userId).addValue("pipelineId", pipelineId)
+                        .addValue("floor", floor == null ? null : java.sql.Timestamp.from(floor)),
+                this::submissionRow)
+                .stream().findFirst();
     }
 
     private Optional<SubmissionRow> evaluatedSubmission(UUID userId, UUID pipelineId,

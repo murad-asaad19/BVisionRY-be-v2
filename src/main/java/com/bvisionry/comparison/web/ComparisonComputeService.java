@@ -240,10 +240,15 @@ public class ComparisonComputeService {
         // BASELINE milestone, else EARLIEST evaluated of the baseline pipeline
         // (intake semantics; retakes never shift it). Distance = the
         // submission tagged to the DISTANCE milestone (any publish status —
-        // the tag is authoritative); when the cohort has no distance milestone
-        // at all, fall back to latest-evaluated ONLY for different-pipeline
-        // pairs (the pre-spine behavior) — for an equal pair "latest" cannot
-        // distinguish a check-in from the distance.
+        // the tag is authoritative); untagged, different-pipeline pairs fall
+        // back to the journey's own-instrument adoption: the EARLIEST
+        // untagged sitting after the baseline reading (the sitting open()
+        // will tag). The floor here is the RESOLVED baseline — a tagged
+        // retake moves it, unlike the SQL adoption's min-sitting floor —
+        // because this pair's "to" must postdate ITS "from", not the
+        // member's first-ever sitting. For an equal pair there is no
+        // untagged fallback: "latest" cannot distinguish a check-in from
+        // the distance.
         Optional<SubmissionRow> baseline = reads.milestoneTask(pair.cohortId(), "BASELINE")
                 .flatMap(t -> reads.latestEvaluatedTaggedSubmission(
                         userId, t.taskId(), pair.baselinePipelineId()))
@@ -251,14 +256,13 @@ public class ComparisonComputeService {
 
         Optional<ComparisonReadRepository.MilestoneTaskRow> distanceTask =
                 reads.milestoneTask(pair.cohortId(), "DISTANCE");
-        Optional<SubmissionRow> distance;
-        if (distanceTask.isPresent()) {
-            distance = reads.latestEvaluatedTaggedSubmission(
-                    userId, distanceTask.get().taskId(), pair.distancePipelineId());
-        } else if (!pair.baselinePipelineId().equals(pair.distancePipelineId())) {
-            distance = reads.latestEvaluatedSubmission(userId, pair.distancePipelineId());
-        } else {
-            distance = Optional.empty();
+        Optional<SubmissionRow> distance = distanceTask
+                .flatMap(t -> reads.latestEvaluatedTaggedSubmission(
+                        userId, t.taskId(), pair.distancePipelineId()));
+        if (distance.isEmpty() && !pair.baselinePipelineId().equals(pair.distancePipelineId())) {
+            distance = reads.earliestEvaluatedUntaggedSubmissionAfter(userId,
+                    pair.distancePipelineId(),
+                    baseline.map(SubmissionRow::evaluatedAt).orElse(null));
         }
         if (baseline.isEmpty() || distance.isEmpty()) {
             return Optional.empty();

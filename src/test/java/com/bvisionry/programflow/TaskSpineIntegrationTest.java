@@ -388,6 +388,56 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         }
 
         /**
+         * A two-pipeline pair (readiness → distance): the distance instrument
+         * itself marks a sitting as the "after" measurement, so the floor is
+         * the member's BASELINE READING, not the cohort launch — a distance
+         * sitting taken BEFORE the cohort launched still counts. The launch
+         * floor and the earliest-sitting carve-out are the shared-instrument
+         * rules only.
+         */
+        @Test
+        void distanceOnItsOwnPipelineAdoptsAPreLaunchSittingAfterTheBaseline() {
+            jdbc.update("UPDATE cohorts SET launched_at = '2026-06-01T00:00:00Z'::timestamptz"
+                    + " WHERE id = ?", cohortId);
+            priorSitting("2026-05-04T09:00:00Z"); // the baseline reading
+            UUID distancePipeline = insertPipeline("Founder Mindset Distance");
+            UUID distanceTaskId = insertTask("Distance check-in", "ASSESSMENT",
+                    distancePipeline, "DISTANCE", 9);
+            UUID sitting = distanceSitting(distancePipeline, "2026-05-10T09:00:00Z");
+
+            assertThat(spineRepo.usersDoneWithTask(distanceTaskId))
+                    .as("pre-launch, but after the baseline reading — adopted")
+                    .containsExactly(member.getId());
+            assertThat(myProgramService.open(distanceTaskId).targetId()).isEqualTo(sitting);
+        }
+
+        /** …but a "to" that predates its "from" is never a distance reading. */
+        @Test
+        void distanceOnItsOwnPipelineNeverAdoptsASittingBeforeTheBaseline() {
+            priorSitting("2026-05-04T09:00:00Z"); // the baseline reading
+            UUID distancePipeline = insertPipeline("Founder Mindset Distance");
+            UUID distanceTaskId = insertTask("Distance check-in", "ASSESSMENT",
+                    distancePipeline, "DISTANCE", 9);
+            distanceSitting(distancePipeline, "2026-03-01T09:00:00Z");
+
+            assertThat(spineRepo.usersDoneWithTask(distanceTaskId)).isEmpty();
+        }
+
+        private UUID distanceSitting(UUID distancePipeline, String evaluatedAt) {
+            UUID assignmentId = jdbc.queryForObject("""
+                    INSERT INTO assignments (pipeline_id, organization_id, user_id)
+                    VALUES (?, ?, ?) RETURNING id
+                    """, UUID.class, distancePipeline, org.getId(), member.getId());
+            UUID id = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO submissions (id, assignment_id, user_id, status,
+                                             submitted_at, evaluated_at)
+                    VALUES (?, ?, ?, 'EVALUATED', ?::timestamptz, ?::timestamptz)
+                    """, id, assignmentId, member.getId(), evaluatedAt, evaluatedAt);
+            return id;
+        }
+
+        /**
          * The launch floor is the FIRST launch: unlaunch keeps
          * {@code cohorts.launched_at} (CohortService), so a sitting evaluated
          * after the original launch is still DISTANCE's to adopt once the

@@ -125,12 +125,18 @@ public class TaskSpineRepository {
      *       programme is measured from predates the programme, which is the
      *       ordinary case for a cohort built around an assessment people have
      *       already taken. Retakes never move it.</li>
-     *   <li>DISTANCE adopts the earliest evaluated sitting AFTER the cohort
-     *       launched, and never the sitting BASELINE would take. Both halves
-     *       matter: without the launch floor a pre-programme sitting could be
-     *       reported as the "after"; without the exclusion a same-instrument
-     *       pair could satisfy both roles from one sitting and report a delta
-     *       of zero against itself.</li>
+     *   <li>DISTANCE's floor depends on the pair's shape. Shared instrument
+     *       (the cohort's BASELINE references the SAME pipeline): earliest
+     *       evaluated sitting AFTER the cohort launched, and never the sitting
+     *       BASELINE would take — without the launch floor a pre-programme
+     *       sitting could be reported as the "after"; without the exclusion
+     *       one sitting could satisfy both roles and report a delta of zero
+     *       against itself. Own instrument (readiness → distance): the
+     *       instrument itself marks the sitting as the "after" measurement,
+     *       so the floor is the member's BASELINE READING, not the launch —
+     *       a distance instrument sat before the cohort existed is still the
+     *       distance reading, but one sat before the baseline would pair a
+     *       "to" that predates its "from". No baseline reading, no floor.</li>
      *   <li>CHECK-IN adopts nothing. A trajectory reading is a point in time
      *       inside the programme, so borrowing an outside sitting for it would
      *       invent a data point on the curve.</li>
@@ -201,7 +207,18 @@ public class TaskSpineRepository {
               AND s.status = 'EVALUATED'
               AND s.program_task_id IS NULL
               AND (t.milestone_role = 'BASELINE'
-                   OR (co.launched_at IS NOT NULL
+                   -- DISTANCE on a SHARED instrument (this cohort's BASELINE
+                   -- references the same pipeline): launch floor plus
+                   -- BASELINE's earliest-sitting carve-out - one sitting must
+                   -- never satisfy both roles.
+                   OR (EXISTS (SELECT 1
+                               FROM program_tasks bt
+                               JOIN program_modules bm ON bm.id = bt.module_id
+                               WHERE bm.cohort_id = co.id
+                                 AND bt.task_type = 'ASSESSMENT'
+                                 AND bt.milestone_role = 'BASELINE'
+                                 AND bt.ref_id = a.pipeline_id)
+                       AND co.launched_at IS NOT NULL
                        AND s.evaluated_at > co.launched_at
                        AND s.id <> (SELECT e.id
                                     FROM submissions e
@@ -210,7 +227,32 @@ public class TaskSpineRepository {
                                       AND ea.pipeline_id = a.pipeline_id
                                       AND e.status = 'EVALUATED'
                                     ORDER BY e.evaluated_at, e.created_at
-                                    LIMIT 1)))
+                                    LIMIT 1))
+                   -- DISTANCE on its OWN instrument: the instrument already
+                   -- marks the sitting as the "after" measurement, so the
+                   -- launch date is the wrong floor - the member's baseline
+                   -- reading is the right one. A sitting BEFORE the baseline
+                   -- would pair a "to" that predates its "from"; without any
+                   -- baseline reading there is nothing to be after.
+                   OR (NOT EXISTS (SELECT 1
+                                   FROM program_tasks bt
+                                   JOIN program_modules bm ON bm.id = bt.module_id
+                                   WHERE bm.cohort_id = co.id
+                                     AND bt.task_type = 'ASSESSMENT'
+                                     AND bt.milestone_role = 'BASELINE'
+                                     AND bt.ref_id = a.pipeline_id)
+                       AND s.evaluated_at > COALESCE(
+                               (SELECT min(bs.evaluated_at)
+                                FROM submissions bs
+                                JOIN assignments bsa ON bsa.id = bs.assignment_id
+                                JOIN program_tasks bt ON bt.ref_id = bsa.pipeline_id
+                                JOIN program_modules bm ON bm.id = bt.module_id
+                                WHERE bm.cohort_id = co.id
+                                  AND bt.task_type = 'ASSESSMENT'
+                                  AND bt.milestone_role = 'BASELINE'
+                                  AND bs.user_id = s.user_id
+                                  AND bs.status = 'EVALUATED'),
+                               '-infinity'::timestamptz)))
             """;
 
     /**

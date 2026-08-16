@@ -19,9 +19,13 @@ import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
  * {@code ADOPTABLE_SITTINGS} — change one, change the other): when the
  * enrolled member has NO submission tagged to the task at all, a BASELINE
  * milestone counts an EVALUATED untagged sitting of the referenced pipeline
- * whenever it happened, and a DISTANCE milestone counts one evaluated after
- * the cohort launched that is not the pipeline's earliest sitting (the one
- * BASELINE takes — one sitting must never satisfy both roles). CHECKIN adopts
+ * whenever it happened. A DISTANCE milestone's floor depends on the pair's
+ * shape: on a shared instrument (the cohort's BASELINE references the same
+ * pipeline) it counts a sitting evaluated after the cohort launched that is
+ * not the pipeline's earliest (the one BASELINE takes; one sitting must never
+ * satisfy both roles); on its own instrument it counts a sitting evaluated
+ * after the member's baseline reading — the instrument itself marks it as the
+ * "after" measurement, so the launch date is not the floor. CHECKIN adopts
  * nothing. Without this branch the journey showed an adopted pre-cohort intake
  * as done while every DONE_FOR_USER surface still reported it outstanding.
  *
@@ -95,7 +99,18 @@ public final class TaskCompletion {
                           AND dad.status = 'EVALUATED'
                           AND dad.program_task_id IS NULL
                           AND (t.milestone_role = 'BASELINE'
-                               OR (dac.launched_at IS NOT NULL
+                               -- shared instrument: launch floor + BASELINE's
+                               -- earliest-sitting carve-out; own instrument:
+                               -- floor is the member's baseline reading
+                               -- (ADOPTABLE_SITTINGS, mirrored)
+                               OR (EXISTS (SELECT 1
+                                           FROM program_tasks dbt
+                                           JOIN program_modules dbm ON dbm.id = dbt.module_id
+                                           WHERE dbm.cohort_id = dac.id
+                                             AND dbt.task_type = 'ASSESSMENT'
+                                             AND dbt.milestone_role = 'BASELINE'
+                                             AND dbt.ref_id = daa.pipeline_id)
+                                   AND dac.launched_at IS NOT NULL
                                    AND dad.evaluated_at > dac.launched_at
                                    AND dad.id <> (SELECT dfe.id
                                                   FROM submissions dfe
@@ -104,7 +119,26 @@ public final class TaskCompletion {
                                                     AND dfa.pipeline_id = daa.pipeline_id
                                                     AND dfe.status = 'EVALUATED'
                                                   ORDER BY dfe.evaluated_at, dfe.created_at
-                                                  LIMIT 1))))))
+                                                  LIMIT 1))
+                               OR (NOT EXISTS (SELECT 1
+                                               FROM program_tasks dbt
+                                               JOIN program_modules dbm ON dbm.id = dbt.module_id
+                                               WHERE dbm.cohort_id = dac.id
+                                                 AND dbt.task_type = 'ASSESSMENT'
+                                                 AND dbt.milestone_role = 'BASELINE'
+                                                 AND dbt.ref_id = daa.pipeline_id)
+                                   AND dad.evaluated_at > COALESCE(
+                                           (SELECT min(dbs.evaluated_at)
+                                            FROM submissions dbs
+                                            JOIN assignments dbsa ON dbsa.id = dbs.assignment_id
+                                            JOIN program_tasks dbt ON dbt.ref_id = dbsa.pipeline_id
+                                            JOIN program_modules dbm ON dbm.id = dbt.module_id
+                                            WHERE dbm.cohort_id = dac.id
+                                              AND dbt.task_type = 'ASSESSMENT'
+                                              AND dbt.milestone_role = 'BASELINE'
+                                              AND dbs.user_id = dad.user_id
+                                              AND dbs.status = 'EVALUATED'),
+                                           '-infinity'::timestamptz))))))
                 WHEN 'SURVEY' THEN EXISTS (
                     SELECT 1 FROM survey_responses dsr
                     WHERE dsr.program_task_id = t.id

@@ -109,6 +109,10 @@ public class ComparisonComputeService {
      * method deletes and rebuilds, so they simply survive the rebuild (see
      * {@code V169} and {@code ShiftNarrative}) — with their decline flag and
      * band label re-stamped from the new rows, so a changed band config binds.
+     *
+     * <p>A member whose sides no longer resolve (per {@link #resolveSides}) is
+     * SKIPPED, not cleared: the stored comparison stands rather than being
+     * deleted for a rebuild that cannot happen.
      */
     @Transactional
     public RecomputeResponse recomputeCohort(UUID cohortId, UUID actorId) {
@@ -139,6 +143,16 @@ public class ComparisonComputeService {
                 : narratives.revertApprovalsForCohortMembers(cohortId, members);
         int recomputed = 0;
         for (UUID userId : members) {
+            if (resolveSides(pair, userId).isEmpty()) {
+                // Nothing to rebuild from (e.g. the DISTANCE milestone was
+                // deleted or retyped): leaving the stored comparison standing
+                // beats deleting a founder's only computed history for a pair
+                // that no longer resolves.
+                continue;
+            }
+            // ponytail: resolveSides runs twice per member (again inside
+            // computeIfReady); fold it into computeIfReady's signature only if
+            // a cohort ever gets big enough to notice.
             comparisons.findByCohortIdAndUserId(cohortId, userId).ifPresent(existing -> {
                 comparisonPillars.deleteByComparisonId(existing.getId());
                 comparisons.delete(existing);

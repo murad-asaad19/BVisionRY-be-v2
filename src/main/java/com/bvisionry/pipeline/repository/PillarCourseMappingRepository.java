@@ -44,6 +44,8 @@ public interface PillarCourseMappingRepository extends JpaRepository<PillarCours
     /**
      * Copies one pillar's rules onto a freshly cloned pillar — otherwise a clone
      * carries the thresholds but silently drops the rules hanging off them.
+     * Every column of the rule, mode included — an AUTO_ASSIGN default here
+     * would hard-enrol founders an admin only ever meant to offer.
      * Called AFTER the clone is saved, because {@code target} needs an id.
      *
      * <p>A default method rather than a service so a caller can use it without a
@@ -66,6 +68,7 @@ public interface PillarCourseMappingRepository extends JpaRepository<PillarCours
                     copy.setPillar(target);
                     copy.setBandPosition(source.getBandPosition());
                     copy.setCourseId(source.getCourseId());
+                    copy.setMode(source.getMode());
                     return copy;
                 })
                 .toList());

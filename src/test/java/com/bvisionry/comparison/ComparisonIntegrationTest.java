@@ -513,6 +513,40 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(queryService.myComparison(founder.getId()).state()).isEqualTo("done");
         }
 
+        /**
+         * Recompute deletes-then-rebuilds; when the rebuild cannot happen (the
+         * DISTANCE milestone was retyped away, so an equal pair no longer
+         * resolves) the stored comparison must be SKIPPED, not wiped — a
+         * founder's only computed history is not the price of an admin repair.
+         */
+        @Test
+        void recompute_neverDeletesAComparisonItCannotRebuild() throws Exception {
+            UUID baselineSubmission = insertEvaluatedSubmissionFor(founder, baselinePipelineId, 90,
+                    new BigDecimal("58.00"), null);
+            insertPillarEval(baselineSubmission, baselineVision, "50.00", "Emerging");
+            UUID distanceSubmission = insertEvaluatedSubmissionFor(founder, baselinePipelineId, 10,
+                    new BigDecimal("71.00"), distanceTaskId);
+            insertPillarEval(distanceSubmission, baselineVision, "62.00", "Strong");
+            computeService.onSubmissionEvaluated(new EvaluationEvents.SubmissionEvaluated(
+                    distanceSubmission, founder.getId(), Map.of()));
+            FounderComparison stored = comparisons
+                    .findByCohortIdAndUserId(samePairCohortId, founder.getId()).orElseThrow();
+
+            // The distance milestone is retyped away: the equal pair no longer
+            // resolves (equalPairWithoutATaggedDistance_neverComputes semantics).
+            jdbc.update("UPDATE program_tasks SET milestone_role = NULL WHERE id = ?", distanceTaskId);
+
+            TestAuthentication.authenticateAsSuperAdmin(userRepository);
+            mockMvc.perform(post("/api/admin/comparisons/cohorts/" + samePairCohortId + "/recompute"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.recomputed", is(0)));
+
+            FounderComparison after = comparisons
+                    .findByCohortIdAndUserId(samePairCohortId, founder.getId()).orElseThrow();
+            assertThat(after.getId()).isEqualTo(stored.getId());
+            assertThat(comparisonPillars.findByComparisonId(after.getId())).isNotEmpty();
+        }
+
         private UUID insertEvaluatedSubmissionFor(User user, UUID pipelineId, int daysAgo,
                                                   BigDecimal overallScore, UUID programTaskId) {
             UUID assignmentId = jdbc

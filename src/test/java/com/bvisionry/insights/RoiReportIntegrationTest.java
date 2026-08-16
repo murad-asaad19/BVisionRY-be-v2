@@ -417,13 +417,25 @@ class RoiReportIntegrationTest extends AbstractPostgresIntegrationTest {
         UUID ours = enrol(orgA.getId(), cohortA, "Ada Lovelace");
         insertSubmission(insertAssignment(orgA.getId(), ours), ours, 40.0, 0);
 
+        // Every ghost below carries TWO evaluated submissions, so pillarMovement
+        // would pair them if its population were looser than the roster's — the
+        // movement rows below must stay founders-paired = 0 regardless.
         UUID moved = enrol(orgB.getId(), cohortB, "Zebedee Moved");
         jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)", cohortA, moved);
+        UUID movedAssignment = insertAssignment(orgA.getId(), moved);
+        insertSubmission(movedAssignment, moved, 20.0, 30);
+        insertSubmission(movedAssignment, moved, 80.0, 0);
 
         UUID orphaned = enrol(orgA.getId(), cohortA, "Olive Orphaned");
+        UUID orphanedAssignment = insertAssignment(orgA.getId(), orphaned);
+        insertSubmission(orphanedAssignment, orphaned, 20.0, 30);
+        insertSubmission(orphanedAssignment, orphaned, 80.0, 0);
         jdbc.update("UPDATE users SET organization_id = NULL WHERE id = ?", orphaned);
 
         UUID suspended = enrol(orgA.getId(), cohortA, "Sam Suspended");
+        UUID suspendedAssignment = insertAssignment(orgA.getId(), suspended);
+        insertSubmission(suspendedAssignment, suspended, 20.0, 30);
+        insertSubmission(suspendedAssignment, suspended, 80.0, 0);
         jdbc.update("UPDATE users SET status = 'SUSPENDED' WHERE id = ?", suspended);
 
         User enrolledCoach = saveUser("roi.coach.enrolled@test.invalid", UserRole.COACH, orgA);
@@ -436,6 +448,11 @@ class RoiReportIntegrationTest extends AbstractPostgresIntegrationTest {
                 .andExpect(jsonPath("$.cohortSize", is(1)))
                 .andExpect(jsonPath("$.founders", hasSize(1)))
                 .andExpect(jsonPath("$.founders[0].founderName", is("Ada Lovelace")))
+                // The movement population equals the roster population: Ada has
+                // one submission, the ghosts' pairs must not be averaged.
+                .andExpect(jsonPath("$.pillars[0].foundersPaired", is(0)))
+                .andExpect(jsonPath("$.pillars[0].intakeAverage", nullValue()))
+                .andExpect(jsonPath("$.pillars[0].latestAverage", nullValue()))
                 .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
         assertThat(body).doesNotContain("Zebedee Moved");
         assertThat(body).doesNotContain("Olive Orphaned");

@@ -112,6 +112,16 @@ public class RoiReportReadRepository {
      * also excludes {@code PENDING_REEDIT} — a submission mid-unlock is being
      * rewritten, and its superseded scores are not a measurement either.
      */
+    /**
+     * THE roster predicate — who counts as a founder of this org's report.
+     * Interpolated into both {@link #EVALUATED} and {@link #founders} so the
+     * movement population and the roster population can never diverge: a
+     * suspended, org-moved or non-MEMBER user must vanish from both at once,
+     * or {@code foundersPaired} would count founders the roster does not show.
+     */
+    private static final String ROSTER_USER =
+            "u.organization_id = :orgId AND u.role = 'MEMBER' AND u.status = 'ACTIVE'";
+
     private static final String EVALUATED = """
             evaluated AS (
                 SELECT s.id, s.user_id,
@@ -129,10 +139,11 @@ public class RoiReportReadRepository {
                   AND EXISTS (SELECT 1 FROM pillar_evaluations pe WHERE pe.submission_id = s.id)
                   AND EXISTS (SELECT 1 FROM cohort_members cm
                               JOIN cohorts c ON c.id = cm.cohort_id
+                              JOIN users u ON u.id = cm.user_id AND %s
                               WHERE cm.user_id = s.user_id
                                 AND c.id = :cohortId
                                 AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId))
-            )""";
+            )""".formatted(ROSTER_USER);
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -271,8 +282,7 @@ public class RoiReportReadRepository {
                 FROM cohort_members cm
                 JOIN cohorts c ON c.id = cm.cohort_id
                                AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
-                JOIN users u   ON u.id = cm.user_id AND u.organization_id = :orgId
-                               AND u.role = 'MEMBER' AND u.status = 'ACTIVE'
+                JOIN users u   ON u.id = cm.user_id AND %s
                 LEFT JOIN summary sm ON sm.user_id = u.id
                 LEFT JOIN LATERAL (
                     SELECT count(*)                   AS total,
@@ -283,7 +293,8 @@ public class RoiReportReadRepository {
                 ) pr ON true
                 WHERE c.id = :cohortId
                 ORDER BY u.name, u.id
-                """.formatted(TaskCompletion.DONE_FOR_USER.formatted("u.id"),
+                """.formatted(ROSTER_USER,
+                        TaskCompletion.DONE_FOR_USER.formatted("u.id"),
                         ProgramAudience.INCLUDES_USER.formatted("u.id"),
                         TaskCompletion.COUNTS_FOR_USER.formatted("u.id")),
                 params(orgId, cohortId, pipelineId),

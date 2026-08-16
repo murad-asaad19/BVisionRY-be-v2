@@ -135,6 +135,26 @@ class AttentionThresholdsServiceTest {
         assertThat(cacheable.value()).contains("platformSettings");
     }
 
+    @Test
+    void anAbsentPillarThresholdIsAViolation_notASilentZero() {
+        // pillarThreshold=0 is the OFF value for the needs-attention pillar rule,
+        // so a primitive int binding an absent field to 0 would let an
+        // incomplete request shut the rule down platform-wide.
+        try (jakarta.validation.ValidatorFactory factory =
+                     jakarta.validation.Validation.buildDefaultValidatorFactory()) {
+            jakarta.validation.Validator validator = factory.getValidator();
+
+            var violations = validator.validate(
+                    new AttentionThresholdsRequest(7, 7, 30, 14, 24, null));
+            assertThat(violations).hasSize(1);
+            assertThat(violations.iterator().next().getPropertyPath().toString())
+                    .isEqualTo("pillarThreshold");
+
+            assertThat(validator.validate(
+                    new AttentionThresholdsRequest(10, 5, 45, 21, 36, 55))).isEmpty();
+        }
+    }
+
     private PlatformSetting setting(String key, int value) {
         PlatformSetting s = new PlatformSetting();
         s.setKey(key);

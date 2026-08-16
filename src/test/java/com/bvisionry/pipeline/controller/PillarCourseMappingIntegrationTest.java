@@ -141,6 +141,12 @@ class PillarCourseMappingIntegrationTest extends AbstractPostgresIntegrationTest
                 .formatted(bandPosition, course);
     }
 
+    private String body(int bandPosition, UUID course, String mode) {
+        return """
+                {"mappings":[{"bandPosition":%d,"courseId":"%s","mode":"%s"}]}"""
+                .formatted(bandPosition, course, mode);
+    }
+
     @Test
     void superAdminStoresARuleAndReadsItBackWithTheBandItActuallyMeans() throws Exception {
         mockMvc.perform(put(path(scored)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
@@ -251,8 +257,10 @@ class PillarCourseMappingIntegrationTest extends AbstractPostgresIntegrationTest
      */
     @Test
     void duplicatingThePillarCarriesItsCourseRulesWithIt() throws Exception {
+        // SUGGEST, not the entity default — a copy that resets mode would turn
+        // an offer into a hard enrolment, and this test has to catch that.
         mockMvc.perform(put(path(scored)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
-                        .content(body(1, courseId))
+                        .content(body(1, courseId, "SUGGEST"))
                         .with(authentication(principal(UserRole.SUPER_ADMIN))))
                 .andExpect(status().isOk());
 
@@ -275,7 +283,8 @@ class PillarCourseMappingIntegrationTest extends AbstractPostgresIntegrationTest
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(1)))
                 .andExpect(jsonPath("$[0].bandLabel", is("Strong")))
-                .andExpect(jsonPath("$[0].courseId", is(courseId.toString())));
+                .andExpect(jsonPath("$[0].courseId", is(courseId.toString())))
+                .andExpect(jsonPath("$[0].mode", is("SUGGEST")));
     }
 
     @Test

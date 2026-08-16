@@ -134,7 +134,9 @@ public class EnrollmentService {
      * cannot undo it: an admin who removes someone from a required course would
      * otherwise be one click from being overruled. {@link #enroll} now refuses
      * before it gets here, so this method's remaining job is the CANCELLED rows
-     * nothing has excluded (an admin's remove-for-everyone).
+     * nothing excludes any more — remove-for-everyone stamps an override per
+     * affected member, but those {@code scope = 'ORG'} rows are deleted again by
+     * the next org-wide assign (V184), leaving the cancelled row free to revive.
      *
      * <p>The restored status is derived rather than assumed ACTIVE: removal only
      * ever changed {@code status}, so a founder who had FINISHED the course comes

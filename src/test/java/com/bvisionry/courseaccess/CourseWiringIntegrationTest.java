@@ -212,9 +212,16 @@ class CourseWiringIntegrationTest extends AbstractPostgresIntegrationTest {
         orgCourses.assign(org.getId(),
                 new AssignCourseRequest(courseId, AssignCourseRequest.AUDIENCE_ORG, null, true, null),
                 admin.getId());
+        // Materialize the rule for this member: the update must reach the row
+        // too, or EffectiveCourses.merge (required OR'd, earliest deadline)
+        // keeps serving the stricter old value to exactly the members who
+        // engaged with the course.
+        spine.ensureEnrollment(member.getId(), courseId);
 
         orgCourses.update(org.getId(), courseId, new UpdateOrgCourseRequest("ORG_RULE", false, null));
-        assertThat(only(courseAccess.effectiveCoursesOf(member.getId(), org.getId())).required()).isFalse();
+        EffectiveCourse relaxed = only(courseAccess.effectiveCoursesOf(member.getId(), org.getId()));
+        assertThat(relaxed.required()).isFalse();
+        assertThat(relaxed.deadline()).isNull();
 
         orgCourses.update(org.getId(), courseId, new UpdateOrgCourseRequest("ORG_RULE", true, null));
         assertThat(only(courseAccess.effectiveCoursesOf(member.getId(), org.getId())).required()).isTrue();
@@ -293,6 +300,35 @@ class CourseWiringIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThatThrownBy(() -> enrollmentService.enroll(slug))
                 .isInstanceOf(BadRequestException.class);
         assertThat(courseAccess.effectiveCoursesOf(member.getId(), org.getId())).isEmpty();
+    }
+
+    /**
+     * V184: the blanket exclusions an org-wide removal stamps (scope ORG) are
+     * undone by the next org-wide assign — otherwise the members who had
+     * started the course would be the only ones locked out of a re-assign —
+     * while a by-name removal (scope MEMBER) is about a person and holds.
+     */
+    @Test
+    void anOrgWideReAssignUndoesItsOwnOrgWideRemoval_butNotAByNameOne() {
+        User second = user("wiring-second", UserRole.MEMBER);
+        orgCourses.assign(org.getId(),
+                new AssignCourseRequest(courseId, AssignCourseRequest.AUDIENCE_ORG, null, true, null),
+                admin.getId());
+        spine.ensureEnrollment(member.getId(), courseId);
+        orgCourses.removeForMember(org.getId(), second.getId(), courseId, "not relevant", admin.getId());
+        orgCourses.removeForEveryone(org.getId(), courseId, "ORG_RULE");
+        assertThat(courseAccess.effectiveCoursesOf(member.getId(), org.getId())).isEmpty();
+
+        orgCourses.assign(org.getId(),
+                new AssignCourseRequest(courseId, AssignCourseRequest.AUDIENCE_ORG, null, true, null),
+                admin.getId());
+
+        assertThat(courseAccess.effectiveCoursesOf(member.getId(), org.getId()))
+                .as("the member who had started the course gets it back with everyone else")
+                .hasSize(1);
+        assertThat(courseAccess.effectiveCoursesOf(second.getId(), org.getId()))
+                .as("a by-name removal survives the org-wide re-assign")
+                .isEmpty();
     }
 
     @Test

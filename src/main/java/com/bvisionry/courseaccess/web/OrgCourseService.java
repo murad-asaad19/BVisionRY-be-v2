@@ -159,6 +159,11 @@ public class OrgCourseService {
         requireVisible(orgId, request.courseId());
 
         if (AssignCourseRequest.AUDIENCE_ORG.equalsIgnoreCase(request.audience())) {
+            // An org-wide assign outranks a previous org-wide removal: the
+            // blanket ORG-scope exclusions that removal stamped are cleared, so
+            // the members who had started the course get it back with everyone
+            // else. By-name (MEMBER-scope) removals still hold — see V184.
+            writes.clearOrgScopeExclusions(orgId, request.courseId());
             OrgCourseRule rule = rules.findByOrgIdAndCourseId(orgId, request.courseId())
                     .orElseGet(OrgCourseRule::new);
             rule.setOrgId(orgId);
@@ -209,6 +214,14 @@ public class OrgCourseService {
             rule.setRequired(request.required());
             rule.setDeadline(request.deadline());
             rules.saveAndFlush(rule);
+            // The rule's members may already have a materialized ORG_RULE
+            // enrollment (written on open); EffectiveCourses.merge ORs
+            // `required` and takes the EARLIEST deadline, so a stale row would
+            // keep serving the stricter old value to exactly the members who
+            // engaged. Zero rows updated is legitimate — nobody has opened it —
+            // which is why the 404 above stays keyed on the rule row.
+            writes.setRequiredAndDeadline(orgId, courseId, EnrollmentSource.ORG_RULE,
+                    request.required(), request.deadline());
             return;
         }
         if (writes.setRequiredAndDeadline(orgId, courseId, source,
@@ -228,9 +241,11 @@ public class OrgCourseService {
      * ({@code EnrollmentService#reactivateIfRemoved}) restores any CANCELLED row
      * that has no {@code enrolment_overrides} row saying an admin removed it. So
      * this writes the same removed-by-admin row {@link #removeForMember} writes,
-     * once per member the cancel is about to hit — and, like every exclusion, it
-     * is member-level, sticky, and beats any org rule still standing until an
-     * explicit by-name assign clears it.
+     * once per member the cancel is about to hit — member-level, and it beats
+     * any org rule still standing. Unlike a by-name exclusion these blanket
+     * rows are stamped {@code scope = 'ORG'} (V184), so the next org-wide
+     * assign of the same course undoes them; only an explicit by-name removal
+     * survives an org-wide re-assign.
      */
     @Transactional
     public void removeForEveryone(UUID orgId, UUID courseId, String sourceName) {
@@ -242,12 +257,14 @@ public class OrgCourseService {
                 rules.delete(r);
                 rules.flush();
             });
-            // DECIDED: exclusions are STICKY across a rule's delete and re-create.
-            // An opt-out is a statement about a PERSON ("not this member"), not
-            // about the rule instance that happened to be live when it was made —
-            // and clearing it here would silently re-add someone an admin removed
-            // the moment the rule was re-assigned. Same reason a re-assign does
-            // not clear them either.
+            // DECIDED (refined 2026-08-16): a BY-NAME exclusion (scope MEMBER)
+            // is a statement about a PERSON and stays sticky across a rule's
+            // delete and re-create. The blanket rows THIS removal stamps below
+            // are scope ORG — a statement about the removal itself — and the
+            // next org-wide assign of the same course undoes them
+            // (assign -> clearOrgScopeExclusions), or the members who had
+            // started the course would be the only ones permanently locked out
+            // of an admin's re-assign.
             //
             // "Unassignment is one delete" must hold for everyone, so the members
             // who already OPENED the course are cancelled too — their row is a

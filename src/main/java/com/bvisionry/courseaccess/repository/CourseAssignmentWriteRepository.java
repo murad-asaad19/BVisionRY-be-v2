@@ -128,8 +128,8 @@ public class CourseAssignmentWriteRepository {
      */
     public void exclude(UUID userId, UUID courseId, UUID actorId, String reason) {
         jdbc.update("""
-                INSERT INTO enrolment_overrides (user_id, course_id, removed_by, reason)
-                VALUES (:userId, :courseId, :actorId, :reason)
+                INSERT INTO enrolment_overrides (user_id, course_id, removed_by, reason, scope)
+                VALUES (:userId, :courseId, :actorId, :reason, 'MEMBER')
                 ON CONFLICT ON CONSTRAINT uq_enrolment_overrides DO NOTHING
                 """,
                 params(userId, courseId).addValue("actorId", actorId).addValue("reason", reason));
@@ -146,11 +146,15 @@ public class CourseAssignmentWriteRepository {
      * is "live enrollment of this source", which the status flip destroys. No
      * {@code reason}: that column is the admin's own words, and an org-wide
      * removal carries none.
+     *
+     * <p>{@code scope = 'ORG'} (V184): these blanket rows are undone by the next
+     * org-wide assign ({@link #clearOrgScopeExclusions}); DO NOTHING on conflict
+     * so an existing by-name MEMBER row is never downgraded to ORG.
      */
     public int excludeAllEnrolled(UUID orgId, UUID courseId, EnrollmentSource source, UUID actorId) {
         return jdbc.update("""
-                INSERT INTO enrolment_overrides (user_id, course_id, removed_by)
-                SELECT e.user_id, e.course_id, :actorId
+                INSERT INTO enrolment_overrides (user_id, course_id, removed_by, scope)
+                SELECT e.user_id, e.course_id, :actorId, 'ORG'
                   FROM enrollment e
                  WHERE e.course_id = :courseId AND e.source = :source AND e.status <> 'CANCELLED'
                    AND e.user_id IN (SELECT id FROM users WHERE organization_id = :orgId)
@@ -168,6 +172,22 @@ public class CourseAssignmentWriteRepository {
     public void clearExclusion(UUID userId, UUID courseId) {
         jdbc.update("DELETE FROM enrolment_overrides WHERE user_id = :userId AND course_id = :courseId",
                 params(userId, courseId));
+    }
+
+    /**
+     * The org-wide counterpart of {@link #clearExclusion}: an org-wide assign
+     * outranks a previous org-wide removal, so the blanket {@code scope = 'ORG'}
+     * rows that removal stamped are deleted — while a by-name removal
+     * ({@code scope = 'MEMBER'}) still survives, exactly as it survives a rule
+     * delete/re-create.
+     */
+    public int clearOrgScopeExclusions(UUID orgId, UUID courseId) {
+        return jdbc.update("""
+                DELETE FROM enrolment_overrides
+                 WHERE course_id = :courseId AND scope = 'ORG'
+                   AND user_id IN (SELECT id FROM users WHERE organization_id = :orgId)
+                """,
+                new MapSqlParameterSource("orgId", orgId).addValue("courseId", courseId));
     }
 
     /** §7b: stamp the moment the member took the suggestion, so the ledger keeps the story. */

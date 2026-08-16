@@ -76,8 +76,12 @@ public class MockLangChainChatModel implements ChatModel {
         }
         // The cohort growth report (§4). Without this arm it fell through to
         // PILLAR_DEFAULT and every mocked report FAILED schema validation, so
-        // the report could never be seen locally. "sharedWins" is its own.
-        if (systemPrompt.contains("sharedWins")) {
+        // the report could never be seen locally. Routed on the INSTRUCTION,
+        // not the schema: V194 took the JSON envelope out of the prompt
+        // (LangChain4j derives it from CohortGrowthSummaryResult), so
+        // "sharedWins" is no longer there. "COHORT-WIDE" is that prompt's whole
+        // job and appears in no other.
+        if (systemPrompt.contains("COHORT-WIDE")) {
             return COHORT_GROWTH_SUMMARY_DEFAULT;
         }
         if (systemPrompt.contains("overallScorePercentage")) {

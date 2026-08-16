@@ -374,16 +374,26 @@ public class ExerciseSubmissionService {
                 submission.getAssignment().getTemplate().getId());
     }
 
-    /** Values are kept as sent; keys that don't match a real column are dropped. */
+    /**
+     * Values are kept as sent; keys that don't match a real column are dropped,
+     * and so is an empty value. A LIST cell nobody typed into arrives as an
+     * empty array — storing it would make the row differ from {@code {}}, so a
+     * no-op autosave would count as a change and drag a REVIEWED sheet back
+     * into the admin's queue. Absent and blank must persist identically.
+     */
     private Map<String, Object> sanitizeCells(Map<String, Object> cells, Set<String> columnIds) {
         Map<String, Object> clean = new LinkedHashMap<>();
         if (cells == null) {
             return clean;
         }
         cells.forEach((key, value) -> {
-            if (columnIds.contains(key) && value != null) {
-                clean.put(key, value);
+            if (!columnIds.contains(key) || value == null) {
+                return;
             }
+            if (value instanceof Collection<?> && ExerciseListEntries.isBlank(value)) {
+                return;
+            }
+            clean.put(key, value);
         });
         return clean;
     }

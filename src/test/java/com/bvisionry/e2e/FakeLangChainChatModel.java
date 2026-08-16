@@ -67,8 +67,12 @@ public class FakeLangChainChatModel implements ChatModel {
         if (systemPrompt.contains("{\"summary\"")) {
             return MEMBER_GROWTH_SUMMARY_DEFAULT;
         }
-        // The cohort growth summary (§4) — the only prompt that names {"overview".
-        if (systemPrompt.contains("{\"overview\"")) {
+        // The cohort growth summary (§4). Routed on the INSTRUCTION, not the
+        // schema: V194 took the JSON envelope out of the prompt (LangChain4j
+        // derives it from CohortGrowthSummaryResult), so {"overview" is no
+        // longer there to match on. "COHORT-WIDE" is that prompt's whole job
+        // and appears in no other.
+        if (systemPrompt.contains("COHORT-WIDE")) {
             return COHORT_GROWTH_SUMMARY_DEFAULT;
         }
         if (systemPrompt.contains("closingAction")) {

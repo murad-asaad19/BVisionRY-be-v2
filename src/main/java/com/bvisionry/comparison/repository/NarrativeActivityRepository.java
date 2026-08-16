@@ -1,5 +1,6 @@
 package com.bvisionry.comparison.repository;
 
+import com.bvisionry.common.programaccess.ProgramAudience;
 import com.bvisionry.common.programaccess.TaskCompletion;
 import com.bvisionry.common.progress.CourseProgressSql;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -72,6 +73,12 @@ public class NarrativeActivityRepository {
      * DRAFT tasks are excluded for the same reason every other surface excludes
      * them: the member has never seen them, so there is nothing they did or
      * failed to do.
+     *
+     * <p>Scoped to the module's audience ({@link ProgramAudience#INCLUDES_USER},
+     * as every other completion surface does): a MEMBERS module the founder is
+     * not on was never assigned to them, so counting it would tell the model
+     * they are overdue on work they were never given — and leak the task names
+     * of a module they were deliberately excluded from.
      */
     public Map<UUID, List<TaskActivity>> activityByPillar(UUID cohortId, UUID userId) {
         MapSqlParameterSource params =
@@ -99,8 +106,10 @@ public class NarrativeActivityRepository {
                 JOIN program_tasks t ON t.id = ptp.task_id
                 JOIN program_modules m ON m.id = t.module_id
                 WHERE m.cohort_id = :cohortId AND t.status = 'LIVE'
+                  AND %2$s
                 ORDER BY t.due_date NULLS LAST, t.position
-                """.formatted(TaskCompletion.DONE_FOR_USER.formatted(":userId")),
+                """.formatted(TaskCompletion.DONE_FOR_USER.formatted(":userId"),
+                        ProgramAudience.INCLUDES_USER.formatted(":userId")),
                 params,
                 (rs, i) -> new TaskRow(rs.getObject("pillar_id", UUID.class),
                         rs.getObject("task_id", UUID.class), rs.getString("name"),

@@ -135,6 +135,24 @@ class ExerciseSubmissionServiceTest {
         assertThat(submission.getReviewedAt()).isNotNull();
     }
 
+    /**
+     * The editor autosaves a LIST cell nobody typed into as {@code []}. That is
+     * not an edit — persisting it would make the row differ from an absent cell
+     * and pull a finished review back open behind the member's back.
+     */
+    @Test
+    void saveRows_blankListCellOnReviewedSubmission_staysReviewed() {
+        row.setCells(new HashMap<>());
+        SaveExerciseRowsRequest request = new SaveExerciseRowsRequest(List.of(
+                new ExerciseRowPayload(row.getId(), Map.of(columnId.toString(), List.of()))));
+
+        service.saveRows(submissionId, userId, request);
+
+        assertThat(row.getCells()).doesNotContainKey(columnId.toString());
+        assertThat(submission.getStatus()).isEqualTo(ExerciseSubmissionStatus.REVIEWED);
+        assertThat(submission.getReviewedAt()).isNotNull();
+    }
+
     @Test
     void overrideRows_writesCellsWithoutReopeningReview() {
         SaveExerciseRowsRequest request = new SaveExerciseRowsRequest(List.of(

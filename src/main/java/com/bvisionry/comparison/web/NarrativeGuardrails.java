@@ -5,7 +5,6 @@ import com.bvisionry.comparison.domain.NarrativeKind;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.regex.Pattern;
 
 /**
  * Spec §6's guardrails as CODE, not prompt-hope. Pure functions, no Spring, no
@@ -20,9 +19,6 @@ import java.util.regex.Pattern;
  *       pillar whose later assessment recorded no text AND has no programme work
  *       tagged to it is not generatable either (see
  *       {@link #hasComparableAfter}).</li>
- *   <li><b>No numbers.</b> §2's rule enforced on the OUTPUT rather than merely
- *       asked for in the prompt — the input is full of figures, so hoping is not
- *       a control (see {@link #SCORE_SHAPED}).</li>
  *   <li><b>Decline close.</b> A pillar in the decline band must come back with a
  *       non-blank {@code closingAction}. The caller re-asks once with the
  *       configured decline-close instruction appended; a second failure is a
@@ -88,28 +84,6 @@ public final class NarrativeGuardrails {
     }
 
     /**
-     * §2's no-numbers rule as code. Matches SCORE-SHAPED figures only: three
-     * quarters of the digit-bearing lines in the real source text are benign
-     * ordinals ("Statement 3"), durations ("7 days a week") and counts ("team of
-     * 3") that the prompt explicitly invites the model to echo when it quotes the
-     * founder's own wording — and with exactly one corrective retry in the budget
-     * (see {@code ShiftNarrativeService.MAX_ATTEMPTS}), a blanket digit ban would
-     * spend it rejecting compliant output.
-     *
-     * <p>ponytail: a regex, not a number detector. Known false positive: "24/7".
-     * Widen it only when a real leak is observed getting past it.
-     */
-    private static final Pattern SCORE_SHAPED = Pattern.compile(
-            "\\d\\s*%"                                            // 80%, 100 %
-                    + "|\\d\\s*/\\s*\\d"                          // 4/5
-                    + "|\\b\\d+(?:\\.\\d+)?\\s+out\\s+of\\s+\\d"  // 6 out of 7
-                    // "scored at 100", "a rating of 3" — the figure need not be
-                    // adjacent, but it must be in the same sentence.
-                    + "|\\b(?:scores?|scored|scoring|rates?|rated|rating|ranks?|ranked)\\b[^.]{0,20}\\d"
-                    + "|\\d[^.]{0,20}\\bpercent(?:ile|age)?\\b",
-            Pattern.CASE_INSENSITIVE);
-
-    /**
      * Guardrail (b): a DECLINING pillar's narrative must close with a next step.
      *
      * <p>Takes the stamped boolean, not a band key. §7 lets a super admin rename
@@ -126,8 +100,6 @@ public final class NarrativeGuardrails {
         BAD_KIND,
         /** No observations at all, or one with empty prose — nothing to review. */
         EMPTY_NARRATIVE,
-        /** A score, percentage or rating reached member-facing prose (§2). */
-        CONTAINS_NUMBER,
         /** A decline pillar came back with no forward-looking next step. */
         MISSING_CLOSING_ACTION
     }
@@ -148,19 +120,10 @@ public final class NarrativeGuardrails {
             if (item.text().isBlank()) {
                 return Optional.of(Rejection.EMPTY_NARRATIVE);
             }
-            if (SCORE_SHAPED.matcher(item.text()).find()) {
-                return Optional.of(Rejection.CONTAINS_NUMBER);
-            }
         }
         if (requiresClosingAction(decline)
                 && (result.closingAction() == null || result.closingAction().isBlank())) {
             return Optional.of(Rejection.MISSING_CLOSING_ACTION);
-        }
-        // The closing action is member-facing prose too, so the same rule binds
-        // it — checked after the decline rule so a blank decline still reports
-        // the rejection a reviewer can act on.
-        if (result.closingAction() != null && SCORE_SHAPED.matcher(result.closingAction()).find()) {
-            return Optional.of(Rejection.CONTAINS_NUMBER);
         }
         return Optional.empty();
     }
@@ -179,10 +142,6 @@ public final class NarrativeGuardrails {
             case EMPTY_NARRATIVE -> "\"items\" must hold at least one observation, and every "
                     + "item's \"text\" must be 1-2 non-empty sentences grounded in the material "
                     + "you were given.";
-            case CONTAINS_NUMBER -> "Your answer stated a score, percentage or rating. A founder "
-                    + "reads this text, and it must never contain one — restate that observation "
-                    + "with the magnitude in words (\"most days\", \"roughly half\", \"nearly "
-                    + "always\") and leave every other sentence exactly as it was.";
         };
     }
 
@@ -191,8 +150,6 @@ public final class NarrativeGuardrails {
         return switch (rejection) {
             case BAD_KIND -> "The AI could not classify the change into one of the five kinds.";
             case EMPTY_NARRATIVE -> "The AI returned an empty narrative.";
-            case CONTAINS_NUMBER ->
-                    "The AI stated a score or percentage, which member-facing narratives never do.";
             case MISSING_CLOSING_ACTION ->
                     "The AI did not include the next step a declining pillar requires.";
         };

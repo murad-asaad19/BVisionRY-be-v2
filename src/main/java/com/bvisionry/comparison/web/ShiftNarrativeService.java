@@ -60,13 +60,15 @@ import java.util.regex.Pattern;
  * #pillarTextBlocks} does not select a score, so no pillar score is in hand to
  * leak into the prompt.
  *
- * <p>Figures DO reach the model inside the prose, though, and pretending
- * otherwise was the bug: the prior evaluations' own text is full of percentages
- * and ratings ("scored at 100%", "rated Easy (4/5)"), as is anything the founder
- * typed. So §2's no-numbers rule is enforced on the OUTPUT
- * ({@link NarrativeGuardrails.Rejection#CONTAINS_NUMBER}) rather than merely
- * asked for. The prompt still carries the one rule the data cannot: never quote
- * the facilitator feedback the activity section labels as such.
+ * <p>Figures DO reach the model inside the prose, though: the prior evaluations'
+ * own text is full of percentages and ratings ("scored at 100%", "rated Easy
+ * (4/5)"), as is anything the founder typed. §2's no-numbers rule is therefore
+ * asked for in the prompt and NOT enforced in code — the rejecting guardrail was
+ * removed because the figures it caught were overwhelmingly the founder's own
+ * words quoted back, and each false reject burned the single corrective retry
+ * and surfaced a pillar as ungeneratable. The prompt also carries the one rule
+ * the data cannot: never quote the facilitator feedback the activity section
+ * labels as such.
  *
  * <h2>Guardrails (code, not prompt-hope)</h2>
  * See {@link NarrativeGuardrails}. Either length floor — no "before" to compare

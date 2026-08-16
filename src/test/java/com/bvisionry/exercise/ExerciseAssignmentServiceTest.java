@@ -5,6 +5,7 @@ import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.exercise.dto.CreateExerciseAssignmentRequest;
 import com.bvisionry.exercise.entity.ExerciseAssignment;
@@ -156,5 +157,21 @@ class ExerciseAssignmentServiceTest {
         service.createAssignment(orgId, request);
 
         verify(assignmentRepository).save(argThat(a -> member.equals(a.getUser())));
+    }
+
+    @Test
+    void cancelAssignment_cohortTaskRow_isRefused() {
+        ExerciseAssignment tagged = new ExerciseAssignment();
+        tagged.setId(UUID.randomUUID());
+        tagged.setOrganization(organization);
+        tagged.setTemplate(template);
+        tagged.setUser(memberOf(organization));
+        tagged.setProgramTaskId(UUID.randomUUID());
+        when(assignmentRepository.findById(tagged.getId())).thenReturn(Optional.of(tagged));
+
+        assertThatThrownBy(() -> service.cancelAssignment(orgId, tagged.getId()))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("cohort task");
+        verify(assignmentRepository, never()).delete(any());
     }
 }

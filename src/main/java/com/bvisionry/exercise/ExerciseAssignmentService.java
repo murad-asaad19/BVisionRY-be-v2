@@ -215,6 +215,11 @@ public class ExerciseAssignmentService {
         }
     }
 
+    /**
+     * The DIRECT-assignment surface: cohort-task-spawned rows
+     * ({@code programTaskId != null}) are excluded from every scope — that
+     * work lives on the cohort board.
+     */
     @Transactional(readOnly = true)
     public List<ExerciseAssignmentResponse> listAssignments(UUID orgId,
                                                             ExerciseAssignmentListScope scope) {
@@ -224,7 +229,7 @@ public class ExerciseAssignmentService {
         List<ExerciseAssignment> assignments = switch (effectiveScope) {
             case PROVISIONS -> assignmentRepository.findProvisionsByOrganizationId(orgId);
             case MEMBERS -> assignmentRepository.findMemberAssignmentsByOrganizationId(orgId);
-            case ALL -> assignmentRepository.findByOrganizationIdOrderByCreatedAtDesc(orgId);
+            case ALL -> assignmentRepository.findDirectByOrganizationId(orgId);
         };
         if (assignments.isEmpty()) {
             return List.of();
@@ -252,6 +257,13 @@ public class ExerciseAssignmentService {
     @Transactional
     public void cancelAssignment(UUID orgId, UUID assignmentId) {
         ExerciseAssignment assignment = requireAssignmentInOrg(orgId, assignmentId);
+
+        // Guard here, not in requireAssignmentInOrg: that gate also fronts the
+        // review surface, and staff must keep reviewing cohort work.
+        if (assignment.getProgramTaskId() != null) {
+            throw new BadRequestException("This exercise was handed out by a cohort task. "
+                    + "Remove or unpublish the task on the cohort board instead.");
+        }
 
         if (assignment.getUser() == null && !currentUser.require().isSuperAdmin()) {
             throw new BadRequestException("Only super admins can remove an organization provision.");

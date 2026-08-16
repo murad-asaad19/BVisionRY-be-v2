@@ -9,6 +9,7 @@ import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.exercise.dto.CreateExerciseCommentRequest;
 import com.bvisionry.exercise.dto.ExerciseCommentResponse;
 import com.bvisionry.exercise.dto.ExerciseSubmissionDetailResponse;
+import com.bvisionry.exercise.dto.SaveExerciseRowsRequest;
 import com.bvisionry.exercise.entity.ExerciseAssignment;
 import com.bvisionry.exercise.entity.ExerciseColumn;
 import com.bvisionry.exercise.entity.ExerciseComment;
@@ -29,6 +30,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Map;
 import java.util.UUID;
 
@@ -116,7 +118,8 @@ public class ExerciseReviewService {
         // A reply inherits its root's anchor and thread — explicit anchors
         // would let a reply drift to a different cell than its thread.
         if (request.parentId() != null) {
-            if (request.rowId() != null || request.columnId() != null) {
+            if (request.rowId() != null || request.columnId() != null
+                    || request.entryId() != null) {
                 throw new BadRequestException("A reply cannot set its own anchor.");
             }
             ExerciseComment root = commentRepository.findById(request.parentId())
@@ -131,6 +134,7 @@ public class ExerciseReviewService {
             comment.setParent(root);
             comment.setRow(root.getRow());
             comment.setColumn(root.getColumn());
+            comment.setEntryId(root.getEntryId());
         }
 
         if (request.rowId() != null) {
@@ -159,7 +163,24 @@ public class ExerciseReviewService {
                 && comment.getRow() != null && comment.getColumn() != null
                 && comment.getRow().getCells() != null) {
             Object value = comment.getRow().getCells().get(comment.getColumn().getId().toString());
-            comment.setCellValueSnapshot(value != null ? String.valueOf(value) : null);
+
+            if (request.entryId() != null) {
+                // Anchor only to an entry that is actually there: an id the
+                // member has since deleted would leave the thread pointing at
+                // nothing, with no way for either side to tell.
+                String text = ExerciseListEntries.textById(value, request.entryId())
+                        .orElseThrow(() -> new BadRequestException(
+                                "That list entry no longer exists — reload and comment again."));
+                comment.setEntryId(request.entryId());
+                comment.setCellValueSnapshot(text);
+            } else {
+                comment.setCellValueSnapshot(value == null ? null
+                        : value instanceof Collection<?>
+                                ? ExerciseListEntries.joinedText(value)
+                                : String.valueOf(value));
+            }
+        } else if (request.parentId() == null && request.entryId() != null) {
+            throw new BadRequestException("A list entry comment needs both a row and a column.");
         }
 
         ExerciseComment saved = commentRepository.save(comment);
@@ -172,6 +193,63 @@ public class ExerciseReviewService {
                 "/app/exercises/" + submission.getId());
 
         return ExerciseCommentResponse.from(saved, true);
+    }
+
+    /**
+     * Super-admin edit of the member's answers (the exercise counterpart of
+     * the assessment answer override). Status is untouched; the audit log is
+     * the record of who rewrote the sheet.
+     */
+    @Transactional
+    public ExerciseSubmissionDetailResponse overrideRows(UUID orgId, UUID assignmentId,
+                                                         SaveExerciseRowsRequest request) {
+        ExerciseSubmission submission = requireMemberSubmission(orgId, assignmentId);
+        ExerciseSubmissionDetailResponse detail = submissionService.overrideRows(submission, request);
+        auditService.log(currentUser.require().userId(), orgId,
+                OrgAuditActions.EXERCISE_ANSWERS_OVERRIDDEN,
+                OrgAuditActions.ENTITY_EXERCISE_SUBMISSION, submission.getId(),
+                Map.of("exerciseName", templateName(submission),
+                       "memberName", submission.getUser().getName()));
+        return detail;
+    }
+
+    /**
+     * Super-admin status override: set ANY status directly, skipping the
+     * member ⇄ admin handshake (e.g. IN_PROGRESS straight to REVIEWED for work
+     * done offline). Timestamps are kept consistent with the handshake's
+     * invariants; the member is deliberately NOT notified — the audit log is
+     * the record, exactly like the answer override.
+     */
+    @Transactional
+    public ExerciseSubmissionDetailResponse overrideStatus(UUID orgId, UUID assignmentId,
+                                                           ExerciseSubmissionStatus target) {
+        ExerciseSubmission submission = requireMemberSubmission(orgId, assignmentId);
+        ExerciseSubmissionStatus from = submission.getStatus();
+        Instant now = Instant.now();
+        switch (target) {
+            case IN_PROGRESS -> submission.setReviewedAt(null);
+            case SUBMITTED -> {
+                if (submission.getSubmittedAt() == null) submission.setSubmittedAt(now);
+                submission.setReviewedAt(null);
+            }
+            case CHANGES_REQUESTED -> {
+                submission.setChangesRequestedAt(now);
+                submission.setReviewedAt(null);
+            }
+            case REVIEWED -> {
+                if (submission.getSubmittedAt() == null) submission.setSubmittedAt(now);
+                submission.setReviewedAt(now);
+            }
+        }
+        submission.setStatus(target);
+
+        auditService.log(currentUser.require().userId(), orgId,
+                OrgAuditActions.EXERCISE_STATUS_OVERRIDDEN,
+                OrgAuditActions.ENTITY_EXERCISE_SUBMISSION, submission.getId(),
+                Map.of("exerciseName", templateName(submission),
+                       "memberName", submission.getUser().getName(),
+                       "from", from.name(), "to", target.name()));
+        return submissionService.buildDetail(submission, true);
     }
 
     @Transactional

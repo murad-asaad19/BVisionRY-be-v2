@@ -34,6 +34,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -104,6 +105,39 @@ public class ExerciseSubmissionService {
     public ExerciseSubmissionDetailResponse saveRows(UUID submissionId, UUID userId,
                                                      SaveExerciseRowsRequest request) {
         ExerciseSubmission submission = requireOwned(submissionId, userId);
+        boolean changed = applyRows(submission, request);
+
+        // REVIEWED is only terminal until the member edits again — a real
+        // change puts the sheet back in the admin's queue for re-review.
+        if (changed && submission.getStatus() == ExerciseSubmissionStatus.REVIEWED) {
+            submission.setStatus(ExerciseSubmissionStatus.SUBMITTED);
+            submission.setReviewedAt(null);
+        }
+
+        submission.setLastSavedAt(Instant.now());
+        return buildDetail(submission, false);
+    }
+
+    /**
+     * Reviewer-side edit of the member's answers (the exercise counterpart of
+     * the assessment answer override). Same row rules as the member save, but
+     * the status is left alone — an admin correcting a REVIEWED sheet must not
+     * push their own edit back into the review queue.
+     */
+    @Transactional
+    public ExerciseSubmissionDetailResponse overrideRows(ExerciseSubmission submission,
+                                                         SaveExerciseRowsRequest request) {
+        applyRows(submission, request);
+        submission.setLastSavedAt(Instant.now());
+        return buildDetail(submission, true);
+    }
+
+    /**
+     * Replace-all row write shared by the member save and the admin override.
+     * Returns whether anything actually changed.
+     */
+    private boolean applyRows(ExerciseSubmission submission, SaveExerciseRowsRequest request) {
+        UUID submissionId = submission.getId();
         Set<String> columnIds = new HashSet<>();
         Set<String> lockedColumnIds = new HashSet<>();
         for (ExerciseColumn column : templateColumns(submission)) {
@@ -172,15 +206,7 @@ public class ExerciseSubmissionService {
             }
         }
 
-        // REVIEWED is only terminal until the member edits again — a real
-        // change puts the sheet back in the admin's queue for re-review.
-        if (changed && submission.getStatus() == ExerciseSubmissionStatus.REVIEWED) {
-            submission.setStatus(ExerciseSubmissionStatus.SUBMITTED);
-            submission.setReviewedAt(null);
-        }
-
-        submission.setLastSavedAt(Instant.now());
-        return buildDetail(submission, false);
+        return changed;
     }
 
     @Transactional
@@ -206,7 +232,13 @@ public class ExerciseSubmissionService {
             String key = column.getId().toString();
             for (ExerciseRow row : liveRows) {
                 Object value = row.getCells() != null ? row.getCells().get(key) : null;
-                if (value == null || String.valueOf(value).isBlank()) {
+                // A LIST cell is a JSON array of entries — blank when none of
+                // them carries text.
+                boolean blank = value == null
+                        || (value instanceof Collection<?>
+                                ? ExerciseListEntries.isBlank(value)
+                                : String.valueOf(value).isBlank());
+                if (blank) {
                     throw new BadRequestException(
                             "\"" + column.getName() + "\" is required — fill it in every row before submitting.");
                 }
@@ -247,6 +279,7 @@ public class ExerciseSubmissionService {
         replyComment.setParent(root);
         replyComment.setRow(root.getRow());
         replyComment.setColumn(root.getColumn());
+        replyComment.setEntryId(root.getEntryId());
         replyComment.setBody(body);
         ExerciseComment saved = commentRepository.save(replyComment);
 

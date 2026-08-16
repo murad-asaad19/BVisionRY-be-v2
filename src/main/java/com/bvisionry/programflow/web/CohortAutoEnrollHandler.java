@@ -4,8 +4,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
-import com.bvisionry.organization.event.MemberJoinedEvent;
-import com.bvisionry.organization.event.MemberMovedEvent;
+import com.bvisionry.common.event.OrganizationEvents;
 
 import lombok.RequiredArgsConstructor;
 
@@ -29,12 +28,12 @@ public class CohortAutoEnrollHandler {
     private final CohortService cohortService;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    public void onMemberJoined(MemberJoinedEvent event) {
+    public void onMemberJoined(OrganizationEvents.MemberJoined event) {
         cohortService.autoEnroll(event.organizationId(), event.userId());
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    public void onMemberMoved(MemberMovedEvent event) {
+    public void onMemberMoved(OrganizationEvents.MemberMoved event) {
         cohortService.autoEnroll(event.toOrganizationId(), event.userId());
     }
 }

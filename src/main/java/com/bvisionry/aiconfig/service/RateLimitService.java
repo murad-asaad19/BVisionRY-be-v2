@@ -351,6 +351,7 @@ public class RateLimitService implements LoginBackoffPort {
      *
      * @param emailKey the submitted email, lowercased and trimmed, existing or not
      */
+    @Override
     public void checkLoginBackoff(String emailKey) {
         StringRedisTemplate redis = this.redisTemplate;
         if (redis != null) {
@@ -384,6 +385,7 @@ public class RateLimitService implements LoginBackoffPort {
      *         live and this attempt (which raced past {@link #checkLoginBackoff}) must
      *         not advance the ladder a second time
      */
+    @Override
     public int recordLoginFailure(String emailKey) {
         StringRedisTemplate redis = this.redisTemplate;
         if (redis != null) {

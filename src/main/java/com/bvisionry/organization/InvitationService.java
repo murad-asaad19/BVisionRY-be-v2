@@ -7,6 +7,7 @@ import com.bvisionry.auth.dto.AuthResponse;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.common.event.OrganizationEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.exception.SsoFlowException;
@@ -20,7 +21,6 @@ import com.bvisionry.organization.dto.InvitationResponse;
 import com.bvisionry.organization.dto.InviteMembersRequest;
 import com.bvisionry.organization.entity.Invitation;
 import com.bvisionry.organization.entity.Organization;
-import com.bvisionry.organization.event.MemberJoinedEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -162,7 +162,7 @@ public class InvitationService {
             invitationRepository.save(invitation);
 
             if (isNewMembership) {
-                eventPublisher.publishEvent(new MemberJoinedEvent(
+                eventPublisher.publishEvent(new OrganizationEvents.MemberJoined(
                         invitation.getOrganization().getId(), savedUser.getId(), savedUser.getUserType()));
             }
 
@@ -232,7 +232,7 @@ public class InvitationService {
             invitationRepository.save(invitation);
 
             if (isNewMembership) {
-                eventPublisher.publishEvent(new MemberJoinedEvent(
+                eventPublisher.publishEvent(new OrganizationEvents.MemberJoined(
                         invitation.getOrganization().getId(), savedUser.getId(), savedUser.getUserType()));
             }
 

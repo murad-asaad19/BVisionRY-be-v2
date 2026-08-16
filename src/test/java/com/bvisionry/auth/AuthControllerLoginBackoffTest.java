@@ -91,6 +91,9 @@ class AuthControllerLoginBackoffTest {
                 authService,
                 mock(PasswordResetService.class),
                 rateLimitService,
+                // Same instance behind both seams — the backoff assertions below are
+                // about the real limiter, not a stub of it.
+                rateLimitService,
                 new ClientIpResolver(0, ""),
                 cookieService,
                 new com.bvisionry.config.SecurityContextCurrentUserAccessor());

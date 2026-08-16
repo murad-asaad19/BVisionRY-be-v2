@@ -190,11 +190,10 @@ public class SsoLoginService {
      * sub-org they belong to. That is pre-existing behaviour, unchanged by the sub-org
      * walk in invariant 3 — which only affects users who ALREADY have an org.
      *
-     * <p>No {@code MemberJoinedEvent} is published. That is the invitation/join-link
-     * signal and it fans out to auto-assignment, which materialises pipeline work
-     * and paid AI evaluation for the new member; an authentication event must not
-     * spend money. (It is also an {@code organization} type, which {@code auth}
-     * may not import.)
+     * <p>No {@code OrganizationEvents.MemberJoined} is published. That is the
+     * invitation/join-link signal and it fans out to auto-assignment, which
+     * materialises pipeline work and paid AI evaluation for the new member; an
+     * authentication event must not spend money.
      */
     private User provision(String email, String avatarUrl, SsoRegistration registration) {
         User user = new User();

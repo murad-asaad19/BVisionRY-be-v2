@@ -15,6 +15,7 @@ import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.exception.AccountNotActiveException;
 import com.bvisionry.common.exception.AuthenticationException;
 import com.bvisionry.common.security.AuthorizedInSecurityConfig;
+import com.bvisionry.common.security.LoginBackoffPort;
 import com.bvisionry.common.web.ClientIpResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -36,6 +37,14 @@ public class AuthController {
     private final AuthService authService;
     private final PasswordResetService passwordResetService;
     private final RateLimitService rateLimitService;
+    /**
+     * The per-ADDRESS guess backoff, reached through the shared-kernel port —
+     * the same seam {@link PasswordResetService} clears through, and the same
+     * bean at runtime. Only the per-IP buckets above still name
+     * {@link RateLimitService}, because that {@code auth} → {@code aiconfig}
+     * edge predates the port and is frozen; nothing new may join it.
+     */
+    private final LoginBackoffPort loginBackoff;
     private final ClientIpResolver clientIpResolver;
     private final CookieService cookieService;
     private final CurrentUserAccessor currentUser;
@@ -43,12 +52,14 @@ public class AuthController {
     public AuthController(AuthService authService,
                           PasswordResetService passwordResetService,
                           RateLimitService rateLimitService,
+                          LoginBackoffPort loginBackoff,
                           ClientIpResolver clientIpResolver,
                           CookieService cookieService,
                           CurrentUserAccessor currentUser) {
         this.authService = authService;
         this.passwordResetService = passwordResetService;
         this.rateLimitService = rateLimitService;
+        this.loginBackoff = loginBackoff;
         this.clientIpResolver = clientIpResolver;
         this.cookieService = cookieService;
         this.currentUser = currentUser;
@@ -109,11 +120,11 @@ public class AuthController {
             // Backoff check BEFORE recording, so wrong-password N answers 401 and
             // wrong-password N+1 is the first 429 — the same wire behaviour as when
             // the check ran up front, minus the owner-lockout.
-            rateLimitService.checkLoginBackoff(emailKey);
-            rateLimitService.recordLoginFailure(emailKey);
+            loginBackoff.checkLoginBackoff(emailKey);
+            loginBackoff.recordLoginFailure(emailKey);
             throw e;
         }
-        rateLimitService.clearLoginFailures(emailKey);
+        loginBackoff.clearLoginFailures(emailKey);
 
         writeAuthCookies(httpResponse, response);
         return ResponseEntity.ok(response);

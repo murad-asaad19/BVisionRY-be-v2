@@ -5,12 +5,12 @@ import com.bvisionry.audit.AuditService;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
+import com.bvisionry.common.event.OrganizationEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.tx.AfterCommit;
 import com.bvisionry.organization.dto.MoveMemberResponse;
 import com.bvisionry.organization.entity.Organization;
-import com.bvisionry.organization.event.MemberMovedEvent;
 import com.bvisionry.reporting.service.CacheInvalidationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -119,7 +119,7 @@ public class MoveMemberService {
         // per-rule (org, pipeline, user) dedup inside applyAutoAssignRule
         // means a moved member who already has the rule's pipeline assigned
         // won't get a duplicate row.
-        eventPublisher.publishEvent(new MemberMovedEvent(
+        eventPublisher.publishEvent(new OrganizationEvents.MemberMoved(
                 target.getId(), source.getId(), memberId, user.getUserType()));
 
         // Both source and target dashboards/member-results/insights now have

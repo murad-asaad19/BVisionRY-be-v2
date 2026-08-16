@@ -77,6 +77,25 @@
         </div>
     </div>
 
+    <!-- The member-level growth summary (spec §3): the report's opening read,
+         above the detail it was written from. Approved-only from the service,
+         absent until then. -->
+    <div class="section" th:if="${growthSummary != null or !growthSummaryItems.isEmpty()}">
+        <p class="section-title"
+           th:text="${staffVoice} ? 'Overall growth' : 'Your growth overall'">Your growth overall</p>
+        <div class="narrative">
+            <!-- V193: the same five kinds the pillar narratives below carry,
+                 merged across pillars. A pre-V193 summary has no items and
+                 renders as the paragraph it was written as. -->
+            <p class="narrative-body" th:each="i : ${growthSummaryItems}">
+                <span class="narrative-kind" th:text="${i.kindLabel()}">Resolved</span>
+                <span th:text="${i.text()}">Observation</span>
+            </p>
+            <p class="narrative-body" th:if="${growthSummary != null}"
+               th:text="${growthSummary}">Summary</p>
+        </div>
+    </div>
+
     <!-- Trajectory -->
     <div class="section">
         <p class="section-title" th:text="${staffVoice} ? 'Trajectory' : 'Your trajectory'">Your trajectory</p>
@@ -129,11 +148,11 @@
            th:text="${staffVoice} ? 'What changed — pillar narratives' : 'What changed — in your own words'">
             What changed — in your own words</p>
         <div class="narrative" th:each="n : ${narratives}">
-            <p class="narrative-head">
-                <span th:text="${n.pillarName()}">Pillar</span>
-                <span class="narrative-kind" th:text="${n.kindLabel()}">Resolved</span>
+            <p class="narrative-head" th:text="${n.pillarName()}">Pillar</p>
+            <p class="narrative-body" th:each="i : ${n.items()}">
+                <span class="narrative-kind" th:text="${i.kindLabel()}">Resolved</span>
+                <span th:text="${i.text()}">Observation</span>
             </p>
-            <p class="narrative-body" th:text="${n.body()}">Narrative</p>
             <p class="narrative-next" th:if="${n.closingAction() != null}">
                 Next step: <span th:text="${n.closingAction()}">Do the thing.</span>
             </p>

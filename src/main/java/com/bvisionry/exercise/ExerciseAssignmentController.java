@@ -5,6 +5,8 @@ import com.bvisionry.exercise.dto.CreateExerciseCommentRequest;
 import com.bvisionry.exercise.dto.ExerciseAssignmentResponse;
 import com.bvisionry.exercise.dto.ExerciseCommentResponse;
 import com.bvisionry.exercise.dto.ExerciseSubmissionDetailResponse;
+import com.bvisionry.exercise.dto.SaveExerciseRowsRequest;
+import com.bvisionry.exercise.dto.SetExerciseStatusRequest;
 import com.bvisionry.exercise.dto.SetQualityTagRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -16,6 +18,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -78,6 +81,32 @@ public class ExerciseAssignmentController {
             @PathVariable UUID orgId,
             @PathVariable UUID id) {
         return ResponseEntity.ok(reviewService.getSubmission(orgId, id));
+    }
+
+    /**
+     * Super-admin only, mirroring the assessment answer override: replace-all
+     * write of the member's rows without touching the review status.
+     */
+    @PutMapping("/{id}/rows")
+    @PreAuthorize("hasAuthority('SUPER_ADMIN')")
+    public ResponseEntity<ExerciseSubmissionDetailResponse> overrideRows(
+            @PathVariable UUID orgId,
+            @PathVariable UUID id,
+            @Valid @RequestBody SaveExerciseRowsRequest request) {
+        return ResponseEntity.ok(reviewService.overrideRows(orgId, id, request));
+    }
+
+    /**
+     * Super-admin only, like the answer override: set any submission status
+     * directly, skipping the review handshake.
+     */
+    @PatchMapping("/{id}/status")
+    @PreAuthorize("hasAuthority('SUPER_ADMIN')")
+    public ResponseEntity<ExerciseSubmissionDetailResponse> overrideStatus(
+            @PathVariable UUID orgId,
+            @PathVariable UUID id,
+            @Valid @RequestBody SetExerciseStatusRequest request) {
+        return ResponseEntity.ok(reviewService.overrideStatus(orgId, id, request.status()));
     }
 
     @PostMapping("/{id}/comments")

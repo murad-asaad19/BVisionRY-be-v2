@@ -139,7 +139,7 @@ public class ProgramAdminService {
 
         List<ModuleUpsert> board = normalize(req);
         requireOwnIds(cohortId, board);
-        validateBoard(req, current, roster);
+        validateBoard(cohortId, req, current, roster);
 
         List<BoardRestoreRepository.DoomedTask> atRisk =
                 restore.memberWorkAtRisk(cohortId, board);
@@ -199,7 +199,8 @@ public class ProgramAdminService {
                         m.tasks().stream()
                                 .map(t -> new TaskUpsert(t.id(), t.name(), t.dueDate(),
                                         t.status(), t.aiDraft(), t.taskType(), t.refId(),
-                                        t.milestoneRole(), normalizeFields(t.fields())))
+                                        t.milestoneRole(), t.pillarIds(),
+                                        normalizeFields(t.fields())))
                                 .toList()))
                 .toList();
     }
@@ -274,13 +275,14 @@ public class ProgramAdminService {
      * "pick what this references" is unactionable, which is why this throws a
      * composed message instead of the single-task save's per-field 400.
      */
-    private void validateBoard(SaveBoardRequest req,
+    private void validateBoard(UUID cohortId, SaveBoardRequest req,
             List<ProgramModule> current, List<CohortMemberRow> roster) {
         Map<UUID, ProgramTask> existing = current.stream()
                 .flatMap(m -> m.getTasks().stream())
                 .collect(Collectors.toMap(ProgramTask::getId, Function.identity()));
         Set<UUID> rosterIds = roster.stream().map(CohortMemberRow::getId)
                 .collect(Collectors.toSet());
+        Set<UUID> mappedPillars = Set.copyOf(spine.mappedDistancePillarIds(cohortId));
         Map<MilestoneRole, UUID> milestones = new EnumMap<>(MilestoneRole.class);
 
         for (SaveBoardRequest.ModuleUpsert m : req.modules()) {
@@ -310,6 +312,9 @@ public class ProgramAdminService {
                     errors.put("milestoneRole", "This cohort already has a "
                             + t.milestoneRole().name().toLowerCase(java.util.Locale.ROOT)
                             + " milestone task.");
+                }
+                if (errors.isEmpty()) {
+                    errors.putAll(pillarTagErrors(t, mappedPillars));
                 }
                 if (!errors.isEmpty()) {
                     throw new BadRequestException("“" + t.name() + "” — "
@@ -458,6 +463,28 @@ public class ProgramAdminService {
                     + "its assessment pipeline can no longer change.");
         }
         return errors;
+    }
+
+    /**
+     * Spec §1's two rules for a task's pillar tags. An ASSESSMENT carries none:
+     * a pipeline assessment is already pillar-linked THROUGH its pipeline, so a
+     * tag on it would be a second, silently divergent linkage. Every other tag
+     * must be one of the cohort's own mapped DISTANCE pillars — an id from
+     * elsewhere would store a tag no narrative can ever read.
+     */
+    private static Map<String, String> pillarTagErrors(TaskUpsert t, Set<UUID> mappedPillars) {
+        if (t.pillarIds().isEmpty()) {
+            return Map.of();
+        }
+        if (t.taskType() == ProgramTaskType.ASSESSMENT) {
+            return Map.of("pillarIds", "A milestone assessment is already linked to its pillars "
+                    + "through its pipeline — it cannot carry pillar tags.");
+        }
+        if (!mappedPillars.containsAll(t.pillarIds())) {
+            return Map.of("pillarIds", "One or more pillar tags are not in this cohort's "
+                    + "pillar mapping — tag only the pairs its Settings tab maps.");
+        }
+        return Map.of();
     }
 
     // ------------------------------------------------------------------ pulse

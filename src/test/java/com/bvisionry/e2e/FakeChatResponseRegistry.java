@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 public class FakeChatResponseRegistry {
 
     private final Queue<String> queue = new ConcurrentLinkedQueue<>();
+    private volatile String lastUserMessage;
 
     public void enqueue(String response) {
         queue.add(response);
@@ -22,7 +23,23 @@ public class FakeChatResponseRegistry {
         return queue.poll();
     }
 
+    /**
+     * The user message of the most recent call — how a spec asserts what was
+     * PUT IN FRONT of the model, not only what came back. The shift-narrative
+     * job builds its prompt from four SQL reads (spec §2's activity section),
+     * and a pure-function test of the assembler would pass happily while the
+     * queries returned nothing.
+     */
+    public void recordUserMessage(String text) {
+        this.lastUserMessage = text;
+    }
+
+    public String lastUserMessage() {
+        return lastUserMessage;
+    }
+
     public void clear() {
         queue.clear();
+        lastUserMessage = null;
     }
 }

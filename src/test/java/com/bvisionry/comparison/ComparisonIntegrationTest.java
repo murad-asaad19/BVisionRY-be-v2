@@ -86,6 +86,7 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
     private UUID baselineFocus;
     private UUID baselineLegacy;
     private UUID distanceVision;
+    private UUID distanceFocus;
     private UUID distanceResilience;
     private UUID founder1BaselineSubmission;
     private UUID founder1DistanceSubmission;
@@ -105,7 +106,7 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
         baselineLegacy = insertPillar(baselinePipelineId, "Legacy", 2);
         // Name-mismatched casing on purpose: the seed matches case-insensitively.
         distanceVision = insertPillar(distancePipelineId, "vision", 0);
-        UUID distanceFocus = insertPillar(distancePipelineId, "Focus & Flow", 1);
+        distanceFocus = insertPillar(distancePipelineId, "Focus & Flow", 1);
         distanceResilience = insertPillar(distancePipelineId, "Resilience", 2);
 
         cohortId = insertCohort(orgA.getId(), "Cohort 12", founder1.getId());
@@ -1206,6 +1207,59 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(garbage).contains("May 21, 2026");
         }
 
+        /**
+         * The narrative sheet is WIDE: one row per pillar, one column per
+         * kind. The long shape repeated the pillar name and the per-pillar
+         * closing action once per observation, so a multi-kind breakdown read
+         * as near-duplicate rows.
+         */
+        @Test
+        void narrativeSheet_isOneRowPerPillar_withAKindPerColumn() throws Exception {
+            computeFounder1();
+            makePremium(orgA);
+            jdbc.update("""
+                    INSERT INTO shift_narratives (cohort_id, org_id, user_id, baseline_pillar_id,
+                                                  distance_pillar_id, pillar_name_snapshot,
+                                                  items, closing_action, status, approved_at)
+                    VALUES (?, ?, ?, ?, ?, 'Vision', ?::jsonb, 'Close one open decision.',
+                            'APPROVED', now())
+                    """, cohortId, orgA.getId(), founder1.getId(), baselineVision, distanceVision,
+                    """
+                    [{"kind":"RESOLVED","text":"The hesitation is gone."},
+                     {"kind":"RESOLVED","text":"So is the second one."},
+                     {"kind":"FADED","text":"The exploratory streak is absent."}]
+                    """);
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.wide@test.invalid", UserRole.ORG_ADMIN, orgA));
+
+            byte[] xlsx = mockMvc.perform(get(adminReport("growth-report.xlsx", founder1)))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsByteArray();
+
+            try (var wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook(
+                    new java.io.ByteArrayInputStream(xlsx))) {
+                var sheet = wb.getSheet("Shift narratives");
+                assertThat(sheet).isNotNull();
+                var header = sheet.getRow(0);
+                assertThat(header.getCell(0).getStringCellValue()).isEqualTo("Pillar");
+                assertThat(header.getCell(1).getStringCellValue()).isEqualTo("Resolved");
+                assertThat(header.getCell(2).getStringCellValue()).isEqualTo("Carried forward");
+                assertThat(header.getCell(6).getStringCellValue()).isEqualTo("Next step");
+                // The pillar appears ONCE despite carrying three observations.
+                assertThat(sheet.getLastRowNum()).isEqualTo(1);
+                var row = sheet.getRow(1);
+                assertThat(row.getCell(0).getStringCellValue()).isEqualTo("Vision");
+                // Two observations of one kind share their cell.
+                assertThat(row.getCell(1).getStringCellValue())
+                        .contains("The hesitation is gone.")
+                        .contains("So is the second one.");
+                assertThat(row.getCell(2).getStringCellValue()).isEmpty();
+                assertThat(row.getCell(5).getStringCellValue())
+                        .isEqualTo("The exploratory streak is absent.");
+                assertThat(row.getCell(6).getStringCellValue())
+                        .isEqualTo("Close one open decision.");
+            }
+        }
+
         /** The rendered PDF text — the content stream is FlateDecoded, so raw bytes see nothing. */
         private static String pdfText(byte[] pdf) throws Exception {
             com.lowagie.text.pdf.PdfReader reader = new com.lowagie.text.pdf.PdfReader(pdf);
@@ -1247,6 +1301,130 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
         private void makePremium(Organization org) {
             org.setSubscriptionTier(SubscriptionTier.GROWTH);
             organizationRepository.saveAndFlush(org);
+        }
+    }
+
+    /* ------------------------------------------------ cohort growth rollup */
+
+    /**
+     * The cohort per-pillar aggregate + its Excel export (operator-settled
+     * dashboard work 2026-08-16): averages over MAPPED rows only, ranking by
+     * average shift, approved-and-attached-only kind counts, and the same
+     * premium gate as the other file exports.
+     */
+    @Nested
+    class CohortGrowthAggregate {
+
+        @Autowired private com.bvisionry.comparison.web.CohortGrowthAggregateService aggregates;
+
+        private static final String XLSX =
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+        private String aggregateUrl() {
+            return "/api/organizations/" + orgA.getId() + "/cohorts/" + cohortId
+                    + "/growth-aggregate";
+        }
+
+        @Test
+        void ranksMappedPillarAveragesByShift_andSkipsOneSidedRows() throws Exception {
+            computeFounder1();
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.agg@test.invalid", UserRole.ORG_ADMIN, orgA));
+
+            mockMvc.perform(get(aggregateUrl()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.membersMeasured", is(1)))
+                    .andExpect(jsonPath("$.avgOverallBefore", is(58.0)))
+                    .andExpect(jsonPath("$.avgOverallAfter", is(71.5)))
+                    .andExpect(jsonPath("$.avgOverallDelta", is(13.5)))
+                    // Legacy (not re-measured) and Resilience (newly measured)
+                    // have no before AND after — out of the rollup entirely.
+                    .andExpect(jsonPath("$.pillars.length()", is(2)))
+                    // Ranked by average shift: Focus +18 before Vision +12.
+                    .andExpect(jsonPath("$.pillars[0].pillarName", is("Focus & Flow")))
+                    .andExpect(jsonPath("$.pillars[0].avgBefore", is(60.0)))
+                    .andExpect(jsonPath("$.pillars[0].avgAfter", is(78.0)))
+                    .andExpect(jsonPath("$.pillars[0].avgDelta", is(18.0)))
+                    .andExpect(jsonPath("$.pillars[0].measuredCount", is(1)))
+                    .andExpect(jsonPath("$.pillars[1].avgDelta", is(12.0)))
+                    .andExpect(jsonPath("$.pillars[1].distancePillarId",
+                            is(distanceVision.toString())));
+        }
+
+        @Test
+        void kindCounts_areApprovedAndStillAttachedOnly_distinctPerMember() {
+            computeFounder1();
+
+            // APPROVED breakdown on the mapped Vision pillar: RESOLVED twice
+            // (must count the member once, not twice) + NEW.
+            insertNarrative(distanceVision, "vision", "APPROVED", """
+                    [{"kind":"RESOLVED","text":"a"},{"kind":"RESOLVED","text":"b"},
+                     {"kind":"NEW","text":"c"}]
+                    """);
+            // DRAFT on the mapped Focus pillar: unreviewed AI output must never
+            // reach an admin-facing count.
+            insertNarrative(distanceFocus, "Focus & Flow", "DRAFT",
+                    "[{\"kind\":\"FADED\",\"text\":\"d\"}]");
+            // APPROVED on the NEWLY_MEASURED Resilience pillar: detached (no
+            // mapped before/after), so it must not resurface here.
+            insertNarrative(distanceResilience, "Resilience", "APPROVED",
+                    "[{\"kind\":\"NEW\",\"text\":\"e\"}]");
+
+            var dto = aggregates.aggregate(orgA.getId(), cohortId);
+
+            var vision = dto.pillars().stream()
+                    .filter(p -> p.distancePillarId().equals(distanceVision)).findFirst().orElseThrow();
+            assertThat(vision.membersWithApprovedNarrative()).isEqualTo(1);
+            assertThat(vision.kindCounts())
+                    .containsEntry(com.bvisionry.comparison.domain.NarrativeKind.RESOLVED, 1)
+                    .containsEntry(com.bvisionry.comparison.domain.NarrativeKind.NEW, 1)
+                    .containsEntry(com.bvisionry.comparison.domain.NarrativeKind.FADED, 0);
+
+            var focus = dto.pillars().stream()
+                    .filter(p -> p.distancePillarId().equals(distanceFocus)).findFirst().orElseThrow();
+            assertThat(focus.membersWithApprovedNarrative()).isZero();
+            assertThat(focus.kindCounts().values()).allMatch(c -> c == 0);
+
+            assertThat(dto.pillars()).noneMatch(
+                    p -> p.distancePillarId().equals(distanceResilience));
+        }
+
+        @Test
+        void xlsxExport_isPremiumGated_andDownloads() throws Exception {
+            computeFounder1();
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.agg.export@test.invalid", UserRole.ORG_ADMIN, orgA));
+            String url = "/api/organizations/" + orgA.getId() + "/cohorts/" + cohortId
+                    + "/growth-report.xlsx";
+
+            mockMvc.perform(get(url)).andExpect(status().isForbidden());
+
+            orgA.setSubscriptionTier(SubscriptionTier.GROWTH);
+            organizationRepository.saveAndFlush(orgA);
+            mockMvc.perform(get(url))
+                    .andExpect(status().isOk())
+                    .andExpect(content().contentType(XLSX))
+                    .andExpect(header().string("Content-Disposition",
+                            containsString("Cohort_Growth_Report")));
+        }
+
+        @Test
+        void foreignOrgAdmin_isRefusedTheAggregate() throws Exception {
+            computeFounder1();
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.agg.b@test.invalid", UserRole.ORG_ADMIN, orgB));
+            mockMvc.perform(get(aggregateUrl())).andExpect(status().isForbidden());
+        }
+
+        private void insertNarrative(UUID distancePillarId, String name, String status,
+                                     String itemsJson) {
+            jdbc.update("""
+                    INSERT INTO shift_narratives (cohort_id, org_id, user_id, baseline_pillar_id,
+                                                  distance_pillar_id, pillar_name_snapshot,
+                                                  items, status, approved_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?, now())
+                    """, cohortId, orgA.getId(), founder1.getId(), distancePillarId,
+                    distancePillarId, name, itemsJson, status);
         }
     }
 

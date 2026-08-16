@@ -75,6 +75,8 @@ public final class OrgAuditActions {
     public static final String EXERCISE_SUBMITTED         = "EXERCISE_SUBMITTED";
     public static final String EXERCISE_CHANGES_REQUESTED = "EXERCISE_CHANGES_REQUESTED";
     public static final String EXERCISE_REVIEWED          = "EXERCISE_REVIEWED";
+    public static final String EXERCISE_ANSWERS_OVERRIDDEN = "EXERCISE_ANSWERS_OVERRIDDEN";
+    public static final String EXERCISE_STATUS_OVERRIDDEN  = "EXERCISE_STATUS_OVERRIDDEN";
 
     /** Member on a Free-tier org clicked Request Upgrade. */
     public static final String UPGRADE_REQUESTED                 = "UPGRADE_REQUESTED";

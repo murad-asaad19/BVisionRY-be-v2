@@ -292,6 +292,10 @@ public class PersonalDataRepository {
         // edited_by are SET NULL like every other staff attribution.
         EXPORT_SECTIONS.put("shift_narratives",
                 "SELECT * FROM shift_narratives WHERE user_id = :userId");
+        // The member-level growth summary (V190, spec §3): the same kind of data
+        // on the same terms — AI prose about the subject, reviewed by a human.
+        EXPORT_SECTIONS.put("growth_summaries",
+                "SELECT * FROM member_growth_summaries WHERE user_id = :userId");
 
         EXPORT_SECTIONS.put("notifications", "SELECT * FROM notifications WHERE user_id = :userId");
         EXPORT_SECTIONS.put("notification_optouts", "SELECT * FROM notification_optouts WHERE user_id = :userId");

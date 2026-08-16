@@ -22,6 +22,7 @@ import com.bvisionry.comparison.dto.NarrativeRequests.UpdateNarrativeRequest;
 import com.bvisionry.comparison.dto.ShiftNarrativeDto;
 import com.bvisionry.comparison.repository.ComparisonReadRepository;
 import com.bvisionry.comparison.repository.ComparisonReadRepository.RawPillarText;
+import com.bvisionry.comparison.repository.NarrativeActivityRepository;
 import com.bvisionry.comparison.repository.FounderComparisonPillarRepository;
 import com.bvisionry.comparison.repository.FounderComparisonRepository;
 import com.bvisionry.comparison.repository.ShiftNarrativeRepository;
@@ -35,6 +36,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -43,23 +46,36 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
- * The Qualitative Shift Narrative job + review gate (redesign spec §6).
+ * The Qualitative Shift Narrative job + review gate (redesign spec §6, output
+ * upgraded to the §2 breakdown).
  *
  * <h2>What the model sees</h2>
- * ONLY the pillar name and the two text blocks ("what's working" / "what can
- * improve") from the baseline and distance evaluations. "No generation from
- * scores alone" is enforced by construction: {@link ComparisonReadRepository
- * #pillarTextBlocks} does not select a score, so there is none in hand to leak
- * into the prompt.
+ * The pillar name, the two text blocks ("what's working" / "what can improve")
+ * from the baseline and distance evaluations, and the programme work tagged to
+ * that pillar ({@link NarrativeActivityRepository}). "No generation from scores
+ * alone" is still enforced by construction: {@link ComparisonReadRepository
+ * #pillarTextBlocks} does not select a score, so no pillar score is in hand to
+ * leak into the prompt.
+ *
+ * <p>Figures DO reach the model inside the prose, though, and pretending
+ * otherwise was the bug: the prior evaluations' own text is full of percentages
+ * and ratings ("scored at 100%", "rated Easy (4/5)"), as is anything the founder
+ * typed. So §2's no-numbers rule is enforced on the OUTPUT
+ * ({@link NarrativeGuardrails.Rejection#CONTAINS_NUMBER}) rather than merely
+ * asked for. The prompt still carries the one rule the data cannot: never quote
+ * the facilitator feedback the activity section labels as such.
  *
  * <h2>Guardrails (code, not prompt-hope)</h2>
- * See {@link NarrativeGuardrails}. Length floor → no model call at all and NO
- * row (the review UI shows the configured standard sentence inline for that
- * pillar; a row would imply a narrative somebody could approve). Decline
- * without a forward-looking close, or a kind outside the five → ONE corrective
- * retry, then a generation failure that persists nothing.
+ * See {@link NarrativeGuardrails}. Either length floor — no "before" to compare
+ * from, or nothing at all to compare it against — means no model call and NO row
+ * (the review UI shows the configured standard sentence inline for that pillar;
+ * a row would imply a narrative somebody could approve). Decline without a
+ * forward-looking close, an empty breakdown, a leaked score, or a kind outside
+ * the five → ONE corrective retry, then a generation failure that persists
+ * nothing.
  *
  * <h2>Review gate</h2>
  * DRAFT → APPROVED, and only APPROVED reaches the member's My Growth / PDF /
@@ -90,6 +106,7 @@ public class ShiftNarrativeService {
     private final FounderComparisonRepository comparisons;
     private final FounderComparisonPillarRepository comparisonPillars;
     private final ComparisonReadRepository reads;
+    private final NarrativeActivityRepository activityReads;
     private final OpenRouterChatService chat;
     private final AuditLogger auditLogger;
 
@@ -149,7 +166,7 @@ public class ShiftNarrativeService {
      */
     private GenerateAllNarrativesResponse generateBatch(Context ctx) {
         List<Candidate> candidates = ctx.candidates().stream()
-                .filter(Candidate::hasEnoughBeforeText)
+                .filter(Candidate::hasEnoughMaterial)
                 .sorted(Comparator.comparingDouble(
                         (Candidate c) -> Math.abs(c.pillar().getDelta().doubleValue())).reversed())
                 .filter(c -> !ctx.existingPillarIds().contains(c.distancePillarId()))
@@ -212,7 +229,7 @@ public class ShiftNarrativeService {
                 .findFirst()
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Mapped comparison pillar", distancePillarId.toString()));
-        if (!candidate.hasEnoughBeforeText()) {
+        if (!candidate.hasEnoughMaterial()) {
             throw new BadRequestException(ctx.wording().notEnoughDataSentence());
         }
         ShiftNarrative saved;
@@ -287,8 +304,10 @@ public class ShiftNarrativeService {
         narrative.setBaselinePillarId(candidate.pillar().getBaselinePillarId());
         narrative.setDistancePillarId(candidate.distancePillarId());
         narrative.setPillarNameSnapshot(candidate.pillar().getPillarNameSnapshot());
-        narrative.setKind(NarrativeKind.parse(result.kind()).orElseThrow());
-        narrative.setBody(result.narrative().trim());
+        // kind/body stay NULL: this row is born in the §2 breakdown shape, and
+        // back-filling the legacy pair from the first item would invent a
+        // "primary" observation the model never nominated.
+        narrative.setItems(items(result));
         narrative.setClosingAction(result.closingAction().isBlank() ? null : result.closingAction().trim());
         narrative.setBandKey(bandKey);
         narrative.setDecline(decline);
@@ -307,18 +326,119 @@ public class ShiftNarrativeService {
         return new Generation(narratives.save(narrative), null);
     }
 
+    /** The guardrail already proved every kind parses, so {@code orElseThrow} cannot fire. */
+    private static List<ShiftNarrative.Item> items(ShiftNarrativeResult result) {
+        return result.items().stream()
+                .map(i -> new ShiftNarrative.Item(
+                        NarrativeKind.parse(i.kind()).orElseThrow(), i.text().trim()))
+                .toList();
+    }
+
     /**
-     * The user message: pillar name + the four text blocks, and nothing else.
-     * Deliberately built from {@link Candidate}, which carries no score.
+     * The user message: pillar name, the four text blocks, and the programme
+     * work tagged to this pillar. Deliberately built from {@link Candidate},
+     * which carries no score.
      */
     static String userMessage(Candidate candidate) {
         StringBuilder sb = new StringBuilder();
-        sb.append("PILLAR: ").append(candidate.pillar().getPillarNameSnapshot()).append("\n\n");
+        sb.append("PILLAR: ").append(candidate.pillar().getPillarNameSnapshot()).append('\n');
+        sb.append("PILLAR DIRECTION: ").append(candidate.direction()).append("\n\n");
         appendBlock(sb, "BEFORE — what's working", candidate.beforeWorking());
         appendBlock(sb, "BEFORE — what can improve", candidate.beforeImprove());
         appendBlock(sb, "AFTER — what's working", candidate.afterWorking());
         appendBlock(sb, "AFTER — what can improve", candidate.afterImprove());
+        appendActivity(sb, candidate.activity());
+        if (candidate.afterTextMissing()) {
+            sb.append(MISSING_AFTER_NOTE);
+        }
         return sb.toString();
+    }
+
+    /**
+     * The other half of the empty-AFTER guardrail. A pillar only reaches the
+     * model with no later assessment text when tagged work makes up for it
+     * ({@link Candidate#hasEnoughMaterial()}), and left to itself the model reads
+     * an empty AFTER block as "the founder lost all of it": every baseline item
+     * comes back FADED or RESOLVED, confidently, on no evidence.
+     *
+     * <p>The template carries the standing version of this rule (V192's MISSING
+     * MATERIAL block); this is the conditional, sharper half, and it lives in
+     * code for two reasons. It fires only on the calls it applies to, right after
+     * the activity it is about. And it binds on installations whose admins have
+     * customised their own SHIFT_NARRATIVE prompt — a guarded migration
+     * deliberately cannot touch those, and this is the half that must not be
+     * optional. The two agree; the repetition is emphasis, not drift.
+     */
+    private static final String MISSING_AFTER_NOTE = """
+            NOTE: the later assessment recorded no commentary for this pillar. That is a gap in \
+            the record, not evidence the founder lost anything — do NOT classify anything as \
+            FADED or RESOLVED on that basis. Ground every observation in the ACTIVITY section \
+            above and classify it against the BEFORE text: PERSISTED where the work still shows \
+            a growth edge named before, CARRIED_FORWARD where it still shows a strength named \
+            before, NEW where it shows something the BEFORE text has no equivalent for.
+            """;
+
+    /**
+     * Spec §2's activity section: every tagged task, the member's status on it,
+     * and the FULL submitted content — no truncation and no item cap, which is
+     * the decision, not an oversight.
+     *
+     * <p>Both halves are FENCED in tags the prompt names: the founder's own work
+     * in {@code <submission>}, staff notes in {@code <facilitator_note>}. Labels
+     * alone were not enough — a label prefixes the first physical line, and a
+     * submission is free text that can contain newlines, so a founder could type
+     * a line that looked exactly like one of ours. A tag pair delimits the whole
+     * block however many lines it runs to, and {@link #fenced} strips the tags
+     * out of the data so nothing inside can close its own fence.
+     */
+    private static void appendActivity(StringBuilder sb,
+                                       List<NarrativeActivityRepository.TaskActivity> activity) {
+        if (activity.isEmpty()) {
+            return;
+        }
+        LocalDate today = LocalDate.now();
+        sb.append("ACTIVITY — programme work tagged to this pillar:\n\n");
+        for (NarrativeActivityRepository.TaskActivity task : activity) {
+            sb.append("TASK: ").append(task.taskName())
+                    .append(" (").append(task.taskType()).append(')')
+                    .append(" — status: ").append(task.status(today));
+            if (task.dueDate() != null) {
+                sb.append(", due ").append(task.dueDate());
+            }
+            if (task.completedAt() != null) {
+                // A date, not the raw instant. "2026-08-13T12:00:00Z" is four
+                // more numbers in a prompt whose one hard rule is "never state a
+                // number", and no narrative has ever needed the seconds.
+                sb.append(", completed ")
+                        .append(task.completedAt().atZone(ZoneId.systemDefault()).toLocalDate());
+            }
+            sb.append('\n');
+            if (task.content().isEmpty()) {
+                sb.append("  (nothing submitted)\n");
+            } else {
+                sb.append("  <submission>\n");
+                task.content().forEach(line -> sb.append("  ").append(fenced(line)).append('\n'));
+                sb.append("  </submission>\n");
+            }
+            task.facilitatorNotes().forEach(note -> sb
+                    .append("  <facilitator_note>\n  ").append(fenced(note))
+                    .append("\n  </facilitator_note>\n"));
+            sb.append('\n');
+        }
+    }
+
+    /**
+     * The fence tags themselves, stripped out of whatever goes INSIDE a fence.
+     * Everything in a {@code <submission>} is data, and a founder who typed
+     * "&lt;/submission&gt;" would otherwise be writing prompt structure the model
+     * reads as ours. The tags are the assembler's to emit, so removing them from
+     * the data costs nothing anybody would miss.
+     */
+    private static final Pattern FENCE_TAG = Pattern.compile(
+            "</?\\s*(?:submission|facilitator_note)\\s*>", Pattern.CASE_INSENSITIVE);
+
+    private static String fenced(String text) {
+        return FENCE_TAG.matcher(text).replaceAll("");
     }
 
     private static void appendBlock(StringBuilder sb, String title, List<String> lines) {
@@ -358,7 +478,7 @@ public class ShiftNarrativeService {
             }
             NarrativePillarOption option = new NarrativePillarOption(candidate.distancePillarId(),
                     candidate.pillar().getPillarNameSnapshot());
-            (candidate.hasEnoughBeforeText() ? available : insufficient).add(option);
+            (candidate.hasEnoughMaterial() ? available : insufficient).add(option);
         }
 
         return new NarrativeReviewResponse(
@@ -452,11 +572,17 @@ public class ShiftNarrativeService {
     public ShiftNarrativeDto update(UUID userId, UUID narrativeId,
                                     UpdateNarrativeRequest request, UUID actorId) {
         ShiftNarrative narrative = requireOwned(userId, narrativeId);
-        if (request.kind() != null && !request.kind().isBlank()) {
-            narrative.setKind(NarrativeKind.parse(request.kind())
-                    .orElseThrow(() -> new BadRequestException("Unknown narrative kind: " + request.kind())));
-        }
-        narrative.setBody(request.body().trim());
+        narrative.setItems(request.items().stream()
+                .map(i -> new ShiftNarrative.Item(NarrativeKind.parse(i.kind())
+                        .orElseThrow(() -> new BadRequestException(
+                                "Unknown narrative kind: " + i.kind())),
+                        i.text().trim()))
+                .toList());
+        // A legacy row edited here MIGRATES: the reviewer just rewrote the whole
+        // breakdown, so leaving the old paragraph beside it would be two
+        // sources of truth on one row, one of them stale.
+        narrative.setKind(null);
+        narrative.setBody(null);
         String closing = request.closingAction() == null ? null : request.closingAction().trim();
         narrative.setClosingAction(closing == null || closing.isBlank() ? null : closing);
         // The §6 decline rule binds humans too — a reviewer must not be able to
@@ -560,9 +686,11 @@ public class ShiftNarrativeService {
 
     /**
      * The member's comparison cohort — the newest cohort with a fully designated
-     * pair, exactly as the growth read resolves it.
+     * pair, exactly as the growth read resolves it. Package-private rather than
+     * private so {@link MemberGrowthSummaryService} anchors on the SAME cohort
+     * instead of resolving its own.
      */
-    private UUID anchorCohort(UUID userId) {
+    UUID anchorCohort(UUID userId) {
         return reads.memberPairCohort(userId)
                 .map(ComparisonReadRepository.PairCohortRow::cohortId)
                 .orElseThrow(() -> new ResourceNotFoundException(
@@ -574,25 +702,74 @@ public class ShiftNarrativeService {
                    List<Candidate> candidates, Set<UUID> existingPillarIds) {
     }
 
-    /** A mapped pillar with both sides' text in hand — a narrative candidate. */
+    /** A mapped pillar with both sides' text and its tagged work in hand — a narrative candidate. */
     record Candidate(FounderComparisonPillar pillar, List<String> beforeWorking,
-                     List<String> beforeImprove, List<String> afterWorking, List<String> afterImprove) {
+                     List<String> beforeImprove, List<String> afterWorking, List<String> afterImprove,
+                     List<NarrativeActivityRepository.TaskActivity> activity) {
 
         UUID distancePillarId() {
             return pillar.getDistancePillarId();
         }
 
-        boolean hasEnoughBeforeText() {
-            return NarrativeGuardrails.hasEnoughBeforeText(beforeWorking, beforeImprove);
+        /**
+         * Which way the pillar moved, as a WORD. The prompt makes the closing
+         * action MANDATORY on a decline, and until now the model was never told
+         * whether the pillar had declined — an unanswerable rule that
+         * {@link NarrativeGuardrails.Rejection#MISSING_CLOSING_ACTION} then
+         * punished it for missing. A direction is not a number, so §2's rule is
+         * untouched; read from the same {@code signum()} the stamped decline flag
+         * uses, so the prompt and the guardrail can never disagree.
+         */
+        String direction() {
+            return switch (pillar.getDelta().signum()) {
+                case -1 -> "declined";
+                case 1 -> "improved";
+                default -> "held steady";
+            };
+        }
+
+        /**
+         * Both floors: a "before" to compare from, and something — later
+         * assessment text or programme work tagged to the pillar — to compare it
+         * against. ONE predicate rather than two call-site conjunctions, because
+         * the batch job, the on-demand button, the review list and
+         * {@link MemberGrowthSummaryService}'s "which pillars must be approved
+         * first" rule all have to answer this identically; a pillar that can
+         * never generate must never be one the summary waits for.
+         */
+        boolean hasEnoughMaterial() {
+            return NarrativeGuardrails.hasEnoughBeforeText(beforeWorking, beforeImprove)
+                    && NarrativeGuardrails.hasComparableAfter(
+                            afterWorking, afterImprove, !activity.isEmpty());
+        }
+
+        /**
+         * True when the later assessment recorded nothing and the tagged work is
+         * the only "after" in hand — the case
+         * {@link ShiftNarrativeService#MISSING_AFTER_NOTE} exists for.
+         */
+        boolean afterTextMissing() {
+            return !NarrativeGuardrails.hasAfterText(afterWorking, afterImprove);
         }
     }
 
-    private Context context(UUID cohortId, UUID userId) {
+    /**
+     * Everything one founder's narrative work needs, read once. Package-private:
+     * {@link MemberGrowthSummaryService} reuses this candidate set as its "which
+     * pillars must be approved first" rule, so the two screens cannot disagree
+     * about which pillars are eligible.
+     */
+    Context context(UUID cohortId, UUID userId) {
         FounderComparison comparison = comparisons.findByCohortIdAndUserId(cohortId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Comparison for user", userId.toString()));
 
         Map<UUID, RawPillarText> before = reads.pillarTextBlocks(comparison.getBaselineSubmissionId());
         Map<UUID, RawPillarText> after = reads.pillarTextBlocks(comparison.getDistanceSubmissionId());
+        // Every pillar's tagged work in ONE read: generation loops a model call
+        // per pillar, and per-pillar activity queries would multiply the
+        // round-trips by the pillar count for nothing.
+        Map<UUID, List<NarrativeActivityRepository.TaskActivity>> activity =
+                activityReads.activityByPillar(cohortId, userId);
 
         List<Candidate> candidates = comparisonPillars.findByComparisonId(comparison.getId()).stream()
                 // Only MAPPED rows can carry a narrative: a newly-measured pillar
@@ -605,7 +782,8 @@ public class ShiftNarrativeService {
                         lines(before.get(p.getBaselinePillarId()), true),
                         lines(before.get(p.getBaselinePillarId()), false),
                         lines(after.get(p.getDistancePillarId()), true),
-                        lines(after.get(p.getDistancePillarId()), false)))
+                        lines(after.get(p.getDistancePillarId()), false),
+                        activity.getOrDefault(p.getDistancePillarId(), List.of())))
                 .toList();
 
         Set<UUID> existing = new HashSet<>(narratives.findByCohortIdAndUserId(cohortId, userId).stream()
@@ -629,8 +807,12 @@ public class ShiftNarrativeService {
                 .withDefaults();
     }
 
-    /** jsonb string array → list; an absent row or unreadable value reads as "no text". */
-    private static List<String> lines(RawPillarText row, boolean working) {
+    /**
+     * jsonb string array → list; an absent row or unreadable value reads as "no
+     * text". Package-private so {@link CohortGrowthSummaryService} parses the
+     * same columns the same way instead of forking a second reader.
+     */
+    static List<String> lines(RawPillarText row, boolean working) {
         if (row == null) {
             return List.of();
         }
@@ -656,10 +838,20 @@ public class ShiftNarrativeService {
         return ids.isEmpty() ? Map.of() : reads.userNames(ids);
     }
 
+    /**
+     * Both shapes travel: {@code items} for anything written since V189,
+     * {@code kind}/{@code body} for the rows that predate it. Never both — so
+     * readers fall back on the pair only when {@code items} is null.
+     */
     private static ShiftNarrativeDto toDto(ShiftNarrative n, Map<UUID, String> actorNames,
                                            boolean detached) {
+        List<ShiftNarrativeDto.NarrativeItemDto> items = n.getItems() == null ? null
+                : n.getItems().stream()
+                        .map(i -> new ShiftNarrativeDto.NarrativeItemDto(i.kind().name(), i.text()))
+                        .toList();
         return new ShiftNarrativeDto(n.getId(), n.getBaselinePillarId(), n.getDistancePillarId(),
-                n.getPillarNameSnapshot(), n.getKind().name(), n.getBody(), n.getClosingAction(),
+                n.getPillarNameSnapshot(), items,
+                n.getKind() == null ? null : n.getKind().name(), n.getBody(), n.getClosingAction(),
                 n.isDecline(), detached,
                 n.getBandKey(), n.getStatus().name(), n.getGeneratedAt(),
                 n.getApprovedBy(), nameOf(actorNames, n.getApprovedBy()), n.getApprovedAt(),

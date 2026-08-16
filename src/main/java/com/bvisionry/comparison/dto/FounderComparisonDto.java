@@ -36,7 +36,23 @@ public record FounderComparisonDto(
          * §6 / the prototype's dashed placeholder) without a single unapproved
          * word crossing the wire.
          */
-        int draftNarrativeCount) {
+        int draftNarrativeCount,
+        /**
+         * The member-level growth summary (spec §3) — the APPROVED content or
+         * null. Same one-way gate as {@code narratives}: this DTO is the
+         * member's payload, so a draft cannot reach it. Staff read the draft
+         * through the separate {@code /summary} review endpoints.
+         *
+         * <p>Legacy paragraph only: everything generated since V193 arrives in
+         * {@code growthSummaryItems}. Exactly one of the two is populated.
+         */
+        String growthSummary,
+        /**
+         * The APPROVED overall breakdown (V193) — the same five kinds the
+         * per-pillar narratives carry, merged across pillars. Null on a
+         * pre-V193 summary (read {@code growthSummary}).
+         */
+        List<ShiftNarrativeDto.NarrativeItemDto> growthSummaryItems) {
 
     /**
      * A pillar row. {@code state} is MAPPED / NEWLY_MEASURED / NOT_REMEASURED —

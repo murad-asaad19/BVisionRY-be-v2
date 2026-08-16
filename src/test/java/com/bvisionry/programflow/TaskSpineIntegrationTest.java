@@ -736,7 +736,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         void nonLessonTasksRejectFormFields_andLiveNeedsARef() {
             assertThatThrownBy(() -> saveTask(courseTaskId,
                     t -> new TaskUpsert(t.id(), "Course task", null, ProgramTaskStatus.LIVE,
-                            false, ProgramTaskType.COURSE, courseId, null,
+                            false, ProgramTaskType.COURSE, courseId, null, List.of(),
                             List.of(new com.bvisionry.programflow.dto.FieldUpsert(null,
                                     com.bvisionry.programflow.domain.FieldType.SHORT, false,
                                     Map.of())))))
@@ -745,7 +745,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
                     .hasMessageContaining("form fields");
             assertThatThrownBy(() -> saveTask(courseTaskId,
                     t -> new TaskUpsert(t.id(), "Course task", null, ProgramTaskStatus.LIVE,
-                            false, ProgramTaskType.COURSE, null, null, List.of())))
+                            false, ProgramTaskType.COURSE, null, null, List.of(), List.of())))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("Course task")
                     .hasMessageContaining("before publishing it");
@@ -756,7 +756,8 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         void aBogusReference_isRejected() {
             assertThatThrownBy(() -> saveTask(courseTaskId,
                     t -> new TaskUpsert(t.id(), "Course task", null, ProgramTaskStatus.LIVE,
-                            false, ProgramTaskType.COURSE, UUID.randomUUID(), null, List.of())))
+                            false, ProgramTaskType.COURSE, UUID.randomUUID(), null, List.of(),
+                            List.of())))
                     .isInstanceOf(BadRequestException.class)
                     .hasMessageContaining("not found");
         }
@@ -781,7 +782,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         private java.util.function.UnaryOperator<TaskUpsert> assessment(String name, UUID refId,
                 MilestoneRole role) {
             return t -> new TaskUpsert(t.id(), name, null, ProgramTaskStatus.LIVE, false,
-                    ProgramTaskType.ASSESSMENT, refId, role, List.of());
+                    ProgramTaskType.ASSESSMENT, refId, role, List.of(), List.of());
         }
     }
 
@@ -845,7 +846,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         void droppingTheRoleClearsThatSide() {
             saveTask(baselineTaskId, t -> new TaskUpsert(t.id(), "Just an assessment", null,
                     ProgramTaskStatus.LIVE, false, ProgramTaskType.ASSESSMENT, pipelineId,
-                    MilestoneRole.CHECKIN, List.of()));
+                    MilestoneRole.CHECKIN, List.of(), List.of()));
             assertThat(pair()).containsExactly(null, null);
         }
 
@@ -893,7 +894,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
         private java.util.function.UnaryOperator<TaskUpsert> assessment(String name, UUID refId,
                 MilestoneRole role) {
             return t -> new TaskUpsert(t.id(), name, null, ProgramTaskStatus.LIVE, false,
-                    ProgramTaskType.ASSESSMENT, refId, role, List.of());
+                    ProgramTaskType.ASSESSMENT, refId, role, List.of(), List.of());
         }
 
         /** The whole board minus one task — the builder's delete. */

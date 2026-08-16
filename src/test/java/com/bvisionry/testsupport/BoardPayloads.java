@@ -58,7 +58,7 @@ public final class BoardPayloads {
 
     public static TaskUpsert asUpsert(TaskDto t) {
         return new TaskUpsert(t.id(), t.name(), t.dueDate(), t.status(), t.aiDraft(),
-                t.taskType(), t.refId(), t.milestoneRole(),
+                t.taskType(), t.refId(), t.milestoneRole(), t.pillarIds(),
                 t.fields().stream()
                         .map(f -> new FieldUpsert(f.id(), f.type(), f.required(), f.config()))
                         .toList());

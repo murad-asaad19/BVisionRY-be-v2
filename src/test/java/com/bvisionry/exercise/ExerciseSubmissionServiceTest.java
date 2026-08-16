@@ -135,6 +135,19 @@ class ExerciseSubmissionServiceTest {
         assertThat(submission.getReviewedAt()).isNotNull();
     }
 
+    @Test
+    void overrideRows_writesCellsWithoutReopeningReview() {
+        SaveExerciseRowsRequest request = new SaveExerciseRowsRequest(List.of(
+                new ExerciseRowPayload(row.getId(), Map.of(columnId.toString(), "admin value"))));
+
+        service.overrideRows(submission, request);
+
+        assertThat(row.getCells()).containsEntry(columnId.toString(), "admin value");
+        // The admin's own edit must not push the sheet back into the queue.
+        assertThat(submission.getStatus()).isEqualTo(ExerciseSubmissionStatus.REVIEWED);
+        assertThat(submission.getReviewedAt()).isNotNull();
+    }
+
     // Published, not called directly: see ExerciseSubmissionService.eventPublisher's
     // field comment. ProgramFlowPushHandler turns this into the org-admin push AND,
     // new in this pass, the coach-of-this-learner push (redesign spec §2.2).

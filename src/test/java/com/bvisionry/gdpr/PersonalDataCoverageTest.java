@@ -155,6 +155,13 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // fact that the narrative was approved before the founder saw it.
             "shift_narratives.user_id", "shift_narratives.approved_by",
             "shift_narratives.edited_by",
+            // member_growth_summaries (V190, spec §3): the same decision as
+            // shift_narratives, for the same reason — the summary is AI prose
+            // about that founder alone, so user_id CASCADEs and it is exported
+            // as growth_summaries; approved_by / edited_by are SET NULL reviewer
+            // attributions on the ORG's record.
+            "member_growth_summaries.user_id", "member_growth_summaries.approved_by",
+            "member_growth_summaries.edited_by",
             "survey_responses.respondent_user_id", "surveys.created_by",
             "upgrade_requests.requested_by", "users.invited_by",
             "workshop_task_submissions.user_id", "workshop_team_members.user_id");

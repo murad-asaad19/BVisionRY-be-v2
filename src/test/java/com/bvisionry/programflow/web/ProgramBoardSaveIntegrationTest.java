@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
@@ -70,12 +71,16 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
     @Autowired private OrganizationRepository orgs;
     @Autowired private UserRepository users;
     @Autowired private EntityManager entityManager;
+    @Autowired private JdbcTemplate jdbc;
 
     private User member;
     private UUID cohortId;
     private UUID moduleId;
     private UUID keptTaskId;
     private UUID doomedTaskId;
+    private UUID baselinePipelineId;
+    private UUID distancePipelineId;
+    private int pillarOrder;
 
     @BeforeEach
     void seed() {
@@ -120,7 +125,7 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static TaskUpsert task(UUID id, String name, ProgramTaskStatus status) {
         return new TaskUpsert(id, name, null, status, false,
-                ProgramTaskType.LESSON, null, null, List.of());
+                ProgramTaskType.LESSON, null, null, List.of(), List.of());
     }
 
     private static ModuleUpsert module(UUID id, String name, List<TaskUpsert> tasks) {
@@ -171,7 +176,7 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
                 module(newModuleId, "Week 2", List.of(
                         task(keptTaskId, "Kept task, moved", ProgramTaskStatus.LIVE),
                         new TaskUpsert(newTaskId, "Brand new", null, ProgramTaskStatus.DRAFT,
-                                false, ProgramTaskType.LESSON, null, null,
+                                false, ProgramTaskType.LESSON, null, null, List.of(),
                                 List.of(new FieldUpsert(newFieldId, FieldType.SHORT, true,
                                         Map.of("question", "What changed?")))))))));
 
@@ -208,7 +213,7 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
         BoardResponse before = adminService.getBoard(cohortId);
         adminService.saveBoard(cohortId, BoardPayloads.edit(before, keptTaskId,
                 t -> new TaskUpsert(t.id(), t.name(), t.dueDate(), t.status(), t.aiDraft(),
-                        t.taskType(), t.refId(), t.milestoneRole(),
+                        t.taskType(), t.refId(), t.milestoneRole(), t.pillarIds(),
                         List.of(new FieldUpsert(null, FieldType.LONG, true,
                                 Map.of("question", "Why?"))))));
 
@@ -301,7 +306,7 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
 
         SaveBoardRequest retype = BoardPayloads.edit(board(), keptTaskId,
                 t -> new TaskUpsert(t.id(), "Now a course", null, ProgramTaskStatus.DRAFT,
-                        false, ProgramTaskType.COURSE, null, null, List.of()));
+                        false, ProgramTaskType.COURSE, null, null, List.of(), List.of()));
         assertThatThrownBy(() -> adminService.saveBoard(cohortId, retype))
                 .isInstanceOf(IllegalOperationException.class)
                 .hasMessageContaining("Still a lesson")
@@ -326,7 +331,7 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
     void save_rejectsATaskTheTypedSpineForbids() {
         SaveBoardRequest req = BoardPayloads.edit(adminService.getBoard(cohortId), keptTaskId,
                 t -> new TaskUpsert(t.id(), "Unlinked course", null, ProgramTaskStatus.LIVE, false,
-                        ProgramTaskType.COURSE, null, null, List.of()));
+                        ProgramTaskType.COURSE, null, null, List.of(), List.of()));
 
         assertThatThrownBy(() -> adminService.saveBoard(cohortId, req))
                 .isInstanceOf(BadRequestException.class)
@@ -378,7 +383,104 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
         // DRAFT + no ref: the structural rules allow an unlinked draft, which
         // keeps this case about the milestone pair and nothing else.
         return new TaskUpsert(id, name, null, ProgramTaskStatus.DRAFT, false,
-                ProgramTaskType.ASSESSMENT, null, role, List.of());
+                ProgramTaskType.ASSESSMENT, null, role, List.of(), List.of());
+    }
+
+    /* ---------------------------------------------------------- pillar tags */
+
+    /**
+     * Spec §1: a task carries the DISTANCE pillar ids it grows, tagged upfront
+     * in the builder. The save persists them and the board reads them back —
+     * and, being a set on a snapshot payload, an empty list clears them.
+     */
+    @Test
+    void save_roundTripsPillarTagsAndClearsThemWhenThePayloadDrops() {
+        UUID pillar = mapPillarPair("Vision");
+        UUID other = mapPillarPair("Resilience");
+
+        adminService.saveBoard(cohortId, BoardPayloads.edit(adminService.getBoard(cohortId),
+                keptTaskId, t -> tagged(t, List.of(pillar, other))));
+        assertThat(taskOf(board(), keptTaskId).pillarIds())
+                .containsExactlyInAnyOrder(pillar, other);
+
+        adminService.saveBoard(cohortId, BoardPayloads.edit(board(), keptTaskId,
+                t -> tagged(t, List.of())));
+        assertThat(taskOf(board(), keptTaskId).pillarIds()).isEmpty();
+    }
+
+    /** A pipeline assessment is pillar-linked through its pipeline — never tagged. */
+    @Test
+    void save_refusesPillarTagsOnAnAssessmentTask() {
+        UUID pillar = mapPillarPair("Vision");
+        BoardResponse before = adminService.getBoard(cohortId);
+
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId, BoardPayloads.edit(before,
+                keptTaskId, t -> tagged(assessment(t.id(), "Distance check", MilestoneRole.DISTANCE),
+                        List.of(pillar)))))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("Distance check")
+                .hasMessageContaining("through its pipeline");
+        assertThat(taskOf(board(), keptTaskId).pillarIds()).isEmpty();
+    }
+
+    /** A tag must name one of the cohort's OWN mapped pairs, or no narrative can read it. */
+    @Test
+    void save_refusesAPillarTagTheCohortDoesNotMap() {
+        mapPillarPair("Vision");
+        BoardResponse before = adminService.getBoard(cohortId);
+
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId, BoardPayloads.edit(before,
+                keptTaskId, t -> tagged(t, List.of(UUID.randomUUID())))))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("Kept task")
+                .hasMessageContaining("pillar mapping");
+        assertThat(taskOf(board(), keptTaskId).pillarIds()).isEmpty();
+    }
+
+    private static TaskUpsert tagged(TaskUpsert t, List<UUID> pillarIds) {
+        return new TaskUpsert(t.id(), t.name(), t.dueDate(), t.status(), t.aiDraft(),
+                t.taskType(), t.refId(), t.milestoneRole(), pillarIds, t.fields());
+    }
+
+    /**
+     * One mapped baseline↔distance pair on this cohort — the pillars its board
+     * may be tagged with. Raw SQL, since the mapping belongs to the comparison
+     * slice and this test is only interested in what the board save makes of it.
+     */
+    private UUID mapPillarPair(String name) {
+        UUID distancePillar = insertPillar(distancePipeline(), name);
+        jdbc.update("""
+                INSERT INTO comparison_pillar_mappings
+                    (cohort_id, baseline_pipeline_id, distance_pipeline_id,
+                     baseline_pillar_id, distance_pillar_id, source)
+                VALUES (?, ?, ?, ?, ?, 'AUTO')
+                """, cohortId, baselinePipeline(), distancePipeline(),
+                insertPillar(baselinePipeline(), name), distancePillar);
+        return distancePillar;
+    }
+
+    private UUID baselinePipeline() {
+        return baselinePipelineId != null ? baselinePipelineId
+                : (baselinePipelineId = insertPipeline("Baseline FRI"));
+    }
+
+    private UUID distancePipeline() {
+        return distancePipelineId != null ? distancePipelineId
+                : (distancePipelineId = insertPipeline("Distance FRI"));
+    }
+
+    private UUID insertPipeline(String name) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("INSERT INTO pipelines (id, name, status, created_by) VALUES (?, ?, 'PUBLISHED', ?)",
+                id, name, member.getId());
+        return id;
+    }
+
+    private UUID insertPillar(UUID pipelineId, String name) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("INSERT INTO pillars (id, pipeline_id, name, display_order) VALUES (?, ?, ?, ?)",
+                id, pipelineId, name, pillarOrder++);
+        return id;
     }
 
     /* ------------------------------------------------- the builder placeholder */

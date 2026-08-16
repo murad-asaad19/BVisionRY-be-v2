@@ -173,6 +173,7 @@ public class BoardRestoreRepository {
         deleteModulesNotIn(cohortId, moduleIds(board));
         deleteFieldsNotIn(cohortId, fieldIds(board));
         replaceAudiences(board);
+        replacePillarTags(board);
     }
 
     private void upsertModules(UUID cohortId, List<ModuleUpsert> board) {
@@ -325,6 +326,31 @@ public class BoardRestoreRepository {
         batchUpdate("""
                 INSERT INTO program_module_members (module_id, user_id)
                 SELECT :moduleId, u.id FROM users u WHERE u.id = :userId
+                ON CONFLICT DO NOTHING
+                """, batch);
+    }
+
+    /**
+     * Pillar tags are a set too, so they are replaced wholesale like the
+     * audience. Only KEPT tasks are cleared — a task the payload dropped took
+     * its tags with it through the FK's cascade.
+     */
+    private void replacePillarTags(List<ModuleUpsert> board) {
+        jdbc.update("DELETE FROM program_task_pillars WHERE task_id IN (:taskIds)",
+                new MapSqlParameterSource("taskIds", withSentinel(taskIds(board))));
+
+        List<SqlParameterSource> batch = new ArrayList<>();
+        for (ModuleUpsert m : board) {
+            for (TaskUpsert t : m.tasks()) {
+                for (UUID pillarId : t.pillarIds()) {
+                    batch.add(new MapSqlParameterSource("taskId", t.id())
+                            .addValue("pillarId", pillarId));
+                }
+            }
+        }
+        batchUpdate("""
+                INSERT INTO program_task_pillars (task_id, pillar_id)
+                VALUES (:taskId, :pillarId)
                 ON CONFLICT DO NOTHING
                 """, batch);
     }

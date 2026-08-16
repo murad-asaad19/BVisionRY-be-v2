@@ -19,5 +19,7 @@ public record TaskDto(
         ProgramTaskType taskType,
         UUID refId,
         MilestoneRole milestoneRole,
+        /** Distance pillar ids this task grows (spec §1); empty when untagged. */
+        List<UUID> pillarIds,
         List<FieldDto> fields) {
 }

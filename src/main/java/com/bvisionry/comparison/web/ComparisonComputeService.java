@@ -56,6 +56,7 @@ public class ComparisonComputeService {
     private final ComparisonPillarMappingRepository mappingRepo;
     private final ComparisonMappingService mappingService;
     private final ShiftNarrativeService narratives;
+    private final MemberGrowthSummaryService growthSummaries;
     private final AuditLogger auditLogger;
     private final org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
@@ -141,6 +142,13 @@ public class ComparisonComputeService {
         int revertedNarratives = orgId == null
                 ? narratives.revertApprovalsForCohort(cohortId)
                 : narratives.revertApprovalsForCohortMembers(cohortId, members);
+        // The member-level summary (§3) is written FROM those narratives, so it
+        // returns to draft on exactly the same rule and through the same seam.
+        if (orgId == null) {
+            growthSummaries.revertApprovalsForCohort(cohortId);
+        } else {
+            growthSummaries.revertApprovalsForCohortMembers(cohortId, members);
+        }
         int recomputed = 0;
         for (UUID userId : members) {
             if (resolveSides(pair, userId).isEmpty()) {

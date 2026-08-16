@@ -104,7 +104,8 @@ public class FounderProfileReadRepository {
 
     public record ProgramTaskRow(UUID taskId, String taskName, UUID cohortId, String cohortName,
                                  String moduleName, LocalDate dueDate, String taskType, UUID refId,
-                                 String milestoneRole, boolean done, String status, Instant savedAt,
+                                 String milestoneRole, Instant cohortLaunchedAt, boolean done,
+                                 String status, Instant savedAt,
                                  Instant submittedAt, UUID surveyResponseId,
                                  Instant surveySubmittedAt) {}
 
@@ -128,7 +129,7 @@ public class FounderProfileReadRepository {
         return jdbc.query("""
                 SELECT t.id, t.name AS task_name, c.id AS cohort_id, c.name AS cohort_name,
                        m.name AS module_name,
-                       t.due_date, t.task_type, t.ref_id, t.milestone_role,
+                       t.due_date, t.task_type, t.ref_id, t.milestone_role, c.launched_at,
                        COALESCE(%1$s, FALSE) AS done,
                        ps.status, ps.saved_at, ps.submitted_at,
                        sr.id AS survey_response_id, sr.submitted_at AS survey_submitted_at
@@ -149,7 +150,8 @@ public class FounderProfileReadRepository {
                         rs.getString("cohort_name"),
                         rs.getString("module_name"), rs.getObject("due_date", LocalDate.class),
                         rs.getString("task_type"), rs.getObject("ref_id", UUID.class),
-                        rs.getString("milestone_role"), rs.getBoolean("done"),
+                        rs.getString("milestone_role"), instant(rs, "launched_at"),
+                        rs.getBoolean("done"),
                         rs.getString("status"), instant(rs, "saved_at"), instant(rs, "submitted_at"),
                         rs.getObject("survey_response_id", UUID.class),
                         instant(rs, "survey_submitted_at")));

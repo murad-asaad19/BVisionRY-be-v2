@@ -79,6 +79,23 @@ class SsoHandshakeRateLimitFilterTest {
     }
 
     /**
+     * The filter must match the DECODED path, exactly as MVC routes it. A
+     * percent-encoded spelling ({@code /%73tart}) or a matrix-parameter suffix
+     * ({@code /start;a=b}) still reaches the {@code /start} handler — a raw
+     * {@code getRequestURI()} comparison would let it through uncounted.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "/api/auth/sso/handshake/%73tart",
+            "/api/auth/sso/handshake/start;a=b",
+    })
+    void aPercentEncodedDiscoveryPathIsStillCounted(String uri) throws Exception {
+        filter.doFilter(request(uri), response, chain);
+
+        verify(rateLimitService).checkAuthLimit("203.0.113.7");
+    }
+
+    /**
      * Every hop the customer's own users traverse, all of them exempt. These arrive
      * from the shared corporate egress address; a shared per-IP budget across them
      * is an outage, not a control.

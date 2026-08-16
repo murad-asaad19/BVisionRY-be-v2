@@ -4,6 +4,7 @@ import com.bvisionry.aiconfig.service.RateLimitService;
 import com.bvisionry.common.exception.RateLimitExceededException;
 import com.bvisionry.common.web.ClientIpResolver;
 import com.bvisionry.common.web.ProblemDetailResponseWriter;
+import com.bvisionry.common.web.RequestPaths;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -30,8 +31,10 @@ import java.io.IOException;
  * login budget turns "the office signs in on Monday morning" into a self-inflicted
  * outage — and the refusal would land mid-handshake, after the identity provider
  * has already authenticated them. Those hops need no ceiling of their own:
- * {@code OidcClientRegistrations} caches discovery, so they are no longer an
- * outbound amplifier, and each one is bounded by the IdP round trip itself.
+ * {@code OidcClientRegistrations} caches discovery — BOTH outcomes, and
+ * single-flights the probe, so a down IdP cannot be used as an outbound
+ * amplifier or a worker-pool pin — and each one is bounded by the IdP round
+ * trip itself.
  *
  * <p><b>Why it lives in {@code config}.</b> {@link RateLimitService} is in the
  * {@code aiconfig} feature and {@code auth.sso} may not grow a new edge to it
@@ -50,7 +53,7 @@ public class SsoHandshakeRateLimitFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        if (!DISCOVERY_PATH.equals(request.getRequestURI())) {
+        if (!DISCOVERY_PATH.equals(RequestPaths.decoded(request))) {
             filterChain.doFilter(request, response);
             return;
         }

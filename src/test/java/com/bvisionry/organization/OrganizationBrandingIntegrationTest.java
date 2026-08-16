@@ -158,9 +158,9 @@ class OrganizationBrandingIntegrationTest extends AbstractPostgresIntegrationTes
      * the predicate this ticket added would be dead weight as far as the suite
      * knows.
      *
-     * <p>The two layers are distinguishable by their bodies: the interceptor
-     * writes a {@code message} field, Spring Security writes an RFC-7807
-     * ProblemDetail with {@code "title":"Forbidden"}. Asserting the shape pins
+     * <p>Both layers now emit RFC-7807 ProblemDetail, but they are still
+     * distinguishable by the {@code detail} text: the interceptor's names the
+     * organization membership rule, Spring Security's does not. Asserting it pins
      * WHICH layer answered; the companion test below pins that the annotation
      * answers when the interceptor cannot.
      */
@@ -170,12 +170,12 @@ class OrganizationBrandingIntegrationTest extends AbstractPostgresIntegrationTes
 
         mockMvc.perform(get("/api/organizations/" + other.getId() + "/branding"))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.message", containsString("do not belong to this organization")));
+                .andExpect(jsonPath("$.detail", containsString("do not belong to this organization")));
         mockMvc.perform(put("/api/organizations/" + other.getId() + "/branding")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body("#0a5cff", null)))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.message", containsString("do not belong to this organization")));
+                .andExpect(jsonPath("$.detail", containsString("do not belong to this organization")));
     }
 
     /**
@@ -219,30 +219,19 @@ class OrganizationBrandingIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     /**
-     * THE FALSIFIER FOR THE READ PREDICATE, and it needs a path the interceptor
-     * cannot see.
+     * A lenient-form org id ({@code 0-0-0-0-1} resolves to
+     * {@code 00000000-0000-0000-0000-000000000001} via {@code UUID.fromString})
+     * is refused 403 for an out-of-org caller.
      *
-     * <p>{@code OrgAccessInterceptor} matches the canonical 8-4-4-4-12 UUID shape.
-     * {@code UUID.fromString} is LENIENT and accepts short group
-     * forms, so {@code 0-0-0-0-1} is a valid path variable that resolves to
-     * {@code 00000000-0000-0000-0000-000000000001} while never matching that
-     * pattern: the interceptor returns "not an org-scoped request" and the
-     * {@code @PreAuthorize} expression is the ONLY gate left.
-     *
-     * <p>So this pins the predicate itself. With it, an out-of-org caller is
-     * refused (403) before the service is ever entered; widen the annotation to
-     * {@code isAuthenticated()} or {@code permitAll()} and the handler runs,
-     * reaching a lookup that answers 404 — a different status, which is how the
-     * mutant dies. Were such an org to exist, the widened annotation would
-     * serve its branding to a foreigner.
-     *
-     * <p>That the interceptor abstains here is a PRE-EXISTING platform-wide gap and is
-     * still open after the pattern was tightened to the canonical shape: the tightening
-     * closed the OPPOSITE direction (over-match), not this one. Branding is closed
-     * regardless, because it carries the predicate — which is the point.
+     * <p>HISTORY: this path used to slip past {@code OrgAccessInterceptor}'s
+     * canonical-shape regex, making it the falsifier for the {@code @PreAuthorize}
+     * read predicate. The interceptor now admits exactly what the binder resolves,
+     * so it answers first and this is no longer a predicate falsifier — the
+     * predicate itself stays pinned by the same-org/other-org tests above. What
+     * this pins now: no spelling of an org id skips the tenancy fence.
      */
     @Test
-    void theReadPredicateRefusesOutOfOrgOnAPathTheInterceptorDoesNotMatch() throws Exception {
+    void theReadPathRefusesOutOfOrgEvenOnALenientUuidSpelling() throws Exception {
         TestAuthentication.authenticateAsMember(userRepository, own);
 
         mockMvc.perform(get("/api/organizations/0-0-0-0-1/branding"))
@@ -250,9 +239,9 @@ class OrganizationBrandingIntegrationTest extends AbstractPostgresIntegrationTes
                 .andExpect(jsonPath("$.title", is("Forbidden")));
     }
 
-    /** The same path, same caller, WRITING — the write predicate's falsifier. */
+    /** The same path, same caller, WRITING — same fence, see the read test's javadoc. */
     @Test
-    void theWritePredicateRefusesOutOfOrgOnAPathTheInterceptorDoesNotMatch() throws Exception {
+    void theWritePathRefusesOutOfOrgEvenOnALenientUuidSpelling() throws Exception {
         TestAuthentication.authenticateAsOrgAdmin(userRepository, own);
 
         mockMvc.perform(put("/api/organizations/0-0-0-0-1/branding")
@@ -270,8 +259,9 @@ class OrganizationBrandingIntegrationTest extends AbstractPostgresIntegrationTes
      * of {@code preHandle}. {@code GlobalExceptionHandler} has no
      * {@code IllegalArgumentException} handler, so a client sending a malformed org id
      * got a 500 — an unexpected-error body, and an error event recorded — for what is a
-     * bad request. The canonical-shape pattern abstains instead, and the
-     * {@code @PathVariable UUID} binder answers 400 via {@code handleTypeMismatch}.
+     * bad request. The interceptor now catches its own {@code UUID.fromString}
+     * failure and abstains instead, and the {@code @PathVariable UUID} binder
+     * answers 400 via {@code handleTypeMismatch}.
      *
      * <p>Only an end-to-end test can see this: the interceptor unit test can prove
      * preHandle no longer throws, but 500-vs-400 is decided in the dispatcher.

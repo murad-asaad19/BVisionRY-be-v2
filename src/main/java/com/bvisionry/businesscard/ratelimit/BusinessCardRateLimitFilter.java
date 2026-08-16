@@ -4,6 +4,7 @@ import com.bvisionry.aiconfig.service.RateLimitService;
 import com.bvisionry.common.exception.RateLimitExceededException;
 import com.bvisionry.common.web.ClientIpResolver;
 import com.bvisionry.common.web.ProblemDetailResponseWriter;
+import com.bvisionry.common.web.RequestPaths;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -39,7 +40,7 @@ public class BusinessCardRateLimitFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         if (!"GET".equalsIgnoreCase(request.getMethod())
-                || !MATCHER.match(PATTERN, request.getRequestURI())) {
+                || !MATCHER.match(PATTERN, RequestPaths.decoded(request))) {
             filterChain.doFilter(request, response);
             return;
         }

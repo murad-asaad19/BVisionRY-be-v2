@@ -10,9 +10,13 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.client.registration.ClientRegistrations;
 import org.springframework.stereotype.Component;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Database-backed {@link ClientRegistrationRepository} — the multi-tenant OIDC
@@ -44,8 +48,8 @@ public class OidcClientRegistrations implements ClientRegistrationRepository {
     private final SecretEncryptionService secretCipher;
 
     /**
-     * Discovery result per registration, invalidated by the row's own
-     * {@code updatedAt}.
+     * Discovery result per registration — BOTH outcomes — invalidated by the row's
+     * own {@code updatedAt}.
      *
      * <p>This is a MITIGATION, not an optimisation. The handshake is anonymous, so
      * without it every unauthenticated request to
@@ -53,7 +57,13 @@ public class OidcClientRegistrations implements ClientRegistrationRepository {
      * URIs at the customer's identity provider with 30-second connect/read
      * timeouts: a ~3x traffic amplifier pointed at a third party we do not own, and
      * a way to tie up a Tomcat worker for 30 seconds per request. Caching turns the
-     * first hit into the only hit.
+     * first hit into the only hit — and that must hold while the IdP is DOWN too,
+     * or an outage turns every request back into a 30-second probe. A FAILURE is
+     * therefore cached as well, but only for {@link #FAILURE_TTL}, so a transient
+     * outage (or a rotated encryption key) is never pinned until someone edits the
+     * row; and the probe itself is single-flighted per registration, so at most one
+     * worker is ever parked on a given IdP. This is what makes
+     * {@code SsoHandshakeRateLimitFilter}'s exemption of the handshake hops safe.
      *
      * <p>Bounded by the number of registrations: keyed on registrationId, so an
      * edit REPLACES the entry rather than adding one. {@code updatedAt} is what
@@ -62,7 +72,29 @@ public class OidcClientRegistrations implements ClientRegistrationRepository {
      */
     private final Map<String, Discovered> discoveryCache = new ConcurrentHashMap<>();
 
-    private record Discovered(Instant updatedAt, ClientRegistration registration) {
+    /** One lock per registration: the single-flight gate around the outbound probe. */
+    private final Map<String, ReentrantLock> probes = new ConcurrentHashMap<>();
+
+    /** How long a FAILED probe is believed before the issuer is tried again. */
+    private static final Duration FAILURE_TTL = Duration.ofSeconds(30);
+
+    private Clock clock = Clock.systemUTC();
+
+    /** Test seam, mirroring {@code RateLimitService}. */
+    void setClock(Clock clock) {
+        this.clock = clock;
+    }
+
+    /** {@code registration} is null for a cached FAILURE; {@code probedAt} bounds its life. */
+    private record Discovered(Instant updatedAt, Instant probedAt, ClientRegistration registration) {
+    }
+
+    /** Is this cache entry still the answer for {@code row}, at {@code now}? */
+    private static boolean usable(Discovered cached, SsoRegistration row, Instant now) {
+        return cached != null
+                && Objects.equals(cached.updatedAt(), row.getUpdatedAt())
+                && (cached.registration() != null
+                        || cached.probedAt().isAfter(now.minus(FAILURE_TTL)));
     }
 
     /**
@@ -96,33 +128,55 @@ public class OidcClientRegistrations implements ClientRegistrationRepository {
             // cached registration so disabling a row takes effect immediately rather
             // than lasting until its next edit.
             discoveryCache.remove(registrationId);
+            probes.remove(registrationId);
             return null;
         }
 
+        Instant now = Instant.now(clock);
         Discovered cached = discoveryCache.get(registrationId);
-        if (cached != null && cached.updatedAt().equals(row.getUpdatedAt())) {
+        if (usable(cached, row, now)) {
             return cached.registration();
         }
 
-        try {
-            ClientRegistration built = ClientRegistrations.fromIssuerLocation(row.getOidcIssuerUri())
-                    .registrationId(registrationId)
-                    .clientId(row.getOidcClientId())
-                    .clientSecret(clientSecretOf(row))
-                    .redirectUri(redirectUri(frontendUrls, registrationId))
-                    .scope("openid", "email", "profile")
-                    .clientName(row.getDisplayName())
-                    .build();
-            discoveryCache.put(registrationId, new Discovered(row.getUpdatedAt(), built));
-            return built;
-        } catch (RuntimeException notUsable) {
-            // Deliberately NOT cached: a transient outage at the IdP — or an encryption
-            // key that has been rotated out from under the stored secret — must not pin
-            // a failure until someone edits the row. The message is the cause's own and
-            // never the secret; SecretEncryptionService reports the key VERSION only.
-            log.error("Could not build the OIDC client registration for {} at {}: {}",
-                    registrationId, row.getOidcIssuerUri(), notUsable.getMessage());
+        // ponytail: tryLock, not lock — during a cold start concurrent callers get a
+        // null (login-page error, self-healing on retry) instead of queueing on the
+        // IdP round trip; wait with a short timeout if cold-start contention bites.
+        ReentrantLock probe = probes.computeIfAbsent(registrationId, k -> new ReentrantLock());
+        if (!probe.tryLock()) {
+            log.warn("OIDC discovery for {} already in flight — answering null rather than queueing", registrationId);
             return null;
+        }
+        try {
+            // The winner may have just filled the cache while this caller raced it.
+            cached = discoveryCache.get(registrationId);
+            if (usable(cached, row, now)) {
+                return cached.registration();
+            }
+            try {
+                ClientRegistration built = ClientRegistrations.fromIssuerLocation(row.getOidcIssuerUri())
+                        .registrationId(registrationId)
+                        .clientId(row.getOidcClientId())
+                        .clientSecret(clientSecretOf(row))
+                        .redirectUri(redirectUri(frontendUrls, registrationId))
+                        .scope("openid", "email", "profile")
+                        .clientName(row.getDisplayName())
+                        .build();
+                discoveryCache.put(registrationId, new Discovered(row.getUpdatedAt(), now, built));
+                return built;
+            } catch (RuntimeException notUsable) {
+                // Cached briefly (FAILURE_TTL): a transient outage at the IdP — or an
+                // encryption key rotated out from under the stored secret — must not pin
+                // a failure until someone edits the row, but it also must not be re-probed
+                // by every anonymous request while it lasts. The message is the cause's
+                // own and never the secret; SecretEncryptionService reports the key
+                // VERSION only.
+                log.error("Could not build the OIDC client registration for {} at {}: {}",
+                        registrationId, row.getOidcIssuerUri(), notUsable.getMessage());
+                discoveryCache.put(registrationId, new Discovered(row.getUpdatedAt(), now, null));
+                return null;
+            }
+        } finally {
+            probe.unlock();
         }
     }
 }

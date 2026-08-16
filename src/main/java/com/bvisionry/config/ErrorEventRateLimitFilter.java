@@ -4,6 +4,7 @@ import com.bvisionry.aiconfig.service.RateLimitService;
 import com.bvisionry.common.exception.RateLimitExceededException;
 import com.bvisionry.common.web.ClientIpResolver;
 import com.bvisionry.common.web.ProblemDetailResponseWriter;
+import com.bvisionry.common.web.RequestPaths;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -49,7 +50,7 @@ public class ErrorEventRateLimitFilter extends OncePerRequestFilter {
         // POST only: the GET on this path is the SUPER_ADMIN read and is already
         // gated by authentication + @PreAuthorize.
         if (!"POST".equalsIgnoreCase(request.getMethod())
-                || !PATH.equals(request.getRequestURI())) {
+                || !PATH.equals(RequestPaths.decoded(request))) {
             filterChain.doFilter(request, response);
             return;
         }

@@ -344,6 +344,11 @@ public class RateLimitService implements LoginBackoffPort {
      * Refuse a password login whose account is currently backing off. Read-only —
      * it never counts the attempt; only {@link #recordLoginFailure} does.
      *
+     * <p>Called only AFTER the credential check has rejected the attempt: the backoff
+     * throttles wrong guesses and must never refuse a proven-correct password, or an
+     * attacker who knows the address could keep a block armed and lock the owner out
+     * — the hard lockout this section's design notes reject.
+     *
      * @param emailKey the submitted email, lowercased and trimmed, existing or not
      */
     public void checkLoginBackoff(String emailKey) {

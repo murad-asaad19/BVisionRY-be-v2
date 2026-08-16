@@ -3,11 +3,14 @@ package com.bvisionry.organization;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.security.OrgScope;
+import com.bvisionry.common.web.ProblemDetailResponseWriter;
+import com.bvisionry.common.web.RequestPaths;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -37,31 +40,35 @@ public class OrgAccessInterceptor implements HandlerInterceptor {
      */
     private final ObjectProvider<OrgScope> orgScope;
 
-    // Case-insensitive: UUIDs may arrive upper- or mixed-case in the path. A
-    // lowercase-only class let an uppercase-UUID request slip past the membership
-    // check entirely (the path no longer matched, so preHandle returned true).
-    //
-    // Canonical 8-4-4-4-12 SHAPE, not a 36-character COUNT. The previous
-    // `[A-Fa-f0-9-]{36}` matched 36 dashes, which then threw IllegalArgumentException
-    // out of UUID.fromString below — GlobalExceptionHandler has no
-    // IllegalArgumentException handler, so a malformed path answered 500 instead of
-    // 400. Not matching hands the segment to Spring's @PathVariable binder, whose
-    // MethodArgumentTypeMismatchException is mapped to 400.
-    //
-    // Deliberately still NARROWER than UUID.fromString, which also accepts short
-    // group forms such as "0-0-0-0-1". Those skip this interceptor and are left to
-    // the endpoint's own @PreAuthorize — OrganizationBrandingIntegrationTest uses
-    // exactly that path to falsify its predicates.
+    // The interceptor must see every path the @PathVariable binder can resolve to
+    // an org id, so the admission test IS the binder's: take the first segment as-is
+    // and parse it with the same UUID.fromString the binder uses. Earlier attempts
+    // to pre-filter with a shape regex were strictly narrower than UUID.fromString
+    // (which also accepts short-group forms like "0-0-0-0-1" and truncates
+    // over-long groups in 36-char spellings), so a non-canonical spelling reached
+    // the handler with a REAL org id while this tenancy check silently abstained.
+    // A segment UUID.fromString rejects (e.g. 36 dashes) abstains here and is
+    // answered 400 by the binder's MethodArgumentTypeMismatchException mapping —
+    // never a 500 out of this interceptor.
     private static final Pattern ORG_PATH_PATTERN = Pattern.compile(
-            "^/api/organizations/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(/.*)?$");
+            "^/api/organizations/([^/]+)(/.*)?$");
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response,
                               Object handler) throws Exception {
-        String path = request.getRequestURI();
+        // Decoded like MVC matches it — a percent-encoded spelling of an org path
+        // must not skip the tenancy check.
+        String path = RequestPaths.decoded(request);
         Matcher matcher = ORG_PATH_PATTERN.matcher(path);
 
         if (!matcher.matches()) return true; // Not an org-scoped request
+
+        UUID requestedOrgId;
+        try {
+            requestedOrgId = UUID.fromString(matcher.group(1));
+        } catch (IllegalArgumentException notAnOrgId) {
+            return true; // Not resolvable to an org id — the binder answers 400
+        }
 
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null || !(auth.getPrincipal() instanceof User user)) {
@@ -72,7 +79,6 @@ public class OrgAccessInterceptor implements HandlerInterceptor {
         // cross-feature edges per origin method + target, and a second
         // occurrence of the same call would register as a new violation.
         UserRole role = user.getRole();
-        UUID requestedOrgId = UUID.fromString(matcher.group(1));
         UUID userOrgId = user.getOrganization() != null ? user.getOrganization().getId() : null;
 
         // ONE tenancy predicate, owned by OrgScope — the same rule the
@@ -89,9 +95,8 @@ public class OrgAccessInterceptor implements HandlerInterceptor {
         if (!allowed) {
             log.warn("Org access denied: user {} (org {}) tried to access org {}",
                     user.getId(), userOrgId, requestedOrgId);
-            response.setContentType("application/json");
-            response.setStatus(403);
-            response.getWriter().write("{\"status\":403,\"message\":\"Access denied: you do not belong to this organization\"}");
+            ProblemDetailResponseWriter.write(response, HttpStatus.FORBIDDEN,
+                    "Access denied: you do not belong to this organization");
             return false;
         }
 

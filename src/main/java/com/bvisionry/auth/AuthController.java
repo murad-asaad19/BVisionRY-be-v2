@@ -81,6 +81,13 @@ public class AuthController {
      * is indistinguishable from a throttled real one. It is a decaying counter, never a
      * lock: see {@code RateLimitService}'s login-backoff section for why an admin-unlock
      * design would be a denial-of-service handed to the attacker.
+     *
+     * <p>The backoff is consulted only AFTER the credential check has REJECTED the
+     * attempt: it caps the rate of wrong guesses per address and can never refuse a
+     * proven-correct credential. Checking it up front would let anyone who knows an
+     * address keep a block armed and lock the account's owner out — the hard lockout
+     * this design explicitly rejects. The per-IP bucket above remains the ceiling on
+     * how fast an attacker reaches the credential check at all.
      */
     @AuthorizedInSecurityConfig("permitAll: pre-auth entry point - the credentials in the body are the authentication")
     @PostMapping("/login")
@@ -90,7 +97,6 @@ public class AuthController {
         rateLimitService.checkAuthLimit(clientIpResolver.resolve(httpRequest));
 
         String emailKey = request.email().toLowerCase().trim();
-        rateLimitService.checkLoginBackoff(emailKey);
         AuthResponse response;
         try {
             response = authService.login(request, contextOf(httpRequest));
@@ -100,6 +106,10 @@ public class AuthController {
             // their own credentials once the account/org is restored.
             throw e;
         } catch (AuthenticationException e) {
+            // Backoff check BEFORE recording, so wrong-password N answers 401 and
+            // wrong-password N+1 is the first 429 — the same wire behaviour as when
+            // the check ran up front, minus the owner-lockout.
+            rateLimitService.checkLoginBackoff(emailKey);
             rateLimitService.recordLoginFailure(emailKey);
             throw e;
         }

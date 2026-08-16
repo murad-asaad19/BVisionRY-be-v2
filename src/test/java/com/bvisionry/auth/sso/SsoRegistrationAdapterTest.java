@@ -17,8 +17,16 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
@@ -206,6 +214,152 @@ class SsoRegistrationAdapterTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    /**
+     * The finding this section pins: discovery caches BOTH outcomes. While a
+     * customer's IdP is down, every anonymous authorize request used to re-run
+     * discovery on its own worker with 30-second timeouts — the exact amplifier
+     * {@code SsoHandshakeRateLimitFilter}'s exemption of the handshake hops
+     * assumes cannot exist.
+     */
+    @Test
+    void aFailingIssuerIsProbedOnceNotOncePerRequest() throws IOException {
+        AtomicInteger hits = new AtomicInteger();
+        HttpServer server = discoveryServer(hits, new AtomicBoolean(false));
+        try {
+            stored(oidcRow(issuerOf(server)));
+            OidcClientRegistrations registrations =
+                    new OidcClientRegistrations(repository, frontendUrls, CIPHER);
+
+            assertThat(registrations.findByRegistrationId(REGISTRATION)).isNull();
+            // One findByRegistrationId may touch several well-known URIs; what must
+            // not happen is any FURTHER outbound traffic while the failure is fresh.
+            int probesForOneLookup = hits.get();
+            assertThat(probesForOneLookup).isPositive();
+
+            for (int i = 0; i < 4; i++) {
+                assertThat(registrations.findByRegistrationId(REGISTRATION)).isNull();
+            }
+            assertThat(hits.get()).isEqualTo(probesForOneLookup);
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    /** …but a failure is believed only briefly: the issuer recovering is picked up. */
+    @Test
+    void aFailedDiscoveryIsRetriedOnceItsShortTtlLapses() throws IOException {
+        AtomicBoolean healthy = new AtomicBoolean(false);
+        HttpServer server = discoveryServer(new AtomicInteger(), healthy);
+        try {
+            stored(oidcRow(issuerOf(server)));
+            OidcClientRegistrations registrations =
+                    new OidcClientRegistrations(repository, frontendUrls, CIPHER);
+            Instant base = Instant.now();
+            registrations.setClock(Clock.fixed(base, ZoneOffset.UTC));
+
+            assertThat(registrations.findByRegistrationId(REGISTRATION)).isNull();
+
+            healthy.set(true);
+            // Still inside the failure TTL: the cached failure answers, no re-probe.
+            assertThat(registrations.findByRegistrationId(REGISTRATION)).isNull();
+
+            registrations.setClock(Clock.fixed(base.plusSeconds(31), ZoneOffset.UTC));
+            assertThat(registrations.findByRegistrationId(REGISTRATION)).isNotNull();
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    /**
+     * Single-flight: while one worker is parked on the IdP round trip, a second
+     * caller answers null immediately instead of queueing behind it — at most ONE
+     * thread is ever pinned per identity provider.
+     */
+    @Test
+    void aSecondCallerDoesNotQueueBehindAnInFlightProbe() throws Exception {
+        CountDownLatch probeEntered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            probeEntered.countDown();
+            try {
+                release.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            exchange.sendResponseHeaders(500, -1);
+            exchange.close();
+        });
+        server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
+        server.start();
+        try {
+            stored(oidcRow(issuerOf(server)));
+            OidcClientRegistrations registrations =
+                    new OidcClientRegistrations(repository, frontendUrls, CIPHER);
+
+            Thread first = new Thread(() -> registrations.findByRegistrationId(REGISTRATION));
+            first.start();
+            assertThat(probeEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+            // The probe is in flight and holding the lock: this caller must not park.
+            long start = System.nanoTime();
+            assertThat(registrations.findByRegistrationId(REGISTRATION)).isNull();
+            assertThat(Duration.ofNanos(System.nanoTime() - start))
+                    .isLessThan(Duration.ofSeconds(2));
+
+            release.countDown();
+            first.join(TimeUnit.SECONDS.toMillis(10));
+            assertThat(first.isAlive()).isFalse();
+        } finally {
+            release.countDown();
+            server.stop(0);
+        }
+    }
+
+    private SsoRegistration oidcRow(String issuer) {
+        SsoRegistration registration = row(SsoRegistration.Protocol.OIDC);
+        registration.setOidcIssuerUri(issuer);
+        registration.setOidcClientId("client-abc");
+        registration.setOidcClientSecret(CIPHER.encrypt("shhh"));
+        return registration;
+    }
+
+    private static String issuerOf(HttpServer server) {
+        return "http://127.0.0.1:" + server.getAddress().getPort();
+    }
+
+    /** A loopback issuer that counts every request and answers 500 until healthy. */
+    private static HttpServer discoveryServer(AtomicInteger hits, AtomicBoolean healthy) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        String issuer = issuerOf(server);
+        server.createContext("/", exchange -> {
+            hits.incrementAndGet();
+            if (!healthy.get()) {
+                exchange.sendResponseHeaders(500, -1);
+                exchange.close();
+                return;
+            }
+            byte[] body = """
+                    {"issuer":"%s",
+                     "authorization_endpoint":"%s/authorize",
+                     "token_endpoint":"%s/token",
+                     "jwks_uri":"%s/jwks",
+                     "userinfo_endpoint":"%s/userinfo",
+                     "response_types_supported":["code"],
+                     "subject_types_supported":["public"],
+                     "id_token_signing_alg_values_supported":["RS256"]}
+                    """.formatted(issuer, issuer, issuer, issuer, issuer)
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(body);
+            }
+        });
+        server.start();
+        return server;
     }
 
     @Test

@@ -188,6 +188,24 @@ class AuthControllerLoginBackoffTest {
         assertThat(throttle(SUSPENDED_EMAIL).getResponse().getStatus()).isEqualTo(429);
     }
 
+    /**
+     * The backoff throttles wrong GUESSES, never the owner: it is evaluated only
+     * after the credential check has rejected the attempt. Were it checked up front,
+     * anyone who knows an address could keep a block armed forever and the owner's
+     * CORRECT password would be answered 429 — the hard lockout the design rejects.
+     */
+    @Test
+    void theOwnersCorrectPasswordSignsInEvenWhileTheAddressIsThrottled() throws Exception {
+        assertThat(throttle(REAL_EMAIL).getResponse().getStatus()).isEqualTo(429);
+
+        assertThat(login(REAL_EMAIL, GOOD_PASSWORD).getResponse().getStatus()).isEqualTo(200);
+
+        // …and the successful sign-in cleared the attacker's ladder: a full budget again.
+        for (int i = 0; i < 6; i++) {
+            assertThat(login(REAL_EMAIL, "after-" + i).getResponse().getStatus()).isEqualTo(401);
+        }
+    }
+
     @Test
     void throttlingOneAccountLeavesEveryOtherAccountSignable() throws Exception {
         throttle(GHOST_EMAIL);

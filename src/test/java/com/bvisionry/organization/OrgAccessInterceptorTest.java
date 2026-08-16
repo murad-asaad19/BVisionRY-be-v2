@@ -124,13 +124,11 @@ class OrgAccessInterceptorTest {
     }
 
     /**
-     * OVER-MATCH, the direction this pattern closes. 36 dashes is 36 characters of
-     * the old {@code [A-Fa-f0-9-]} class, so the old pattern MATCHED and
-     * {@code UUID.fromString} threw {@code IllegalArgumentException} straight out of
-     * {@code preHandle} — a 500, because {@code GlobalExceptionHandler} has no
-     * handler for it. Now the shape does not match, the interceptor abstains, and the
-     * request falls to Spring's {@code @PathVariable} binder, which is a 400.
-     * {@link OrganizationBrandingIntegrationTest} pins that status over HTTP.
+     * A segment {@code UUID.fromString} rejects (36 dashes) can never resolve to an
+     * org, so the interceptor ABSTAINS instead of throwing — a 500 out of
+     * {@code preHandle} would mask the binder's 400
+     * ({@code GlobalExceptionHandler} has no {@code IllegalArgumentException}
+     * handler). {@link OrganizationBrandingIntegrationTest} pins that status over HTTP.
      */
     @Test
     void malformedOrgId_doesNotThrow_soThePlatformCanAnswer400() throws Exception {
@@ -144,23 +142,44 @@ class OrgAccessInterceptorTest {
     }
 
     /**
-     * UNDER-MATCH, pinned as an ACCEPTED RESIDUAL, not as a fix. {@code UUID.fromString}
+     * The interceptor's admission test is now the binder's: {@code UUID.fromString}
      * is lenient about short group forms, so {@code 0-0-0-0-1} binds to a real
-     * {@code 00000000-0000-0000-0000-000000000001} downstream while never matching the
-     * canonical shape here — the interceptor abstains and the endpoint's own
-     * {@code @PreAuthorize} is the only gate left. Closing this would break
-     * {@link OrganizationBrandingIntegrationTest}, which uses precisely this path as the
-     * falsifier for its read/write predicates. Tightening it is a separate decision.
+     * {@code 00000000-0000-0000-0000-000000000001} downstream — and any spelling the
+     * binder can resolve to an org id must be guarded here too, or the tenancy check
+     * is skippable by re-spelling the id.
      */
     @Test
-    void lenientUuidForm_stillSkipsTheInterceptor_knownResidual() throws Exception {
+    void lenientUuidFormIsGuardedLikeTheBinderResolvesIt() throws Exception {
         authenticate(UserRole.ORG_ADMIN, parentOrgId);
-        assertThat(UUID.fromString("0-0-0-0-1"))
-                .isEqualTo(UUID.fromString("00000000-0000-0000-0000-000000000001"));
+        UUID target = UUID.fromString("0-0-0-0-1");
+        assertThat(target).isEqualTo(UUID.fromString("00000000-0000-0000-0000-000000000001"));
+        when(orgHierarchy.isParentOf(parentOrgId, target)).thenReturn(false);
 
         MockHttpServletResponse response = new MockHttpServletResponse();
         assertThat(interceptor.preHandle(pathRequest("/api/organizations/0-0-0-0-1/members"),
-                response, new Object())).isTrue();
+                response, new Object())).isFalse();
+        assertThat(response.getStatus()).isEqualTo(403);
+    }
+
+    /**
+     * A 36-character NON-canonical spelling: {@code UUID.fromString} truncates each
+     * over-long group to its low bits, so this string resolves to the REAL org id
+     * {@code 1a2b3c4d-5e6f-4a8b-9c0d-0e2f3a4b5c6d} — the old canonical-shape regex
+     * abstained on it while the binder happily bound it, a re-spelling bypass of the
+     * tenancy check.
+     */
+    @Test
+    void nonCanonicalThirtySixCharUuid_isGuarded() throws Exception {
+        authenticate(UserRole.ORG_ADMIN, parentOrgId);
+        UUID target = UUID.fromString("01a2b3c4d-5e6f-4a8b-9c0d-e2f3a4b5c6d");
+        assertThat(target).isEqualTo(UUID.fromString("1a2b3c4d-5e6f-4a8b-9c0d-0e2f3a4b5c6d"));
+        when(orgHierarchy.isParentOf(parentOrgId, target)).thenReturn(false);
+
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        assertThat(interceptor.preHandle(
+                pathRequest("/api/organizations/01a2b3c4d-5e6f-4a8b-9c0d-e2f3a4b5c6d/members"),
+                response, new Object())).isFalse();
+        assertThat(response.getStatus()).isEqualTo(403);
     }
 
     private MockHttpServletRequest orgRequest(UUID orgId) {

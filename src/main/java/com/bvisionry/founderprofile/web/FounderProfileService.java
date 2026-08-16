@@ -200,21 +200,13 @@ public class FounderProfileService {
                 }
                 case "ASSESSMENT" -> {
                     AssessmentRow a = assessmentByTask.get(t.taskId());
-                    if (a == null && "BASELINE".equals(t.milestoneRole())) {
-                        // The journey's pre-spine fallback, mirrored
-                        // (TaskSpineRepository#directAssessments): a BASELINE
-                        // with no tagged sitting adopts the member's earliest
-                        // evaluated UNTAGGED sitting of its pipeline. Without
-                        // this the task row read "To do" while the same sitting
-                        // showed again in the Direct bucket below.
-                        a = assessments.stream()
-                                .filter(s -> s.programTaskId() == null
-                                        && "EVALUATED".equals(s.status())
-                                        && t.refId() != null
-                                        && t.refId().equals(s.pipelineId()))
-                                .min(Comparator.comparing(AssessmentRow::evaluatedAt,
-                                        Comparator.nullsLast(Comparator.naturalOrder())))
-                                .orElse(null);
+                    if (a == null) {
+                        // The journey's adoption, mirrored
+                        // (TaskSpineRepository#ADOPTABLE_SITTINGS — change one,
+                        // change the other). Without this the task row read
+                        // "To do" while the same sitting showed again in the
+                        // Direct bucket below.
+                        a = adoptableSitting(t, tasks, assessments);
                     }
                     if (a != null && a.submissionId() != null) {
                         mergedSubmissions.add(a.submissionId());
@@ -297,5 +289,69 @@ public class FounderProfileService {
                         a.submittedAt(), null, a.evaluatedAt(), null, false, false, null,
                         null, a.assignedAt())));
         return items;
+    }
+
+    /**
+     * The untagged sitting a milestone task adopts — the Work tab's twin of
+     * {@code TaskSpineRepository#ADOPTABLE_SITTINGS} (change one, change the
+     * other): BASELINE adopts the member's earliest evaluated sitting of its
+     * pipeline whenever it happened; DISTANCE on a SHARED instrument (the
+     * cohort's BASELINE references the same pipeline) adopts the earliest
+     * post-launch sitting that is not the pipeline's earliest (BASELINE's);
+     * DISTANCE on its OWN instrument adopts the earliest sitting after the
+     * member's baseline reading. CHECKIN adopts nothing.
+     */
+    static AssessmentRow adoptableSitting(ProgramTaskRow t, List<ProgramTaskRow> tasks,
+                                          List<AssessmentRow> assessments) {
+        if (t.refId() == null || t.milestoneRole() == null) {
+            return null;
+        }
+        List<AssessmentRow> evaluated = assessments.stream()
+                .filter(s -> "EVALUATED".equals(s.status()) && s.evaluatedAt() != null
+                        && t.refId().equals(s.pipelineId()))
+                .sorted(Comparator.comparing(AssessmentRow::evaluatedAt))
+                .toList();
+        List<AssessmentRow> untagged = evaluated.stream()
+                .filter(s -> s.programTaskId() == null)
+                .toList();
+        return switch (t.milestoneRole()) {
+            case "BASELINE" -> untagged.isEmpty() ? null : untagged.get(0);
+            case "DISTANCE" -> {
+                boolean sharedInstrument = tasks.stream().anyMatch(bt ->
+                        "ASSESSMENT".equals(bt.taskType())
+                                && "BASELINE".equals(bt.milestoneRole())
+                                && java.util.Objects.equals(bt.cohortId(), t.cohortId())
+                                && t.refId().equals(bt.refId()));
+                if (sharedInstrument) {
+                    // launch floor + BASELINE's earliest-sitting carve-out
+                    // (earliest over ALL sittings, tagged included, like the SQL)
+                    if (t.cohortLaunchedAt() == null || evaluated.isEmpty()) {
+                        yield null;
+                    }
+                    UUID baselines = evaluated.get(0).submissionId();
+                    yield untagged.stream()
+                            .filter(s -> s.evaluatedAt().isAfter(t.cohortLaunchedAt()))
+                            .filter(s -> !s.submissionId().equals(baselines))
+                            .findFirst().orElse(null);
+                }
+                // own instrument: floor is the member's baseline reading (min
+                // evaluated sitting of the cohort's BASELINE pipelines)
+                Instant floor = tasks.stream()
+                        .filter(bt -> "ASSESSMENT".equals(bt.taskType())
+                                && "BASELINE".equals(bt.milestoneRole())
+                                && java.util.Objects.equals(bt.cohortId(), t.cohortId())
+                                && bt.refId() != null)
+                        .flatMap(bt -> assessments.stream()
+                                .filter(s -> "EVALUATED".equals(s.status())
+                                        && s.evaluatedAt() != null
+                                        && bt.refId().equals(s.pipelineId())))
+                        .map(AssessmentRow::evaluatedAt)
+                        .min(Comparator.naturalOrder()).orElse(null);
+                yield untagged.stream()
+                        .filter(s -> floor == null || s.evaluatedAt().isAfter(floor))
+                        .findFirst().orElse(null);
+            }
+            default -> null;    // CHECKIN adopts nothing
+        };
     }
 }

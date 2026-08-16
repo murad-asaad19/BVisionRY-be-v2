@@ -81,7 +81,8 @@ public class CohortViewReadRepository {
      * "not assigned to your org" → 404.
      *
      * <p>Schema note: the cohort itself carries no schedule. {@code startAt} is
-     * the lifecycle instant {@code cohorts.launched_at} (null while DRAFT) and
+     * the lifecycle instant {@code cohorts.launched_at} (the FIRST launch,
+     * kept across unlaunch; null only if never launched) and
      * {@code endAt} is {@code program_settings.end_at}, which has been keyed per
      * cohort since V122 — those are the only two dates the schema records.
      *

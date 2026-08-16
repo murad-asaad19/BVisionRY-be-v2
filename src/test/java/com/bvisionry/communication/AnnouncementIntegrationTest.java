@@ -208,6 +208,22 @@ class AnnouncementIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(jsonPath("$", hasSize(1)))
                     .andExpect(jsonPath("$[0].name", is("Granted Cohort")));
         }
+
+        @Test
+        void broadcastTargetsCarryEachCohortsLaunchState() throws Exception {
+            // Information, NOT a filter. The DRAFT cohort is still listed —
+            // its announcement history stays staff's to read — but it now says
+            // it is a draft, so the picker's composer can explain the refusal
+            // before anything is typed instead of after the post is rejected.
+            jdbc.update("UPDATE cohorts SET status = 'DRAFT' WHERE id = ?", cohortOther);
+
+            TestAuthentication.authenticate(orgAdminA);
+            mockMvc.perform(get("/api/organizations/" + orgA.getId() + "/announcement-cohorts"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", hasSize(2)))
+                    .andExpect(jsonPath("$[*].name", contains("Granted Cohort", "Other Cohort")))
+                    .andExpect(jsonPath("$[*].status", contains("LAUNCHED", "DRAFT")));
+        }
     }
 
     /* ------------------------------------------------------- sanitisation */
@@ -301,31 +317,28 @@ class AnnouncementIntegrationTest extends AbstractPostgresIntegrationTest {
         }
 
         /**
-         * V167: a DRAFT cohort is invisible to members, so a broadcast to it
-         * reaches nobody and never surfaces in a member's feed — even for a
-         * member already enrolled in the draft.
+         * A DRAFT cohort — including one temporarily unlaunched — is invisible
+         * to members ({@code CohortVisibility}), so a broadcast to it would
+         * silently reach nobody: refused with a 400 pointing at launch, and no
+         * row is written. Relaunched, the same author's post lands and reaches
+         * the enrolled members.
          */
         @Test
-        void aDraftCohortsBroadcastReachesNobody_andIsAbsentFromTheMemberFeed() throws Exception {
-            UUID draftCohort = UUID.randomUUID();
-            jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, 'Draft Cohort', 'DRAFT')",
-                    draftCohort);
-            jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)",
-                    draftCohort, orgA.getId());
-            jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
-                    draftCohort, memberIn.getId());
+        void postingToAnUnlaunchedCohortIsRefused_untilRelaunch() throws Exception {
+            jdbc.update("UPDATE cohorts SET status = 'DRAFT' WHERE id = ?", cohortGranted);
 
             TestAuthentication.authenticate(orgAdminA);
-            mockMvc.perform(postAnnouncement(orgA.getId(), draftCohort, "Sneak peek."))
-                    .andExpect(status().isCreated());
-            assertThat(singlePostedEvent().recipientIds()).isEmpty();
+            mockMvc.perform(postAnnouncement(orgA.getId(), cohortGranted, "Sneak peek."))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.detail",
+                            is("This cohort isn't live — launch it before announcing.")));
+            assertThat(countAnnouncements(cohortGranted)).isZero();
 
-            entityManager.flush();
-            TestAuthentication.authenticate(memberIn);
-            mockMvc.perform(get("/api/my/announcements"))
-                    .andExpect(status().isOk())
-                    .andExpect(jsonPath("$[*].body",
-                            org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasItem("Sneak peek."))));
+            jdbc.update("UPDATE cohorts SET status = 'LAUNCHED' WHERE id = ?", cohortGranted);
+            mockMvc.perform(postAnnouncement(orgA.getId(), cohortGranted, "We are live."))
+                    .andExpect(status().isCreated());
+            assertThat(singlePostedEvent().recipientIds())
+                    .containsExactlyInAnyOrder(memberIn.getId(), memberAlsoIn.getId());
         }
 
         @Test

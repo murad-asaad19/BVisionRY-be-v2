@@ -176,6 +176,36 @@ class MemberTaskViewIntegrationTest extends AbstractPostgresIntegrationTest {
         }
 
         /**
+         * Staff review must not depend on the cohort's CURRENT visibility
+         * ({@code CohortRepository.findEnrolledForStaff}): an unlaunched —
+         * DRAFT again — cohort's work stays readable through both doors, and
+         * the journey door still carries the cohort's modules. Only the
+         * MEMBER's own view goes dark, pinned by
+         * {@code CohortLifecycleIntegrationTest.memberVisibilityFollowsTheLifecycle}.
+         */
+        @Test
+        void bothStaffDoorsStillWorkWhileTheCohortIsUnlaunched() throws Exception {
+            jdbc.update("UPDATE cohorts SET status = 'DRAFT' WHERE id = ?", cohort);
+
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(adminPlayer(orgA, founder, lessonTask)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.answers['" + fieldId + "']", is(TASK_ANSWER)))
+                    .andExpect(jsonPath("$.readOnly", is(true)));
+            mockMvc.perform(get("/api/organizations/" + orgA.getId() + "/members/"
+                            + founder.getId() + "/journey"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.modules", hasSize(1)))
+                    .andExpect(jsonPath("$.modules[0].name", is("Module One")));
+
+            TestAuthentication.authenticate(coachGranted);
+            mockMvc.perform(get(coachPlayer(founder, lessonTask)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.answers['" + fieldId + "']", is(TASK_ANSWER)))
+                    .andExpect(jsonPath("$.readOnly", is(true)));
+        }
+
+        /**
          * The service's own contribution, independent of either gate: the member
          * must be enrolled in the TASK's cohort. A task id that exists but is
          * not the member's reads exactly like one that does not exist.

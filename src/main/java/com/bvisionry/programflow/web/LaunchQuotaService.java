@@ -83,11 +83,14 @@ public class LaunchQuotaService {
      * are never blocked.
      */
     void consumeForLaunch(Collection<UUID> assignedOrgIds, UUID cohortId) {
+        // Skip-if-charged, not unconditional: a RELAUNCH after unlaunch finds
+        // the family's ledger row from the first launch and pays nothing —
+        // "each family pays once per cohort" (spec §8), not once per click.
         assignedOrgIds.stream()
                 .map(this::requireRoot)
                 .distinct()
                 .sorted()
-                .forEach(root -> chargeRoot(root, cohortId));
+                .forEach(root -> chargeRootUnlessCharged(root, cohortId));
     }
 
     /**
@@ -99,7 +102,11 @@ public class LaunchQuotaService {
      * assignments of siblings serialize and the second sees the first's row.
      */
     void consumeUnlessCharged(UUID orgId, UUID cohortId) {
-        UUID root = requireRoot(orgId);
+        chargeRootUnlessCharged(requireRoot(orgId), cohortId);
+    }
+
+    /** Lock the root, then charge only if this family never paid for this cohort. */
+    private void chargeRootUnlessCharged(UUID root, UUID cohortId) {
         ledger.lockBillingRoot(root);
         // ponytail: linear scan of the family's ledger (small — quota-bounded);
         // switch to an exists query if a family's history ever gets long.
@@ -108,12 +115,6 @@ public class LaunchQuotaService {
         if (!charged) {
             chargeRootLocked(root, cohortId);
         }
-    }
-
-    /** Lock the root, then verdict + insert — the §8 atomic pair for one family. */
-    private void chargeRoot(UUID root, UUID cohortId) {
-        ledger.lockBillingRoot(root);
-        chargeRootLocked(root, cohortId);
     }
 
     /** The check + append, on an already-locked root. */

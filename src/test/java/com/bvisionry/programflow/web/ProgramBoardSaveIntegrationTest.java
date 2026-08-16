@@ -493,15 +493,4 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(board().stats().tasks()).isZero();
     }
 
-    /* ---------------------------------------------------------------- archived */
-
-    @Test
-    void save_refusesOnAnArchivedCohort() {
-        BoardResponse before = adminService.getBoard(cohortId);
-        cohortService.archive(cohortId);
-
-        assertThatThrownBy(() -> adminService.saveBoard(cohortId, BoardPayloads.echo(before)))
-                .isInstanceOf(IllegalOperationException.class)
-                .hasMessageContaining("archived");
-    }
 }

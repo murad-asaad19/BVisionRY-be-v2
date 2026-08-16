@@ -45,8 +45,8 @@ import lombok.RequiredArgsConstructor;
  * Cohort management in the platform-cohort model (spec §13): cohorts are
  * authored by super admins and ASSIGNED to organizations, each assignment
  * carrying the enrollment rule (all members now / selected members /
- * auto-enroll future joiners). Lifecycle stays DRAFT → LAUNCHED →
- * COMPLETED / ARCHIVED (spec §8).
+ * auto-enroll future joiners). Lifecycle is the two-way toggle
+ * DRAFT ⇄ LAUNCHED (spec §8, two-state since V183).
  *
  * <p>Quota: each assigned BILLING FAMILY pays for a launched cohort from its
  * root plan, once — {@link #launch} consumes one launch per distinct billing
@@ -66,8 +66,7 @@ public class CohortService {
 
     static final String ENTITY_COHORT = "Cohort";
     static final String ACTION_LAUNCHED = "COHORT_LAUNCHED";
-    static final String ACTION_COMPLETED = "COHORT_COMPLETED";
-    static final String ACTION_ARCHIVED = "COHORT_ARCHIVED";
+    static final String ACTION_UNLAUNCHED = "COHORT_UNLAUNCHED";
     static final String ACTION_ORG_ASSIGNED = "COHORT_ORG_ASSIGNED";
     static final String ACTION_ORG_UNASSIGNED = "COHORT_ORG_UNASSIGNED";
 
@@ -169,9 +168,9 @@ public class CohortService {
         return CohortDto.of(cohorts.save(c));
     }
 
-    /** Rename only — lifecycle moves through {@link #launch}/{@link #complete}/{@link #archive}. */
+    /** Rename only — lifecycle moves through {@link #launch}/{@link #unlaunch}. */
     public CohortDto update(UUID cohortId, UpdateCohortRequest req) {
-        Cohort c = requireEditable(cohortId);
+        Cohort c = require(cohortId);
         c.setName(req.name());
         return CohortDto.of(c);
     }
@@ -179,24 +178,17 @@ public class CohortService {
     /* ------------------------------------------------------------ lifecycle */
 
     /**
-     * DRAFT → LAUNCHED. Every assigned billing family pays ONCE: the
-     * assignments are collapsed to their distinct billing roots and one launch
-     * is consumed per root, check + append-only ledger insert in THIS
-     * transaction, serialized on the billing-root row lock (spec §8). Any
-     * family over quota → 409 and the whole launch rolls back — the admin
-     * unassigns that family's orgs or grants it a launch, then retries.
+     * DRAFT → LAUNCHED. Every assigned billing family pays ONCE PER COHORT:
+     * the assignments are collapsed to their distinct billing roots and one
+     * launch is consumed per root that has not already paid for this cohort —
+     * so relaunching after {@link #unlaunch} is free for families the ledger
+     * already carries. Check + append-only ledger insert in THIS transaction,
+     * serialized on the billing-root row lock (spec §8). Any family over
+     * quota → 409 and the whole launch rolls back — the admin unassigns that
+     * family's orgs or grants it a launch, then retries.
      */
     public CohortDto launch(UUID cohortId) {
-        // DRAFT → LAUNCHED is a read-then-decide, so the read takes the
-        // cohort's row lock: a double-clicked Launch serializes here and the
-        // loser reads the committed LAUNCHED status into the ordinary 409
-        // below, instead of charging the family again and re-notifying the
-        // roster. (V181's UNIQUE on the ledger backstops the charge at the
-        // database even for a path without this lock.)
-        Cohort c = entityManager.find(Cohort.class, cohortId, LockModeType.PESSIMISTIC_WRITE);
-        if (c == null) {
-            throw new ResourceNotFoundException("Cohort", cohortId.toString());
-        }
+        Cohort c = requireLocked(cohortId);
         if (c.getStatus() != CohortStatus.DRAFT) {
             throw new IllegalOperationException("Only a draft cohort can be launched — this one is "
                     + c.getStatus().name().toLowerCase() + ".");
@@ -206,45 +198,44 @@ public class CohortService {
                         .map(CohortOrgAssignment::getOrgId)
                         .toList(),
                 cohortId);
+        boolean firstLaunch = c.getLaunchedAt() == null;
         c.setStatus(CohortStatus.LAUNCHED);
-        c.setLaunchedAt(OffsetDateTime.now());
+        if (firstLaunch) {
+            // launchedAt is "when this cohort FIRST went live" — the floor for
+            // milestone adoption (TaskSpineRepository.ADOPTABLE_SITTINGS), so a
+            // relaunch keeps the original stamp.
+            c.setLaunchedAt(OffsetDateTime.now());
+        }
         auditLifecycle(null, c, ACTION_LAUNCHED);
-        // The moment the cohort becomes visible is the moment the roster hears
-        // about it — draft-time enrolment stays silent by design.
-        if (!c.getMemberIds().isEmpty()) {
+        // The moment the cohort FIRST becomes visible is the moment the roster
+        // hears about it — draft-time enrolment stays silent by design, and a
+        // relaunch does not re-blast people who already heard.
+        // ponytail: relaunch is silent; members enrolled during a DRAFT rework
+        // window aren't notified — add cohort_members.enrolled_at and notify
+        // enrolled_at > last unlaunch if that gap bites.
+        if (firstLaunch && !c.getMemberIds().isEmpty()) {
             events.publishEvent(new ProgramFlowEvents.CohortEnrolled(
                     c.getName(), List.copyOf(c.getMemberIds())));
         }
         return CohortDto.of(c);
     }
 
-    /** LAUNCHED → COMPLETED: read-only for members (the closing screen); never refunds quota. */
-    public CohortDto complete(UUID cohortId) {
-        Cohort c = require(cohortId);
+    /**
+     * LAUNCHED → DRAFT: pulls the cohort back to the drawing board — invisible
+     * to members again, no notifications, no survey submits. NEVER refunds
+     * quota (the ledger is append-only, spec §8); relaunching later re-charges
+     * only families that have not paid for this cohort yet. {@code launchedAt}
+     * survives: it records the FIRST launch, so milestone adoptions keyed on it
+     * outlive an unlaunch/relaunch cycle.
+     */
+    public CohortDto unlaunch(UUID cohortId) {
+        Cohort c = requireLocked(cohortId);
         if (c.getStatus() != CohortStatus.LAUNCHED) {
-            throw new IllegalOperationException("Only a launched cohort can be completed — this one is "
+            throw new IllegalOperationException("Only a launched cohort can be unlaunched — this one is "
                     + c.getStatus().name().toLowerCase() + ".");
         }
-        c.setStatus(CohortStatus.COMPLETED);
-        c.setCompletedAt(OffsetDateTime.now());
-        auditLifecycle(null, c, ACTION_COMPLETED);
-        return CohortDto.of(c);
-    }
-
-    /**
-     * DRAFT / COMPLETED → ARCHIVED: read-only for everyone, invisible to
-     * members. A LAUNCHED cohort must be completed first — archiving is
-     * shelving, not an emergency stop.
-     */
-    public CohortDto archive(UUID cohortId) {
-        Cohort c = require(cohortId);
-        if (c.getStatus() != CohortStatus.DRAFT && c.getStatus() != CohortStatus.COMPLETED) {
-            throw new IllegalOperationException("Only a draft or completed cohort can be archived — "
-                    + "this one is " + c.getStatus().name().toLowerCase() + ".");
-        }
-        c.setStatus(CohortStatus.ARCHIVED);
-        c.setArchivedAt(OffsetDateTime.now());
-        auditLifecycle(null, c, ACTION_ARCHIVED);
+        c.setStatus(CohortStatus.DRAFT);
+        auditLifecycle(null, c, ACTION_UNLAUNCHED);
         return CohortDto.of(c);
     }
 
@@ -273,7 +264,7 @@ public class CohortService {
      * sub-org: joining an already-bought participation is free.
      */
     public CohortDto assignOrg(UUID cohortId, AssignOrgRequest req) {
-        Cohort c = requireEditable(cohortId);
+        Cohort c = require(cohortId);
         if (!cohorts.orgExists(req.orgId())) {
             throw new ResourceNotFoundException("Organization", req.orgId().toString());
         }
@@ -299,7 +290,7 @@ public class CohortService {
 
     /** Changes the assignment's auto-enroll rule (nothing retroactive). */
     public CohortDto updateOrgAssignment(UUID cohortId, UUID orgId, UpdateOrgAssignmentRequest req) {
-        Cohort c = requireEditable(cohortId);
+        Cohort c = require(cohortId);
         CohortOrgAssignment a = assignments.findByCohortIdAndOrgId(cohortId, orgId)
                 .orElseThrow(() -> new ResourceNotFoundException("Assignment", orgId.toString()));
         a.setAutoEnroll(req.autoEnroll());
@@ -312,7 +303,7 @@ public class CohortService {
      * destroyed here); quota is never refunded (spec §8).
      */
     public CohortDto unassignOrg(UUID cohortId, UUID orgId) {
-        Cohort c = requireEditable(cohortId);
+        Cohort c = require(cohortId);
         CohortOrgAssignment a = assignments.findByCohortIdAndOrgId(cohortId, orgId)
                 .orElseThrow(() -> new ResourceNotFoundException("Assignment", orgId.toString()));
         assignments.delete(a);
@@ -325,8 +316,7 @@ public class CohortService {
     /**
      * Auto-enroll hook: a member just joined (or moved into) {@code orgId} —
      * enroll them in every cohort whose assignment to that org says so.
-     * DRAFT cohorts enroll silently (the roster hears at launch); COMPLETED /
-     * ARCHIVED ones are done and skip.
+     * DRAFT cohorts enroll silently (the roster hears at launch).
      *
      * <p>Learners-only, the same rule {@link #setOrgMembers} and
      * {@link #enrollForAssignment} enforce ({@link #NOT_ENROLLABLE}). The check
@@ -354,8 +344,7 @@ public class CohortService {
                 continue;
             }
             Cohort c = cohorts.findById(a.getCohortId()).orElse(null);
-            if (c == null || c.getStatus() == CohortStatus.COMPLETED
-                    || c.getStatus() == CohortStatus.ARCHIVED) {
+            if (c == null) {
                 continue;
             }
             if (c.getMemberIds().add(userId)) {
@@ -371,7 +360,7 @@ public class CohortService {
      * manages their own members only; other orgs' enrollments are untouched).
      */
     public CohortDto setOrgMembers(UUID orgId, UUID cohortId, UpdateCohortMembersRequest req) {
-        Cohort c = requireAssignedEditable(orgId, cohortId);
+        Cohort c = requireAssigned(orgId, cohortId);
         Set<UUID> mine = orgMemberIds(orgId);
         if (!mine.containsAll(req.memberIds())) {
             throw new BadRequestException(NOT_ENROLLABLE);
@@ -407,8 +396,7 @@ public class CohortService {
 
     /**
      * Only a LAUNCHED cohort notifies newcomers — a member added to a DRAFT
-     * can't see it yet (they hear at launch with everyone else), and a
-     * COMPLETED one has nothing left to start on.
+     * can't see it yet (they hear at launch with everyone else).
      */
     private void notifyEnrolled(Cohort c, List<UUID> added) {
         if (!added.isEmpty() && c.getStatus() == CohortStatus.LAUNCHED) {
@@ -435,7 +423,7 @@ public class CohortService {
     private static CohortDto orgScoped(Cohort c, Set<UUID> orgMemberIds, int moduleCount, String stageLabel) {
         // orgNames stays empty here: the org console already knows whose page it is.
         return new CohortDto(c.getId(), c.getName(), c.getPosition(), c.getStatus(),
-                c.getLaunchedAt(), c.getCompletedAt(), c.getArchivedAt(),
+                c.getLaunchedAt(),
                 c.getMemberIds().stream().filter(orgMemberIds::contains).toList(),
                 List.of(), moduleCount, stageLabel);
     }
@@ -454,14 +442,18 @@ public class CohortService {
     }
 
     /**
-     * {@link #require} + the ARCHIVED read-only rule: assignment, roster and
-     * curriculum stay editable in any non-archived state; an archived cohort
-     * refuses every mutation with a clear 409.
+     * {@link #require} under the cohort's row lock. Lifecycle transitions are
+     * read-then-decide, so the read takes {@code PESSIMISTIC_WRITE}: a
+     * double-clicked Launch, or an unlaunch racing a launch, serializes here
+     * and the loser re-reads the committed status into the ordinary 409
+     * instead of charging the family again, re-notifying the roster or
+     * lost-updating the state. (V181's UNIQUE on the ledger backstops the
+     * charge at the database even for a path without this lock.)
      */
-    Cohort requireEditable(UUID cohortId) {
-        Cohort c = require(cohortId);
-        if (c.getStatus() == CohortStatus.ARCHIVED) {
-            throw new IllegalOperationException("This cohort is archived and read-only.");
+    private Cohort requireLocked(UUID cohortId) {
+        Cohort c = entityManager.find(Cohort.class, cohortId, LockModeType.PESSIMISTIC_WRITE);
+        if (c == null) {
+            throw new ResourceNotFoundException("Cohort", cohortId.toString());
         }
         return c;
     }
@@ -471,15 +463,6 @@ public class CohortService {
         Cohort c = require(cohortId);
         if (!assignments.existsByCohortIdAndOrgId(cohortId, orgId)) {
             throw new ResourceNotFoundException("Cohort", cohortId.toString());
-        }
-        return c;
-    }
-
-    /** {@link #requireAssigned} behind the ARCHIVED read-only gate. */
-    Cohort requireAssignedEditable(UUID orgId, UUID cohortId) {
-        Cohort c = requireAssigned(orgId, cohortId);
-        if (c.getStatus() == CohortStatus.ARCHIVED) {
-            throw new IllegalOperationException("This cohort is archived and read-only.");
         }
         return c;
     }

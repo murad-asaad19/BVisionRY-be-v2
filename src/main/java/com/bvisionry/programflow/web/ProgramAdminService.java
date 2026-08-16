@@ -123,7 +123,7 @@ public class ProgramAdminService {
      *     with a 409 naming exactly what would be lost.
      */
     public BoardResponse saveBoard(UUID cohortId, SaveBoardRequest req) {
-        Cohort cohort = cohortService.requireEditable(cohortId);
+        Cohort cohort = cohortService.require(cohortId);
         // Fast-fail on an obviously stale payload, BEFORE the expensive validation
         // + restore — but this value check is not atomic on its own (board_version
         // is a plain column), so it is only the optimisation; the authoritative
@@ -357,7 +357,7 @@ public class ProgramAdminService {
     }
 
     public ProgramSettingsDto updateSettings(UUID cohortId, ProgramSettingsDto req) {
-        cohortService.requireEditable(cohortId);
+        cohortService.require(cohortId);
         ProgramSettings s = settings.findById(cohortId).orElseGet(() -> {
             ProgramSettings created = new ProgramSettings();
             created.setCohortId(cohortId);

@@ -107,6 +107,18 @@ class CohortLaunchQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     @Test
+    void unlaunchThenRelaunch_neverChargesTwice() {
+        UUID cohort = launch(subA, "Spring 26");
+        long charged = ledger.countByOrgId(root.getId());
+
+        cohortService.unlaunch(cohort);
+        // STARTER is 1/quarter: the relaunch only passes because the family's
+        // ledger row from the first launch still covers this cohort.
+        assertThatCode(() -> cohortService.launch(cohort)).doesNotThrowAnyException();
+        assertThat(ledger.countByOrgId(root.getId())).isEqualTo(charged);
+    }
+
+    @Test
     void grant_thenLaunchSucceeds_andDeleteNeverRefunds() {
         UUID first = launch(subA, "Spring 26");
         UUID second = draft(subA, "Summer 26");

@@ -7,8 +7,11 @@ import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.LaunchQuotaExceededException;
 import com.bvisionry.organization.OrganizationRepository;
 import com.bvisionry.organization.entity.Organization;
+import com.bvisionry.programflow.domain.Cohort;
+import com.bvisionry.programflow.domain.CohortStatus;
 import com.bvisionry.programflow.dto.CreateCohortRequest;
 import com.bvisionry.programflow.repository.CohortLaunchLedgerRepository;
+import com.bvisionry.programflow.repository.CohortRepository;
 import com.bvisionry.testsupport.AbstractPostgresIntegrationTest;
 import com.bvisionry.testsupport.EnabledIfDockerAvailable;
 import com.bvisionry.testsupport.TestAuthentication;
@@ -46,6 +49,7 @@ class CohortLaunchConcurrencyIntegrationTest extends AbstractPostgresIntegration
 
     @Autowired private CohortService cohortService;
     @Autowired private CohortLaunchLedgerRepository ledger;
+    @Autowired private CohortRepository cohorts;
     @Autowired private OrganizationRepository orgs;
     @Autowired private UserRepository users;
 
@@ -129,6 +133,68 @@ class CohortLaunchConcurrencyIntegrationTest extends AbstractPostgresIntegration
         assertThat(launched.get()).as("exactly one launch wins").isEqualTo(1);
         assertThat(alreadyLaunched.get()).as("the other sees an already-launched cohort").isEqualTo(1);
         assertThat(ledger.countByOrgId(orgId)).as("one ledger row, never two").isEqualTo(1);
+    }
+
+    /**
+     * An unlaunch racing a launch on a LAUNCHED cohort. Both transitions read
+     * through the same {@code PESSIMISTIC_WRITE} row lock, so they serialize:
+     * the second reads the first's committed status, never a lost update. Two
+     * legal histories exist — launch loses on the still-LAUNCHED cohort (final
+     * DRAFT), or unlaunch commits first and the relaunch wins (final LAUNCHED)
+     * — but the ledger carries exactly one row (a relaunch is free for a
+     * family that already paid) and launched_at survives either way.
+     */
+    @Test
+    void concurrentLaunchAndUnlaunch_serializeOnTheRowLock() throws Exception {
+        Organization root = new Organization();
+        root.setName("Toggle Root " + UUID.randomUUID());
+        root.setSubscriptionTier(SubscriptionTier.FOUNDER_SUCCESS);
+        root.setActive(true);
+        root = orgs.saveAndFlush(root);
+        User admin = TestAuthentication.authenticateAsOrgAdmin(users, root);
+        UUID orgId = root.getId();
+
+        UUID cohortId = cohortService.create(new CreateCohortRequest("Toggle")).id();
+        cohortService.assignOrg(cohortId, new com.bvisionry.programflow.dto.AssignOrgRequest(
+                orgId, false, java.util.List.of(), false));
+        cohortService.launch(cohortId);
+
+        AtomicInteger relaunched = new AtomicInteger();
+        AtomicInteger launchRefused = new AtomicInteger();
+        AtomicInteger unlaunched = new AtomicInteger();
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> a = pool.submit(doubleClicker(admin, cohortId, start, relaunched, launchRefused));
+            Future<?> b = pool.submit(() -> {
+                TestAuthentication.authenticate(admin);
+                try {
+                    start.await();
+                    cohortService.unlaunch(cohortId);
+                    unlaunched.incrementAndGet();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    SecurityContextHolder.clearContext();
+                }
+            });
+            start.countDown();
+            a.get(30, TimeUnit.SECONDS);
+            b.get(30, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(unlaunched.get()).as("the unlaunch always lands").isEqualTo(1);
+        assertThat(relaunched.get() + launchRefused.get())
+                .as("the launch either wins after the unlaunch or gets the ordinary 409")
+                .isEqualTo(1);
+        Cohort finalState = cohorts.findById(cohortId).orElseThrow();
+        assertThat(finalState.getStatus())
+                .as("final status is whichever transition committed last, never a lost update")
+                .isEqualTo(relaunched.get() == 1 ? CohortStatus.LAUNCHED : CohortStatus.DRAFT);
+        assertThat(finalState.getLaunchedAt()).as("first-launch stamp survives").isNotNull();
+        assertThat(ledger.countByOrgId(orgId)).as("relaunch never re-charges").isEqualTo(1);
     }
 
     private Runnable doubleClicker(User admin, UUID cohortId, CountDownLatch start,

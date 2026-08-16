@@ -7,6 +7,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import com.bvisionry.common.programaccess.CohortVisibility;
 import com.bvisionry.common.programaccess.ProgramAudience;
 
 import lombok.RequiredArgsConstructor;
@@ -47,9 +48,10 @@ public class ProgramTaskSurveyRepository {
                 JOIN cohorts c ON c.id = m.cohort_id
                 JOIN cohort_members cm ON cm.cohort_id = c.id AND cm.user_id = :userId
                 WHERE t.id = :taskId AND t.task_type = 'SURVEY' AND t.status = 'LIVE'
-                  AND c.status IN ('LAUNCHED', 'COMPLETED')
                   AND %s
-                """.formatted(ProgramAudience.INCLUDES_USER.formatted(":userId"));
+                  AND %s
+                """.formatted(CohortVisibility.MEMBER_VISIBLE.formatted("c"),
+                ProgramAudience.INCLUDES_USER.formatted(":userId"));
         return jdbc.query(sql,
                         new MapSqlParameterSource("taskId", taskId).addValue("userId", userId),
                         (rs, i) -> new ProgramTaskSurveyRow(

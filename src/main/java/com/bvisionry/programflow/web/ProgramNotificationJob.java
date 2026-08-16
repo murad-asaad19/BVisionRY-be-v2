@@ -44,7 +44,9 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
  * Both are send-once: the row is stamped ({@code unlock_notified_at} /
  * {@code due_reminder_sent_at}) in the same transaction that publishes, so
  * restarts and overlapping schedules can't double-send. Recipients are always
- * the module's cohort enrolment ∩ its audience; FINISHED cohorts stay silent.
+ * the module's cohort enrolment ∩ its audience; a cohort that is not LAUNCHED
+ * is skipped without consuming its stamp, so an unlaunch/relaunch defers
+ * rather than swallows the notification.
  */
 @Component
 @RequiredArgsConstructor
@@ -72,6 +74,9 @@ public class ProgramNotificationJob {
         for (ProgramModule module : modules
                 .findByLockModeAndUnlockAtLessThanEqualAndUnlockNotifiedAtIsNull(
                         ModuleLockMode.SCHEDULED, now)) {
+            if (!memberVisible(module.getCohortId())) {
+                continue; // hidden right now — defer, don't burn the one-shot stamp
+            }
             // Stamp first — even with zero recipients this unlock is now handled.
             module.setUnlockNotifiedAt(now);
             List<UUID> recipients = recipients(module);
@@ -94,6 +99,9 @@ public class ProgramNotificationJob {
         for (ProgramTask task : tasks.findDueForReminder(
                 ProgramTaskStatus.LIVE, today, today.plusDays(MAX_DUE_SOON_DAYS))) {
             ProgramModule module = task.getModule();
+            if (!memberVisible(module.getCohortId())) {
+                continue; // hidden right now — defer, don't burn the one-shot stamp
+            }
             int dueSoonDays = ProgramMapper
                     .toDto(settings.findById(module.getCohortId()).orElse(null))
                     .dueSoonDays();
@@ -130,9 +138,22 @@ public class ProgramNotificationJob {
         return recipientRows(module).stream().map(CohortMemberRow::getId).toList();
     }
 
+    /**
+     * Whether members can see the cohort right now (LAUNCHED). Checked BEFORE
+     * either send-once stamp is written: a DRAFT window must defer the
+     * notification, not consume it. A cohort that never launches keeps its
+     * rows in the candidate scans forever — harmless, the queries are indexed
+     * on the null stamp and the set is small.
+     */
+    private boolean memberVisible(UUID cohortId) {
+        return cohorts.findById(cohortId)
+                .map(c -> c.getStatus() == CohortStatus.LAUNCHED)
+                .orElse(false);
+    }
+
     private List<CohortMemberRow> recipientRows(ProgramModule module) {
-        // Only a LAUNCHED cohort notifies: drafts aren't visible to members yet,
-        // completed/archived ones are done making noise.
+        // The loops skip non-LAUNCHED cohorts before stamping (memberVisible);
+        // re-checked here harmlessly so a new caller cannot notify a draft.
         Cohort cohort = cohorts.findById(module.getCohortId()).orElse(null);
         if (cohort == null || cohort.getStatus() != CohortStatus.LAUNCHED) {
             return List.of();

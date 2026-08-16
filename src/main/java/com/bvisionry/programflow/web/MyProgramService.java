@@ -92,8 +92,11 @@ public class MyProgramService {
      * method's own tenancy contribution is the org filter on the enrolled
      * cohorts, so a foreign org id can only ever produce the empty journey.
      * Cohort choice mirrors {@link #resolveCohort}: an explicit request must
-     * be one of the member's org-scoped cohorts (else 404); null defaults to
-     * the first enrolled (LAUNCHED first; DRAFT/ARCHIVED are invisible here too — same rule as the member).
+     * be one of the member's enrolled cohorts (else 404); null defaults to
+     * the first enrolled. ANY lifecycle status: this is a staff door, and
+     * reviewing existing work must not 404 because the cohort is temporarily
+     * unlaunched — the member-only visibility rule lives in
+     * {@code CohortRepository.findEnrolled}.
      */
     @Transactional(readOnly = true)
     public JourneyResponse journeyOfMember(UUID orgId, UUID memberId, UUID requestedCohortId) {
@@ -101,7 +104,7 @@ public class MyProgramService {
         // artifacts, so there is no per-cohort org to filter on. The orgId is
         // the viewed member's org and scopes their direct assignments and
         // course visibility below.
-        List<Cohort> enrolled = cohorts.findEnrolled(memberId);
+        List<Cohort> enrolled = cohorts.findEnrolledForStaff(memberId);
         Cohort cohort;
         if (requestedCohortId != null) {
             cohort = enrolled.stream()
@@ -120,7 +123,7 @@ public class MyProgramService {
         if (cohort == null) {
             // Spec §2.1: no cohort → the page is Direct assignments only.
             return new JourneyResponse(ProgramSettingsDto.defaults(), new JourneyResponse.Progress(0, 0),
-                    gamification(List.of()), List.of(), null, false, 0, direct);
+                    gamification(List.of()), List.of(), null, 0, direct);
         }
         Context ctx = context(userId, orgId, cohort);
         ProgramSettingsDto s = settingsOf(cohort.getId());
@@ -172,7 +175,7 @@ public class MyProgramService {
 
         return new JourneyResponse(s, new JourneyResponse.Progress(done, total),
                 gamification(ctx.mySubmissions()), journeyModules,
-                cohort.getId(), cohort.getStatus() == CohortStatus.COMPLETED,
+                cohort.getId(),
                 cohort.getMemberIds().size(), direct);
     }
 
@@ -269,7 +272,9 @@ public class MyProgramService {
                 sub == null ? null : sub.getStatus(),
                 sub == null ? null : sub.getSavedAt(),
                 sub == null ? null : sub.getSubmittedAt(),
-                access.ctx().finished());
+                // The member's OWN player is never read-only — readOnly is the
+                // peer-view flag (playerOfMember below).
+                false);
     }
 
     /**
@@ -279,7 +284,10 @@ public class MyProgramService {
      * {@link #journeyOfMember}; this method's own contribution is "the member
      * is enrolled in the task's cohort", so a foreign task id 404s without
      * leaking existence. No audience/drip re-check: staff review of submitted
-     * work must not be blocked by a lock the member has since passed.
+     * work must not be blocked by a lock the member has since passed — and the
+     * cohort's lifecycle state is not part of that gate either
+     * ({@code findEnrolledForStaff}), so an unlaunched cohort's work stays
+     * reviewable.
      */
     @Transactional(readOnly = true)
     public PlayerResponse playerOfMember(UUID memberId, UUID taskId) {
@@ -287,7 +295,7 @@ public class MyProgramService {
                 .filter(x -> x.getStatus() == ProgramTaskStatus.LIVE)
                 .orElseThrow(() -> new ResourceNotFoundException("Task", taskId.toString()));
         requireLesson(t);
-        Cohort cohort = cohorts.findEnrolled(memberId).stream()
+        Cohort cohort = cohorts.findEnrolledForStaff(memberId).stream()
                 .filter(c -> c.getId().equals(t.getModule().getCohortId()))
                 .findFirst()
                 .orElseThrow(() -> new ResourceNotFoundException("Task", taskId.toString()));
@@ -333,7 +341,7 @@ public class MyProgramService {
     }
 
     public SaveAnswersResponse saveAnswers(UUID taskId, Map<String, Object> answers) {
-        Access access = requireWritableAccess(taskId);
+        Access access = requireAccess(taskId);
         requireLesson(access.task());
         ProgramSubmission sub = submissions.findByTaskIdAndUserId(taskId, access.ctx().userId())
                 .orElseGet(() -> {
@@ -349,7 +357,7 @@ public class MyProgramService {
     }
 
     public SubmitResponse submit(UUID taskId, Map<String, Object> answers) {
-        Access access = requireWritableAccess(taskId);
+        Access access = requireAccess(taskId);
         requireLesson(access.task());
         ProgramTask t = access.task();
 
@@ -485,10 +493,6 @@ public class MyProgramService {
     private record Context(UUID userId, UUID orgId, Cohort cohort, List<ProgramModule> visibleModules,
             List<ProgramSubmission> mySubmissions, Map<UUID, ProgramSubmission> myByTask,
             Map<UUID, TypedState> typedStates, Set<UUID> doneTaskIds) {
-
-        boolean finished() {
-            return cohort.getStatus() == CohortStatus.COMPLETED;
-        }
     }
 
     /** {@code orgId} is the MEMBER's own org (spec §13) — it scopes course visibility and slice writes. */
@@ -650,19 +654,10 @@ public class MyProgramService {
     private record Access(Context ctx, ProgramTask task, ProgramModule module, int moduleIndex) {
     }
 
-    /** Like {@link #requireAccess} but rejects writes to a COMPLETED (read-only) cohort. */
-    private Access requireWritableAccess(UUID taskId) {
-        Access access = requireAccess(taskId);
-        if (access.ctx().finished()) {
-            throw new BadRequestException("This cohort has finished — it is read-only now.");
-        }
-        return access;
-    }
-
     /**
      * Loads the task and verifies the learner may work on it: LIVE, in a cohort
-     * they're enrolled in, in a module whose audience includes them and — unless
-     * the cohort has completed (read-only review) — whose drip is unlocked.
+     * they're enrolled in, in a module whose audience includes them and whose
+     * drip is unlocked.
      */
     private Access requireAccess(UUID taskId) {
         CurrentUser me = currentUser.require();
@@ -683,15 +678,13 @@ public class MyProgramService {
         if (index < 0) {
             throw new ResourceNotFoundException("Task", taskId.toString());
         }
-        if (!ctx.finished()) {
-            boolean dripEnabled = settingsOf(cohort.getId()).dripEnabled();
-            LockState lock = ProgramRules.lockState(ctx.visibleModules(), index, dripEnabled,
-                    ctx.doneTaskIds(),
-                    blockedCourseIds(ctx.orgId(), ctx.visibleModules()),
-                    OffsetDateTime.now());
-            if (lock != LockState.UNLOCKED) {
-                throw new BadRequestException("This module hasn't unlocked yet");
-            }
+        boolean dripEnabled = settingsOf(cohort.getId()).dripEnabled();
+        LockState lock = ProgramRules.lockState(ctx.visibleModules(), index, dripEnabled,
+                ctx.doneTaskIds(),
+                blockedCourseIds(ctx.orgId(), ctx.visibleModules()),
+                OffsetDateTime.now());
+        if (lock != LockState.UNLOCKED) {
+            throw new BadRequestException("This module hasn't unlocked yet");
         }
         return new Access(ctx, t, ctx.visibleModules().get(index), index);
     }
@@ -748,7 +741,6 @@ public class MyProgramService {
                             "This course is no longer available to your organization.");
                 }
                 if (!spine.enrollmentExists(userId, requireRef(t))) {
-                    requireNotFinished(access);
                     spine.ensureEnrollment(userId, t.getRefId());
                 }
                 yield t.getRefId();
@@ -758,15 +750,6 @@ public class MyProgramService {
                         : spine.findExerciseSubmissionId(userId, t.getId(), t.getRefId()).orElse(null);
                 if (existing != null) {
                     yield existing;
-                }
-                // No submission for the CURRENT template (re-pointed, or the
-                // template is gone). A finished cohort is read-only: we cannot
-                // reconcile, so surface the member's existing work rather than an
-                // error. Active cohorts still reconcile via ensureExerciseSubmission.
-                if (access.ctx().finished()) {
-                    yield spine.findAnyExerciseSubmissionId(userId, t.getId())
-                            .orElseThrow(() -> new BadRequestException(
-                                    "This cohort has finished — it is read-only now."));
                 }
                 yield spine.ensureExerciseSubmission(orgId, requireRef(t), userId, t.getId());
             }
@@ -782,10 +765,8 @@ public class MyProgramService {
                                 spine.tagSubmission(adopted, t.getId());
                                 return adopted;
                             }))
-                    .orElseGet(() -> {
-                        requireNotFinished(access);
-                        return spine.createTaggedSubmission(orgId, requireRef(t), userId, t.getId());
-                    });
+                    .orElseGet(() ->
+                        spine.createTaggedSubmission(orgId, requireRef(t), userId, t.getId()));
         };
         return new OpenTaskResponse(t.getId(), t.getTaskType(), t.getRefId(), target,
                 java.time.Instant.now());
@@ -797,12 +778,6 @@ public class MyProgramService {
             throw new BadRequestException("This task has no reference configured yet.");
         }
         return t.getRefId();
-    }
-
-    private static void requireNotFinished(Access access) {
-        if (access.ctx().finished()) {
-            throw new BadRequestException("This cohort has finished — it is read-only now.");
-        }
     }
 
     /** The next task to continue with: first non-submitted LIVE task in an unlocked module. */

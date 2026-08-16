@@ -7,15 +7,13 @@ import java.util.UUID;
 import com.bvisionry.programflow.domain.Cohort;
 import com.bvisionry.programflow.domain.CohortStatus;
 
-/** A cohort as the admin switcher/roster sees it, with §7b lifecycle stamps. */
+/** A cohort as the admin switcher/roster sees it, with the §7b launch stamp. */
 public record CohortDto(
         UUID id,
         String name,
         int position,
         CohortStatus status,
         OffsetDateTime launchedAt,
-        OffsetDateTime completedAt,
-        OffsetDateTime archivedAt,
         List<UUID> memberIds,
         /**
          * The assigned orgs' names (spec §13). Cohort names are no longer
@@ -44,7 +42,7 @@ public record CohortDto(
 
     public static CohortDto of(Cohort c, List<String> orgNames) {
         return new CohortDto(c.getId(), c.getName(), c.getPosition(), c.getStatus(),
-                c.getLaunchedAt(), c.getCompletedAt(), c.getArchivedAt(),
+                c.getLaunchedAt(),
                 List.copyOf(c.getMemberIds()), List.copyOf(orgNames), 0, "Week");
     }
 }

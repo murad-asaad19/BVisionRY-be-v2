@@ -90,20 +90,32 @@ public interface CohortRepository extends JpaRepository<Cohort, UUID> {
 
     /**
      * The cohorts a learner is enrolled in AND may see (spec §8: members see
-     * LAUNCHED + COMPLETED; DRAFT and ARCHIVED are invisible) — LAUNCHED
-     * first, then by position. Every member-facing read routes through this,
-     * so the visibility rule cannot fork.
+     * LAUNCHED only; DRAFT is invisible) — by position. Every member-facing
+     * read routes through this, so the visibility rule cannot fork; the
+     * status predicate is the JPQL twin of
+     * {@code common.programaccess.CohortVisibility#MEMBER_VISIBLE}. Staff peer
+     * views deliberately use {@link #findEnrolledForStaff} instead — do not
+     * re-merge the two.
      */
     @Query("""
             SELECT c FROM Cohort c
             JOIN c.memberIds m
             WHERE m = :userId
-              AND c.status IN (com.bvisionry.programflow.domain.CohortStatus.LAUNCHED,
-                               com.bvisionry.programflow.domain.CohortStatus.COMPLETED)
-            ORDER BY CASE WHEN c.status = com.bvisionry.programflow.domain.CohortStatus.LAUNCHED
-                          THEN 0 ELSE 1 END, c.position ASC
+              AND c.status = com.bvisionry.programflow.domain.CohortStatus.LAUNCHED
+            ORDER BY c.position ASC
             """)
     List<Cohort> findEnrolled(@Param("userId") UUID userId);
+
+    /**
+     * Staff peer views only: every cohort the member is enrolled in, ANY
+     * status. Reviewing work that already exists must never depend on the
+     * cohort's current visibility — an unlaunched cohort would otherwise 404
+     * the org admin and coach doors ({@code MyProgramService.journeyOfMember}
+     * / {@code playerOfMember}). Callers authorize first (org guard stack or
+     * {@code CoachAccess}); do not use this for any member-facing read.
+     */
+    @Query("SELECT c FROM Cohort c JOIN c.memberIds m WHERE m = :userId ORDER BY c.position ASC")
+    List<Cohort> findEnrolledForStaff(@Param("userId") UUID userId);
 
     /**
      * Every sub-organization with its parent's name, console membership and

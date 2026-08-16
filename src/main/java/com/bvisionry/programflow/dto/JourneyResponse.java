@@ -18,7 +18,6 @@ public record JourneyResponse(
         GamificationDto gamification,
         List<JourneyModule> modules,
         UUID cohortId,
-        boolean readOnly,
         /**
          * How many members the cohort has (spec §11: the journey hero shows
          * cohort size). 0 when the member has no cohort. Week x-of-y and the

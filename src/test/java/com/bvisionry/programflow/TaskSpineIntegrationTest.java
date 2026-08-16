@@ -62,6 +62,7 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
     @Autowired private JdbcTemplate jdbc;
     @Autowired private MyProgramService myProgramService;
     @Autowired private ProgramAdminService programAdminService;
+    @Autowired private com.bvisionry.programflow.web.CohortService cohortService;
     @Autowired private EngagementReadRepository engagementReads;
     @Autowired private com.bvisionry.programflow.repository.TaskSpineRepository spineRepo;
 
@@ -384,6 +385,38 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
             priorSitting("2026-07-01T09:00:00Z");
             assertThat(spineRepo.usersDoneWithTask(checkinTaskId))
                     .containsExactly(member.getId());
+        }
+
+        /**
+         * The launch floor is the FIRST launch: unlaunch keeps
+         * {@code cohorts.launched_at} (CohortService), so a sitting evaluated
+         * after the original launch is still DISTANCE's to adopt once the
+         * cohort is relaunched — open() resolves it instead of minting a
+         * duplicate.
+         */
+        @Test
+        void distanceAdoptionSurvivesAnUnlaunchRelaunchCycle() {
+            org.setSubscriptionTier(com.bvisionry.common.enums.SubscriptionTier.FOUNDER_SUCCESS);
+            organizationRepository.saveAndFlush(org);
+            jdbc.update("UPDATE cohorts SET launched_at = '2026-06-01T00:00:00Z'::timestamptz"
+                    + " WHERE id = ?", cohortId);
+            jdbc.update("UPDATE program_tasks SET milestone_role = 'DISTANCE' WHERE id = ?",
+                    checkinTaskId);
+            priorSitting("2026-06-10T09:00:00Z"); // the earliest — BASELINE's
+            UUID postLaunch = priorSitting("2026-07-01T09:00:00Z");
+
+            cohortService.unlaunch(cohortId);
+            cohortService.launch(cohortId);
+
+            assertThat(spineRepo.assessmentStates(
+                    java.util.List.of(member.getId()), java.util.List.of(checkinTaskId)))
+                    .singleElement()
+                    .satisfies(row -> assertThat(row.status()).isEqualTo("EVALUATED"));
+            assertThat(myProgramService.open(checkinTaskId).targetId()).isEqualTo(postLaunch);
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM submissions WHERE user_id = ?",
+                    Integer.class, member.getId()))
+                    .as("adoption, never a duplicate sitting").isEqualTo(2);
         }
 
         /** The journey must say "done" BEFORE the member opens anything. */

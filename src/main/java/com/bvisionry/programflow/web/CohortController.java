@@ -80,16 +80,10 @@ public class CohortController {
         return service.launch(cohortId);
     }
 
-    /** LAUNCHED → COMPLETED (member read-only closing state). */
-    @PostMapping("/{cohortId}/complete")
-    public CohortDto complete(@PathVariable UUID cohortId) {
-        return service.complete(cohortId);
-    }
-
-    /** DRAFT/COMPLETED → ARCHIVED (read-only for everyone). */
-    @PostMapping("/{cohortId}/archive")
-    public CohortDto archive(@PathVariable UUID cohortId) {
-        return service.archive(cohortId);
+    /** LAUNCHED → DRAFT: back to the drawing board. Quota is never refunded (spec §8). */
+    @PostMapping("/{cohortId}/unlaunch")
+    public CohortDto unlaunch(@PathVariable UUID cohortId) {
+        return service.unlaunch(cohortId);
     }
 
     /** The roster as names — what the audience picker needs. No progress (§13.7). */

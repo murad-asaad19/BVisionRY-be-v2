@@ -62,7 +62,7 @@ public class SessionService {
     }
 
     public SessionDto create(UUID cohortId, UUID orgId, UpsertSessionRequest req, UUID actorId) {
-        requireEditableCohort(cohortId, orgId);
+        requireAssignedCohort(cohortId, orgId);
         Session s = new Session();
         s.setCohortId(cohortId);
         s.setCreatedBy(actorId);
@@ -71,7 +71,7 @@ public class SessionService {
     }
 
     public SessionDto update(UUID cohortId, UUID orgId, UUID sessionId, UpsertSessionRequest req) {
-        requireEditableCohort(cohortId, orgId);
+        requireAssignedCohort(cohortId, orgId);
         Session s = requireSession(cohortId, sessionId);
         apply(s, cohortId, orgId, req);
         return withAttendance(s);
@@ -96,7 +96,7 @@ public class SessionService {
     }
 
     public void delete(UUID cohortId, UUID orgId, UUID sessionId) {
-        requireEditableCohort(cohortId, orgId);
+        requireAssignedCohort(cohortId, orgId);
         sessions.delete(requireSession(cohortId, sessionId));
     }
 
@@ -106,7 +106,7 @@ public class SessionService {
      */
     public SessionDto setAttendance(UUID cohortId, UUID orgId, UUID sessionId, UUID memberId,
                                     boolean present, UUID actorId) {
-        requireEditableCohort(cohortId, orgId);
+        requireAssignedCohort(cohortId, orgId);
         Session s = requireSession(cohortId, sessionId);
         // Own members only — the org path must never be a door to another
         // org's founders (§13.7).
@@ -133,20 +133,6 @@ public class SessionService {
     }
 
     /* ------------------------------------------------------------- plumbing */
-
-    /**
-     * The V167 write gate: sessions and roll call stay mutable while the
-     * cohort is DRAFT/LAUNCHED/COMPLETED (a late roll-call tidy-up on a
-     * completed cohort is legitimate); ARCHIVED refuses every mutation.
-     */
-    private void requireEditableCohort(UUID cohortId, UUID orgId) {
-        requireAssignedCohort(cohortId, orgId);
-        String status = reads.cohortStatus(cohortId)
-                .orElseThrow(() -> new ResourceNotFoundException("Cohort", cohortId.toString()));
-        if ("ARCHIVED".equals(status)) {
-            throw new IllegalOperationException("This cohort is archived and read-only.");
-        }
-    }
 
     /** Tenant guard (§13.7): the cohort must exist AND be assigned to this org. */
     private void requireAssignedCohort(UUID cohortId, UUID orgId) {

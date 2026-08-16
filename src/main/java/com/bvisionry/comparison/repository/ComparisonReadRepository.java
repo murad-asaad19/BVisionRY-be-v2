@@ -1,6 +1,7 @@
 package com.bvisionry.comparison.repository;
 
 import com.bvisionry.common.programaccess.CohortInstruments;
+import com.bvisionry.common.programaccess.CohortVisibility;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -76,7 +77,7 @@ public class ComparisonReadRepository {
     /**
      * The member's cohort with a fully-designated pair, newest first — the
      * anchor for the member/coach growth read. Member-visible cohorts only
-     * (V167: LAUNCHED/COMPLETED) — a configured DRAFT must not become the
+     * (LAUNCHED, V183) — a configured DRAFT must not become the
      * member's growth anchor before launch; staff-facing joins stay
      * unfiltered. ponytail: a member in two
      * designated cohorts sees the newest; per-cohort selection can come with
@@ -87,10 +88,10 @@ public class ComparisonReadRepository {
                 JOIN cohort_members cm ON cm.cohort_id = c.id AND cm.user_id = :userId
                 WHERE ps.baseline_pipeline_id IS NOT NULL
                   AND ps.distance_pipeline_id IS NOT NULL
-                  AND c.status IN ('LAUNCHED', 'COMPLETED')
+                  AND %s
                 ORDER BY c.created_at DESC
                 LIMIT 1
-                """,
+                """.formatted(CohortVisibility.MEMBER_VISIBLE.formatted("c")),
                 new MapSqlParameterSource("userId", userId), this::pairRow)
                 .stream().findFirst();
     }

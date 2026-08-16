@@ -1,5 +1,7 @@
 package com.bvisionry.communication.repository;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -11,6 +13,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import com.bvisionry.common.coachaccess.CoachAccess;
+import com.bvisionry.common.programaccess.CohortVisibility;
 
 /**
  * Cross-feature reads for announcements, expressed as raw SQL through
@@ -47,7 +50,13 @@ public class AnnouncementReadRepository {
         this.jdbc = jdbc;
     }
 
-    public record CohortRow(UUID id, String name) {}
+    /**
+     * {@code status} is {@code cohorts.status} ({@code DRAFT} / {@code LAUNCHED})
+     * — read, never filtered on: the target lists below stay complete so an
+     * unlaunched cohort's history remains reachable, and the state travels to
+     * the composer instead.
+     */
+    public record CohortRow(UUID id, String name, String status) {}
 
     public record FeedRow(UUID id, UUID cohortId, String cohortName, String authorName,
                           String body, boolean flagged, Instant createdAt) {}
@@ -56,31 +65,36 @@ public class AnnouncementReadRepository {
     /** Every cohort assigned to the org — the org-admin's broadcast targets. */
     public List<CohortRow> cohortsInOrg(UUID orgId) {
         return jdbc.query("""
-                        SELECT c.id, c.name FROM cohorts c
+                        SELECT c.id, c.name, c.status FROM cohorts c
                         JOIN cohort_orgs cox ON cox.cohort_id = c.id AND cox.org_id = :orgId
                         ORDER BY c.position, c.name
                         """,
                 new MapSqlParameterSource("orgId", orgId),
-                (rs, i) -> new CohortRow(rs.getObject("id", UUID.class), rs.getString("name")));
+                AnnouncementReadRepository::cohortRow);
     }
 
     /** The cohorts a coach holds a whole-cohort grant on — their broadcast targets. */
     public List<CohortRow> cohortsGrantedToCoach(UUID orgId, UUID coachId) {
         return jdbc.query("""
-                        SELECT c.id, c.name FROM cohorts c
+                        SELECT c.id, c.name, c.status FROM cohorts c
                         WHERE EXISTS (SELECT 1 FROM cohort_orgs cox
                                       WHERE cox.cohort_id = c.id AND cox.org_id = :orgId) AND %s
                         ORDER BY c.position, c.name
                         """.formatted(CoachAccess.GRANTED_COHORT_PREDICATE.formatted("c.id")),
                 new MapSqlParameterSource("orgId", orgId).addValue("coachId", coachId),
-                (rs, i) -> new CohortRow(rs.getObject("id", UUID.class), rs.getString("name")));
+                AnnouncementReadRepository::cohortRow);
+    }
+
+    private static CohortRow cohortRow(ResultSet rs, int rowNum) throws SQLException {
+        return new CohortRow(rs.getObject("id", UUID.class), rs.getString("name"),
+                rs.getString("status"));
     }
 
     /**
      * The recipients of a broadcast: ACTIVE users of {@code orgId} enrolled in
      * the cohort at send time, minus the author — and only while the cohort is
-     * member-visible (V167: LAUNCHED/COMPLETED; a DRAFT's broadcast reaches
-     * nobody until launch, an ARCHIVED one is history). Enrolment is the
+     * member-visible (LAUNCHED, V183; a DRAFT's broadcast reaches
+     * nobody until launch). Enrolment is the
      * definition of the audience, so no role filter — but the org equality is carried on the
      * user row too, so a member moved to another tenant with a stale enrolment
      * row drops out.
@@ -93,11 +107,11 @@ public class AnnouncementReadRepository {
                                     AND u.organization_id = :orgId
                                     AND u.status = 'ACTIVE'
                         JOIN cohorts c ON c.id = cm.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
-                                      AND c.status IN ('LAUNCHED', 'COMPLETED')
+                                      AND %s
                         WHERE cm.cohort_id = :cohortId
                           AND u.id <> :authorId
                         ORDER BY u.id
-                        """,
+                        """.formatted(CohortVisibility.MEMBER_VISIBLE.formatted("c")),
                 new MapSqlParameterSource("orgId", orgId)
                         .addValue("cohortId", cohortId)
                         .addValue("authorId", authorId),
@@ -120,14 +134,29 @@ public class AnnouncementReadRepository {
                                           AND u.organization_id = :orgId
                                           AND u.status = 'ACTIVE'
                             JOIN cohorts c ON c.id = cm.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
-                                          AND c.status IN ('LAUNCHED', 'COMPLETED')
+                                          AND %s
                             WHERE cm.cohort_id = :cohortId AND cm.user_id = :userId)
-                        """,
+                        """.formatted(CohortVisibility.MEMBER_VISIBLE.formatted("c")),
                 new MapSqlParameterSource("orgId", orgId)
                         .addValue("cohortId", cohortId)
                         .addValue("userId", userId),
                 Boolean.class);
         return Boolean.TRUE.equals(member);
+    }
+
+    /**
+     * Whether members can currently see the cohort at all
+     * ({@link CohortVisibility}) — the post-time gate: announcing to a cohort
+     * nobody can see would silently reach nobody.
+     */
+    public boolean isMemberVisible(UUID cohortId) {
+        Boolean visible = jdbc.queryForObject("""
+                        SELECT EXISTS (SELECT 1 FROM cohorts c
+                                       WHERE c.id = :cohortId AND %s)
+                        """.formatted(CohortVisibility.MEMBER_VISIBLE.formatted("c")),
+                new MapSqlParameterSource("cohortId", cohortId),
+                Boolean.class);
+        return Boolean.TRUE.equals(visible);
     }
 
     public record MemberFeedRow(UUID id, String cohortName, String authorName, String authorRole,
@@ -145,14 +174,14 @@ public class AnnouncementReadRepository {
                                u.role AS author_role, a.body, a.created_at
                         FROM announcements a
                         JOIN cohorts c ON c.id = a.cohort_id AND EXISTS (SELECT 1 FROM cohort_orgs cox WHERE cox.cohort_id = c.id AND cox.org_id = :orgId)
-                                      AND c.status IN ('LAUNCHED', 'COMPLETED')
+                                      AND %s
                         JOIN cohort_members cm ON cm.cohort_id = a.cohort_id
                                               AND cm.user_id = :memberId
                         LEFT JOIN users u ON u.id = a.author_id
                         WHERE a.org_id = :orgId
                         ORDER BY a.created_at DESC
                         LIMIT %d
-                        """.formatted(FEED_CEILING),
+                        """.formatted(CohortVisibility.MEMBER_VISIBLE.formatted("c"), FEED_CEILING),
                 new MapSqlParameterSource("orgId", orgId).addValue("memberId", memberId),
                 (rs, i) -> new MemberFeedRow(
                         rs.getObject("id", UUID.class),

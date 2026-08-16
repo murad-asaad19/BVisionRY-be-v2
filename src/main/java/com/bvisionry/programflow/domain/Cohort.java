@@ -27,8 +27,8 @@ import lombok.Setter;
  * A cohort: a platform-level program run (spec §13). Authored by super admins
  * and ASSIGNED to organizations via {@link CohortOrgAssignment}; owns its
  * modules and settings (both FK cohort_id), carries the enrolled learner set
- * (accumulated across assigned orgs) and the DRAFT → LAUNCHED → COMPLETED /
- * ARCHIVED lifecycle (spec §8). Soft-coupled to identity by UUID, like the
+ * (accumulated across assigned orgs) and the DRAFT ⇄ LAUNCHED lifecycle
+ * (spec §8, two-state since V183). Soft-coupled to identity by UUID, like the
  * rest of the slice.
  */
 @Entity
@@ -53,15 +53,13 @@ public class Cohort {
     @Column(name = "status", nullable = false, length = 20)
     private CohortStatus status = CohortStatus.DRAFT;
 
-    /** §7b lifecycle stamps — set once by their transition, never cleared. */
+    /**
+     * Stamped by the FIRST launch and never cleared — the floor for milestone
+     * adoption ({@code TaskSpineRepository.ADOPTABLE_SITTINGS}). Null only for
+     * a cohort that has never been launched; an unlaunched cohort keeps it.
+     */
     @Column(name = "launched_at")
     private OffsetDateTime launchedAt;
-
-    @Column(name = "completed_at")
-    private OffsetDateTime completedAt;
-
-    @Column(name = "archived_at")
-    private OffsetDateTime archivedAt;
 
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(name = "cohort_members", joinColumns = @JoinColumn(name = "cohort_id"))

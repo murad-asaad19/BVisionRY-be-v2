@@ -72,7 +72,13 @@ public class AnnouncementService {
 
     /* --------------------------------------------------------------- reads */
 
-    /** The cohorts the caller may broadcast to — all of the org's, or a coach's grants. */
+    /**
+     * The cohorts the caller may broadcast to — all of the org's, or a coach's
+     * grants. Every state, DRAFT included: an unlaunched cohort cannot RECEIVE a
+     * broadcast, but its history is still staff's to read, so the list carries
+     * each cohort's {@code status} for the composer to gate on rather than
+     * dropping rows the reader still needs.
+     */
     @Transactional(readOnly = true)
     public List<AnnouncementCohortResponse> broadcastTargets(UUID orgId) {
         CurrentUser caller = currentUser.require();
@@ -80,7 +86,7 @@ public class AnnouncementService {
                 ? reads.cohortsGrantedToCoach(orgId, caller.userId())
                 : reads.cohortsInOrg(orgId);
         return rows.stream()
-                .map(row -> new AnnouncementCohortResponse(row.id(), row.name()))
+                .map(row -> new AnnouncementCohortResponse(row.id(), row.name(), row.status()))
                 .toList();
     }
 
@@ -122,6 +128,14 @@ public class AnnouncementService {
     public AnnouncementResponse post(UUID orgId, UUID cohortId, CreateAnnouncementRequest request) {
         CurrentUser caller = currentUser.require();
         String cohortName = requireBroadcastableCohort(orgId, cohortId, caller);
+        // Recipients are resolved member-visible-only (CohortVisibility), so a
+        // post to a DRAFT cohort would silently reach nobody — refuse it where
+        // the author can act. Reads (feed, broadcastTargets) stay unfiltered:
+        // a temporarily-unlaunched cohort's history remains visible to staff.
+        if (!reads.isMemberVisible(cohortId)) {
+            throw new BadRequestException(
+                    "This cohort isn't live — launch it before announcing.");
+        }
 
         // REJECT, don't rewrite. Sanitising and storing the result is not a
         // fixpoint: the sanitiser decodes entities, so `&lt;script&gt;` comes

@@ -44,10 +44,9 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The V167 lifecycle: legal transitions only, ARCHIVED read-only, and member
- * visibility per state (spec §8 — members see LAUNCHED + COMPLETED, COMPLETED
- * is read-only; DRAFT/ARCHIVED are invisible; admin board/pulse/matrix read
- * any state).
+ * The two-state lifecycle (V183): DRAFT ⇄ LAUNCHED, legal transitions only,
+ * and member visibility per state (spec §8 — members see LAUNCHED; DRAFT is
+ * invisible; admin board/pulse/matrix read any state).
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -96,70 +95,73 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void onlyLegalTransitionsPass() {
-        // DRAFT: complete refused, archive allowed (tested separately), launch allowed.
-        assertThatThrownBy(() -> cohortService.complete(cohortId))
+        // DRAFT: unlaunch refused, launch allowed.
+        assertThatThrownBy(() -> cohortService.unlaunch(cohortId))
                 .isInstanceOf(IllegalOperationException.class);
 
         CohortDto launched = cohortService.launch(cohortId);
         assertThat(launched.status()).isEqualTo(CohortStatus.LAUNCHED);
         assertThat(launched.launchedAt()).isNotNull();
 
-        // LAUNCHED: no relaunch, no direct archive.
+        // LAUNCHED: no relaunch on top.
         assertThatThrownBy(() -> cohortService.launch(cohortId))
                 .isInstanceOf(IllegalOperationException.class);
-        assertThatThrownBy(() -> cohortService.archive(cohortId))
-                .isInstanceOf(IllegalOperationException.class);
 
-        CohortDto completed = cohortService.complete(cohortId);
-        assertThat(completed.status()).isEqualTo(CohortStatus.COMPLETED);
-        assertThat(completed.completedAt()).isNotNull();
+        // Unlaunch pulls it back to draft but KEEPS the first-launch stamp —
+        // the milestone-adoption floor (ADOPTABLE_SITTINGS) must survive.
+        CohortDto unlaunched = cohortService.unlaunch(cohortId);
+        assertThat(unlaunched.status()).isEqualTo(CohortStatus.DRAFT);
+        assertThat(unlaunched.launchedAt()).isEqualTo(launched.launchedAt());
 
-        // COMPLETED: no relaunch — archive is the only exit.
-        assertThatThrownBy(() -> cohortService.launch(cohortId))
-                .isInstanceOf(IllegalOperationException.class);
-        CohortDto archived = cohortService.archive(cohortId);
-        assertThat(archived.status()).isEqualTo(CohortStatus.ARCHIVED);
-        assertThat(archived.archivedAt()).isNotNull();
+        // Relaunch works and returns the SAME instant, not a fresh stamp.
+        CohortDto relaunched = cohortService.launch(cohortId);
+        assertThat(relaunched.status()).isEqualTo(CohortStatus.LAUNCHED);
+        assertThat(relaunched.launchedAt()).isEqualTo(launched.launchedAt());
     }
 
+    /**
+     * Relaunch is silent: the "you were enrolled" blast fires on the FIRST
+     * launch only, and members added while LAUNCHED are notified individually
+     * by the roster path — never the whole roster again.
+     */
     @Test
-    void aDraftMayBeArchivedDirectly() {
-        assertThat(cohortService.archive(cohortId).status())
-                .isEqualTo(CohortStatus.ARCHIVED);
-    }
-
-    /* ----------------------------------------------------- archived = frozen */
-
-    @Test
-    void archived_isReadOnlyForEveryMutation_butAdminReadsStillWork() {
-        cohortService.archive(cohortId);
-
-        assertThatThrownBy(() -> cohortService.update(cohortId,
-                new UpdateCohortRequest("Renamed")))
-                .isInstanceOf(IllegalOperationException.class)
-                .hasMessageContaining("archived");
-        assertThatThrownBy(() -> cohortService.setOrgMembers(org.getId(), cohortId,
-                new UpdateCohortMembersRequest(List.of())))
-                .isInstanceOf(IllegalOperationException.class);
-        assertThatThrownBy(() -> addModule("Week 1", null))
-                .isInstanceOf(IllegalOperationException.class);
-
-        // Admin reads keep working in any state (spec: "Pulse/matrix work for any state").
-        assertThatCode(() -> adminService.getBoard(cohortId)).doesNotThrowAnyException();
-        assertThatCode(() -> adminService.getPulse(cohortId, null)).doesNotThrowAnyException();
-        assertThatCode(() -> adminService.getMatrix(cohortId, null)).doesNotThrowAnyException();
-    }
-
-    @Test
-    void membersAndCurriculumStayEditableWhileCompleted() {
+    void relaunch_doesNotRenotifyTheRoster() {
+        User member2 = newOrgUser("relaunch.member@lifecycle.invalid", "Relaunch Member",
+                com.bvisionry.common.enums.UserRole.MEMBER);
+        TestAuthentication.authenticate(admin);
         cohortService.launch(cohortId);
-        cohortService.complete(cohortId);
+        assertThat(applicationEvents.stream(ProgramFlowEvents.CohortEnrolled.class))
+                .as("first launch blasts the roster once").hasSize(1);
 
+        cohortService.unlaunch(cohortId);
+        cohortService.launch(cohortId);
+        assertThat(applicationEvents.stream(ProgramFlowEvents.CohortEnrolled.class))
+                .as("relaunch stays silent").hasSize(1);
+
+        cohortService.setOrgMembers(org.getId(), cohortId,
+                new UpdateCohortMembersRequest(List.of(member.getId(), member2.getId())));
+        List<ProgramFlowEvents.CohortEnrolled> events = applicationEvents
+                .stream(ProgramFlowEvents.CohortEnrolled.class).toList();
+        assertThat(events).as("a newcomer while LAUNCHED still hears").hasSize(2);
+        assertThat(events.get(1).userIds()).containsExactly(member2.getId());
+    }
+
+    @Test
+    void everythingStaysEditableWhileLaunched_andAdminReadsWorkInAnyState() {
+        cohortService.launch(cohortId);
+
+        assertThatCode(() -> cohortService.update(cohortId, new UpdateCohortRequest("Renamed")))
+                .doesNotThrowAnyException();
         assertThatCode(() -> addModule("Retro module", "Mindset"))
                 .doesNotThrowAnyException();
         assertThatCode(() -> cohortService.setOrgMembers(org.getId(), cohortId,
                 new UpdateCohortMembersRequest(List.of(member.getId()))))
                 .doesNotThrowAnyException();
+
+        cohortService.unlaunch(cohortId);
+        assertThatCode(() -> adminService.getBoard(cohortId)).doesNotThrowAnyException();
+        assertThatCode(() -> adminService.getPulse(cohortId, null)).doesNotThrowAnyException();
+        assertThatCode(() -> adminService.getMatrix(cohortId, null)).doesNotThrowAnyException();
     }
 
     /* ------------------------------------------------- board writes (§13.10) */
@@ -403,14 +405,10 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /* -------------------------------------------- sessions write gate (§4) */
 
-    /**
-     * Review blocking #2: sessions + roll call reject an ARCHIVED cohort;
-     * COMPLETED stays mutable (late roll-call tidy-up is legitimate).
-     */
+    /** Sessions + roll call stay mutable in both states — the gate is tenancy only. */
     @Test
-    void sessionMutations_rejectArchived_butCompletedStaysMutable() {
+    void sessionMutations_workInEitherState() {
         cohortService.launch(cohortId);
-        cohortService.complete(cohortId);
 
         var req = new com.bvisionry.engagement.dto.SessionDtos.UpsertSessionRequest(
                 com.bvisionry.engagement.domain.SessionType.WORKSHOP, "Retro",
@@ -420,18 +418,11 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
         sessionService.setAttendance(cohortId, org.getId(), sessionId, member.getId(),
                 true, admin.getId());
 
-        cohortService.archive(cohortId);
-        // The write gate reads the status by raw SQL; flush the JPA status
-        // change so it is visible inside this test transaction (in production
-        // the archive committed long before).
+        cohortService.unlaunch(cohortId);
         entityManager.flush();
-        assertThatThrownBy(() -> sessionService.create(cohortId, org.getId(), req,
-                admin.getId()))
-                .isInstanceOf(IllegalOperationException.class)
-                .hasMessageContaining("archived");
-        assertThatThrownBy(() -> sessionService.setAttendance(cohortId, org.getId(),
+        assertThatCode(() -> sessionService.setAttendance(cohortId, org.getId(),
                 sessionId, member.getId(), false, admin.getId()))
-                .isInstanceOf(IllegalOperationException.class);
+                .doesNotThrowAnyException();
     }
 
     /* -------------------------------------------------- member visibility */
@@ -445,19 +436,11 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
         cohortService.launch(cohortId);
         TestAuthentication.authenticate(member);
         assertThat(myProgramService.myCohorts()).hasSize(1);
-        assertThat(myProgramService.journey(cohortId).readOnly()).isFalse();
 
         TestAuthentication.authenticate(admin);
-        cohortService.complete(cohortId);
+        cohortService.unlaunch(cohortId);
         TestAuthentication.authenticate(member);
         assertThat(myProgramService.myCohorts())
-                .as("COMPLETED stays visible (the closing screen)").hasSize(1);
-        assertThat(myProgramService.journey(cohortId).readOnly())
-                .as("COMPLETED reads as read-only (the closing screen)").isTrue();
-
-        TestAuthentication.authenticate(admin);
-        cohortService.archive(cohortId);
-        TestAuthentication.authenticate(member);
-        assertThat(myProgramService.myCohorts()).as("ARCHIVED is invisible").isEmpty();
+                .as("unlaunched → back to invisible").isEmpty();
     }
 }

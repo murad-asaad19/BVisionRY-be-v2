@@ -633,16 +633,30 @@ public class TaskSpineRepository {
     }
 
     /**
-     * The DISTANCE pillars this cohort's mapping names — the only ids a board
-     * task may be tagged with (spec §1: a tag lines up 1:1 with the narrative it
-     * feeds). Raw SQL for this class's usual reason: the mapping belongs to the
+     * The DISTANCE pillars this cohort maps as one half of a PAIR — the only ids
+     * a board task may be tagged with (spec §1: a tag lines up 1:1 with the
+     * narrative it feeds).
+     *
+     * <p><strong>Both sides required.</strong> A narrative candidate is a
+     * comparison pillar that is MAPPED with both ids set
+     * ({@code ShiftNarrativeService.context}), so tagged work on a half-mapped
+     * distance pillar is quoted by nothing, ever. Accepting the distance side
+     * alone also made an unmapped pair's tags immortal: {@code unmap} leaves a
+     * one-sided row behind, which kept the id allowed, so every later board save
+     * re-inserted the tag the picker no longer shows — and it reattached itself
+     * to whatever baseline was mapped to that pillar next. The builder's picker
+     * offers pairs only; this is the same rule, enforced.
+     *
+     * <p>Raw SQL for this class's usual reason: the mapping belongs to the
      * comparison slice and the ArchUnit ratchet forbids a new
      * programflow→comparison import.
      */
     public List<UUID> mappedDistancePillarIds(UUID cohortId) {
         return jdbc.query("""
                 SELECT distance_pillar_id FROM comparison_pillar_mappings
-                WHERE cohort_id = :cohortId AND distance_pillar_id IS NOT NULL
+                WHERE cohort_id = :cohortId
+                  AND distance_pillar_id IS NOT NULL
+                  AND baseline_pillar_id IS NOT NULL
                 """,
                 new MapSqlParameterSource("cohortId", cohortId),
                 (rs, i) -> rs.getObject("distance_pillar_id", UUID.class));
@@ -745,6 +759,21 @@ public class TaskSpineRepository {
                 FROM exercise_assignments ea
                 JOIN exercise_submissions es ON es.assignment_id = ea.id
                 WHERE ea.user_id = :userId AND ea.program_task_id = :taskId
+                """,
+                new MapSqlParameterSource("userId", userId).addValue("taskId", taskId),
+                (rs, i) -> rs.getObject("id", UUID.class))
+                .stream().findFirst();
+    }
+
+    /**
+     * The member's exercise ASSIGNMENT for this cohort task — what the staff
+     * review screen is keyed on (the submission id keys the member's editor).
+     * (program_task_id, user_id) is unique, so at most one row.
+     */
+    public Optional<UUID> exerciseAssignmentId(UUID userId, UUID taskId) {
+        return jdbc.query("""
+                SELECT id FROM exercise_assignments
+                WHERE user_id = :userId AND program_task_id = :taskId
                 """,
                 new MapSqlParameterSource("userId", userId).addValue("taskId", taskId),
                 (rs, i) -> rs.getObject("id", UUID.class))

@@ -85,6 +85,38 @@ public class ProgramAdminService {
     private final EntityManager entityManager;
     private final ApplicationEventPublisher events;
 
+    // --------------------------------------------------- member exercise copy
+
+    /**
+     * Materializes the member's working copy (assignment + submission + starter
+     * rows) for an EXERCISE cohort task they never opened, so staff can fill it
+     * in on their behalf, and returns the assignment id the review screen needs.
+     *
+     * <p>Deliberately the SAME write the member's own open performs
+     * ({@link MyProgramService#open}) — idempotent and race-safe, so a member
+     * who opens the task afterwards lands on this very copy rather than a
+     * second one. Callers authorize first (the controller's org+member guard).
+     */
+    public UUID ensureMemberExerciseCopy(UUID orgId, UUID memberId, UUID taskId) {
+        ProgramTask task = tasks.findById(taskId)
+                .orElseThrow(() -> new ResourceNotFoundException("Task", taskId.toString()));
+        if (task.getTaskType() != ProgramTaskType.EXERCISE) {
+            throw new BadRequestException("This task is not an exercise.");
+        }
+        if (task.getRefId() == null) {
+            throw new BadRequestException("This task has no exercise configured yet.");
+        }
+        UUID submissionId = spine
+                .findExerciseSubmissionId(memberId, taskId, task.getRefId())
+                .orElse(null);
+        if (submissionId == null) {
+            spine.ensureExerciseSubmission(orgId, task.getRefId(), memberId, taskId);
+        }
+        return spine.exerciseAssignmentId(memberId, taskId)
+                .orElseThrow(() -> new ResourceNotFoundException("Exercise assignment",
+                        taskId.toString()));
+    }
+
     // ------------------------------------------------------------------ board
 
     @Transactional(readOnly = true)

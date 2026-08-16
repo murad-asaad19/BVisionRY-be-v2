@@ -108,15 +108,21 @@ public class MemberGrowthSummaryService {
                 userMessage(eligible, approved),
                 new CallMetadata(ctx.comparison().getDistanceSubmissionId(), null, null));
         MemberGrowthSummaryResult result = response.parsed();
-        if (result == null || (result.items().isEmpty() && result.summary().isBlank())) {
-            throw new BadRequestException(
-                    "The AI did not return a growth summary. Nothing was saved — try again in a moment.");
-        }
         // Whichever shape arrived is the shape stored. An installation whose
         // customised template still asks for prose keeps producing prose (V193
         // deliberately leaves its wording alone), and a breakdown is never
         // faked out of a paragraph nobody wrote that way.
-        List<ShiftNarrative.Item> items = parseItems(result);
+        List<ShiftNarrative.Item> items = result == null ? List.of() : parseItems(result);
+        String body = result == null ? "" : result.summary().trim();
+        // The "did a usable summary come back" check, asserted on what would
+        // actually be PERSISTED rather than on the raw response: a breakdown
+        // whose kinds all fail NarrativeKind.parse reconciles to nothing, and
+        // saving that would overwrite the one row — possibly an approved,
+        // human-reviewed one — with an empty draft. Refuse before the load.
+        if (items.isEmpty() && body.isBlank()) {
+            throw new BadRequestException(
+                    "The AI did not return a growth summary. Nothing was saved — try again in a moment.");
+        }
 
         OpenRouterChatService.Provenance provenance = response.provenance();
         MemberGrowthSummary summary = summaries.findByCohortIdAndUserId(cohortId, userId)
@@ -125,7 +131,7 @@ public class MemberGrowthSummaryService {
         summary.setOrgId(ctx.comparison().getOrgId());
         summary.setUserId(userId);
         summary.setItems(items.isEmpty() ? null : items);
-        summary.setBody(items.isEmpty() ? result.summary().trim() : null);
+        summary.setBody(items.isEmpty() ? body : null);
         // Regeneration is a fresh draft: the old approval and the old reviewer's
         // edit stamp described text that no longer exists.
         summary.setStatus(NarrativeStatus.DRAFT);
@@ -157,7 +163,9 @@ public class MemberGrowthSummaryService {
      * The model's breakdown, kinds validated here rather than trusted. An
      * unrecognised kind drops its observation instead of failing the whole
      * generation — the rest of the breakdown is still usable prose a reviewer
-     * can read, and an empty result is caught by the caller's blank check.
+     * can read. When NOTHING survives, the caller refuses the whole generation
+     * (it checks this list, not the raw response) rather than persisting an
+     * empty summary over the existing row.
      */
     private static List<ShiftNarrative.Item> parseItems(MemberGrowthSummaryResult result) {
         return result.items().stream()

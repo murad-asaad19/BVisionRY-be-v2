@@ -138,63 +138,39 @@ class NarrativeGuardrailsTest {
         assertThat(NarrativeGuardrails.validate(null, false)).contains(Rejection.EMPTY_NARRATIVE);
     }
 
-    /* ------------------------------------------------- (d) the no-numbers rule */
+    /* --------------------------------------- (d) numbers are the prompt's job */
 
     @Test
-    void aScoreShapedFigureInAnObservation_isRejected() {
-        // The rule §2 states and the prompt cannot enforce: the input is full of
-        // figures ("scored at 100%", "rated Easy (4/5)"), so the only place to
-        // hold the line is the output.
-        for (String leak : List.of(
+    void figuresInMemberFacingProse_areNotRejected() {
+        // §2's no-numbers rule is asked for in the prompt and NOT enforced here.
+        // The rejecting guardrail was removed: the input is full of figures the
+        // model is told to quote back ("scored at 100%", "rated Easy (4/5)"), so
+        // it fired mostly on the founder's own words — and each false reject
+        // burned the single corrective retry and surfaced the pillar as
+        // ungeneratable to the reviewer. This test fails if it is reinstated.
+        for (String withFigure : List.of(
                 "Your focus score moved to 80%.",
                 "You rated it Easy (4/5) this time.",
                 "Restorative sleep now runs 6 out of 7 nights.",
-                "The pillar scored at 100 on the later reading.",
-                "It landed in the 90 percentile.")) {
-            assertThat(NarrativeGuardrails.validate(result("NEW", leak, ""), false))
-                    .as(leak).contains(Rejection.CONTAINS_NUMBER);
-        }
-    }
-
-    @Test
-    void ordinalsAndDurationsAreNotScores_andPassUntouched() {
-        // Three quarters of the digit-bearing lines in the real source text look
-        // like these, and the prompt tells the model to quote the founder's own
-        // wording — rejecting them would burn the single retry on compliant prose.
-        for (String fine : List.of(
                 "Statement 3 is where the shift shows up.",
-                "You now protect the habit 7 days a week.",
-                "The block runs 31-60 minutes rather than whenever time allowed.",
-                "You describe a team of 3 with clearer ownership.",
-                "Dimension 1 reads differently now.")) {
-            assertThat(NarrativeGuardrails.validate(result("NEW", fine, ""), false))
-                    .as(fine).isEmpty();
+                "You now protect the habit 7 days a week.")) {
+            assertThat(NarrativeGuardrails.validate(result("NEW", withFigure, ""), false))
+                    .as(withFigure).isEmpty();
         }
     }
 
     @Test
-    void theClosingActionIsHeldToTheSameRule() {
-        // It is member-facing prose too — a next step is not exempt.
+    void aClosingActionCarryingAFigure_isAccepted() {
         assertThat(NarrativeGuardrails.validate(
                 result("FADED", "The cadence slipped.", "Get back to 80% completion this month."),
                 true))
-                .contains(Rejection.CONTAINS_NUMBER);
+                .isEmpty();
     }
 
     @Test
-    void aBlankDeclineReportsTheMissingClose_notTheNumberRule() {
-        // Order matters for the corrective retry: the reviewer needs the
-        // rejection they can act on, and an empty string has no number in it.
+    void aBlankDeclineStillReportsTheMissingClose() {
         assertThat(NarrativeGuardrails.validate(result("FADED", "It slipped.", ""), true))
                 .contains(Rejection.MISSING_CLOSING_ACTION);
-    }
-
-    @Test
-    void numberCorrection_asksForWordsRatherThanAnotherFigure() {
-        assertThat(NarrativeGuardrails.correction(Rejection.CONTAINS_NUMBER, "ignored"))
-                .contains("score").contains("words");
-        assertThat(NarrativeGuardrails.reasonLabel(Rejection.CONTAINS_NUMBER))
-                .contains("score");
     }
 
     /* ------------------------------------------------- (e) the breakdown */

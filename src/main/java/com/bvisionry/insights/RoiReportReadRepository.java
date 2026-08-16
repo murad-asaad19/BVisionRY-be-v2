@@ -116,11 +116,12 @@ public class RoiReportReadRepository {
      * THE roster predicate — who counts as a founder of this org's report.
      * Interpolated into both {@link #EVALUATED} and {@link #founders} so the
      * movement population and the roster population can never diverge: a
-     * suspended, org-moved or non-MEMBER user must vanish from both at once,
+     * suspended, org-moved or non-learner user must vanish from both at once,
      * or {@code foundersPaired} would count founders the roster does not show.
      */
     private static final String ROSTER_USER =
-            "u.organization_id = :orgId AND u.role = 'MEMBER' AND u.status = 'ACTIVE'";
+            "u.organization_id = :orgId AND u.status = 'ACTIVE' AND "
+                    + com.bvisionry.common.programaccess.Learner.ROLE_PREDICATE.formatted("u");
 
     private static final String EVALUATED = """
             evaluated AS (
@@ -242,7 +243,7 @@ public class RoiReportReadRepository {
      * {@code u.organization_id = :orgId} a user who now belongs to another
      * tenant — or to none — would appear in a funder-facing roster under their
      * live name, and inflate {@code cohortSize} and the completion denominator
-     * as a permanent zero-assessment ghost. {@code role = 'MEMBER'} and
+     * as a permanent zero-assessment ghost. {@code Learner.ROLE_IN} and
      * {@code status = 'ACTIVE'} follow for the same reason: a coach seeded into
      * {@code cohort_members} or a suspended member is not a learner — the coach
      * roster's {@code VISIBLE_FOUNDER} and the cohort screen's org slice filter

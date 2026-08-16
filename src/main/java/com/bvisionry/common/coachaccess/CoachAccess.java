@@ -4,6 +4,8 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import com.bvisionry.common.programaccess.Learner;
+
 import java.util.UUID;
 
 /**
@@ -51,7 +53,8 @@ public class CoachAccess {
                 FROM coach_assignments ca
                 JOIN users mu ON mu.id = %1$s
                              AND mu.organization_id = ca.org_id
-                             AND mu.role = 'MEMBER'
+                             AND\s""" + Learner.ROLE_PREDICATE.formatted("mu") + """
+
                              AND mu.status = 'ACTIVE'
                 WHERE ca.org_id = :orgId
                   AND ca.coach_id = %2$s

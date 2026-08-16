@@ -56,12 +56,13 @@ public class FounderProfileReadRepository {
      * deliberately excluded — this is the FOUNDER's last activity.
      */
     public Optional<MemberRow> member(UUID orgId, UUID memberId) {
-        return jdbc.query("""
+        return jdbc.query(("""
                 SELECT u.id, u.name, u.email, u.role, u.status, u.user_type, u.last_login_at,
                        %s AS last_activity_at
                 FROM users u
-                WHERE u.id = :memberId AND u.organization_id = :orgId AND u.role = 'MEMBER'
-                """.formatted(com.bvisionry.common.programaccess.MemberActivity.LAST_ACTIVITY
+                WHERE u.id = :memberId AND u.organization_id = :orgId
+                  AND\s""" + com.bvisionry.common.programaccess.Learner.ROLE_PREDICATE.formatted("u"))
+                .formatted(com.bvisionry.common.programaccess.MemberActivity.LAST_ACTIVITY
                         .formatted("u")),
                 params(orgId, memberId),
                 (rs, i) -> new MemberRow(rs.getObject("id", UUID.class), rs.getString("name"),

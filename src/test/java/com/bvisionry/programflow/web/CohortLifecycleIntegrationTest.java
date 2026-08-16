@@ -310,7 +310,9 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
      * program, not joining it. Enrolling him would push him a "you were
      * enrolled" notification and leave a memberIds row no roster surface ever
      * shows (findRoster is role-filtered), so the raw count would disagree
-     * with the roster forever.
+     * with the roster forever. An ORG_ADMIN, by contrast, IS a learner
+     * ({@code Learner.ROLE_IN}): an org-scoped admin takes the program like a
+     * founder does, matching the assessment slice's targetRoles.
      */
     @Test
     void autoEnroll_takesLearnersOnly_neverStaff() {
@@ -321,18 +323,21 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
                 com.bvisionry.common.enums.UserRole.COACH);
         User joiner = newOrgUser("late.joiner@lifecycle.invalid", "Late Joiner",
                 com.bvisionry.common.enums.UserRole.MEMBER);
+        User orgAdmin = newOrgUser("orgadmin@lifecycle.invalid", "Org Admin",
+                com.bvisionry.common.enums.UserRole.ORG_ADMIN);
         TestAuthentication.authenticate(admin);
 
         cohortService.autoEnroll(org.getId(), coach.getId());
         cohortService.autoEnroll(org.getId(), joiner.getId());
+        cohortService.autoEnroll(org.getId(), orgAdmin.getId());
 
         assertThat(rawMemberIds())
-                .as("the coach staffs the cohort; only learners land on the roster")
-                .containsExactlyInAnyOrder(member.getId(), joiner.getId());
+                .as("the coach staffs the cohort; learners — member and org admin — enroll")
+                .containsExactlyInAnyOrder(member.getId(), joiner.getId(), orgAdmin.getId());
         assertThat(applicationEvents.stream(ProgramFlowEvents.CohortEnrolled.class)
                 .flatMap(e -> e.userIds().stream()))
                 .as("no 'you were enrolled' push for someone who is staffing")
-                .containsExactlyInAnyOrder(member.getId(), joiner.getId());
+                .containsExactlyInAnyOrder(member.getId(), joiner.getId(), orgAdmin.getId());
     }
 
     /** The cohort's RAW roster — the platform view, before any role filtering. */

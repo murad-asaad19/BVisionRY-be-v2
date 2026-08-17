@@ -45,7 +45,7 @@
 -- only a Flyway-migrated schema plus the e2e fixtures.
 --
 -- WHAT IT BUILDS
---   * cohort "Alpha Founders" (LAUNCHED) → 4 pillar modules, typed task spine
+--   * cohort "Demo Founders" (LAUNCHED) → 4 pillar modules, typed task spine
 --     (LESSON/EXERCISE/COURSE/SURVEY + BASELINE/CHECKIN/DISTANCE assessment
 --     milestones), 5 founders with four different progress stories, 4 sessions
 --     with attendance, 1 announcement.
@@ -92,7 +92,7 @@ DECLARE
     wshop      uuid := 'de300000-0600-4000-8000-000000000001'; -- Founder Positioning Sprint (Demo)
     w_ex       uuid := 'de300000-0601-4000-8000-000000000001'; -- its one exercise
     w_team     uuid := 'de300000-0602-4000-8000-000000000001'; -- its one team
-    cohort_a   uuid := 'de300000-0400-4000-8000-000000000001'; -- Alpha Founders (LAUNCHED)
+    cohort_a   uuid := 'de300000-0400-4000-8000-000000000001'; -- Demo Founders (LAUNCHED)
     cohort_d   uuid := 'de300000-0400-4000-8000-000000000002'; -- Delta Alumni (2025) (COMPLETED)
 
     v_coach1   uuid := 'de300000-0500-4000-8000-000000000001'; -- Priya Hale     (cohort coach)
@@ -353,12 +353,20 @@ ON CONFLICT (workshop_id, user_id) DO UPDATE SET
 -- --------------------------------------------------------------- cohorts ----
 -- position 10/11 keeps them out of `cohorts[0]`, which two specs read.
 -- No org_id since V171: a cohort is authored at the platform level.
+--
+-- "Demo Founders", NOT "Alpha Founders": e2e-seed.sql already puts an "Alpha
+-- Founders" in this same org at position 0, and Playwright's getByRole(name)
+-- is a SUBSTRING match, so two cohorts sharing a name made every name-based
+-- locator in cohort-view.spec.ts a strict-mode violation. The e2e-seed one
+-- owns that name (roi-report.spec.ts and the announcements picker both read
+-- the org's first cohort), so this one moved. Keep the two names disjoint —
+-- not merely different, since a substring still matches both.
 -- No completed_at / COMPLETED status since V183: the lifecycle is DRAFT <->
 -- LAUNCHED, and V183 maps the old COMPLETED to LAUNCHED. Delta stays LAUNCHED
 -- with an old launched_at — it is only ever asserted on as the cohort Mara's
 -- view must NOT show (cohort isolation), so its status is immaterial.
 INSERT INTO cohorts (id, name, position, status, launched_at) VALUES
- (cohort_a, 'Alpha Founders',      10, 'LAUNCHED', now() - interval '35 days'),
+ (cohort_a, 'Demo Founders',      10, 'LAUNCHED', now() - interval '35 days'),
  (cohort_d, 'Delta Alumni (2025)', 11, 'LAUNCHED', now() - interval '260 days')
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name, position = EXCLUDED.position,
@@ -960,7 +968,7 @@ SELECT c.name, c.status, c.position,
   JOIN cohort_orgs co ON co.cohort_id = c.id AND co.org_id = :org
  ORDER BY c.position, c.name;
 
-\echo '--- counts (Alpha Founders) ---'
+\echo '--- counts (Demo Founders) ---'
 SELECT 'modules' AS what, count(*) FROM program_modules WHERE cohort_id = :cohort_a
 UNION ALL SELECT 'tasks', count(*) FROM program_tasks t JOIN program_modules m ON m.id = t.module_id
   WHERE m.cohort_id = :cohort_a
@@ -1119,7 +1127,7 @@ SELECT ct.content_type, count(*)
  WHERE c.org_id = '00000000-0000-0000-0000-0000000000ca'
  GROUP BY 1 ORDER BY 1;
 
-\echo '--- INVARIANT: all five task types LIVE on Alpha Founders (rows = missing) ---'
+\echo '--- INVARIANT: all five task types LIVE on Demo Founders (rows = missing) ---'
 -- Five, not six: V172 removed WORKSHOP from ck_program_tasks_task_type.
 SELECT t AS missing_task_type
   FROM unnest(ARRAY['LESSON','COURSE','EXERCISE','ASSESSMENT','SURVEY']) AS t
@@ -1141,7 +1149,7 @@ SELECT tm.name AS team, u.name AS member, wm.is_lead
  WHERE wm.workshop_id = 'de300000-0600-4000-8000-000000000001'
  ORDER BY wm.is_lead DESC, u.name;
 
-\echo '--- per-founder progress + comparison state (Alpha Founders) ---'
+\echo '--- per-founder progress + comparison state (Demo Founders) ---'
 SELECT u.name AS founder,
        (SELECT os.overall_score_percentage FROM submissions s
           JOIN overall_summaries os ON os.submission_id = s.id

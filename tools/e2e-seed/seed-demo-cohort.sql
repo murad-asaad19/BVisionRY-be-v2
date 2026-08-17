@@ -353,13 +353,17 @@ ON CONFLICT (workshop_id, user_id) DO UPDATE SET
 -- --------------------------------------------------------------- cohorts ----
 -- position 10/11 keeps them out of `cohorts[0]`, which two specs read.
 -- No org_id since V171: a cohort is authored at the platform level.
-INSERT INTO cohorts (id, name, position, status, launched_at, completed_at) VALUES
- (cohort_a, 'Alpha Founders',      10, 'LAUNCHED',  now() - interval '35 days', NULL),
- (cohort_d, 'Delta Alumni (2025)', 11, 'COMPLETED', now() - interval '260 days', now() - interval '150 days')
+-- No completed_at / COMPLETED status since V183: the lifecycle is DRAFT <->
+-- LAUNCHED, and V183 maps the old COMPLETED to LAUNCHED. Delta stays LAUNCHED
+-- with an old launched_at — it is only ever asserted on as the cohort Mara's
+-- view must NOT show (cohort isolation), so its status is immaterial.
+INSERT INTO cohorts (id, name, position, status, launched_at) VALUES
+ (cohort_a, 'Alpha Founders',      10, 'LAUNCHED', now() - interval '35 days'),
+ (cohort_d, 'Delta Alumni (2025)', 11, 'LAUNCHED', now() - interval '260 days')
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name, position = EXCLUDED.position,
     status = EXCLUDED.status, launched_at = EXCLUDED.launched_at,
-    completed_at = EXCLUDED.completed_at, updated_at = now();
+    updated_at = now();
 
 -- The org's PARTICIPATION (V171). This is the row every org-scoped read joins
 -- through — the cohort header, the roster, announcements, the coach console,
@@ -559,10 +563,13 @@ END LOOP;
 
 -- The pair's pillar mapping. ComparisonComputeService auto-seeds this on first
 -- use; seeding it here means the row exists before anything reads it. Same
--- instrument on both sides, so every pillar maps to itself.
-INSERT INTO comparison_pillar_mappings (id, baseline_pipeline_id, distance_pipeline_id,
+-- instrument on both sides, so every pillar maps to itself. Cohort-scoped
+-- since V182 — the mapping is this cohort's Settings config, not global.
+INSERT INTO comparison_pillar_mappings (id, cohort_id,
+                                        baseline_pipeline_id, distance_pipeline_id,
                                         baseline_pillar_id, distance_pillar_id, source)
-SELECT md5('demo:cpm:' || p.id::text)::uuid, pipe, pipe, p.id, p.id, 'AUTO'
+SELECT md5('demo:cpm:' || cohort_a::text || ':' || p.id::text)::uuid, cohort_a,
+       pipe, pipe, p.id, p.id, 'AUTO'
   FROM pillars p WHERE p.pipeline_id = pipe
 ON CONFLICT (id) DO NOTHING;
 

@@ -31,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -205,11 +206,8 @@ public class ExerciseReviewService {
                                                          SaveExerciseRowsRequest request) {
         ExerciseSubmission submission = requireMemberSubmission(orgId, assignmentId);
         ExerciseSubmissionDetailResponse detail = submissionService.overrideRows(submission, request);
-        auditService.log(currentUser.require().userId(), orgId,
-                OrgAuditActions.EXERCISE_ANSWERS_OVERRIDDEN,
-                OrgAuditActions.ENTITY_EXERCISE_SUBMISSION, submission.getId(),
-                Map.of("exerciseName", templateName(submission),
-                       "memberName", submission.getUser().getName()));
+        notifyStatus(submission, OrgAuditActions.EXERCISE_ANSWERS_OVERRIDDEN,
+                null, null, Map.of());
         return detail;
     }
 
@@ -243,12 +241,8 @@ public class ExerciseReviewService {
         }
         submission.setStatus(target);
 
-        auditService.log(currentUser.require().userId(), orgId,
-                OrgAuditActions.EXERCISE_STATUS_OVERRIDDEN,
-                OrgAuditActions.ENTITY_EXERCISE_SUBMISSION, submission.getId(),
-                Map.of("exerciseName", templateName(submission),
-                       "memberName", submission.getUser().getName(),
-                       "from", from.name(), "to", target.name()));
+        notifyStatus(submission, OrgAuditActions.EXERCISE_STATUS_OVERRIDDEN,
+                null, null, Map.of("from", from.name(), "to", target.name()));
         return submissionService.buildDetail(submission, true);
     }
 
@@ -288,7 +282,8 @@ public class ExerciseReviewService {
 
         notifyStatus(submission, OrgAuditActions.EXERCISE_CHANGES_REQUESTED,
                 "Changes requested",
-                "Your reviewer requested changes on \"" + templateName(submission) + "\".");
+                "Your reviewer requested changes on \"" + templateName(submission) + "\".",
+                Map.of());
         return submissionService.buildDetail(submission, true);
     }
 
@@ -316,7 +311,8 @@ public class ExerciseReviewService {
 
         notifyStatus(submission, OrgAuditActions.EXERCISE_REVIEWED,
                 "Exercise reviewed",
-                "\"" + templateName(submission) + "\" has been reviewed.");
+                "\"" + templateName(submission) + "\" has been reviewed.",
+                Map.of());
         return submissionService.buildDetail(submission, true);
     }
 
@@ -361,13 +357,27 @@ public class ExerciseReviewService {
         submission.setQualityTaggedBy(currentUserAccessor.require().userId());
     }
 
+    /**
+     * This service's single seam onto the {@code audit} and {@code notification}
+     * features for the status flows. Keep the cross-feature calls HERE rather
+     * than in each caller: {@code ArchitectureRulesTest}'s frozen baseline pins
+     * this method as their owner, and the CI ratchet rejects a new owner — so a
+     * rename, or an audit call inlined back into a caller, turns the build red.
+     *
+     * <p>A null {@code title} audits without notifying: the super-admin
+     * overrides are recorded but deliberately silent for the member.
+     */
     private void notifyStatus(ExerciseSubmission submission, String auditAction,
-                              String title, String body) {
+                              String title, String body, Map<String, Object> extraDetails) {
         UUID orgId = submission.getAssignment().getOrganization().getId();
+        Map<String, Object> details = new LinkedHashMap<>(extraDetails);
+        details.put("exerciseName", templateName(submission));
+        details.put("memberName", submission.getUser().getName());
         auditService.log(currentUser.require().userId(), orgId, auditAction,
-                OrgAuditActions.ENTITY_EXERCISE_SUBMISSION, submission.getId(),
-                Map.of("exerciseName", templateName(submission),
-                       "memberName", submission.getUser().getName()));
+                OrgAuditActions.ENTITY_EXERCISE_SUBMISSION, submission.getId(), details);
+        if (title == null) {
+            return;
+        }
         pushNotificationService.notifyUser(submission.getUser().getId(),
                 NotificationType.EXERCISE_FEEDBACK, title, body,
                 "/app/exercises/" + submission.getId());

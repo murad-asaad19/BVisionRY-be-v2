@@ -152,7 +152,12 @@ public final class DiffCoverage {
             if (path.isEmpty() || !Files.isRegularFile(Path.of(path))) {
                 continue;
             }
-            add(changed, path, 1, Files.readAllLines(Path.of(path)).size());
+            // ISO-8859-1, not UTF-8: an untracked BINARY file (e.g. the osv-scanner
+            // binary CI downloads into the workspace) throws MalformedInputException
+            // under UTF-8. Only the line COUNT matters here, and a binary file is
+            // never in the JaCoCo report, so its lines are skipped as unmeasurable.
+            add(changed, path, 1,
+                    Files.readAllLines(Path.of(path), StandardCharsets.ISO_8859_1).size());
         }
         return changed;
     }

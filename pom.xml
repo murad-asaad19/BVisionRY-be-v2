@@ -31,6 +31,21 @@
              opensaml-xmlsec-*, net.shibboleth:shib-*) are pinned by OpenSAML's own poms,
              not here — `./mvnw dependency:list` is the way to see the resolved set. -->
         <opensaml.version>5.1.6</opensaml.version>
+
+        <!-- SECURITY BUMPS over what spring-boot-starter-parent 4.0.7 manages.
+             Each one is an advisory the OSV gate below (see osv-scanner.toml)
+             flagged as FIXABLE, so it is fixed here rather than baselined —
+             the baseline is for debt that has no upgrade, and adding an id to
+             it that a property override would close is accepted risk nobody
+             needed to accept. Drop each line once the parent's own managed
+             version reaches it (`./mvnw help:evaluate -Dexpression=<prop>`). -->
+        <!-- GHSA-hjcp-jmpx-g3qm (5.3) — parent manages 5.5.2. -->
+        <httpclient5.version>5.6.3</httpclient5.version>
+        <!-- GHSA-hf6x-8p5f-cgmf + GHSA-v3jc-474w-2wm6 (7.5) — parent manages
+             5.3.6, and this property versions httpcore5 and httpcore5-h2. -->
+        <httpcore5.version>5.4.3</httpcore5.version>
+        <!-- GHSA-qv9r-c865-cp47 (6.3) — parent manages 2.25.4. -->
+        <log4j2.version>2.25.5</log4j2.version>
     </properties>
 
     <!--

@@ -998,6 +998,58 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(myProgramService.journey(cohortId).directAssignments()).isEmpty();
         }
 
+        /**
+         * The DISTANCE half of the same rule, and the bug it was reported for:
+         * a founder saw one assessment twice — on the distance milestone band,
+         * which had already adopted the sitting and was showing its score, and
+         * again under "direct assignments outside your cohort". Only BASELINE
+         * was excluded, so DISTANCE fell through. The tag that would have
+         * covered it is written only when the member OPENS the task, and the
+         * module in the report was locked, so it never could be.
+         *
+         * <p>Asserts BOTH halves deliberately: the band must display the
+         * sitting AND the direct row must be gone. Excluding a sitting nothing
+         * displays is the worse failure, so the two can only move together.
+         */
+        @Test
+        void anAdoptedDistanceSitting_showsOnTheBandAndLeavesTheDirectList() {
+            insertTaggedEvaluatedSubmission(null, 30, new BigDecimal("52.00"));
+            UUID distancePipeline = insertPipeline("Distance instrument");
+            // Re-point the seeded check-in as this cohort's DISTANCE milestone,
+            // on its own instrument (no BASELINE references it).
+            programAdminService.saveBoard(cohortId, BoardPayloads.edit(
+                    programAdminService.getBoard(cohortId), checkinTaskId,
+                    t -> new TaskUpsert(t.id(), "Distance", null, ProgramTaskStatus.LIVE, false,
+                            ProgramTaskType.ASSESSMENT, distancePipeline, MilestoneRole.DISTANCE,
+                            List.of(), List.of())));
+
+            UUID assignmentId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO assignments (id, pipeline_id, organization_id, user_id, assigned_by)
+                    VALUES (?, ?, ?, ?, ?)
+                    """, assignmentId, distancePipeline, org.getId(), member.getId(), member.getId());
+            UUID submissionId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO submissions (id, assignment_id, user_id, status, program_task_id,
+                                             submitted_at, evaluated_at, created_at)
+                    VALUES (?, ?, ?, 'EVALUATED', NULL,
+                            now() - make_interval(days => 5), now() - make_interval(days => 5),
+                            now() - make_interval(days => 5))
+                    """, submissionId, assignmentId, member.getId());
+            jdbc.update("INSERT INTO overall_summaries (submission_id, overall_score_percentage) "
+                    + "VALUES (?, ?)", submissionId, new BigDecimal("70.00"));
+
+            List<JourneyTask> tasks = myProgramService.journey(cohortId).modules().stream()
+                    .flatMap(m -> m.tasks().stream()).toList();
+            assertThat(tasks).filteredOn(t -> distancePipeline.equals(t.refId()))
+                    .singleElement()
+                    .satisfies(t -> {
+                        assertThat(t.state()).isEqualTo(JourneyTaskState.EVALUATED);
+                        assertThat(t.score()).isEqualByComparingTo("70.00");
+                    });
+            assertThat(myProgramService.journey(cohortId).directAssignments()).isEmpty();
+        }
+
         @Test
         void memberWithoutAnyCohort_stillGetsDirectAssignments() {
             User loner = saveUser("spine.loner@test.invalid", UserRole.MEMBER, org);

@@ -86,8 +86,9 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /**
      * Swaps the AI transport for the scripted fake. Registered as {@code @Primary}
-     * beside the production provider (which is {@code @Profile("!e2e & !mock")}
-     * and therefore still present under {@code test}) — no bean-override flag
+     * beside the production provider — which is still present under {@code test},
+     * because {@code bvisionry.ai.mock.enabled} is unset there and AIConfig's
+     * condition is {@code matchIfMissing = true} — so no bean-override flag is
      * needed, and no e2e profile, so real method security stays in play.
      */
     @TestConfiguration

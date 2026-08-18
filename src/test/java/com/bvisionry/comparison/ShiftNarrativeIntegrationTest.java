@@ -86,10 +86,14 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /**
      * Swaps the AI transport for the scripted fake. Registered as {@code @Primary}
-     * beside the production provider — which is still present under {@code test},
-     * because {@code bvisionry.ai.mock.enabled} is unset there and AIConfig's
-     * condition is {@code matchIfMissing = true} — so no bean-override flag is
-     * needed, and no e2e profile, so real method security stays in play.
+     * beside the production provider — which is still present under {@code test}
+     * because {@code application.properties} ships
+     * {@code bvisionry.ai.mock.enabled=false} and AIConfig's condition is
+     * {@code havingValue = "false"} with NO {@code matchIfMissing}: the key being
+     * present and false is what wires it, not the key being absent. (Absent wires
+     * no transport at all — {@code AiTransportDefaultTest} pins that.) So no
+     * bean-override flag is needed, and no e2e profile, so real method security
+     * stays in play.
      */
     @TestConfiguration
     static class FakeAiTransport {

@@ -53,8 +53,10 @@ public record FounderProfileResponse(
             List<FounderCoachRef> coaches,
             /** Latest evaluated overall score (the FRI), null when never evaluated. */
             BigDecimal friLatest,
-            /** Latest minus earliest evaluated overall — the Δ-so-far. Null with fewer than two. */
-            BigDecimal friDelta,
+            // No Δ here on purpose: movement is the comparison's answer
+            // (founder_comparisons.overall_delta), read from the growth
+            // endpoint. A second, instrument-blind Δ on this header contradicted
+            // it on the same screen.
             Instant friEvaluatedAt,
             /** Most recent of: program save/submit, exercise save/submit, assessment activity, course enrolment/completion, login. */
             Instant lastActivityAt,

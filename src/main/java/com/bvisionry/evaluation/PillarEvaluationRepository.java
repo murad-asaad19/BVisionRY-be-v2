@@ -127,6 +127,11 @@ public interface PillarEvaluationRepository extends JpaRepository<PillarEvaluati
      * PDF/Excel insight exports, which read the AI narrative columns. Dashboard
      * aggregations must use {@link #findScoreViewsByOrgAndPipeline} instead —
      * this query hydrates the heavy AI payload columns with every row.
+     *
+     * <p>Org scope — including the sub-org clause and the index ceiling it
+     * carries — is {@code SubmissionRepository#findByOrgAndPipeline}'s, shared
+     * verbatim; pinned alongside it by
+     * {@code SubmissionOrgScopeIntegrationTest}.
      */
     @Query("""
             SELECT pe FROM PillarEvaluation pe
@@ -134,7 +139,7 @@ public interface PillarEvaluationRepository extends JpaRepository<PillarEvaluati
             JOIN FETCH pe.submission s
             JOIN FETCH s.user
             JOIN s.assignment a
-            WHERE a.organization.id = :orgId
+            WHERE (a.organization.id = :orgId OR a.organization.parentOrganization.id = :orgId)
             AND a.pipeline.id = :pipelineId
             AND s.status = 'EVALUATED'
             """)
@@ -143,8 +148,9 @@ public interface PillarEvaluationRepository extends JpaRepository<PillarEvaluati
 
     /**
      * Score-only projection of {@link #findByOrgAndPipeline} for dashboard
-     * aggregations: identical scope (org + pipeline, EVALUATED only), but
-     * selects just the six aggregation columns instead of whole rows.
+     * aggregations: identical scope (org + sub-orgs + pipeline, EVALUATED
+     * only), but selects just the six aggregation columns instead of whole
+     * rows.
      */
     @Query("""
             SELECT new com.bvisionry.evaluation.PillarScoreView(
@@ -153,7 +159,7 @@ public interface PillarEvaluationRepository extends JpaRepository<PillarEvaluati
             JOIN pe.pillar p
             JOIN pe.submission s
             JOIN s.assignment a
-            WHERE a.organization.id = :orgId
+            WHERE (a.organization.id = :orgId OR a.organization.parentOrganization.id = :orgId)
             AND a.pipeline.id = :pipelineId
             AND s.status = 'EVALUATED'
             """)

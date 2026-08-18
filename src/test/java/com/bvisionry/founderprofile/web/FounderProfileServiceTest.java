@@ -1,11 +1,9 @@
 package com.bvisionry.founderprofile.web;
 
 import com.bvisionry.founderprofile.repository.FounderProfileReadRepository.AssessmentRow;
-import com.bvisionry.founderprofile.repository.FounderProfileReadRepository.FriPoint;
 import com.bvisionry.founderprofile.repository.FounderProfileReadRepository.ProgramTaskRow;
 import org.junit.jupiter.api.Test;
 
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -13,38 +11,14 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The header's Δ-so-far math (pure): latest minus earliest, null under two
- * points — plus the Work tab's per-type cohort-task status.
+ * The Work tab's per-type cohort-task status and milestone adoption.
+ *
+ * <p>The header's Δ-so-far math used to be tested here. It is gone: a global
+ * latest-minus-earliest across every instrument contradicted the cohort's real
+ * comparison on the same screen, so the header now reads
+ * {@code founder_comparisons.overall_delta} instead of deriving a second answer.
  */
 class FounderProfileServiceTest {
-
-    private static FriPoint point(String score) {
-        return new FriPoint(score == null ? null : new BigDecimal(score), Instant.now());
-    }
-
-    @Test
-    void latestMinusEarliest() {
-        assertThat(FounderProfileService.friDelta(
-                List.of(point("50.00"), point("64.00"), point("71.25"))))
-                .isEqualByComparingTo("21.25");
-    }
-
-    @Test
-    void declineIsNegative() {
-        assertThat(FounderProfileService.friDelta(List.of(point("60.00"), point("52.50"))))
-                .isEqualByComparingTo("-7.50");
-    }
-
-    @Test
-    void underTwoPointsIsNull() {
-        assertThat(FounderProfileService.friDelta(List.of())).isNull();
-        assertThat(FounderProfileService.friDelta(List.of(point("58.00")))).isNull();
-    }
-
-    @Test
-    void nullScoresYieldNullNotAnException() {
-        assertThat(FounderProfileService.friDelta(List.of(point(null), point("58.00")))).isNull();
-    }
 
     private static ProgramTaskRow task(String type, boolean done, String submissionStatus) {
         return new ProgramTaskRow(null, "T", null, "Cohort", "Module", null, type, null, null,

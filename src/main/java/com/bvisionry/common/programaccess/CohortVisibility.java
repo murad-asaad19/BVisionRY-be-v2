@@ -13,7 +13,11 @@ package com.bvisionry.common.programaccess;
  * memberFeed, isMemberVisible), {@code ComparisonReadRepository
  * .memberPairCohort} and {@code ProgramTaskSurveyRepository
  * .findEnrolledTaskSurvey}. Staff-facing reads deliberately do NOT use it —
- * admin boards, feeds and reviews work in any state.
+ * admin boards, feeds and reviews work in any state. The one deliberate
+ * exception is {@code CoachingReadRepository}'s roster Δ lateral: the number it
+ * shows a coach is the MEMBER's growth anchor, so it has to land on the same
+ * cohort {@code memberPairCohort} picks — without this fragment the roster and
+ * the founder profile it links to would disagree for an unlaunched cohort.
  *
  * <p>Lives in {@code common} for the same reason as {@link ProgramAudience}:
  * the ArchUnit ratchet forbids feature→feature imports and {@code common} may

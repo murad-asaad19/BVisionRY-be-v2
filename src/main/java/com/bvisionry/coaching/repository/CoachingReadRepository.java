@@ -15,6 +15,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import com.bvisionry.common.coachaccess.CoachAccess;
+import com.bvisionry.common.programaccess.CohortVisibility;
 import com.bvisionry.common.programaccess.ProgramAudience;
 import com.bvisionry.common.programaccess.TaskCompletion;
 
@@ -93,12 +94,36 @@ public class CoachingReadRepository {
 
     /**
      * The roster row shape: grant-scoped cohort names, grant-scoped per-type
-     * program completion, the FRI trajectory ends (latest + Δ vs earliest —
-     * the founder-profile rule: evaluated submissions ordered by
-     * {@code evaluated_at ASC NULLS LAST, created_at ASC}), the lowest
-     * incomplete module, the open-items split and the founder's last
-     * activity. All LATERAL/scalar subqueries, so the whole query stays
-     * O(visible founders), never O(org members × live tasks).
+     * program completion, the FRI pair (latest evaluated overall + the
+     * movement chip), the lowest incomplete module, the open-items split and
+     * the founder's last activity. All LATERAL/scalar subqueries, so the whole
+     * query stays O(visible founders), never O(org members × live tasks).
+     *
+     * <p><strong>FRI and Δ answer different questions and come from different
+     * places.</strong> {@code fri_latest} is the member's GLOBAL latest
+     * evaluated overall, deliberately unscoped — the rule
+     * {@link com.bvisionry.common.programaccess.CohortInstruments} records for
+     * every global surface, and the same number the founder profile's header
+     * shows. Δ is the COMPUTED comparison's {@code overall_delta}, NOT
+     * latest-minus-earliest over every instrument the founder ever sat: that
+     * number flips sign on an unrelated scan, and this row links straight to
+     * the founder profile whose chip IS the comparison — a coach must never
+     * read "+13 improving" here and "−6" one click later for the same founder.
+     *
+     * <p><strong>Which means the two are NOT a sentence.</strong> The Δ is not
+     * a change in the score printed beside it: a founder whose last sitting was
+     * an unrelated public scan reads that scan's 85 next to a +4.2 computed
+     * over their cohort's 67.4 → 71.6. Both numbers are the right answer to
+     * their own question and neither is the other's; the roster and the founder
+     * profile therefore label the chip with what it measured rather than
+     * letting the pair read as "85, up 4.2".
+     *
+     * <p>Nor is this the only Δ on the platform. {@code cohortview
+     * .CohortViewReadRepository} compares consecutive sittings on ONE cohort's
+     * own instruments, which is a different question with a legitimately
+     * different answer for the same founder — also labelled at its own surface.
+     * What is forbidden is two numbers claiming to answer the SAME question,
+     * which is what the deleted global latest-minus-earliest did.
      *
      * <p><strong>"Unread replies" is a proxy, commented honestly:</strong>
      * there is no read tracking, so it counts OPEN exercise-comment threads on
@@ -113,7 +138,7 @@ public class CoachingReadRepository {
                    COALESCE(p.total, 0)     AS total_tasks,
                    COALESCE(p.done, 0)      AS submitted_tasks,
                    fri.latest               AS fri_latest,
-                   CASE WHEN fri.taken >= 2 THEN fri.latest - fri.earliest END AS fri_delta,
+                   growth.overall_delta     AS fri_delta,
                    cur.module_name          AS current_module,
                    (SELECT count(*)
                     FROM exercise_assignments ea
@@ -152,18 +177,53 @@ public class CoachingReadRepository {
                   AND %5$s
             ) p ON true
             LEFT JOIN LATERAL (
-                SELECT count(*) AS taken,
-                       max(f.score) FILTER (WHERE f.rn_first = 1) AS earliest,
-                       max(f.score) FILTER (WHERE f.rn_last = 1)  AS latest
-                FROM (SELECT os.overall_score_percentage AS score,
-                             row_number() OVER (ORDER BY s.evaluated_at ASC NULLS LAST,
-                                                         s.created_at ASC)  AS rn_first,
-                             row_number() OVER (ORDER BY s.evaluated_at DESC,
-                                                         s.created_at DESC) AS rn_last
-                      FROM submissions s
-                      JOIN overall_summaries os ON os.submission_id = s.id
-                      WHERE s.user_id = u.id AND s.status = 'EVALUATED') f
+                -- Ordering key shared VERBATIM with pillarScores (no NULLS
+                -- LAST, see the comment there), so the header score and the
+                -- pillar bars always describe the same submission.
+                SELECT os.overall_score_percentage AS latest
+                FROM submissions s
+                JOIN overall_summaries os ON os.submission_id = s.id
+                WHERE s.user_id = u.id AND s.status = 'EVALUATED'
+                ORDER BY s.evaluated_at DESC, s.created_at DESC
+                LIMIT 1
             ) fri ON true
+            LEFT JOIN LATERAL (
+                -- The movement chip, read off the SAME anchor
+                -- ComparisonReadRepository.memberPairCohort picks: the newest
+                -- member-visible cohort holding a fully designated pair.
+                -- Restated in SQL rather than imported because the ArchUnit
+                -- ratchet forbids coaching → comparison — the same
+                -- restate-and-name-your-twin idiom CohortVisibility's own
+                -- javadoc uses for CohortRepository.findEnrolled.
+                --
+                -- founder_comparisons is a LEFT join INSIDE the lateral on
+                -- purpose: the anchor is chosen first and the comparison read
+                -- off it, so "pair designated, compute not landed yet" reads
+                -- NULL — the pending state the member's own report renders as
+                -- no chip — instead of quietly borrowing an older cohort's
+                -- number.
+                --
+                -- MEMBER_VISIBLE applies even though this is a staff-facing
+                -- read (against that fragment's general note): the value being
+                -- mirrored is the member-anchored one, so dropping it would
+                -- make the roster and the profile disagree for an unlaunched
+                -- cohort — the exact bug class this lateral closes. No org
+                -- clause, for the same reason the twin has none: VISIBLE_FOUNDER
+                -- already pins the founder's tenant. The anchor cohort may sit
+                -- outside the coach's grant grain, which is not a widening —
+                -- ComparisonCoachController already hands this coach that same
+                -- comparison, and its cohort name, on CoachAccess.requireSees
+                -- alone, and this row is the link to it.
+                SELECT fc.overall_delta
+                FROM program_settings ps
+                JOIN cohorts pc         ON pc.id = ps.cohort_id AND %6$s
+                JOIN cohort_members pcm ON pcm.cohort_id = pc.id AND pcm.user_id = u.id
+                LEFT JOIN founder_comparisons fc ON fc.cohort_id = pc.id AND fc.user_id = u.id
+                WHERE ps.baseline_pipeline_id IS NOT NULL
+                  AND ps.distance_pipeline_id IS NOT NULL
+                ORDER BY pc.created_at DESC
+                LIMIT 1
+            ) growth ON true
             LEFT JOIN LATERAL (
                 SELECT m.name AS module_name
                 FROM cohort_members cm
@@ -184,7 +244,8 @@ public class CoachingReadRepository {
                     // ProgramRules.gates in SQL: a COURSE task the founder's org
                     // cannot see counts in neither side of the fraction and never
                     // pins a module as "current".
-                    TaskCompletion.COUNTS_FOR_USER.formatted("u.id"));
+                    TaskCompletion.COUNTS_FOR_USER.formatted("u.id"),
+                    CohortVisibility.MEMBER_VISIBLE.formatted("pc"));
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -202,8 +263,9 @@ public class CoachingReadRepository {
 
     /**
      * Every founder the coach may see, with grant-scoped completion counts and
-     * the triage columns (FRI + Δ, current module, open-items split, last
-     * activity). ponytail: unbounded — a caseload is tens of founders today;
+     * the triage columns (latest FRI + the comparison's Δ, current module,
+     * open-items split, last activity).
+     * ponytail: unbounded — a caseload is tens of founders today;
      * paginate when orgs run cohorts in the hundreds.
      */
     public List<RosterRow> roster(UUID orgId, UUID coachId) {

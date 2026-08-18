@@ -36,7 +36,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * the real schema:
  *
  * <ul>
- *   <li>roster triage numbers: FRI + Δ (earliest vs latest evaluated), current
+ *   <li>roster triage numbers: FRI (latest evaluated) + Δ (the computed
+ *       comparison, same as the founder profile the row opens), current
  *       module (lowest incomplete, per-type done), the open-items split
  *       (awaiting review + the unread-replies proxy) and last activity;</li>
  *   <li>the review queue: oldest first, resubmitted marker, CoachAccess
@@ -66,7 +67,7 @@ class CoachWorkspaceIntegrationTest extends AbstractPostgresIntegrationTest {
     private Organization orgA;
     private Organization orgB;
     private User coach;      // COACH in org A: cohort1 grant + direct(f2, f3)
-    private User f1;         // "a.founder" — cohort1: FRI 58→71, 1 review + 1 reply open
+    private User f1;         // "a.founder" — cohort1: FRI 71, comparison Δ 4.20, 1 review + 1 reply open
     private User f2;         // "b.founder" — direct grant: driven through the review loop
     private User f3;         // "c.founder" — direct grant: idle (login 9 days ago, nothing else)
     private User fHidden;    // cohort2, NO grant — never in roster or queue
@@ -132,21 +133,44 @@ class CoachWorkspaceIntegrationTest extends AbstractPostgresIntegrationTest {
                 """, lessonDone, f1.getId());
     }
 
-    /** Two evaluated submissions for f1: 58.00 (30 days ago) → 71.00 (yesterday). */
+    /**
+     * Two evaluated submissions for f1: 58.00 (30 days ago) → 71.00 (yesterday),
+     * plus the computed comparison those two sittings belong to.
+     *
+     * <p>The two scores are also the regression trap. They used to BE the Δ
+     * (71 − 58 = 13, last minus first over everything the founder ever sat);
+     * the roster now reports the comparison's own {@code overall_delta}, so a
+     * 13.0 reappearing here means the global trajectory rule crept back in.
+     * The pair is designated on two DIFFERENT pipelines deliberately — an
+     * equal pair is a separate shape the comparison slice treats specially.
+     */
     private void seedFriTrajectory() {
         UUID pipelineId = UUID.randomUUID();
         jdbc.update("INSERT INTO pipelines (id, name, status, created_by) VALUES (?, 'WS Pipeline', 'PUBLISHED', ?)",
                 pipelineId, coach.getId());
+        UUID distancePipelineId = UUID.randomUUID();
+        jdbc.update("INSERT INTO pipelines (id, name, status, created_by) VALUES (?, 'WS Distance Pipeline', 'PUBLISHED', ?)",
+                distancePipelineId, coach.getId());
         UUID assignmentId = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO assignments (id, pipeline_id, organization_id, user_id, assigned_by)
                 VALUES (?, ?, ?, ?, ?)
                 """, assignmentId, pipelineId, orgA.getId(), f1.getId(), coach.getId());
-        insertEvaluated(assignmentId, f1.getId(), "58.00", "30 days");
-        insertEvaluated(assignmentId, f1.getId(), "71.00", "1 day");
+        UUID baseline = insertEvaluated(assignmentId, f1.getId(), "58.00", "30 days");
+        UUID distance = insertEvaluated(assignmentId, f1.getId(), "71.00", "1 day");
+
+        jdbc.update("""
+                INSERT INTO program_settings (cohort_id, baseline_pipeline_id, distance_pipeline_id)
+                VALUES (?, ?, ?)
+                """, cohort1, pipelineId, distancePipelineId);
+        jdbc.update("""
+                INSERT INTO founder_comparisons (cohort_id, org_id, user_id, baseline_submission_id,
+                                                 distance_submission_id, overall_delta, computed_at)
+                VALUES (?, ?, ?, ?, ?, 4.20, now())
+                """, cohort1, orgA.getId(), f1.getId(), baseline, distance);
     }
 
-    private void insertEvaluated(UUID assignmentId, UUID userId, String score, String ago) {
+    private UUID insertEvaluated(UUID assignmentId, UUID userId, String score, String ago) {
         UUID submissionId = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO submissions (id, assignment_id, user_id, status, submitted_at, evaluated_at)
@@ -156,6 +180,7 @@ class CoachWorkspaceIntegrationTest extends AbstractPostgresIntegrationTest {
                 INSERT INTO overall_summaries (submission_id, overall_score_percentage)
                 VALUES (?, ?)
                 """, submissionId, new java.math.BigDecimal(score));
+        return submissionId;
     }
 
     private UUID templateT1;
@@ -233,7 +258,10 @@ class CoachWorkspaceIntegrationTest extends AbstractPostgresIntegrationTest {
                     // f1 — ordered first by name.
                     .andExpect(jsonPath("$.founders[0].name", is("a.founder")))
                     .andExpect(jsonPath("$.founders[0].friLatest", is(71.0)))
-                    .andExpect(jsonPath("$.founders[0].friDelta", is(13.0)))
+                    // The chip is the COMPUTED comparison, not 71 − 58 = 13:
+                    // the row links to the founder profile, whose chip is this
+                    // same overall_delta, so the two cannot read differently.
+                    .andExpect(jsonPath("$.founders[0].friDelta", is(4.2)))
                     .andExpect(jsonPath("$.founders[0].currentModule", is("Module Two")))
                     .andExpect(jsonPath("$.founders[0].awaitingReview", is(1)))
                     .andExpect(jsonPath("$.founders[0].unreadReplies", is(1)))
@@ -242,7 +270,7 @@ class CoachWorkspaceIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(jsonPath("$.founders[0].submittedTasks", is(2)))
                     .andExpect(jsonPath("$.founders[0].lastActivityAt", notNullValue()))
                     .andExpect(jsonPath("$.founders[0].idleDays", is(0)))
-                    // f2 — one evaluated point is no delta.
+                    // f2 — never evaluated: no FRI and no comparison, both null.
                     .andExpect(jsonPath("$.founders[1].name", is("b.founder")))
                     .andExpect(jsonPath("$.founders[1].friLatest", nullValue()))
                     .andExpect(jsonPath("$.founders[1].friDelta", nullValue()))

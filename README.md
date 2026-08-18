@@ -61,11 +61,45 @@ Profile is chosen via `spring.profiles.active` / `SPRING_PROFILES_ACTIVE`
 
 | Profile | File                            | Purpose                                                                                     |
 | ------- | ------------------------------- | ------------------------------------------------------------------------------------------- |
-| `dev`   | `application-dev.properties`    | Default local run. Plain-HTTP cookies (`cookies.secure=false`), Mailpit SMTP on `:1025`, dev super-admin bootstrap, Swagger enabled. |
-| `local` | `application-local.properties`  | Like `dev` plus verbose SQL logging (`show-sql`, formatted, `com.bvisionry=DEBUG`).          |
+| `dev`   | `application-dev.properties`    | Default local run. Plain-HTTP cookies (`cookies.secure=false`), Mailpit SMTP on `:1025`, dev super-admin bootstrap, Swagger enabled, **AI transport mocked** (`bvisionry.ai.mock.enabled=true`). |
+| `local` | `application-local.properties`  | Like `dev` plus verbose SQL logging (`show-sql`, formatted, `com.bvisionry=DEBUG`). AI transport mocked. |
 | `test`  | `application-test.properties`   | Unit-test profile: H2 in-memory, Flyway off, `ddl-auto=create-drop`, simple cache.          |
 | `prod`  | `application-prod.properties`   | Railway. Resend HTTP mail, `Secure` + `SameSite=None` cookies, Swagger disabled, datasource + secrets from env. |
-| `mock`  | `com.bvisionry.config.mock`     | Add-on (compose uses `dev,mock`): static AI provider so evaluation runs with no live model/key. |
+| `mock`  | `application-mock.properties`   | Add-on that forces the static AI provider on ANY profile (compose uses `dev,mock`). Redundant on `dev`/`local`, which already mock. |
+
+### The AI transport never bills from a laptop
+
+`bvisionry.ai.mock.enabled` picks the transport, the same way
+`bvisionry.mail.transport` picks the mail one. It is `false` in
+`application.properties` (real provider, real spend) and `true` in `dev`,
+`local` and `mock` — so **every local run is mocked by default**, with no
+profile to remember. The chosen transport announces itself at boot:
+`AI transport: MOCK …`.
+
+It used to be opt-in, which meant `./mvnw spring-boot:run` — the loop this
+README recommends — silently called OpenRouter for every evaluation, narrative
+and cohort summary.
+
+To exercise the live provider from a local run, for that run only:
+
+```bash
+BVISIONRY_AI_MOCK_ENABLED=false ./mvnw spring-boot:run
+```
+
+Two guards keep the switch from failing the other way, towards a production
+that quietly serves canned text:
+
+- **`prod` refuses to boot mocked.** `StartupSafetyValidator` throws if the
+  `prod` profile is active with `bvisionry.ai.mock.enabled=true`. This is not
+  theoretical: `application-mock.properties` is profile-specific, so it beats
+  `application-prod.properties` on a `prod,mock` boot, and a stray
+  `BVISIONRY_AI_MOCK_ENABLED=true` in a deploy dashboard wins outright. The
+  mock answers every call successfully, so without this a mocked production
+  looks entirely healthy.
+- **An unreadable value picks nothing.** Both `@ConditionalOnProperty` arms are
+  explicit — there is no `matchIfMissing`. An empty or non-boolean value
+  matches neither, so the context fails to start rather than falling through to
+  the transport that bills.
 
 ### `prod` fails closed on missing secrets
 

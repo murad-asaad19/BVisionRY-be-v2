@@ -35,7 +35,7 @@ class StartupSafetyValidatorTest {
 
     private static StartupSafetyValidator validator(String profile, String vapidPrivate, String minioSecret) {
         return new StartupSafetyValidator(env(profile), true,
-                GOOD_JWT, GOOD_ENC, GOOD_PROXY, vapidPrivate, minioSecret);
+                GOOD_JWT, GOOD_ENC, GOOD_PROXY, vapidPrivate, minioSecret, false);
     }
 
     @Test
@@ -61,13 +61,13 @@ class StartupSafetyValidatorTest {
     @Test
     void prodStillRefusesDevJwtAndEncryptionAndInsecureCookies() {
         assertThatThrownBy(() -> new StartupSafetyValidator(env("prod"), true,
-                DEV_JWT, GOOD_ENC, GOOD_PROXY, GOOD_VAPID, GOOD_MINIO).afterPropertiesSet())
+                DEV_JWT, GOOD_ENC, GOOD_PROXY, GOOD_VAPID, GOOD_MINIO, false).afterPropertiesSet())
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("JWT");
         assertThatThrownBy(() -> new StartupSafetyValidator(env("prod"), true,
-                GOOD_JWT, DEV_ENC_KEY, GOOD_PROXY, GOOD_VAPID, GOOD_MINIO).afterPropertiesSet())
+                GOOD_JWT, DEV_ENC_KEY, GOOD_PROXY, GOOD_VAPID, GOOD_MINIO, false).afterPropertiesSet())
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("encryption");
         assertThatThrownBy(() -> new StartupSafetyValidator(env("prod"), false,
-                GOOD_JWT, GOOD_ENC, GOOD_PROXY, GOOD_VAPID, GOOD_MINIO).afterPropertiesSet())
+                GOOD_JWT, GOOD_ENC, GOOD_PROXY, GOOD_VAPID, GOOD_MINIO, false).afterPropertiesSet())
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("cookies");
     }
 
@@ -75,7 +75,7 @@ class StartupSafetyValidatorTest {
     void devBootsOnAllDevDefaults() {
         assertThatCode(() -> new StartupSafetyValidator(env("dev"), false,
                 DEV_JWT, DEV_ENC_KEY, "default-bvisionry-proxy-secret-9f2c7a4e1d8b6053f4a9c2e7b1d6480a",
-                DEV_VAPID_PRIVATE, DEV_MINIO_SECRET).afterPropertiesSet())
+                DEV_VAPID_PRIVATE, DEV_MINIO_SECRET, true).afterPropertiesSet())
                 .doesNotThrowAnyException();
     }
 }

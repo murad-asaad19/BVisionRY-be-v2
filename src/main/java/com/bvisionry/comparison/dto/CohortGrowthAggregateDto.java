@@ -39,6 +39,40 @@ public record CohortGrowthAggregateDto(
             BigDecimal avgAfter,
             BigDecimal avgDelta,
             int membersWithApprovedNarrative,
-            Map<NarrativeKind, Integer> kindCounts) {
+            Map<NarrativeKind, Integer> kindCounts,
+            List<BandMoveDto> bandMoves) {
+    }
+
+    /**
+     * How many members crossed from one maturity band to another IN THIS
+     * PILLAR — "4 of 7 moved Formative → Strong in Vision Mindset", the thing
+     * an org admin can report upward.
+     *
+     * <p>Deliberately per-pillar and label-based rather than platform-wide:
+     * maturity bands are per-pillar free text
+     * ({@code pillars.maturity_thresholds_json}), so "Strong" can span a
+     * different score range on the next pillar and the labels are NOT
+     * comparable across pillars. Grouped inside one pillar they are consistent,
+     * because every row here was banded against that pillar's own thresholds.
+     * Never sum these across pillars into a single "N founders moved" figure —
+     * that number would be meaningless.
+     *
+     * <p>Read from the frozen {@code maturity_before}/{@code maturity_after}
+     * snapshots taken at compute time, so a later threshold edit cannot rewrite
+     * history. {@code held} is the no-move case ({@code from} equals
+     * {@code to}), kept rather than filtered so the moves and the stayers
+     * reconcile against EACH OTHER — the sum of {@code members} over this list
+     * is the banded population, and every bucket in it (there is one held
+     * bucket per band anyone stayed in, not one in total) has to be rendered
+     * for that sum to hold on screen.
+     *
+     * <p>That sum is NOT {@code measuredCount}, and must not be presented as
+     * it. This list is filtered on BOTH maturity snapshots while
+     * {@code measuredCount} and the averages are filtered on both percentages,
+     * so a row whose pillar produced no band label (an empty
+     * {@code maturity_thresholds_json}, or a comparison computed before V161)
+     * counts toward {@code measuredCount} and toward no band move at all.
+     */
+    public record BandMoveDto(String from, String to, int members, boolean held) {
     }
 }

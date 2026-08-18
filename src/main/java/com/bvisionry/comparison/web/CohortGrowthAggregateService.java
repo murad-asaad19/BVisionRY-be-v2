@@ -132,7 +132,42 @@ public class CohortGrowthAggregateService {
                 mean(rows, FounderComparisonPillar::getBeforePct),
                 mean(rows, FounderComparisonPillar::getAfterPct),
                 mean(rows, FounderComparisonPillar::getDelta),
-                narratives.size(), kindCounts);
+                narratives.size(), kindCounts, bandMoves(rows));
+    }
+
+    /**
+     * Band transitions within ONE pillar. Only rows carrying BOTH snapshots
+     * count: a pillar measured on one side alone has no transition to report,
+     * which is the same null-not-zero rule the averages follow.
+     *
+     * <p>Ordering is real moves first (biggest cohort first), then the held
+     * buckets last — an admin reads this for "who moved", and the stayers are
+     * the denominator, not the headline. Plural: grouping is by (from, to), so
+     * a pillar where some founders held Strong and others held Formative emits
+     * a held bucket for each, and a reader that renders only the first one
+     * drops founders out of a total it still prints.
+     */
+    private static List<CohortGrowthAggregateDto.BandMoveDto> bandMoves(
+            List<FounderComparisonPillar> rows) {
+        Map<List<String>, Long> counts = rows.stream()
+                .filter(r -> r.getMaturityBefore() != null && r.getMaturityAfter() != null)
+                .collect(java.util.stream.Collectors.groupingBy(
+                        r -> List.of(r.getMaturityBefore(), r.getMaturityAfter()),
+                        java.util.LinkedHashMap::new,
+                        java.util.stream.Collectors.counting()));
+        return counts.entrySet().stream()
+                .map(e -> new CohortGrowthAggregateDto.BandMoveDto(
+                        e.getKey().get(0), e.getKey().get(1), e.getValue().intValue(),
+                        e.getKey().get(0).equals(e.getKey().get(1))))
+                .sorted(Comparator
+                        .comparing(CohortGrowthAggregateDto.BandMoveDto::held)
+                        .thenComparing(Comparator.comparingInt(
+                                CohortGrowthAggregateDto.BandMoveDto::members).reversed())
+                        .thenComparing(CohortGrowthAggregateDto.BandMoveDto::from,
+                                String::compareToIgnoreCase)
+                        .thenComparing(CohortGrowthAggregateDto.BandMoveDto::to,
+                                String::compareToIgnoreCase))
+                .toList();
     }
 
     /** Both stored shapes count: breakdown items, or the pre-V189 single kind. */

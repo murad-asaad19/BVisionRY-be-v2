@@ -67,22 +67,30 @@ public class ComparisonQueryService {
                 .toList();
 
         if (pairCohort.isEmpty()) {
-            return new MyComparisonResponse("none", null, null, null, trajectory);
+            return new MyComparisonResponse("none", null, null, null, trajectory, null);
         }
         PairCohortRow pair = pairCohort.get();
         return comparisons.findByCohortIdAndUserId(pair.cohortId(), userId)
                 .map(c -> new MyComparisonResponse("done", pair.cohortId(), pair.cohortName(),
-                        toDto(c, null), trajectory))
+                        toDto(c, null), trajectory, null))
                 .orElseGet(() -> {
                     // §5 guard, same-pipeline flavor: an equal pair can only
                     // ever compute through a DISTANCE milestone task's tag —
                     // without one the report is not coming, so never tease it.
                     if (pair.baselinePipelineId().equals(pair.distancePipelineId())
                             && reads.milestoneTask(pair.cohortId(), "DISTANCE").isEmpty()) {
-                        return new MyComparisonResponse("none", null, null, null, trajectory);
+                        return new MyComparisonResponse("none", null, null, null, trajectory, null);
                     }
+                    // "No stored row" is NOT "the member never sat it". Both
+                    // sides resolving means the compute never landed — the same
+                    // predicate foundersAwaitingComparison uses, so the member's
+                    // copy and the admin's awaiting-list cannot contradict each
+                    // other by construction.
+                    String reason = compute.resolveSides(pair, userId).isPresent()
+                            ? "awaiting-compute"
+                            : "awaiting-distance";
                     return new MyComparisonResponse("pending", pair.cohortId(),
-                            pair.cohortName(), null, trajectory);
+                            pair.cohortName(), null, trajectory, reason);
                 });
     }
 

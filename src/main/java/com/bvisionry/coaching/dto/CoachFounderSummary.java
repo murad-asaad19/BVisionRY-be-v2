@@ -11,9 +11,11 @@ import com.bvisionry.coaching.repository.CoachingReadRepository.RosterRow;
 /**
  * One founder on the coach's roster — a triage row (redesign spec §2.2): name
  * (no email — {@code coach_sees} does not include contact data), the GRANTED
- * cohorts they belong to, grant-scoped per-type program completion, FRI + Δ
- * (latest vs earliest evaluated — the founder-profile rule), the lowest
- * incomplete module, the open-items split and the founder's last activity.
+ * cohorts they belong to, grant-scoped per-type program completion, the latest
+ * evaluated FRI plus the computed comparison's Δ (the founder-profile rule —
+ * the row links to that profile, so both must read the same movement), the
+ * lowest incomplete module, the open-items split and the founder's last
+ * activity.
  * {@code completionPct} is null when nothing is assigned — "no tasks yet" is
  * different from 0%.
  *
@@ -30,7 +32,12 @@ public record CoachFounderSummary(
         Integer completionPct,
         /** Latest evaluated overall score, null when never evaluated. */
         BigDecimal friLatest,
-        /** Latest minus earliest evaluated overall — null with fewer than two points. */
+        /**
+         * The founder's computed distance comparison
+         * ({@code founder_comparisons.overall_delta}) for their anchor cohort —
+         * the same number the founder profile this row opens shows. Null when
+         * no cohort designates a pair or the comparison has not been computed.
+         */
         BigDecimal friDelta,
         /** Lowest incomplete module in the granted cohorts, null when everything is done. */
         String currentModule,

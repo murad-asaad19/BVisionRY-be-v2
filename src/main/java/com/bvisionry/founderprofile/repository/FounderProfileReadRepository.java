@@ -87,7 +87,7 @@ public class FounderProfileReadRepository {
 
     public record FriPoint(BigDecimal score, Instant evaluatedAt) {}
 
-    /** Evaluated overall scores oldest → newest; latest = FRI, latest − earliest = Δ-so-far. */
+    /** Evaluated overall scores oldest → newest; the last point is the FRI. */
     public List<FriPoint> friTrajectory(UUID memberId) {
         return jdbc.query("""
                 SELECT os.overall_score_percentage AS score, s.evaluated_at

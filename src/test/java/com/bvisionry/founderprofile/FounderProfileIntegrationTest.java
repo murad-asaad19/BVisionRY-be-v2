@@ -119,9 +119,11 @@ class FounderProfileIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(jsonPath("$.header.email", is("founder.a@test.invalid")))
                     .andExpect(jsonPath("$.header.cohorts[0].name", is("Cohort One")))
                     .andExpect(jsonPath("$.header.cohorts[0].id", notNullValue()))
-                    // FRI: baseline 50.00 → latest 71.25, Δ-so-far +21.25
+                    // FRI: latest evaluated overall. No Δ on this header — the
+                    // movement number is the comparison's, not a second
+                    // instrument-blind derivation.
                     .andExpect(jsonPath("$.header.friLatest", is(71.25)))
-                    .andExpect(jsonPath("$.header.friDelta", is(21.25)))
+                    .andExpect(jsonPath("$.header.friDelta").doesNotExist())
                     .andExpect(jsonPath("$.header.friEvaluatedAt", notNullValue()))
                     .andExpect(jsonPath("$.header.lastActivityAt", notNullValue()))
                     // Unified work list, MERGED model (§2.4 as amended

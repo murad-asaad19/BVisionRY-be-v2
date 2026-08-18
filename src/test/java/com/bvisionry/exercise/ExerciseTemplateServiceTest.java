@@ -88,4 +88,78 @@ class ExerciseTemplateServiceTest {
 
         assertThat(column.getName()).isEqualTo("Renamed");
     }
+
+    // ---------------------------------------------------------------------
+    // Lossless type changes stay open after assignment: TEXT and LONG_TEXT
+    // both store a plain string, and either widens into LIST because the web
+    // reads a bare string as the list's first entry.
+    // ---------------------------------------------------------------------
+
+    @Test
+    void updateColumn_textToLongTextAfterAssignment_isAllowed() {
+        lenient().when(assignmentRepository.countByTemplateId(templateId)).thenReturn(1L);
+
+        service.updateColumn(templateId, columnId,
+                request("Answer", ExerciseColumnType.LONG_TEXT, false));
+
+        assertThat(column.getType()).isEqualTo(ExerciseColumnType.LONG_TEXT);
+    }
+
+    @Test
+    void updateColumn_longTextToTextAfterAssignment_isAllowed() {
+        column.setType(ExerciseColumnType.LONG_TEXT);
+        lenient().when(assignmentRepository.countByTemplateId(templateId)).thenReturn(1L);
+
+        service.updateColumn(templateId, columnId,
+                request("Answer", ExerciseColumnType.TEXT, false));
+
+        assertThat(column.getType()).isEqualTo(ExerciseColumnType.TEXT);
+    }
+
+    @Test
+    void updateColumn_longTextToListAfterAssignment_isAllowed() {
+        column.setType(ExerciseColumnType.LONG_TEXT);
+        lenient().when(assignmentRepository.countByTemplateId(templateId)).thenReturn(1L);
+
+        service.updateColumn(templateId, columnId,
+                request("Answer", ExerciseColumnType.LIST, false));
+
+        assertThat(column.getType()).isEqualTo(ExerciseColumnType.LIST);
+    }
+
+    @Test
+    void updateColumn_listCannotNarrowBackAfterAssignment() {
+        // A multi-entry cell has no single value to collapse into, and comments
+        // anchored to an entry id would lose their target.
+        column.setType(ExerciseColumnType.LIST);
+        lenient().when(assignmentRepository.countByTemplateId(templateId)).thenReturn(1L);
+
+        assertThatThrownBy(() -> service.updateColumn(templateId, columnId,
+                request("Answer", ExerciseColumnType.TEXT, false)))
+                .isInstanceOf(BadRequestException.class);
+        assertThat(column.getType()).isEqualTo(ExerciseColumnType.LIST);
+    }
+
+    @Test
+    void updateColumn_dateToTextAfterAssignment_isRejected() {
+        // Only TEXT/LONG_TEXT are interchangeable — widening from a stricter
+        // type is not automatically safe and stays frozen.
+        column.setType(ExerciseColumnType.DATE);
+        lenient().when(assignmentRepository.countByTemplateId(templateId)).thenReturn(1L);
+
+        assertThatThrownBy(() -> service.updateColumn(templateId, columnId,
+                request("Answer", ExerciseColumnType.TEXT, false)))
+                .isInstanceOf(BadRequestException.class);
+        assertThat(column.getType()).isEqualTo(ExerciseColumnType.DATE);
+    }
+
+    @Test
+    void updateColumn_textToListBeforeAssignment_isAllowed() {
+        lenient().when(assignmentRepository.countByTemplateId(templateId)).thenReturn(0L);
+
+        service.updateColumn(templateId, columnId,
+                request("Answer", ExerciseColumnType.LIST, false));
+
+        assertThat(column.getType()).isEqualTo(ExerciseColumnType.LIST);
+    }
 }

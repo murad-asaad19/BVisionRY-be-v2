@@ -184,29 +184,21 @@ public class TaskSpineRepository {
     }
 
     /**
-     * Every sitting a milestone task could adopt, by the rule documented on
-     * {@link #assessmentStates}. Written once and shared by the read and the
-     * open path; callers narrow it to the earliest per (member, task).
+     * The role-specific floor a sitting must clear before a milestone task will
+     * adopt it. Shared VERBATIM by {@link #ADOPTABLE_SITTINGS} and by the
+     * direct-list exclusion in {@link #directAssessments}, so the two can never
+     * drift apart: an assignment is hidden from the direct list only when the
+     * milestone hiding it would genuinely display that sitting. Splitting these
+     * is how an assignment ends up represented by nobody and vanishes from every
+     * surface — strictly worse than the double-show it was meant to prevent.
      *
-     * <p>{@code program_task_id IS NULL} does the heavy lifting: a sitting that
-     * some task has already claimed is nobody else's to take, so the moment
-     * BASELINE tags one, DISTANCE stops seeing it.
+     * <p>Expects the aliases {@code s} (submission), {@code a} (its assignment),
+     * {@code co} (cohort) and {@code t} (the milestone task).
      */
-    private static final String ADOPTABLE_SITTINGS = """
-            SELECT s.user_id, t.id AS task_id, s.id AS submission_id,
-                   s.status, s.submitted_at, s.evaluated_at
-            FROM submissions s
-            JOIN assignments a ON a.id = s.assignment_id
-            JOIN program_tasks t ON t.ref_id = a.pipeline_id
-                 AND t.task_type = 'ASSESSMENT'
-                 AND t.milestone_role IN ('BASELINE', 'DISTANCE')
-            JOIN program_modules m ON m.id = t.module_id
-            JOIN cohorts co ON co.id = m.cohort_id
-            JOIN cohort_members cm ON cm.cohort_id = co.id AND cm.user_id = s.user_id
-            WHERE s.user_id IN (:userIds) AND t.id IN (:taskIds)
-              AND s.status = 'EVALUATED'
-              AND s.program_task_id IS NULL
-              AND (t.milestone_role = 'BASELINE'
+    private static final String MILESTONE_ADOPTION_FLOOR = """
+            (t.milestone_role = 'BASELINE'"""
+            + """
+
                    -- DISTANCE on a SHARED instrument (this cohort's BASELINE
                    -- references the same pipeline): launch floor plus
                    -- BASELINE's earliest-sitting carve-out - one sitting must
@@ -254,6 +246,31 @@ public class TaskSpineRepository {
                                   AND bs.status = 'EVALUATED'),
                                '-infinity'::timestamptz)))
             """;
+
+    /**
+     * Every sitting a milestone task could adopt, by the rule documented on
+     * {@link #assessmentStates}. Written once and shared by the read and the
+     * open path; callers narrow it to the earliest per (member, task).
+     *
+     * <p>{@code program_task_id IS NULL} does the heavy lifting: a sitting that
+     * some task has already claimed is nobody else's to take, so the moment
+     * BASELINE tags one, DISTANCE stops seeing it.
+     */
+    private static final String ADOPTABLE_SITTINGS = """
+            SELECT s.user_id, t.id AS task_id, s.id AS submission_id,
+                   s.status, s.submitted_at, s.evaluated_at
+            FROM submissions s
+            JOIN assignments a ON a.id = s.assignment_id
+            JOIN program_tasks t ON t.ref_id = a.pipeline_id
+                 AND t.task_type = 'ASSESSMENT'
+                 AND t.milestone_role IN ('BASELINE', 'DISTANCE')
+            JOIN program_modules m ON m.id = t.module_id
+            JOIN cohorts co ON co.id = m.cohort_id
+            JOIN cohort_members cm ON cm.cohort_id = co.id AND cm.user_id = s.user_id
+            WHERE s.user_id IN (:userIds) AND t.id IN (:taskIds)
+              AND s.status = 'EVALUATED'
+              AND s.program_task_id IS NULL
+              AND """ + MILESTONE_ADOPTION_FLOOR;
 
     /**
      * The sitting this milestone task should adopt for the member, or empty when
@@ -431,13 +448,25 @@ public class TaskSpineRepository {
      * is represented — and therefore excluded — only when (a) one of its
      * submissions is tagged to a LIVE cohort task of the member's (the tag is
      * proof of representation; audience was enforced when the tag was
-     * created), or (b) a BASELINE milestone task references its pipeline AND
-     * the member has an evaluated UNTAGGED submission — the exact condition
-     * under which the journey's pre-spine baseline fallback will display it
-     * ({@link #earliestEvaluatedForPipelines}, tagged rows excluded there too,
-     * so the two predicates stay mirrored and no assignment can fall between
-     * them and vanish from every surface). Any other assignment on the
-     * pipeline stays listed as direct work.
+     * created), or (b) a BASELINE or DISTANCE milestone task references its
+     * pipeline AND the member has an evaluated UNTAGGED sitting that the task
+     * would actually adopt ({@link #MILESTONE_ADOPTION_FLOOR}, shared verbatim
+     * with {@link #ADOPTABLE_SITTINGS} so the two predicates stay mirrored and
+     * no assignment can fall between them and vanish from every surface). Any
+     * other assignment on the pipeline stays listed as direct work.
+     *
+     * <p>DISTANCE was missing from (b) until it caused the double-show this
+     * clause exists to prevent: a founder whose cohort names the SAME pipeline
+     * as its distance milestone saw that assessment twice — once on the locked
+     * milestone band (which had already adopted the sitting and was showing its
+     * score) and again under "direct assignments outside your cohort". A tag
+     * would have covered it, but the tag is only written when the member OPENS
+     * the task, and a locked module can never be opened.
+     *
+     * <p>CHECKIN is deliberately still absent: it adopts nothing
+     * ({@link #ADOPTABLE_SITTINGS} covers BASELINE and DISTANCE only), so
+     * excluding a check-in's assignment here would hide a sitting that no
+     * milestone displays.
      */
     public List<DirectAssessmentRow> directAssessments(UUID orgId, UUID memberId) {
         return jdbc.query("""
@@ -458,19 +487,22 @@ public class TaskSpineRepository {
                         AND %2$s)
                   AND NOT EXISTS (
                       SELECT 1 FROM cohort_members cm
-                      JOIN program_modules m ON m.cohort_id = cm.cohort_id
+                      JOIN cohorts co ON co.id = cm.cohort_id
+                      JOIN program_modules m ON m.cohort_id = co.id
                       JOIN program_tasks t ON t.module_id = m.id
+                      JOIN submissions s ON s.assignment_id = a.id AND s.user_id = :memberId
+                                        AND s.status = 'EVALUATED'
+                                        AND s.program_task_id IS NULL
                       WHERE cm.user_id = :memberId AND t.status = 'LIVE'
-                        AND t.task_type = 'ASSESSMENT' AND t.milestone_role = 'BASELINE'
+                        AND t.task_type = 'ASSESSMENT'
+                        AND t.milestone_role IN ('BASELINE', 'DISTANCE')
                         AND t.ref_id = a.pipeline_id
                         AND %1$s
-                        AND EXISTS (SELECT 1 FROM submissions se
-                                    WHERE se.assignment_id = a.id AND se.user_id = :memberId
-                                      AND se.status = 'EVALUATED'
-                                      AND se.program_task_id IS NULL))
+                        AND %3$s)
                 ORDER BY a.created_at DESC
                 """.formatted(ProgramAudience.INCLUDES_USER.formatted(":memberId"),
-                        COVERED_BY_TAGGED_TASK.formatted("st.program_task_id")),
+                        COVERED_BY_TAGGED_TASK.formatted("st.program_task_id"),
+                        MILESTONE_ADOPTION_FLOOR),
                 params(orgId, memberId),
                 (rs, i) -> new DirectAssessmentRow(rs.getObject("id", UUID.class),
                         rs.getObject("pipeline_id", UUID.class), rs.getString("title"),

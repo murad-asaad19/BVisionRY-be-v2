@@ -157,13 +157,23 @@ public class ExerciseTemplateService {
                                                UpsertExerciseColumnRequest request) {
         ExerciseColumn column = requireColumnInTemplate(templateId, columnId);
         requireNotArchived(column.getTemplate());
-        // Type and locked-state changes would invalidate or freeze cell values
-        // members already hold — frozen alongside add/delete once assigned.
-        // Renames, descriptions, config tweaks and required stay allowed.
-        if (isStructureLocked(templateId)
-                && (column.getType() != request.type() || column.isLocked() != request.isLocked())) {
-            throw new BadRequestException(
-                    "This exercise has been assigned — a column's type and locked state can no longer change.");
+        // Once assigned, a column may only take a type that leaves every cell
+        // members already filled still readable — see
+        // ExerciseColumnType.convertsLosslesslyTo. Locked-state changes stay
+        // frozen (they would freeze or release data mid-flight), as do
+        // add/delete. Renames, descriptions, config tweaks and required are
+        // always allowed.
+        if (isStructureLocked(templateId)) {
+            if (column.isLocked() != request.isLocked()) {
+                throw new BadRequestException(
+                        "This exercise has been assigned — a column's locked state can no longer change.");
+            }
+            if (!column.getType().convertsLosslesslyTo(request.type())) {
+                throw new BadRequestException(
+                        "This exercise has been assigned — a " + column.getType() + " column cannot become "
+                                + request.type() + " without invalidating cells members already filled. "
+                                + "Text and Long text can change into each other, or into List.");
+            }
         }
         applyColumn(column, request);
         return ExerciseColumnResponse.from(column);

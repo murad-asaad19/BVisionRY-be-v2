@@ -66,7 +66,6 @@ public class FounderProfileService {
                         .toList(),
                 coaches(orgId, memberId),
                 latest == null ? null : latest.score(),
-                friDelta(fri),
                 latest == null ? null : latest.evaluatedAt(),
                 member.lastActivityAt(), member.lastLoginAt());
 
@@ -85,18 +84,20 @@ public class FounderProfileService {
                         .toList());
     }
 
-    /** Δ-so-far: latest minus earliest evaluated overall; null with fewer than two points. */
-    static BigDecimal friDelta(List<FriPoint> trajectory) {
-        if (trajectory.size() < 2) {
-            return null;
-        }
-        BigDecimal first = trajectory.get(0).score();
-        BigDecimal last = trajectory.get(trajectory.size() - 1).score();
-        if (first == null || last == null) {
-            return null;
-        }
-        return last.subtract(first);
-    }
+    // A global "latest minus earliest" Δ used to ride on the header here. It
+    // spanned EVERY instrument the member ever sat — no pipeline, cohort or
+    // task filter — so an unrelated scan landing last could flip its sign while
+    // the cohort's real comparison sat inches away on the same page. Deleted
+    // rather than fixed: it answered no question anyone asks. The header now
+    // reads founder_comparisons.overall_delta — the baseline→distance
+    // comparison.
+    //
+    // Not the platform's only Δ, and it does not need to be: CohortView's
+    // roster compares consecutive sittings on one cohort's own instruments,
+    // which is a different question with a legitimately different answer.
+    // Every surface showing one of them labels which it is (see the web app's
+    // ShiftChip/DeltaChip `title`), because two unlabelled numbers on the same
+    // founder read as a contradiction even when both are right.
 
     /** LESSON Work-tab status: the submission's own, or SUBMITTED once done. */
     static String lessonStatus(ProgramTaskRow t) {

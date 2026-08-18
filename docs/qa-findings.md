@@ -1,11 +1,17 @@
 # QA findings — live multi-role run
 
-Lane 1 (`api :8181` · `web :3011` · mail `:8027`), backend `b62bc34` · web `4e9132e`.
-AI stubbed: `SPRING_PROFILES_ACTIVE=dev,mock,sandbox` → `MockAiConfig` replaces the chat-model
-provider with `MockLangChainChatModel` (no HTTP client). Production provider is
-`@Profile("!e2e & !mock")`, so exactly one bean exists and it cannot reach the network.
+Originally recorded against a sandbox lane (`api :8181` · `web :3011` · mail `:8027`) on
+backend `b62bc34` · web `4e9132e`. **That environment no longer exists** — the lane system was
+removed 2026-08-16 and there is now one local stack (backend `:8080`, web `:3000`); see the root
+`CLAUDE.md`. Reproduction steps below that name a lane or an `agent-N.env` need translating to it.
 
-Severity per `qa-plan.md` §6. `[FIXED]` marks findings closed in this run.
+Severity scale: P1 = blocks or corrupts the product's core number · P2 = wrong or missing
+behaviour a user meets · P3 = polish, noise, or internal-quality. (`qa-plan.md`, which defined
+this scale, was deleted with the lane environment it documented.) `FIXED` marks findings closed.
+
+**See "Validation pass — 2026-08-18" at the foot of this file for the current status of every
+finding.** The bodies below are preserved as first written; where the pass disagrees with one,
+the pass is authoritative.
 
 ---
 
@@ -925,3 +931,71 @@ reset. Verification used lane 2 instead, reset to the V144 snapshot so V145..V15
 ### Gates after the merge
 Backend **1262 tests, 0 failures, 0 errors, 0 skipped, BUILD SUCCESS** (read from the log, not the
 exit code). Web **1015 tests / 79 files**, lint 0, typecheck 0.
+
+---
+
+# Validation pass — 2026-08-18
+
+Every open finding re-checked against the working tree on `feat/cohort-redesign`. This section
+is authoritative where it disagrees with a body above.
+
+## Fixed since the original run
+
+| # | Evidence |
+|---|---|
+| **F4** · P1 | `platform-overview.tsx` `TIER_DOT` now maps the four sellable plans (FREE / STARTER / GROWTH / FOUNDER_SUCCESS). Its comment documents "Premium / Trial / Free" in the past tense. |
+| **F7** · P2 | Every pillar-count site pluralizes: `pillar{p.pillarCount !== 1 ? "s" : ""}` — `pipeline-selector.tsx:81`, `assign-dialog.tsx:363`, `lesson-editor.tsx:296`, `pipelines-list.tsx:393`. |
+| **F8** · P2 | `(app)/app/page.tsx` sets its own title (its comment names the bug it closed). The "Coaches" sub-point is resolved by the root layout's `title.template` = `%s · ${SITE.name}`, which appends the suffix. |
+| **F13** · P2 | `AssignableRole` is now `Extract<MemberRole, "MEMBER" \| "ORG_ADMIN" \| "COACH">`. Its comment explains INSTRUCTOR stays out deliberately (no console of its own). |
+
+F1 and F5 were already marked fixed in their own sections and re-confirmed here.
+
+## No longer applicable
+
+- **F9** · P3 — lane emails. The lane system was deleted 2026-08-16; no `agent-N.env` exists.
+  **Moot**, not fixed.
+- **F15** · P3 — native `confirm()`. Retracted by this file's own "Correction" section: `confirm()`
+  is the norm in the admin console, not the outlier. Left as a house-style question, not a defect.
+- **F18 / F19 / F20** · P3 — all three cite `assessments-list.tsx` and `my-courses.tsx`, both
+  **deleted** in the redesign (`assessments/_components/` no longer exists). The successor surfaces
+  — `assessments/history/_components/history-body.tsx` and the `/app/courses` tree — were not
+  audited for the same defects. **Obsolete as written**; a fresh a11y + fetch-resilience pass on
+  the successors would be the honest replacement, not carrying these forward.
+
+## Still live
+
+- **F2** · P2 — nested `<main>`. Confirmed: `(app)/layout.tsx:61` renders `<main id="main">` and
+  four descendants render their own — `assessment-taker.tsx:303`, `pipeline-simulator.tsx:476`,
+  `public-assessment-taker.tsx:292`, `player-shell.tsx:270`. Unchanged since filing.
+- **F3** · P3 — recharts `^3.8.1` still in use; the warning is library-owned and was deliberately
+  left. No action, kept so a re-run does not re-investigate it.
+- **F6** · P2 — anonymised users still weigh on cohort completion. No exclusion predicate exists
+  in the dashboard or cohort-view read paths.
+- **F21** · P3 — raw `toLocaleDateString()` down from ~15 sites to **6**. Reduced, not closed.
+- **F17** · P2 — see the flag change below; the dead-end premise no longer holds, but the finding
+  was an operator decision rather than a bug and is superseded rather than fixed.
+
+## F22 — split verdict, and one thing that got sharper
+
+The **org-scoping half is built**. `common/coursevisibility/CourseVisibilityAccess` supplies a
+`VISIBLE_TO_ORG` SQL predicate over a new `org_visibility` model (`EVERYONE` / `ORG_LIST` via
+`course_visible_orgs` / `MIN_TIER` ranked off `SubscriptionTier` declaration order, resolved at
+the billing root, failing closed on an unknown tier). Its javadoc names the five surfaces that
+share it. "Assigned to an org" now exists.
+
+The **inert-enum half is not fixed, and now reads worse.** `Course.visibility`
+(`CourseVisibility`: PUBLIC/UNLISTED/PRIVATE/MEMBERS) and `Course.access` (`CourseAccess`:
+EVERYONE/SIGNED_IN/ENROLLED/LINK) are still written by `AuthoringService:365,367` and mapped by
+`CourseMapper`, and still appear in **zero** authorization branches. They now sit beside a real
+mechanism keyed on a *different* column (`org_visibility`), so an author setting a course
+`PRIVATE` or `MEMBERS` gets no scoping from those fields while a live-looking control says
+otherwise. The public catalog remains unscoped by design (`CourseRepository:43` — "no org
+scoping, all PUBLISHED courses"), which is correct for a marketing catalog and is exactly what
+makes the dead enums a trap.
+
+**The mitigation F22 relied on has been withdrawn.** F22 closed with "not live-exploitable today:
+`FEATURES.courses` is off". It is now **on by default** — `features.ts:36` reads
+`process.env.NEXT_PUBLIC_COURSES_ENABLED !== "false"`, so an unset variable enables courses where
+it used to disable them. Worth an explicit decision before staging: either enforce the two enums,
+delete them, or confirm the public catalog is meant to expose every PUBLISHED course regardless
+of what an author selected.

@@ -1351,6 +1351,42 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                             is(distanceVision.toString())));
         }
 
+        /**
+         * O2: "N of M moved Formative → Strong in this pillar". Only rows with
+         * BOTH snapshots contribute — a one-sided pillar has no transition to
+         * report — and the held bucket sorts last so the movers read first.
+         */
+        @Test
+        void bandMoves_countTransitionsPerPillar_heldLast() {
+            computeFounder1();
+
+            var dto = aggregates.aggregate(orgA.getId(), cohortId);
+            var vision = dto.pillars().stream()
+                    .filter(p -> p.distancePillarId().equals(distanceVision))
+                    .findFirst().orElseThrow();
+
+            // One founder computed, so exactly one transition on the mapped
+            // pillar, and its members must total the banded population.
+            assertThat(vision.bandMoves()).isNotEmpty();
+            assertThat(vision.bandMoves().stream().mapToInt(m -> m.members()).sum())
+                    .isEqualTo(1);
+            assertThat(vision.bandMoves())
+                    .allSatisfy(m -> {
+                        assertThat(m.from()).isNotBlank();
+                        assertThat(m.to()).isNotBlank();
+                        assertThat(m.held()).isEqualTo(m.from().equals(m.to()));
+                    });
+            // Held never outranks a real move.
+            assertThat(vision.bandMoves().stream().map(m -> m.held()).toList())
+                    .isSortedAccordingTo(java.util.Comparator.naturalOrder());
+
+            // A pillar measured on one side only reports no transition at all.
+            assertThat(dto.pillars().stream()
+                    .filter(p -> p.distancePillarId().equals(distanceResilience))
+                    .findFirst())
+                    .isEmpty();
+        }
+
         @Test
         void kindCounts_areApprovedAndStillAttachedOnly_distinctPerMember() {
             computeFounder1();

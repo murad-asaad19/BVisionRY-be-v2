@@ -72,12 +72,27 @@ public interface SubmissionRepository extends JpaRepository<Submission, UUID> {
 
     /**
      * All submissions for an org + pipeline (dashboard).
+     *
+     * <p>Sub-org clause per {@code AssignmentRepository
+     * #findDistinctPipelineIdsByOrganizationId}: admins live on the root org
+     * while assignments live in sub-orgs (V136). The pipeline SELECTOR is
+     * sub-org aware, so a root-only match here made the pipeline list while
+     * every stat read empty. Pinned by {@code SubmissionOrgScopeIntegrationTest}
+     * — both directions, plus the tenant floor.
+     *
+     * <p>ponytail: the OR spans {@code assignments} and {@code organizations},
+     * which {@code idx_assignments_org_pipeline} (organization_id, pipeline_id)
+     * cannot serve on its own. Fine at current row counts; if these reads ever
+     * show up in slow-query logs, rewrite the clause as
+     * {@code a.organization.id IN (SELECT o.id FROM Organization o WHERE
+     * o.id = :orgId OR o.parentOrganization.id = :orgId)} — same rows, single
+     * column on {@code assignments}, so the composite index is usable again.
      */
     @Query("""
             SELECT s FROM Submission s
             JOIN FETCH s.user
             JOIN s.assignment a
-            WHERE a.organization.id = :orgId
+            WHERE (a.organization.id = :orgId OR a.organization.parentOrganization.id = :orgId)
             AND a.pipeline.id = :pipelineId
             """)
     List<Submission> findByOrgAndPipeline(@Param("orgId") UUID orgId,
@@ -86,14 +101,15 @@ public interface SubmissionRepository extends JpaRepository<Submission, UUID> {
     /**
      * Dashboard variant — eagerly loads user + assignment + pipeline so the
      * @Cacheable overview render doesn't trigger 2*N lazy loads when reading
-     * {@code submission.assignment.pipeline.name} per row.
+     * {@code submission.assignment.pipeline.name} per row. Same sub-org scope
+     * as {@link #findByOrgAndPipeline}.
      */
     @Query("""
             SELECT s FROM Submission s
             JOIN FETCH s.user
             JOIN FETCH s.assignment a
             JOIN FETCH a.pipeline
-            WHERE a.organization.id = :orgId
+            WHERE (a.organization.id = :orgId OR a.organization.parentOrganization.id = :orgId)
             AND a.pipeline.id = :pipelineId
             """)
     List<Submission> findByOrgAndPipelineForDashboard(@Param("orgId") UUID orgId,
@@ -101,11 +117,12 @@ public interface SubmissionRepository extends JpaRepository<Submission, UUID> {
 
     /**
      * Count submissions by status for an org + pipeline (completion stats).
+     * Same sub-org scope as {@link #findByOrgAndPipeline}.
      */
     @Query("""
             SELECT s.status, COUNT(s) FROM Submission s
             JOIN s.assignment a
-            WHERE a.organization.id = :orgId
+            WHERE (a.organization.id = :orgId OR a.organization.parentOrganization.id = :orgId)
             AND a.pipeline.id = :pipelineId
             GROUP BY s.status
             """)
@@ -116,19 +133,6 @@ public interface SubmissionRepository extends JpaRepository<Submission, UUID> {
      * Total evaluated submissions across entire platform.
      */
     long countByStatus(SubmissionStatus status);
-
-    /**
-     * Count evaluated submissions for an org + pipeline.
-     */
-    @Query("""
-            SELECT COUNT(s) FROM Submission s
-            JOIN s.assignment a
-            WHERE a.organization.id = :orgId
-            AND a.pipeline.id = :pipelineId
-            AND s.status = 'EVALUATED'
-            """)
-    long countEvaluatedByOrgPipeline(@Param("orgId") UUID orgId,
-                                     @Param("pipelineId") UUID pipelineId);
 
     /**
      * Finds the most recent submission for a (user, pipeline) pair, regardless of

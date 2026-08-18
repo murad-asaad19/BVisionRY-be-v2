@@ -396,21 +396,48 @@ public class PipelineService {
         return cloned;
     }
 
+    /**
+     * The published assessments assigned to ONE organisation — the catalogue
+     * behind the org console's reporting selectors (Dashboard, Insights,
+     * Reports).
+     *
+     * <p>Scoped by the org being VIEWED, not by the caller's own org, and
+     * identically for every role. {@link #getPublishedCatalog()} keys off the
+     * caller instead, which meant a SUPER_ADMIN opening one org's dashboard got
+     * every published pipeline on the platform: other tenants' assessments, the
+     * test pipelines somebody published, and two different pipelines sharing a
+     * name with nothing to tell them apart. Picking one of those returned an
+     * all-zeros dashboard indistinguishable from "nobody has started".
+     *
+     * <p>Sub-org aware via
+     * {@code AssignmentRepository#findDistinctPipelineIdsByOrganizationId}:
+     * admins sit on the root org while assignments live in sub-orgs (V136), so
+     * a root-only match would always be empty.
+     *
+     * <p>NOT for the assigning and authoring pickers — assign-dialog, the
+     * course lesson picker, public assessments and the cohort task picker all
+     * need the full catalogue, because you cannot assign a pipeline that this
+     * list would already have filtered out.
+     */
+    @Transactional(readOnly = true)
+    public List<PipelineSummaryResponse> getPublishedCatalogForOrg(UUID orgId) {
+        List<UUID> assignedIds = assignmentRepository
+                .findDistinctPipelineIdsByOrganizationId(orgId);
+        if (assignedIds.isEmpty()) {
+            return List.of();
+        }
+        return toSummaryResponsesWithOrgs(
+                pipelineRepository.findByStatusAndIdIn(PipelineStatus.PUBLISHED, assignedIds));
+    }
+
     @Transactional(readOnly = true)
     public List<PipelineSummaryResponse> getPublishedCatalog() {
         // Org admins only see assessments assigned to their org; super admins see all.
+        // Delegates the org-scoped half rather than repeating the assignment
+        // lookup: one cross-feature reach into the assessment package, not two.
         com.bvisionry.common.security.CurrentUser caller = currentUser.require();
         if (com.bvisionry.common.enums.UserRole.ORG_ADMIN.name().equals(caller.role())) {
-            if (caller.orgId() == null) {
-                return List.of();
-            }
-            List<UUID> assignedIds = assignmentRepository
-                    .findDistinctPipelineIdsByOrganizationId(caller.orgId());
-            if (assignedIds.isEmpty()) {
-                return List.of();
-            }
-            return toSummaryResponsesWithOrgs(
-                    pipelineRepository.findByStatusAndIdIn(PipelineStatus.PUBLISHED, assignedIds));
+            return caller.orgId() == null ? List.of() : getPublishedCatalogForOrg(caller.orgId());
         }
         return toSummaryResponsesWithOrgs(pipelineRepository.findByStatus(PipelineStatus.PUBLISHED));
     }

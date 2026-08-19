@@ -67,19 +67,27 @@ public class ComparisonQueryService {
                 .toList();
 
         if (pairCohort.isEmpty()) {
-            return new MyComparisonResponse("none", null, null, null, trajectory, null);
+            // No designated pair: nothing names a baseline instrument, so there
+            // is no pillar set to describe either.
+            return new MyComparisonResponse("none", null, null, null, trajectory, null, List.of());
         }
         PairCohortRow pair = pairCohort.get();
+        // What the member is measured on, carried in EVERY state — the growth
+        // surfaces have to say what a pillar is before a score exists, and a
+        // member awaiting their first evaluation is exactly who needs it.
+        List<MyComparisonResponse.PillarBlurb> pillars =
+                reads.instrumentPillars(pair.baselinePipelineId());
         return comparisons.findByCohortIdAndUserId(pair.cohortId(), userId)
                 .map(c -> new MyComparisonResponse("done", pair.cohortId(), pair.cohortName(),
-                        toDto(c, null), trajectory, null))
+                        toDto(c, null), trajectory, null, pillars))
                 .orElseGet(() -> {
                     // §5 guard, same-pipeline flavor: an equal pair can only
                     // ever compute through a DISTANCE milestone task's tag —
                     // without one the report is not coming, so never tease it.
                     if (pair.baselinePipelineId().equals(pair.distancePipelineId())
                             && reads.milestoneTask(pair.cohortId(), "DISTANCE").isEmpty()) {
-                        return new MyComparisonResponse("none", null, null, null, trajectory, null);
+                        return new MyComparisonResponse("none", null, null, null, trajectory,
+                                null, pillars);
                     }
                     // "No stored row" is NOT "the member never sat it". Both
                     // sides resolving means the compute never landed — the same
@@ -90,7 +98,7 @@ public class ComparisonQueryService {
                             ? "awaiting-compute"
                             : "awaiting-distance";
                     return new MyComparisonResponse("pending", pair.cohortId(),
-                            pair.cohortName(), null, trajectory, reason);
+                            pair.cohortName(), null, trajectory, reason, pillars);
                 });
     }
 

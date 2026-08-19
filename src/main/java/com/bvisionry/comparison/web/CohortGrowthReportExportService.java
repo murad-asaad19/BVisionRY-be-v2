@@ -2,6 +2,10 @@ package com.bvisionry.comparison.web;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
 import java.util.UUID;
 
 import org.springframework.stereotype.Service;
@@ -81,17 +85,32 @@ public class CohortGrowthReportExportService {
         s.autoSize();
     }
 
+    /**
+     * One column per kind, taken FROM the enum rather than listed here: the
+     * aggregate seeds a count for every {@link NarrativeKind}, so a hand-kept
+     * header list silently drops any kind added later (V202 added two).
+     *
+     * <p>Ordered by {@link MyGrowthExportService#KIND_ORDER} — the reading arc —
+     * not by enum order, so this sheet and the member growth sheet tell the same
+     * story left-to-right. A kind the arc does not name still gets a column; it
+     * simply sorts last rather than vanishing.
+     */
     private static void writeNarrativeTags(ExcelWorkbookBuilder wb, CohortGrowthAggregateDto data) {
+        List<NarrativeKind> kinds = Arrays.stream(NarrativeKind.values())
+                .sorted(Comparator.comparingInt(k -> {
+                    int at = MyGrowthExportService.KIND_ORDER.indexOf(k.name());
+                    return at < 0 ? Integer.MAX_VALUE : at;
+                }))
+                .toList();
+        List<String> headers = new ArrayList<>(List.of("Pillar", "Members with approved narrative"));
+        kinds.stream().map(k -> MyGrowthExportService.kindLabel(k.name())).forEach(headers::add);
         ExcelWorkbookBuilder.SheetBuilder s = wb.newSheet("Narrative tags")
-                .headers("Pillar", "Members with approved narrative", "Resolved",
-                        "Carried forward", "New", "Persisted", "Faded");
+                .headers(headers.toArray(String[]::new));
         for (PillarAggregateDto p : data.pillars()) {
-            s.row(p.pillarName(), p.membersWithApprovedNarrative(),
-                    p.kindCounts().get(NarrativeKind.RESOLVED),
-                    p.kindCounts().get(NarrativeKind.CARRIED_FORWARD),
-                    p.kindCounts().get(NarrativeKind.NEW),
-                    p.kindCounts().get(NarrativeKind.PERSISTED),
-                    p.kindCounts().get(NarrativeKind.FADED));
+            List<Object> cells = new ArrayList<>(
+                    List.of(p.pillarName(), p.membersWithApprovedNarrative()));
+            kinds.stream().map(k -> p.kindCounts().get(k)).forEach(cells::add);
+            s.row(cells.toArray());
         }
         s.autoSize();
     }

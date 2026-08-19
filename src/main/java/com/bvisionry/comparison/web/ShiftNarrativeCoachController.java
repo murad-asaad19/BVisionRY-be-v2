@@ -60,13 +60,19 @@ public class ShiftNarrativeCoachController {
     public ShiftNarrativeDto generate(@PathVariable UUID founderId,
                                       @Valid @RequestBody GenerateNarrativeRequest request) {
         return narratives.generateForPillar(founderId, request.distancePillarId(),
-                requireSeen(founderId).viewerId());
+                requireSeen(founderId).viewerId(), request.isRegenerate());
     }
 
-    /** One click, every remaining eligible pillar — the staff "Generate narratives" button. */
+    /**
+     * One click, every remaining eligible pillar — the staff "Generate
+     * narratives" button. {@code ?regenerate=true} redoes the existing ones too
+     * (the "underlying data changed" button), replacing each in place.
+     */
     @PostMapping("/generate-all")
-    public GenerateAllNarrativesResponse generateAll(@PathVariable UUID founderId) {
-        return narratives.generateAllForFounder(founderId, requireSeen(founderId).viewerId());
+    public GenerateAllNarrativesResponse generateAll(@PathVariable UUID founderId,
+                                                     @org.springframework.web.bind.annotation.RequestParam(
+                                                             defaultValue = "false") boolean regenerate) {
+        return narratives.generateAllForFounder(founderId, requireSeen(founderId).viewerId(), regenerate);
     }
 
     @PatchMapping(path = "/{narrativeId}", consumes = MediaType.APPLICATION_JSON_VALUE)

@@ -237,7 +237,7 @@ public class AiEvaluationEngine {
      * approved per-pillar narratives.
      *
      * <p>No required field, deliberately: since V193 the shipped contract is
-     * {@code items} (the five-kind breakdown) while an installation whose
+     * {@code items} (the classified breakdown) while an installation whose
      * admins customised the template still asks for {@code summary}, and this
      * guardrail can only demand ALL of a list. Requiring either one would hard-
      * fail the other's install. The JSON-validity checks still run here;

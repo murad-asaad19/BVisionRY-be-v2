@@ -6,7 +6,7 @@ import java.util.List;
 
 /**
  * The member-level growth summary's model output (spec §3): the founder's
- * whole cohort read as ONE breakdown across the same five kinds the per-pillar
+ * whole cohort read as ONE breakdown across the same kinds the per-pillar
  * narratives use, synthesised from their approved per-pillar observations.
  *
  * <p>Two shapes on purpose. {@code items} is what the shipped prompt asks for.

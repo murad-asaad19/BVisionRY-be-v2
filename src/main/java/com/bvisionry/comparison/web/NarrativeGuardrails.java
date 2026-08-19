@@ -3,8 +3,10 @@ package com.bvisionry.comparison.web;
 import com.bvisionry.common.dto.ShiftNarrativeResult;
 import com.bvisionry.comparison.domain.NarrativeKind;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Spec §6's guardrails as CODE, not prompt-hope. Pure functions, no Spring, no
@@ -23,9 +25,9 @@ import java.util.Optional;
  *       non-blank {@code closingAction}. The caller re-asks once with the
  *       configured decline-close instruction appended; a second failure is a
  *       generation failure, never a persisted decline without a way forward.</li>
- *   <li><b>Kind sanity.</b> Every observation's classification must be one of
- *       the five (see {@link NarrativeKind#parse}); garbage is re-asked
- *       once.</li>
+ *   <li><b>Kind sanity.</b> Every observation's classification must be a
+ *       {@link NarrativeKind} (see {@link NarrativeKind#parse}); garbage is
+ *       re-asked once.</li>
  * </ol>
  */
 public final class NarrativeGuardrails {
@@ -96,7 +98,7 @@ public final class NarrativeGuardrails {
 
     /** Why a model response was rejected — drives the single corrective retry. */
     public enum Rejection {
-        /** An observation's classification was not one of the five kinds. */
+        /** An observation's classification was not a known {@link NarrativeKind}. */
         BAD_KIND,
         /** No observations at all, or one with empty prose — nothing to review. */
         EMPTY_NARRATIVE,
@@ -137,8 +139,13 @@ public final class NarrativeGuardrails {
         return switch (rejection) {
             case MISSING_CLOSING_ACTION -> declineCloseInstruction
                     + " This pillar declined: \"closingAction\" MUST be a non-empty, concrete next step.";
-            case BAD_KIND -> "Every item's \"kind\" must be exactly one of RESOLVED, "
-                    + "CARRIED_FORWARD, NEW, PERSISTED or FADED — no other value, no free text.";
+            // Listed FROM the enum: {@link NarrativeKind#parse} is what rejects
+            // the answer, so a hand-kept list here could tell the model a kind
+            // is illegal that the parser happily accepts (V202 added two).
+            case BAD_KIND -> "Every item's \"kind\" must be exactly one of "
+                    + Arrays.stream(NarrativeKind.values()).map(Enum::name)
+                            .collect(Collectors.joining(", "))
+                    + " — no other value, no free text.";
             case EMPTY_NARRATIVE -> "\"items\" must hold at least one observation, and every "
                     + "item's \"text\" must be 1-2 non-empty sentences grounded in the material "
                     + "you were given.";
@@ -148,7 +155,8 @@ public final class NarrativeGuardrails {
     /** Human-readable failure reason for the review UI — what went wrong, reader-facing. */
     public static String reasonLabel(Rejection rejection) {
         return switch (rejection) {
-            case BAD_KIND -> "The AI could not classify the change into one of the five kinds.";
+            case BAD_KIND -> "The AI could not classify the change into one of the "
+                    + "narrative kinds.";
             case EMPTY_NARRATIVE -> "The AI returned an empty narrative.";
             case MISSING_CLOSING_ACTION ->
                     "The AI did not include the next step a declining pillar requires.";

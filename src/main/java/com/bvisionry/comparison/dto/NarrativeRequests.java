@@ -14,8 +14,19 @@ public final class NarrativeRequests {
     private NarrativeRequests() {
     }
 
-    /** On-demand generation for one mapped pillar ("Generate for another pillar…"). */
-    public record GenerateNarrativeRequest(@NotNull UUID distancePillarId) {
+    /**
+     * On-demand generation for one mapped pillar ("Generate for another pillar…").
+     *
+     * <p>{@code regenerate = true} replaces the pillar's existing narrative in
+     * place — model call first, then overwrite, so a failed generation leaves
+     * the old prose untouched. The row returns to DRAFT whatever its status
+     * was; new prose has never been signed off (same rule as an edit).
+     */
+    public record GenerateNarrativeRequest(@NotNull UUID distancePillarId, Boolean regenerate) {
+
+        public boolean isRegenerate() {
+            return Boolean.TRUE.equals(regenerate);
+        }
     }
 
     /**
@@ -27,7 +38,7 @@ public final class NarrativeRequests {
     public record UpdateNarrativeRequest(@NotEmpty @Valid List<NarrativeItem> items,
                                          String closingAction) {
 
-        /** One observation: one of the five {@code NarrativeKind}s + its prose. */
+        /** One observation: one {@code NarrativeKind} + its prose. */
         public record NarrativeItem(@NotBlank String kind, @NotBlank String text) {
         }
     }
@@ -41,7 +52,7 @@ public final class NarrativeRequests {
      */
     public record UpdateGrowthSummaryRequest(@NotEmpty @Valid List<NarrativeItem> items) {
 
-        /** One observation: one of the five {@code NarrativeKind}s + its prose. */
+        /** One observation: one {@code NarrativeKind} + its prose. */
         public record NarrativeItem(@NotBlank String kind, @NotBlank String text) {
         }
     }

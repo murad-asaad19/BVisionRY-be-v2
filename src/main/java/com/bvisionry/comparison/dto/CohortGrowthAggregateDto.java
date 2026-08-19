@@ -24,8 +24,8 @@ public record CohortGrowthAggregateDto(
         List<PillarAggregateDto> pillars) {
 
     /**
-     * One distance pillar across the cohort. {@code kindCounts} holds all five
-     * kinds, zero-filled: the count of DISTINCT members whose APPROVED,
+     * One distance pillar across the cohort. {@code kindCounts} holds every
+     * {@link com.bvisionry.comparison.domain.NarrativeKind}, zero-filled: the count of DISTINCT members whose APPROVED,
      * still-attached narrative carries at least one observation of that kind —
      * "resolved for 3 of 7", where 7 is {@code membersWithApprovedNarrative}.
      * Draft prose never reaches this payload, same rule as every other

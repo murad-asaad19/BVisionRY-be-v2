@@ -53,12 +53,14 @@ import java.util.regex.Pattern;
  * upgraded to the §2 breakdown).
  *
  * <h2>What the model sees</h2>
- * The pillar name, the two text blocks ("what's working" / "what can improve")
- * from the baseline and distance evaluations, and the programme work tagged to
- * that pillar ({@link NarrativeActivityRepository}). "No generation from scores
- * alone" is still enforced by construction: {@link ComparisonReadRepository
- * #pillarTextBlocks} does not select a score, so no pillar score is in hand to
- * leak into the prompt.
+ * The pillar name, the direction word, the before/after percentages (context
+ * for gauging the size of the shift — operator decision 2026-08-19; the inline
+ * note beside them restates the no-numbers OUTPUT rule), the two text blocks
+ * ("what's working" / "what can improve") from the baseline and distance
+ * evaluations, and the programme work tagged to that pillar
+ * ({@link NarrativeActivityRepository}). "No generation from scores alone" still
+ * holds: the length floors below refuse a pillar whose text is missing, so a
+ * score with nothing to ground it never generates.
  *
  * <p>Figures DO reach the model inside the prose, though: the prior evaluations'
  * own text is full of percentages and ratings ("scored at 100%", "rated Easy
@@ -76,7 +78,7 @@ import java.util.regex.Pattern;
  * (the review UI shows the configured standard sentence inline for that pillar;
  * a row would imply a narrative somebody could approve). Decline without a
  * forward-looking close, an empty breakdown, a leaked score, or a kind outside
- * the five → ONE corrective retry, then a generation failure that persists
+ * {@link NarrativeKind} → ONE corrective retry, then a generation failure that persists
  * nothing.
  *
  * <h2>Review gate</h2>
@@ -95,7 +97,7 @@ public class ShiftNarrativeService {
     /**
      * The model gets one draft and exactly one corrective re-ask (§6). A third
      * try would just re-bill the same misunderstanding: when a model cannot
-     * classify into five kinds or close a decline after being told to, the
+     * classify into a known kind or close a decline after being told to, the
      * honest outcome is a generation failure a human can see.
      */
     static final int MAX_ATTEMPTS = 2;
@@ -105,6 +107,7 @@ public class ShiftNarrativeService {
     };
 
     private final ShiftNarrativeRepository narratives;
+    private final com.bvisionry.comparison.repository.MemberGrowthSummaryRepository growthSummaries;
     private final FounderComparisonRepository comparisons;
     private final FounderComparisonPillarRepository comparisonPillars;
     private final ComparisonReadRepository reads;
@@ -132,7 +135,7 @@ public class ShiftNarrativeService {
 
     /** Synchronous entry point — the async wrapper above, and the tests, call this. */
     public int generateAllPillars(UUID cohortId, UUID userId) {
-        GenerateAllNarrativesResponse result = generateBatch(context(cohortId, userId));
+        GenerateAllNarrativesResponse result = generateBatch(context(cohortId, userId), false);
         log.info("Generated {} shift narratives ({} skipped, {} failed) for cohort {} user {}",
                 result.generated(), result.skipped(), result.failed(), cohortId, userId);
         return result.generated();
@@ -149,9 +152,26 @@ public class ShiftNarrativeService {
      * sit open across that many provider round-trips.
      */
     public GenerateAllNarrativesResponse generateAllForFounder(UUID userId, UUID actorId) {
+        return generateAllForFounder(userId, actorId, false);
+    }
+
+    /**
+     * {@code regenerate = true} is the "the underlying data changed, redo the
+     * set" button: existing narratives — approved ones included — are replaced
+     * in place (model call first, overwrite on success), everything missing is
+     * generated as usual. Because the replacement discards prose the growth
+     * summary may have been written from, an APPROVED summary is returned to
+     * draft, exactly as a recompute would.
+     */
+    public GenerateAllNarrativesResponse generateAllForFounder(UUID userId, UUID actorId,
+                                                               boolean regenerate) {
         Context ctx = context(anchorCohort(userId), userId);
-        GenerateAllNarrativesResponse result = generateBatch(ctx);
-        auditLogger.log(actorId, ctx.comparison().getOrgId(), "SHIFT_NARRATIVES_GENERATED_ALL",
+        GenerateAllNarrativesResponse result = generateBatch(ctx, regenerate);
+        if (regenerate && result.generated() > 0) {
+            revertSummaryFor(ctx);
+        }
+        auditLogger.log(actorId, ctx.comparison().getOrgId(),
+                regenerate ? "SHIFT_NARRATIVES_REGENERATED_ALL" : "SHIFT_NARRATIVES_GENERATED_ALL",
                 "FounderComparison", ctx.comparison().getId(),
                 Map.of("generated", result.generated(), "skipped", result.skipped(),
                         "failed", result.failed()));
@@ -166,12 +186,12 @@ public class ShiftNarrativeService {
      * batch racing a click — dies on the V169 unique constraint at save time;
      * that is a SKIP (somebody's draft is there), never a failure.
      */
-    private GenerateAllNarrativesResponse generateBatch(Context ctx) {
+    private GenerateAllNarrativesResponse generateBatch(Context ctx, boolean regenerate) {
         List<Candidate> candidates = ctx.candidates().stream()
                 .filter(Candidate::hasEnoughMaterial)
                 .sorted(Comparator.comparingDouble(
                         (Candidate c) -> Math.abs(c.pillar().getDelta().doubleValue())).reversed())
-                .filter(c -> !ctx.existingPillarIds().contains(c.distancePillarId()))
+                .filter(c -> regenerate || !ctx.existingPillarIds().contains(c.distancePillarId()))
                 .toList();
 
         List<GenerateAllNarrativesResponse.NarrativePillarOutcome> outcomes = new ArrayList<>();
@@ -182,7 +202,8 @@ public class ShiftNarrativeService {
             String outcome;
             String reason = null;
             try {
-                Generation generation = generateOne(ctx, candidate);
+                Generation generation = generateOne(ctx, candidate,
+                        regenerate ? ctx.existingByPillar().get(candidate.distancePillarId()) : null);
                 if (generation.saved() != null) {
                     outcome = "GENERATED";
                     generated++;
@@ -222,8 +243,21 @@ public class ShiftNarrativeService {
      * pool gets exhausted by a handful of reviewers clicking at once.
      */
     public ShiftNarrativeDto generateForPillar(UUID userId, UUID distancePillarId, UUID actorId) {
+        return generateForPillar(userId, distancePillarId, actorId, false);
+    }
+
+    /**
+     * {@code regenerate = true} replaces the pillar's existing narrative in
+     * place — model call first, overwrite only on success, so a failed
+     * generation leaves the old prose (approved or not) untouched. An APPROVED
+     * member growth summary is returned to draft when the replacement lands: it
+     * was written from prose that no longer exists.
+     */
+    public ShiftNarrativeDto generateForPillar(UUID userId, UUID distancePillarId, UUID actorId,
+                                               boolean regenerate) {
         Context ctx = context(anchorCohort(userId), userId);
-        if (ctx.existingPillarIds().contains(distancePillarId)) {
+        ShiftNarrative existing = ctx.existingByPillar().get(distancePillarId);
+        if (existing != null && !regenerate) {
             throw new BadRequestException("This pillar already has a narrative.");
         }
         Candidate candidate = ctx.candidates().stream()
@@ -236,7 +270,7 @@ public class ShiftNarrativeService {
         }
         ShiftNarrative saved;
         try {
-            Generation generation = generateOne(ctx, candidate);
+            Generation generation = generateOne(ctx, candidate, existing);
             if (generation.saved() == null) {
                 throw new BadRequestException(
                         NarrativeGuardrails.reasonLabel(generation.rejection())
@@ -249,7 +283,11 @@ public class ShiftNarrativeService {
             // not a 500.
             throw new BadRequestException("This pillar already has a narrative.");
         }
-        auditLogger.log(actorId, ctx.comparison().getOrgId(), "SHIFT_NARRATIVE_GENERATED",
+        if (existing != null) {
+            revertSummaryFor(ctx);
+        }
+        auditLogger.log(actorId, ctx.comparison().getOrgId(),
+                existing != null ? "SHIFT_NARRATIVE_REGENERATED" : "SHIFT_NARRATIVE_GENERATED",
                 "ShiftNarrative", saved.getId(), Map.of("pillar", saved.getPillarNameSnapshot()));
         return toDto(saved, names(List.of(saved)), false);
     }
@@ -259,12 +297,28 @@ public class ShiftNarrativeService {
     }
 
     /**
+     * Regeneration's summary rule: replaced pillar prose invalidates an APPROVED
+     * growth summary the same way a recompute does — it was synthesised from
+     * narratives that no longer exist, so the stamp has to be re-earned. Straight
+     * to the repository: {@code MemberGrowthSummaryService} depends on this class,
+     * so the service route would be a constructor cycle.
+     */
+    private void revertSummaryFor(Context ctx) {
+        int reverted = growthSummaries.revertApprovalsForCohortMembers(
+                ctx.comparison().getCohortId(), List.of(ctx.comparison().getUserId()));
+        if (reverted > 0) {
+            log.info("Regeneration returned the approved growth summary to draft for cohort {} user {}",
+                    ctx.comparison().getCohortId(), ctx.comparison().getUserId());
+        }
+    }
+
+    /**
      * One model call plus, at most, one corrective retry. Returns the rejection
      * (with NOTHING persisted) when the output still fails the guardrails —
      * deliberately, rather than saving a decline with no way forward or an
      * unclassifiable kind.
      */
-    private Generation generateOne(Context ctx, Candidate candidate) {
+    private Generation generateOne(Context ctx, Candidate candidate, ShiftNarrative existing) {
         String userMessage = userMessage(candidate);
         CallMetadata metadata = new CallMetadata(ctx.comparison().getDistanceSubmissionId(), null,
                 candidate.pillar().getPillarNameSnapshot());
@@ -299,7 +353,21 @@ public class ShiftNarrativeService {
         }
 
         OpenRouterChatService.Provenance provenance = response.provenance();
-        ShiftNarrative narrative = new ShiftNarrative();
+        // Regeneration reuses the row (the V169 unique key forbids a second one)
+        // and resets its review state: the new prose has never been signed off,
+        // so the approval/edit stamps go, and the legacy kind/body pair is
+        // cleared — the fresh items are the whole breakdown. The auto-approve
+        // branch below still applies, exactly as it does to a first generation.
+        ShiftNarrative narrative = existing != null ? existing : new ShiftNarrative();
+        if (existing != null) {
+            narrative.setStatus(NarrativeStatus.DRAFT);
+            narrative.setApprovedBy(null);
+            narrative.setApprovedAt(null);
+            narrative.setEditedBy(null);
+            narrative.setEditedAt(null);
+            narrative.setKind(null);
+            narrative.setBody(null);
+        }
         narrative.setCohortId(ctx.comparison().getCohortId());
         narrative.setOrgId(ctx.comparison().getOrgId());
         narrative.setUserId(ctx.comparison().getUserId());
@@ -344,7 +412,19 @@ public class ShiftNarrativeService {
     static String userMessage(Candidate candidate) {
         StringBuilder sb = new StringBuilder();
         sb.append("PILLAR: ").append(candidate.pillar().getPillarNameSnapshot()).append('\n');
-        sb.append("PILLAR DIRECTION: ").append(candidate.direction()).append("\n\n");
+        sb.append("PILLAR DIRECTION: ").append(candidate.direction()).append('\n');
+        // The before/after percentages, as CONTEXT for gauging the size of the
+        // shift (operator decision 2026-08-19 — a direction word alone cannot
+        // distinguish +2 from +40). The §2 no-numbers rule is about the OUTPUT
+        // and is restated inline, where it binds even on installations whose
+        // admins customised the system prompt.
+        if (candidate.pillar().getBeforePct() != null && candidate.pillar().getAfterPct() != null) {
+            sb.append("PILLAR SCORE: before ").append(pct(candidate.pillar().getBeforePct()))
+                    .append("% → after ").append(pct(candidate.pillar().getAfterPct()))
+                    .append("% (context for you only — never repeat or state any number "
+                            + "in the output)\n");
+        }
+        sb.append('\n');
         appendBlock(sb, "BEFORE — what's working", candidate.beforeWorking());
         appendBlock(sb, "BEFORE — what can improve", candidate.beforeImprove());
         appendBlock(sb, "AFTER — what's working", candidate.afterWorking());
@@ -415,6 +495,14 @@ public class ShiftNarrativeService {
                         .append(task.completedAt().atZone(ZoneId.systemDefault()).toLocalDate());
             }
             sb.append('\n');
+            if (task.aiContext() != null && !task.aiContext().isBlank()) {
+                // The admin's staff-only brief on what the task is for. Fenced
+                // for the same reason the member data is: it is interpolated
+                // text, and the fence is what makes "data, not instructions"
+                // followable rather than aspirational.
+                sb.append("  ABOUT: ").append(fenced(task.aiContext()).strip().replace('\n', ' '))
+                        .append('\n');
+            }
             if (task.content().isEmpty()) {
                 sb.append("  (nothing submitted)\n");
             } else {
@@ -438,6 +526,16 @@ public class ShiftNarrativeService {
      */
     private static final Pattern FENCE_TAG = Pattern.compile(
             "</?\\s*(?:submission|facilitator_note)\\s*>", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * "44.00" → "44", "56.50" → "56.5" — the prompt reads like a person wrote
+     * it. ONE definition for the package: {@link MemberGrowthSummaryService}
+     * builds the same score context into its own prompt, and the two must not
+     * be able to drift into formatting a percentage differently for the model.
+     */
+    static String pct(java.math.BigDecimal value) {
+        return value.stripTrailingZeros().toPlainString();
+    }
 
     private static String fenced(String text) {
         return FENCE_TAG.matcher(text).replaceAll("");
@@ -701,7 +799,11 @@ public class ShiftNarrativeService {
 
     /** Everything one founder's narrative work needs, read once. */
     record Context(FounderComparison comparison, NarrativeWording wording,
-                   List<Candidate> candidates, Set<UUID> existingPillarIds) {
+                   List<Candidate> candidates, Map<UUID, ShiftNarrative> existingByPillar) {
+
+        Set<UUID> existingPillarIds() {
+            return existingByPillar.keySet();
+        }
     }
 
     /** A mapped pillar with both sides' text and its tagged work in hand — a narrative candidate. */
@@ -788,8 +890,12 @@ public class ShiftNarrativeService {
                         activity.getOrDefault(p.getDistancePillarId(), List.of())))
                 .toList();
 
-        Set<UUID> existing = new HashSet<>(narratives.findByCohortIdAndUserId(cohortId, userId).stream()
-                .map(ShiftNarrative::getDistancePillarId).toList());
+        // Keyed rows, not just ids: regeneration overwrites the existing row in
+        // place (the V169 unique constraint forbids a second one). Uniqueness of
+        // the key is that same constraint's guarantee.
+        Map<UUID, ShiftNarrative> existing = narratives.findByCohortIdAndUserId(cohortId, userId).stream()
+                .collect(java.util.stream.Collectors.toMap(
+                        ShiftNarrative::getDistancePillarId, java.util.function.Function.identity()));
         return new Context(comparison, wording(), candidates, existing);
     }
 

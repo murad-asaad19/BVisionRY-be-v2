@@ -44,7 +44,7 @@ public class MemberGrowthSummary extends BaseEntity {
     private UUID userId;
 
     /**
-     * The overall breakdown (V193) — the same five kinds the per-pillar
+     * The overall breakdown (V193) — the same kinds the per-pillar
      * narratives carry, merged across every pillar. The shape everything
      * generated or edited since V193 uses.
      */

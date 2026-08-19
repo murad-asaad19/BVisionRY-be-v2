@@ -1,5 +1,6 @@
 package com.bvisionry.comparison.repository;
 
+import com.bvisionry.comparison.dto.MyComparisonResponse;
 import com.bvisionry.common.programaccess.CohortInstruments;
 import com.bvisionry.common.programaccess.CohortVisibility;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -350,6 +351,30 @@ public class ComparisonReadRepository {
                 (rs, i) -> new PillarEvalRow(rs.getObject("pillar_id", UUID.class),
                         rs.getBigDecimal("score_percentage"), rs.getString("maturity_label")))
                 .stream().collect(Collectors.toMap(PillarEvalRow::pillarId, Function.identity()));
+    }
+
+    /**
+     * The scored pillars of an instrument, in the order they are asked.
+     *
+     * PERSONAL pillars are excluded by type, not by name: they carry zero
+     * weight and no maturity thresholds, so a member is never scored on one —
+     * the FRI's "General Information" section is data collection, and rotating
+     * it through a growth surface as a mindset would be a bug the day an org
+     * renames it.
+     */
+    public List<MyComparisonResponse.PillarBlurb> instrumentPillars(UUID pipelineId) {
+        return jdbc.query("""
+                SELECT id, name, description, display_order
+                FROM pillars
+                WHERE pipeline_id = :id AND type = 'STANDARD'
+                ORDER BY display_order ASC
+                """,
+                new MapSqlParameterSource("id", pipelineId),
+                (rs, i) -> new MyComparisonResponse.PillarBlurb(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("name"),
+                        rs.getString("description"),
+                        rs.getInt("display_order")));
     }
 
     public record TrajectoryRow(UUID submissionId, String pipelineName,

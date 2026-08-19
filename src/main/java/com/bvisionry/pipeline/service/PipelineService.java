@@ -191,6 +191,7 @@ public class PipelineService {
 
         pipeline.setName(request.name());
         pipeline.setDescription(request.description());
+        pipeline.setAbbreviation(blankToNull(request.abbreviation()));
         pipeline.setFreeTierPrompt(request.freeTierPrompt());
         pipeline.setOverallSummaryPrompt(request.overallSummaryPrompt());
 
@@ -284,6 +285,10 @@ public class PipelineService {
         Pipeline cloned = new Pipeline();
         cloned.setName(original.getName());
         cloned.setDescription(original.getDescription());
+        // The short code travels with the version: a cohort repointed at the new
+        // one still heads its roster column "MRA → MDA" rather than silently
+        // falling back to the role names.
+        cloned.setAbbreviation(original.getAbbreviation());
         cloned.setCreatedBy(original.getCreatedBy());
         cloned.setStatus(PipelineStatus.DRAFT);
         cloned.setVersion(maxVersion + 1);
@@ -564,7 +569,7 @@ public class PipelineService {
         boolean includePostCompletion = isSuperAdminSafe();
 
         return new PipelineResponse(
-                p.getId(), p.getName(), p.getDescription(), p.getVersion(),
+                p.getId(), p.getName(), p.getDescription(), p.getAbbreviation(), p.getVersion(),
                 p.getStatus(), p.getCreatedBy(),
                 p.getFreeTierPrompt(),
                 p.getOverallSummaryPrompt(),
@@ -573,6 +578,11 @@ public class PipelineService {
                 includePostCompletion ? p.getPostCompletionExternalUrl() : null,
                 includePostCompletion ? p.getPostCompletionLabel() : null
         );
+    }
+
+    /** Optional free text: an emptied form field clears the column, never stores "". */
+    private static String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s.trim();
     }
 
     private boolean isSuperAdminSafe() {
@@ -673,7 +683,7 @@ public class PipelineService {
                 ? (int) p.getPillars().stream().filter(pillar -> pillar.getType() != PillarType.PERSONAL).count()
                 : 0;
         return new PipelineSummaryResponse(
-                p.getId(), p.getName(), p.getDescription(), p.getVersion(),
+                p.getId(), p.getName(), p.getDescription(), p.getAbbreviation(), p.getVersion(),
                 p.getStatus(), p.getCreatedBy(),
                 pillarCount, assignedOrganizations, p.getCreatedAt(), p.getUpdatedAt()
         );

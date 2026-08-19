@@ -53,7 +53,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Sessions + attendance + Engagement Record (redesign spec §4): org-admin
  * session CRUD and roll call (§7b stamped), the participation score computed
  * on read with weight renormalization, and the visibility gates — admin +
- * assigned coach read, admin-only writes, NEVER any member access.
+ * assigned coach read, admin-only writes, and a member door that only ever
+ * answers with the caller's OWN record.
  */
 @SpringBootTest
 @AutoConfigureMockMvc(addFilters = false)
@@ -488,7 +489,8 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
             mockMvc.perform(get(engagementUrl(founder)))
                     .andExpect(status().isForbidden());
 
-            // Member: NEVER — neither door, not even for themselves (spec §4).
+            // Member: never through the ADMIN or COACH door, not even for
+            // themselves — their own record has its own door (see below).
             TestAuthentication.authenticate(founder);
             mockMvc.perform(get(engagementUrl(founder)))
                     .andExpect(status().isForbidden());
@@ -500,6 +502,30 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
             mockMvc.perform(get("/api/organizations/" + orgA.getId() + "/members/"
                             + UUID.randomUUID() + "/engagement"))
                     .andExpect(status().isNotFound());
+        }
+
+        /**
+         * The member's own door (operator decision 2026-08-19) — the same
+         * record the admin reads for THIS founder, carrying no id to widen. A
+         * caller with no learner row (staff opening the member surface) gets an
+         * empty record rather than a 404.
+         */
+        @Test
+        void memberReadsTheirOwnRecordThroughTheirOwnDoor() throws Exception {
+            seedAssignmentsForFounder();
+
+            TestAuthentication.authenticate(founder);
+            mockMvc.perform(get("/api/my/engagement"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.cohorts", hasSize(1)))
+                    .andExpect(jsonPath("$.cohorts[0].cohortName", is("Cohort One")))
+                    .andExpect(jsonPath("$.cohorts[0].participation.categories", hasSize(4)))
+                    .andExpect(jsonPath("$.cohorts[0].participation.categories[0].done", is(2)));
+
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get("/api/my/engagement"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.cohorts", hasSize(0)));
         }
     }
 

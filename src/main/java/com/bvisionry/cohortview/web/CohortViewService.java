@@ -57,6 +57,7 @@ public class CohortViewService {
                 // No per-cohort seat count exists (V167 meters launches per org).
                 null,
                 cohort.baselinePipelineName(), cohort.distancePipelineName(),
+                cohort.baselinePipelineAbbrev(), cohort.distancePipelineAbbrev(),
                 reads.coaches(orgId, cohortId).stream()
                         .map(c -> new CohortCoach(c.id(), c.name(), c.orgWide()))
                         .toList(),

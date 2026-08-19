@@ -304,6 +304,30 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                     .containsExactly("Baseline FRI", "Baseline FRI", "Distance FRI");
         }
 
+        /**
+         * The growth card names what a member is measured ON before they have
+         * a single score, so the payload carries the BASELINE instrument's
+         * pillars in every state — and only the scored ones. A PERSONAL pillar
+         * (the FRI's "General Information" section) collects data, carries no
+         * weight and no maturity thresholds; rotating it through a growth
+         * surface as if it were a mindset is the bug this pins.
+         */
+        @Test
+        void carriesTheBaselinesScoredPillars_neverThePersonalSection() {
+            jdbc.update("UPDATE pillars SET description = ? WHERE id = ?",
+                    "Where you are going, as a picture others can act on.", baselineVision);
+            UUID personal = insertPillar(baselinePipelineId, "General Information", 9);
+            jdbc.update("UPDATE pillars SET type = 'PERSONAL' WHERE id = ?", personal);
+
+            assertThat(queryService.myComparison(founder1.getId()).pillars())
+                    .extracting(MyComparisonResponse.PillarBlurb::name)
+                    .containsExactly("Vision", "Focus & Flow", "Legacy");
+            assertThat(queryService.myComparison(founder1.getId()).pillars())
+                    .first()
+                    .extracting(MyComparisonResponse.PillarBlurb::description)
+                    .isEqualTo("Where you are going, as a picture others can act on.");
+        }
+
         /** The §5 guard: no designated pair → never tease a pending report. */
         @Test
         void memberWithoutDesignatedPair_getsNoneState() {
@@ -1227,6 +1251,7 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                     """
                     [{"kind":"RESOLVED","text":"The hesitation is gone."},
                      {"kind":"RESOLVED","text":"So is the second one."},
+                     {"kind":"REGRESSED","text":"The weekly review is now an edge."},
                      {"kind":"FADED","text":"The exploratory streak is absent."}]
                     """);
             TestAuthentication.authenticate(
@@ -1241,21 +1266,50 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                 assertThat(sheet).isNotNull();
                 var header = sheet.getRow(0);
                 assertThat(header.getCell(0).getStringCellValue()).isEqualTo("Pillar");
-                assertThat(header.getCell(1).getStringCellValue()).isEqualTo("Resolved");
-                assertThat(header.getCell(2).getStringCellValue()).isEqualTo("Carried forward");
-                assertThat(header.getCell(6).getStringCellValue()).isEqualTo("Next step");
+                // The pillar's numbers ride beside the prose — printed by code,
+                // never stated by the model (operator decision 2026-08-19).
+                assertThat(header.getCell(1).getStringCellValue()).isEqualTo("Before → after");
+                // Columns run in the reading arc — gained, resolved, held, still
+                // open, newly picked up, slipped, lost — and each header states the
+                // before → after move it stands for, so "Carried forward" needs no
+                // glossary.
+                assertThat(header.getCell(2).getStringCellValue())
+                        .isEqualTo("New (not present → strength)");
+                assertThat(header.getCell(3).getStringCellValue())
+                        // Two outcomes, not one — RESOLVED covers a growth edge
+                        // that became a strength AND one that simply stopped
+                        // appearing. Naming only the first overstates it.
+                        .isEqualTo("Resolved (growth edge → strength or gone)");
+                assertThat(header.getCell(4).getStringCellValue())
+                        // No arrow where nothing moved — an arrow in this sheet
+                        // now always means the state actually changed.
+                        .isEqualTo("Carried forward (strength · held)");
+                // V202's two negative cells. Both MOVE, so both keep an arrow —
+                // and REGRESSED is what the mis-filed FADED rows really were.
+                assertThat(header.getCell(6).getStringCellValue())
+                        .isEqualTo("Emerged (not present → growth edge)");
+                assertThat(header.getCell(7).getStringCellValue())
+                        .isEqualTo("Regressed (strength → growth edge)");
+                assertThat(header.getCell(8).getStringCellValue())
+                        .isEqualTo("Faded (strength → not present)");
+                assertThat(header.getCell(9).getStringCellValue()).isEqualTo("Next step");
                 // The pillar appears ONCE despite carrying three observations.
                 assertThat(sheet.getLastRowNum()).isEqualTo(1);
                 var row = sheet.getRow(1);
                 assertThat(row.getCell(0).getStringCellValue()).isEqualTo("Vision");
-                // Two observations of one kind share their cell.
-                assertThat(row.getCell(1).getStringCellValue())
-                        .contains("The hesitation is gone.")
-                        .contains("So is the second one.");
+                assertThat(row.getCell(1).getStringCellValue()).contains("→");
                 assertThat(row.getCell(2).getStringCellValue()).isEmpty();
-                assertThat(row.getCell(5).getStringCellValue())
-                        .isEqualTo("The exploratory streak is absent.");
-                assertThat(row.getCell(6).getStringCellValue())
+                // Two observations of one kind share their cell, as bullets.
+                assertThat(row.getCell(3).getStringCellValue())
+                        .contains("• The hesitation is gone.")
+                        .contains("• So is the second one.");
+                assertThat(row.getCell(4).getStringCellValue()).isEmpty();
+                assertThat(row.getCell(6).getStringCellValue()).isEmpty();
+                assertThat(row.getCell(7).getStringCellValue())
+                        .isEqualTo("• The weekly review is now an edge.");
+                assertThat(row.getCell(8).getStringCellValue())
+                        .isEqualTo("• The exploratory streak is absent.");
+                assertThat(row.getCell(9).getStringCellValue())
                         .isEqualTo("Close one open decision.");
             }
         }
@@ -1437,11 +1491,30 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
 
             orgA.setSubscriptionTier(SubscriptionTier.GROWTH);
             organizationRepository.saveAndFlush(orgA);
-            mockMvc.perform(get(url))
+            byte[] xlsx = mockMvc.perform(get(url))
                     .andExpect(status().isOk())
                     .andExpect(content().contentType(XLSX))
                     .andExpect(header().string("Content-Disposition",
-                            containsString("Cohort_Growth_Report")));
+                            containsString("Cohort_Growth_Report")))
+                    .andReturn().getResponse().getContentAsByteArray();
+
+            // One tag column per kind, read off the enum: the aggregate counts
+            // every kind, so a hand-kept header list here would silently drop
+            // any kind added later (V202 added two).
+            //
+            // Ordered by the READING ARC, not by enum order, so this sheet and
+            // the member growth sheet put the same kind in the same place — an
+            // admin reads both.
+            try (var wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook(
+                    new java.io.ByteArrayInputStream(xlsx))) {
+                var header = wb.getSheet("Narrative tags").getRow(0);
+                assertThat((int) header.getLastCellNum())
+                        .isEqualTo(2 + com.bvisionry.comparison.domain.NarrativeKind.values().length);
+                assertThat(header.getCell(2).getStringCellValue()).isEqualTo("New");
+                assertThat(header.getCell(6).getStringCellValue()).isEqualTo("Emerged");
+                assertThat(header.getCell(7).getStringCellValue()).isEqualTo("Regressed");
+                assertThat(header.getCell(8).getStringCellValue()).isEqualTo("Faded");
+            }
         }
 
         @Test

@@ -18,6 +18,9 @@ public record UpsertExerciseTemplateRequest(
         @Size(max = 500, message = "Cover image URL must be 500 characters or less")
         String coverImageUrl,
 
+        /** Staff-only brief for the AI — what this exercise is for. Never shown to members. */
+        String aiContext,
+
         /** Optional read-only sample row (columnId → value) shown above the sheet. */
         Map<String, Object> exampleRow,
 

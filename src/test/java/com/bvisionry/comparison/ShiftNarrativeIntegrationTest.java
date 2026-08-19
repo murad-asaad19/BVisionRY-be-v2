@@ -12,6 +12,7 @@ import com.bvisionry.comparison.domain.MemberGrowthSummary;
 import com.bvisionry.comparison.domain.NarrativeKind;
 import com.bvisionry.comparison.domain.NarrativeStatus;
 import com.bvisionry.comparison.domain.ShiftNarrative;
+import com.bvisionry.comparison.dto.GenerateAllNarrativesResponse;
 import com.bvisionry.comparison.dto.MemberGrowthSummaryDto;
 import com.bvisionry.comparison.dto.MyComparisonResponse;
 import com.bvisionry.comparison.dto.NarrativeRequests.UpdateGrowthSummaryRequest;
@@ -53,6 +54,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -361,7 +363,18 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
                     .contains("Weekly reflection (LESSON)")
                     .contains("What did you change this week?: I moved the standup to Monday.")
                     .contains("Constraint map (EXERCISE)")
-                    .contains("Cash collection")
+                    // The staff-only brief travels, labelled as ours.
+                    .contains("ABOUT: Founders map the constraints choking growth.")
+                    // The grid is a TABLE: header line first, then data rows —
+                    // numbered from 2 because the header is row 1.
+                    .contains("Row 1 (column titles): Constraint | Tags")
+                    .contains("Row 3: Cash collection | Finance")
+                    // A template-seeded row is marked as scaffolding.
+                    .contains("Row 2 (template-prefilled): Round 1 | —")
+                    // Multi-select cells arrive as their text, never raw JSON.
+                    .doesNotContain("11111111-1111")
+                    // The scores travel as context — bigGain was seeded 50→70.
+                    .contains("PILLAR SCORE: before 50% → after 70%")
                     // No truncation: the founder's whole answer travels (§2).
                     .contains("status: done");
             // The founder's work and the staff note sit in the two fences the
@@ -456,6 +469,41 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
                     // on it, so the model still has to be told.
                     .contains("When PILLAR DIRECTION says the pillar declined, a closing action is "
                             + "MANDATORY");
+            // V202: the two cells the taxonomy had no kind for. REGRESSED is what
+            // every FADED in the staging data actually was, so FADED is tightened
+            // in the same breath — a new kind the old catch-all still absorbs
+            // changes nothing.
+            assertThat(prompt).contains("EXACTLY ONE of seven kinds")
+                    .contains("- REGRESSED — a strength in BEFORE that appears in AFTER as a "
+                            + "growth edge.")
+                    .contains("- EMERGED — a growth edge in AFTER with no equivalent in BEFORE, "
+                            + "neither as a strength nor as a growth edge.")
+                    .contains("If it appears there as a growth edge, it is REGRESSED, not FADED")
+                    // The punt is gone: a growth edge appearing only in AFTER has
+                    // a kind now, so burying it in the closing action would hide
+                    // a new problem inside a next step.
+                    .doesNotContain("A growth edge that appears only in AFTER has no kind");
+        }
+
+        /**
+         * The member-level synthesis restates the same vocabulary in its own
+         * words (V193) and is fed the per-pillar kinds as input — so if it does
+         * not learn V202's two, it can only classify a founder's overall change
+         * into five of the seven tags it is reading.
+         */
+        @Test
+        void theMemberSummaryPromptTeachesTheSameSevenKinds() {
+            String prompt = jdbc.queryForObject(
+                    "SELECT content FROM prompt_templates WHERE prompt_type = 'MEMBER_GROWTH_SUMMARY'",
+                    String.class);
+
+            assertThat(prompt).contains("EXACTLY ONE of seven kinds")
+                    .contains("- REGRESSED — a strength named earlier that appears in the later "
+                            + "readings as a growth edge.")
+                    .contains("- EMERGED — a growth edge in the later readings with no equivalent "
+                            + "earlier, neither as a strength nor as a growth edge.")
+                    .contains("If it appears there as a growth edge, it is REGRESSED, not FADED")
+                    .doesNotContain("EXACTLY ONE of five kinds");
         }
 
         /**
@@ -816,6 +864,125 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
+    /* ============================================ regeneration (in place) */
+
+    /**
+     * Regeneration replaces a pillar's narrative IN PLACE — model call first,
+     * overwrite only on success — so staff can redo the set whenever the
+     * underlying programme data changes (new exercise submissions being the
+     * motivating case).
+     */
+    @Nested
+    class Regeneration {
+
+        @Test
+        void regeneratingADraft_replacesItInPlace_sameRowNewProse() {
+            narrativeService.generateAllPillars(cohortId, founder.getId());
+            ShiftNarrative before = narrativeOf(bigGain);
+            responses.enqueue("""
+                    {"items":[{"kind":"NEW","text":"A written decision log appears for the first time."}],
+                     "closingAction":"Keep the log."}
+                    """);
+
+            ShiftNarrativeDto dto = narrativeService.generateForPillar(
+                    founder.getId(), bigGain, admin.getId(), true);
+
+            assertThat(dto.id()).isEqualTo(before.getId());
+            ShiftNarrative after = narrativeOf(bigGain);
+            assertThat(after.getId()).isEqualTo(before.getId());
+            assertThat(after.getStatus()).isEqualTo(NarrativeStatus.DRAFT);
+            assertThat(after.getItems()).hasSize(1);
+            assertThat(after.getItems().get(0).text()).contains("decision log");
+        }
+
+        @Test
+        void regeneratingAnApprovedNarrative_returnsItToDraft_andRevertsTheApprovedSummary() {
+            narrativeService.generateAllPillars(cohortId, founder.getId());
+            approveEveryNarrative();
+            summaryService.generate(founder.getId(), admin.getId());
+            summaryService.approve(founder.getId(), admin.getId());
+
+            narrativeService.generateForPillar(founder.getId(), bigGain, admin.getId(), true);
+
+            ShiftNarrative after = narrativeOf(bigGain);
+            assertThat(after.getStatus()).isEqualTo(NarrativeStatus.DRAFT);
+            assertThat(after.getApprovedBy()).isNull();
+            assertThat(after.getApprovedAt()).isNull();
+            // The summary was synthesised from prose that no longer exists — the
+            // stamp has to be re-earned, exactly as after a recompute.
+            assertThat(summaries.findByCohortIdAndUserId(cohortId, founder.getId()))
+                    .hasValueSatisfying(s ->
+                            assertThat(s.getStatus()).isEqualTo(NarrativeStatus.DRAFT));
+        }
+
+        @Test
+        void aFailedRegeneration_leavesTheOldProseUntouched() {
+            narrativeService.generateAllPillars(cohortId, founder.getId());
+            ShiftNarrative before = narrativeOf(bigGain);
+            List<ShiftNarrative.Item> beforeItems = before.getItems();
+            // Both attempts unclassifiable — generation fails, nothing saved.
+            responses.enqueue("""
+                    {"items":[{"kind":"Sideways","text":"?"}],"closingAction":"x"}
+                    """);
+            responses.enqueue("""
+                    {"items":[{"kind":"Sideways","text":"?"}],"closingAction":"x"}
+                    """);
+
+            assertThatThrownBy(() -> narrativeService.generateForPillar(
+                    founder.getId(), bigGain, admin.getId(), true))
+                    .hasMessageContaining("could not classify the change");
+
+            ShiftNarrative after = narrativeOf(bigGain);
+            assertThat(after.getItems()).isEqualTo(beforeItems);
+            assertThat(after.getStatus()).isEqualTo(NarrativeStatus.DRAFT);
+        }
+
+        @Test
+        void withoutTheFlag_generatingOverAnExistingNarrative_stillRefuses() {
+            narrativeService.generateAllPillars(cohortId, founder.getId());
+
+            assertThatThrownBy(() -> narrativeService.generateForPillar(
+                    founder.getId(), bigGain, admin.getId()))
+                    .hasMessageContaining("already has a narrative");
+        }
+
+        @Test
+        void regenerateAll_redoesEveryExistingPillar_andStillFillsGaps() {
+            narrativeService.generateAllPillars(cohortId, founder.getId());
+            narrativeService.delete(founder.getId(), narrativeOf(midGain).getId(), admin.getId());
+            Set<UUID> idsBefore = narratives.findByCohortIdAndUserId(cohortId, founder.getId())
+                    .stream().map(ShiftNarrative::getId).collect(java.util.stream.Collectors.toSet());
+
+            GenerateAllNarrativesResponse result =
+                    narrativeService.generateAllForFounder(founder.getId(), admin.getId(), true);
+
+            assertThat(result.generated()).isEqualTo(5);
+            List<ShiftNarrative> rows = narratives.findByCohortIdAndUserId(cohortId, founder.getId());
+            assertThat(rows).hasSize(5);
+            // The four survivors kept their row ids — replaced, not recreated.
+            assertThat(rows.stream().map(ShiftNarrative::getId)
+                    .filter(idsBefore::contains)).hasSize(4);
+        }
+
+        /**
+         * The platform auto-approve toggle applies to a REgeneration exactly as
+         * it does to a first generation: the org opted out of hand-approval, so
+         * the replacement lands APPROVED again — system-stamped, no reviewer.
+         */
+        @Test
+        void autoApproveOn_regeneratedNarrativesLandApprovedAgain() {
+            enableAutoApprove();
+            narrativeService.generateAllPillars(cohortId, founder.getId());
+
+            narrativeService.generateForPillar(founder.getId(), bigGain, admin.getId(), true);
+
+            ShiftNarrative after = narrativeOf(bigGain);
+            assertThat(after.getStatus()).isEqualTo(NarrativeStatus.APPROVED);
+            assertThat(after.getApprovedAt()).isNotNull();
+            assertThat(after.getApprovedBy()).isNull();
+        }
+    }
+
     /* ================================= the member-level growth summary (§3) */
 
     /**
@@ -871,7 +1038,10 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
             assertThat(queryService.myComparison(founder.getId()).comparison().growthSummary()).isNull();
         }
 
-        /** The model is given the approved breakdowns and nothing else (§3). */
+        /**
+         * The model is given the approved breakdowns plus the scores as
+         * weighing context (§3 + operator decision 2026-08-19) — nothing else.
+         */
         @Test
         void thePromptCarriesTheApprovedBreakdowns() {
             approveEveryNarrative();
@@ -880,7 +1050,10 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
 
             assertThat(responses.lastUserMessage())
                     .contains("APPROVED PILLAR NARRATIVES")
-                    .contains("PILLAR: Vision")
+                    // The fixture seeds Vision at 50→70 and the overall at 55→66.
+                    .contains("PILLAR: Vision — before 50% → after 70%")
+                    .contains("OVERALL: before 55% → after 66%")
+                    .contains("never repeat or state any number")
                     .contains("CARRIED_FORWARD:");
         }
 
@@ -1144,11 +1317,6 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
             return out.toString();
         }
 
-        private void approveEveryNarrative() {
-            narrativeService.generateAllPillars(cohortId, founder.getId());
-            narratives.findByCohortIdAndUserId(cohortId, founder.getId())
-                    .forEach(n -> narrativeService.approve(founder.getId(), n.getId(), admin.getId()));
-        }
     }
 
     /* ============================================================ doors */
@@ -1312,14 +1480,19 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
     private void seedTaggedExerciseWithFacilitatorComment(UUID pillarId) {
         UUID templateId = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO exercise_templates (id, name, created_by)
-                VALUES (?, 'Constraint map', ?)
+                INSERT INTO exercise_templates (id, name, created_by, ai_context)
+                VALUES (?, 'Constraint map', ?, 'Founders map the constraints choking growth.')
                 """, templateId, admin.getId());
         UUID columnId = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO exercise_columns (id, template_id, name, type, display_order)
                 VALUES (?, ?, 'Constraint', 'TEXT', 0)
                 """, columnId, templateId);
+        UUID tagsColumnId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO exercise_columns (id, template_id, name, type, display_order)
+                VALUES (?, ?, 'Tags', 'TEXT', 1)
+                """, tagsColumnId, templateId);
 
         UUID taskId = insertTaggedTask(pillarId, "Constraint map", "EXERCISE", templateId);
         UUID assignmentId = UUID.randomUUID();
@@ -1333,10 +1506,17 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
                 INSERT INTO exercise_submissions (id, assignment_id, user_id, status, submitted_at)
                 VALUES (?, ?, ?, 'SUBMITTED', now())
                 """, submissionId, assignmentId, founder.getId());
+        // A starter row the template seeded, and a member row whose second cell
+        // is a serialised multi-select — both rendering rules under test.
+        jdbc.update("""
+                INSERT INTO exercise_rows (submission_id, display_order, cells, is_starter)
+                VALUES (?, 0, ?::jsonb, true)
+                """, submissionId, "{\"" + columnId + "\":\"Round 1\"}");
         jdbc.update("""
                 INSERT INTO exercise_rows (submission_id, display_order, cells)
-                VALUES (?, 0, ?::jsonb)
-                """, submissionId, "{\"" + columnId + "\":\"Cash collection\"}");
+                VALUES (?, 1, ?::jsonb)
+                """, submissionId, "{\"" + columnId + "\":\"Cash collection\",\"" + tagsColumnId
+                        + "\":[{\"id\":\"11111111-1111-1111-1111-111111111111\",\"text\":\"Finance\"}]}");
         jdbc.update("""
                 INSERT INTO exercise_comments (submission_id, author_id, body)
                 VALUES (?, ?, 'This one is weak, push them on it.')
@@ -1357,6 +1537,13 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
         jdbc.update("INSERT INTO program_task_pillars (task_id, pillar_id) VALUES (?, ?)",
                 taskId, pillarId);
         return taskId;
+    }
+
+    /** Generate whatever is missing, then approve the lot — shared by the summary and regeneration suites. */
+    private void approveEveryNarrative() {
+        narrativeService.generateAllPillars(cohortId, founder.getId());
+        narratives.findByCohortIdAndUserId(cohortId, founder.getId())
+                .forEach(n -> narrativeService.approve(founder.getId(), n.getId(), admin.getId()));
     }
 
     private ShiftNarrative narrativeOf(UUID distancePillarId) {

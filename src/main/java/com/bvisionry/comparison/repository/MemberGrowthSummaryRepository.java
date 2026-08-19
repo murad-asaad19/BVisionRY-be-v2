@@ -30,7 +30,15 @@ public interface MemberGrowthSummaryRepository extends JpaRepository<MemberGrowt
             """)
     int revertApprovalsForCohort(@Param("cohortId") UUID cohortId);
 
-    /** Org-scoped {@link #revertApprovalsForCohort} — a platform cohort spans orgs. */
+    /**
+     * Org-scoped {@link #revertApprovalsForCohort} — a platform cohort spans orgs.
+     *
+     * <p>{@code @Transactional} because one caller — narrative regeneration —
+     * deliberately runs outside a transaction (it wraps model calls), and a
+     * {@code @Modifying} query cannot execute without one. Recompute's call
+     * simply joins its own transaction.
+     */
+    @org.springframework.transaction.annotation.Transactional
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             UPDATE MemberGrowthSummary s

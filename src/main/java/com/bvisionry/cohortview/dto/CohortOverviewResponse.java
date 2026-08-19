@@ -46,6 +46,13 @@ public record CohortOverviewResponse(
          */
         String baselinePipelineName,
         String distancePipelineName,
+        /**
+         * The same pair's short codes (V201) — what the People roster's growth
+         * column is headed with ("MRA → MDA"). Null when the pipeline carries
+         * no abbreviation; the reader falls back to the role name.
+         */
+        String baselinePipelineAbbrev,
+        String distancePipelineAbbrev,
         List<CohortCoach> coaches,
         List<Milestone> milestones,
         List<CohortActivityItem> activity) {

@@ -71,6 +71,21 @@ public class EngagementService {
     }
 
     /**
+     * The signed-in founder's OWN record — the member-facing door (operator
+     * decision 2026-08-19, which reversed spec §4's admin/coach-only stance for
+     * the caller's own data). Empty rather than 404 for a caller who is not one
+     * of the org's learners (staff opening the member surface, an org-less
+     * super admin): "you have no participation" is the honest answer there, and
+     * a 404 would break a screen that is otherwise fine.
+     */
+    public EngagementRecordResponse myRecord(UUID orgId, UUID userId) {
+        if (orgId == null || !members.isMemberOf(orgId, userId)) {
+            return new EngagementRecordResponse(List.of());
+        }
+        return record(orgId, userId);
+    }
+
+    /**
      * Every founder in one cohort with their participation score (spec §4:
      * Pulse is a participation surface). Config is read ONCE for the whole
      * roster, so a cohort scores against a single consistent formula.

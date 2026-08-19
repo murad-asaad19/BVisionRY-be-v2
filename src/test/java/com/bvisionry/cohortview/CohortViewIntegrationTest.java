@@ -185,15 +185,18 @@ class CohortViewIntegrationTest extends AbstractPostgresIntegrationTest {
         /**
          * The header's measurement-pair chip (spec §5 gap A): once an admin
          * designates BOTH sides on the Curriculum tab's Distance card, the
-         * overview names both instruments by their pipeline names, not their ids.
+         * overview names both instruments by their pipeline names, not their ids,
+         * and carries their short codes (V201) for the roster column header.
+         * The distance side has none here: an assessment without one is a
+         * supported state and must read null, not "".
          */
         @Test
         void measurementPairReportsTheDesignatedPipelineNames() throws Exception {
             UUID baselinePipeline = UUID.randomUUID();
             UUID distancePipeline = UUID.randomUUID();
             jdbc.update("""
-                    INSERT INTO pipelines (id, name, status)
-                    VALUES (?, 'Founder Mindset Assessment', 'PUBLISHED')
+                    INSERT INTO pipelines (id, name, abbreviation, status)
+                    VALUES (?, 'Founder Mindset Assessment', 'MRA', 'PUBLISHED')
                     """, baselinePipeline);
             jdbc.update("""
                     INSERT INTO pipelines (id, name, status)
@@ -210,7 +213,9 @@ class CohortViewIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.baselinePipelineName", is("Founder Mindset Assessment")))
                     .andExpect(jsonPath("$.distancePipelineName",
-                            is("Founder Mindset Assessment — Distance")));
+                            is("Founder Mindset Assessment — Distance")))
+                    .andExpect(jsonPath("$.baselinePipelineAbbrev", is("MRA")))
+                    .andExpect(jsonPath("$.distancePipelineAbbrev", nullValue()));
         }
 
         /**

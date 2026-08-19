@@ -17,8 +17,9 @@ import lombok.RequiredArgsConstructor;
 /**
  * The org admin's engagement-record read (spec §4) — a sibling of the founder
  * profile endpoint (same guard stack); the profile Growth tab composes both.
- * Visibility (§4 DECIDED): admins and the assigned coach only — there is NO
- * member-facing engagement endpoint.
+ * Visibility (§4 DECIDED): admins and the assigned coach only. A member's own
+ * record is reachable through {@link MyEngagementController}, never another
+ * founder's.
  */
 @RestController
 @RequestMapping(path = "/api/organizations/{orgId}/members/{memberId}/engagement",

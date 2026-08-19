@@ -80,6 +80,7 @@ public class ExerciseTemplateService {
         template.setName(request.name());
         template.setDescription(request.description());
         template.setCoverImageUrl(request.coverImageUrl());
+        template.setAiContext(request.aiContext());
         template.setCreatedBy(currentUser.require().userId());
         return detail(templateRepository.save(template), false);
     }
@@ -91,6 +92,7 @@ public class ExerciseTemplateService {
         template.setName(request.name());
         template.setDescription(request.description());
         template.setCoverImageUrl(request.coverImageUrl());
+        template.setAiContext(request.aiContext());
         template.setExampleRow(request.exampleRow());
         template.setStarterRows(request.starterRows());
         template.setAllowAddRows(request.allowAddRows());

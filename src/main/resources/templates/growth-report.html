@@ -35,8 +35,17 @@
         .narrative { margin-top: 10px; padding: 11px 14px; background: #f8f9fc;
                      border: 1px solid #dce3ee; border-radius: 10px; }
         .narrative-head { font-size: 10.5pt; font-weight: 700; color: #051647; }
+        .narrative-score { font-size: 8.5pt; font-weight: 600; color: #005392; margin: 2px 0 0; }
         .narrative-kind { font-size: 8pt; font-weight: 700; color: #005392;
                           text-transform: uppercase; letter-spacing: 0.06em; }
+        /* The before → after move the kind describes: what makes the label
+           legible without a glossary. */
+        .narrative-shift { font-size: 8pt; font-weight: 700; color: #18233f; }
+        .narrative-gloss { font-size: 8pt; color: #5b6580; margin: 1px 0 0; }
+        .narrative-group { margin: 7px 0 0; }
+        .narrative-bullets { margin: 3px 0 0; padding-left: 15px; }
+        .narrative-bullets li { font-size: 9.5pt; color: #18233f; line-height: 1.55;
+                                margin: 2px 0 0; }
         .narrative-body { font-size: 9.5pt; color: #18233f; line-height: 1.55; margin: 5px 0 0; }
         .narrative-next { margin: 7px 0 0; padding-top: 6px; border-top: 1px solid #dce3ee;
                           font-size: 9.5pt; font-weight: 700; color: #18233f; }
@@ -84,13 +93,23 @@
         <p class="section-title"
            th:text="${staffVoice} ? 'Overall growth' : 'Your growth overall'">Your growth overall</p>
         <div class="narrative">
-            <!-- V193: the same five kinds the pillar narratives below carry,
-                 merged across pillars. A pre-V193 summary has no items and
+            <!-- V193: the same kinds the pillar narratives below carry,
+                 merged across pillars — grouped, so a kind with three
+                 observations is one heading with three bullets rather than the
+                 same label three times. A pre-V193 summary has no items and
                  renders as the paragraph it was written as. -->
-            <p class="narrative-body" th:each="i : ${growthSummaryItems}">
-                <span class="narrative-kind" th:text="${i.kindLabel()}">Resolved</span>
-                <span th:text="${i.text()}">Observation</span>
-            </p>
+            <div class="narrative-group" th:each="g : ${growthSummaryItems}">
+                <p>
+                    <span class="narrative-kind" th:text="${g.kindLabel()}">Resolved</span>
+                    <span class="narrative-shift" th:if="${g.shift() != null}"
+                          th:text="${g.shift()}">Growth edge → Strength</span>
+                </p>
+                <p class="narrative-gloss" th:if="${g.gloss() != null}"
+                   th:text="${g.gloss()}">What this means.</p>
+                <ul class="narrative-bullets">
+                    <li th:each="t : ${g.texts()}" th:text="${t}">Observation</li>
+                </ul>
+            </div>
             <p class="narrative-body" th:if="${growthSummary != null}"
                th:text="${growthSummary}">Summary</p>
         </div>
@@ -149,10 +168,24 @@
             What changed — in your own words</p>
         <div class="narrative" th:each="n : ${narratives}">
             <p class="narrative-head" th:text="${n.pillarName()}">Pillar</p>
-            <p class="narrative-body" th:each="i : ${n.items()}">
-                <span class="narrative-kind" th:text="${i.kindLabel()}">Resolved</span>
-                <span th:text="${i.text()}">Observation</span>
-            </p>
+            <!-- The pillar's numbers, printed by code beside the AI's prose —
+                 the narrative itself never states a figure, so the report does. -->
+            <p class="narrative-score" th:if="${n.scoreLine() != null}"
+               th:text="${n.scoreLine()}">44 → 69 · +25 · High</p>
+            <!-- One heading per kind, its before → after move beside it, then a
+                 bullet per observation. -->
+            <div class="narrative-group" th:each="g : ${n.groups()}">
+                <p>
+                    <span class="narrative-kind" th:text="${g.kindLabel()}">Resolved</span>
+                    <span class="narrative-shift" th:if="${g.shift() != null}"
+                          th:text="${g.shift()}">Growth edge → Strength</span>
+                </p>
+                <p class="narrative-gloss" th:if="${g.gloss() != null}"
+                   th:text="${g.gloss()}">What this means.</p>
+                <ul class="narrative-bullets">
+                    <li th:each="t : ${g.texts()}" th:text="${t}">Observation</li>
+                </ul>
+            </div>
             <p class="narrative-next" th:if="${n.closingAction() != null}">
                 Next step: <span th:text="${n.closingAction()}">Do the thing.</span>
             </p>

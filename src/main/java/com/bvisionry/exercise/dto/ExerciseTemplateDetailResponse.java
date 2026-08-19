@@ -22,6 +22,8 @@ public record ExerciseTemplateDetailResponse(
         String coverImageUrl,
         /** The same cover, resolved for display. Never sent back. */
         String coverImageDisplayUrl,
+        /** Staff-only brief for the AI — admin surface only, never in member payloads. */
+        String aiContext,
         ExerciseTemplateStatus status,
         List<ExerciseColumnResponse> columns,
         /** Read-only sample row (columnId → value) shown above the sheet, or null. */
@@ -50,6 +52,7 @@ public record ExerciseTemplateDetailResponse(
                 template.getDescription(),
                 template.getCoverImageUrl(),
                 coverImageDisplayUrl,
+                template.getAiContext(),
                 template.getStatus(),
                 template.getColumns().stream().map(ExerciseColumnResponse::from).toList(),
                 template.getExampleRow(),

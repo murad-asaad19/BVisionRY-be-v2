@@ -54,7 +54,7 @@ public record ShiftNarrativeDto(
         String editedByName,
         Instant editedAt) {
 
-    /** One observation of the breakdown: one of the five kinds + its 1-2 sentences. */
+    /** One observation of the breakdown: one {@code NarrativeKind} + its 1-2 sentences. */
     public record NarrativeItemDto(String kind, String text) {
     }
 }

@@ -21,10 +21,9 @@ import lombok.RequiredArgsConstructor;
  * "Bvisionry Labs" — the live sessions an admin or coach has already scheduled
  * for the cohorts the signed-in founder belongs to.
  *
- * <p>Spec §4 keeps the Engagement Record and the participation score off the
- * member's report. This is not that: it answers "when are we meeting, and did I
- * make it", carrying no roster, no other founder's attendance and no marker
- * names. The distinction is enforced by the query
+ * <p>Not the Engagement Record ({@link MyEngagementController} is the member's
+ * door to that): this answers "when are we meeting, and did I make it",
+ * carrying no roster, no other founder's attendance and no marker names. The distinction is enforced by the query
  * ({@link EngagementReadRepository#mySessions}), not by this class trimming a
  * wider row afterwards — a response that never holds another member's data
  * cannot leak it.

@@ -76,7 +76,8 @@ public class CohortViewReadRepository {
 
     public record CohortRow(UUID id, String name, String description, String status,
                             Instant createdAt, LocalDate startAt, LocalDate endAt,
-                            String baselinePipelineName, String distancePipelineName) {}
+                            String baselinePipelineName, String distancePipelineName,
+                            String baselinePipelineAbbrev, String distancePipelineAbbrev) {}
 
     /**
      * The cohort's header, org-scoped through {@code cohort_orgs} — empty means
@@ -92,14 +93,18 @@ public class CohortViewReadRepository {
      * header's measurement-pair chip (redesign spec §5): the names behind
      * {@code program_settings.baseline_pipeline_id}/{@code distance_pipeline_id}
      * (set on the Curriculum tab's Distance card), both null until an admin
-     * designates the pair — same "no pending state" guard the comparison
+     * designates the pair; the {@code *Abbrev} pair is those pipelines' short
+     * codes (V201), which head the People roster's "MRA → MDA" column and stay
+     * null until an author writes them — same "no pending state" guard the comparison
      * feature uses.
      */
     public Optional<CohortRow> cohort(UUID orgId, UUID cohortId) {
         return jdbc.query("""
                 SELECT c.id, c.name, c.description, c.status, c.created_at,
                        c.launched_at::date AS start_at, ps.end_at::date AS end_at,
-                       bp.name AS baseline_pipeline_name, dp.name AS distance_pipeline_name
+                       bp.name AS baseline_pipeline_name, dp.name AS distance_pipeline_name,
+                       bp.abbreviation AS baseline_pipeline_abbrev,
+                       dp.abbreviation AS distance_pipeline_abbrev
                 FROM cohorts c
                 LEFT JOIN program_settings ps ON ps.cohort_id = c.id
                 LEFT JOIN pipelines bp ON bp.id = ps.baseline_pipeline_id
@@ -114,7 +119,9 @@ public class CohortViewReadRepository {
                         instant(rs, "created_at"), rs.getObject("start_at", LocalDate.class),
                         rs.getObject("end_at", LocalDate.class),
                         rs.getString("baseline_pipeline_name"),
-                        rs.getString("distance_pipeline_name")))
+                        rs.getString("distance_pipeline_name"),
+                        rs.getString("baseline_pipeline_abbrev"),
+                        rs.getString("distance_pipeline_abbrev")))
                 .stream().findFirst();
     }
 

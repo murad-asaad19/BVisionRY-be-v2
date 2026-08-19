@@ -48,7 +48,7 @@ public record FounderComparisonDto(
          */
         String growthSummary,
         /**
-         * The APPROVED overall breakdown (V193) — the same five kinds the
+         * The APPROVED overall breakdown (V193) — the same kinds the
          * per-pillar narratives carry, merged across pillars. Null on a
          * pre-V193 summary (read {@code growthSummary}).
          */

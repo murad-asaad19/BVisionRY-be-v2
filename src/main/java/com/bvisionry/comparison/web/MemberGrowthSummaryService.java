@@ -7,6 +7,7 @@ import com.bvisionry.common.audit.AuditLogger;
 import com.bvisionry.common.dto.MemberGrowthSummaryResult;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.comparison.domain.FounderComparison;
 import com.bvisionry.comparison.domain.MemberGrowthSummary;
 import com.bvisionry.comparison.domain.NarrativeKind;
 import com.bvisionry.comparison.domain.NarrativeStatus;
@@ -105,7 +106,7 @@ public class MemberGrowthSummaryService {
         }
 
         AIResponse<MemberGrowthSummaryResult> response = chat.generateMemberGrowthSummary(
-                userMessage(eligible, approved),
+                userMessage(ctx.comparison(), eligible, approved),
                 new CallMetadata(ctx.comparison().getDistanceSubmissionId(), null, null));
         MemberGrowthSummaryResult result = response.parsed();
         // Whichever shape arrived is the shape stored. An installation whose
@@ -180,12 +181,31 @@ public class MemberGrowthSummaryService {
      * comparison's own pillar order. Built from the candidate list, so a pillar
      * the comparison no longer measures cannot smuggle a detached narrative in.
      */
-    private static String userMessage(List<ShiftNarrativeService.Candidate> eligible,
+    private static String userMessage(FounderComparison comparison,
+                                      List<ShiftNarrativeService.Candidate> eligible,
                                       Map<UUID, ShiftNarrative> approved) {
-        StringBuilder sb = new StringBuilder("APPROVED PILLAR NARRATIVES:\n\n");
+        StringBuilder sb = new StringBuilder("APPROVED PILLAR NARRATIVES:\n");
+        // Scores as CONTEXT (operator decision 2026-08-19, same as the pillar
+        // prompt): without them the model weighs a +2 pillar and a +40 pillar
+        // identically. The no-numbers OUTPUT rule is restated inline so it
+        // binds even on installations with a customised system prompt.
+        sb.append("(each pillar's before → after scores, and the OVERALL line, are context "
+                + "for weighing what mattered most ONLY — never repeat or state any number "
+                + "in the output)\n\n");
+        if (comparison.getOverallBefore() != null && comparison.getOverallAfter() != null) {
+            sb.append("OVERALL: before ").append(ShiftNarrativeService.pct(comparison.getOverallBefore()))
+                    .append("% → after ").append(ShiftNarrativeService.pct(comparison.getOverallAfter())).append("%\n\n");
+        }
         for (ShiftNarrativeService.Candidate candidate : eligible) {
             ShiftNarrative narrative = approved.get(candidate.distancePillarId());
-            sb.append("PILLAR: ").append(narrative.getPillarNameSnapshot()).append('\n');
+            sb.append("PILLAR: ").append(narrative.getPillarNameSnapshot());
+            if (candidate.pillar().getBeforePct() != null
+                    && candidate.pillar().getAfterPct() != null) {
+                sb.append(" — before ").append(ShiftNarrativeService.pct(candidate.pillar().getBeforePct()))
+                        .append("% → after ").append(ShiftNarrativeService.pct(candidate.pillar().getAfterPct()))
+                        .append('%');
+            }
+            sb.append('\n');
             if (narrative.getItems() == null || narrative.getItems().isEmpty()) {
                 // A pre-V189 row: its single paragraph IS the whole breakdown.
                 sb.append("- ").append(narrative.getKind()).append(": ")

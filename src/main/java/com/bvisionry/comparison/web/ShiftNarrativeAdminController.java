@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
@@ -61,15 +62,21 @@ public class ShiftNarrativeAdminController {
                                       @Valid @RequestBody GenerateNarrativeRequest request) {
         queries.requireMemberInOrg(orgId, userId);
         return narratives.generateForPillar(userId, request.distancePillarId(),
-                currentUser.require().userId());
+                currentUser.require().userId(), request.isRegenerate());
     }
 
-    /** One click, every remaining eligible pillar — the staff "Generate narratives" button. */
+    /**
+     * One click, every remaining eligible pillar — the staff "Generate
+     * narratives" button. {@code ?regenerate=true} redoes the existing ones too
+     * (the "underlying data changed" button), replacing each in place.
+     */
     @PostMapping("/generate-all")
     public GenerateAllNarrativesResponse generateAll(@PathVariable UUID orgId,
-                                                     @PathVariable UUID userId) {
+                                                     @PathVariable UUID userId,
+                                                     @RequestParam(defaultValue = "false")
+                                                     boolean regenerate) {
         queries.requireMemberInOrg(orgId, userId);
-        return narratives.generateAllForFounder(userId, currentUser.require().userId());
+        return narratives.generateAllForFounder(userId, currentUser.require().userId(), regenerate);
     }
 
     @PatchMapping(path = "/{narrativeId}", consumes = MediaType.APPLICATION_JSON_VALUE)

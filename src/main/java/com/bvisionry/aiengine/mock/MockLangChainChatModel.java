@@ -1,16 +1,24 @@
 package com.bvisionry.aiengine.mock;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.output.FinishReason;
 import dev.langchain4j.model.output.TokenUsage;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * LangChain4j {@link ChatModel} that returns canned, schema-valid JSON instead
@@ -38,7 +46,7 @@ public class MockLangChainChatModel implements ChatModel {
     public ChatResponse chat(ChatRequest chatRequest) {
         String body = scripted.poll();
         if (body == null) {
-            body = defaultFor(systemText(chatRequest));
+            body = defaultFor(systemText(chatRequest), userText(chatRequest));
         }
         return ChatResponse.builder()
                 .aiMessage(AiMessage.from(body))
@@ -56,15 +64,29 @@ public class MockLangChainChatModel implements ChatModel {
         return "";
     }
 
-    private static String defaultFor(String systemPrompt) {
+    /**
+     * The FIRST user message — the one carrying the assessment data. The repair
+     * loop appends corrective user messages after it; deriving the canned answer
+     * from the first keeps a mocked retry deterministic.
+     */
+    private static String userText(ChatRequest request) {
+        for (ChatMessage message : request.messages()) {
+            if (message instanceof UserMessage user) {
+                return user.singleText();
+            }
+        }
+        return "";
+    }
+
+    private static String defaultFor(String systemPrompt, String userMessage) {
         // Order matters: the pillar schema's scorePercentage is a substring of
         // overallScorePercentage, so check the more specific keys first.
         // The member growth summary (§3). Checked BEFORE the shift-narrative
-        // arm: since V193 both prompts name the five kinds, so CARRIED_FORWARD
+        // arm: since V193 both prompts name the same kinds, so CARRIED_FORWARD
         // no longer tells them apart — "overall growth breakdown" does, and it
         // appears only here.
         if (systemPrompt.contains("overall growth breakdown")) {
-            return MEMBER_GROWTH_BREAKDOWN_DEFAULT;
+            return memberGrowthBreakdownFor(userMessage);
         }
         // Its pre-V193 contract, still shipped by installations that customised
         // the template — {"summary" appears only there.
@@ -92,9 +114,219 @@ public class MockLangChainChatModel implements ChatModel {
         // kind/narrative guardrail and no narrative could ever be reviewed on a
         // sandbox lane. CARRIED_FORWARD appears only in that prompt.
         if (systemPrompt.contains("CARRIED_FORWARD")) {
-            return SHIFT_NARRATIVE_DEFAULT;
+            return shiftNarrativeFor(userMessage);
         }
         return PILLAR_DEFAULT;
+    }
+
+    /* --------------------------------------- data-grounded shift narrative */
+
+    private static final ObjectMapper JSON = new ObjectMapper();
+    /**
+     * The pillar NAME alone: the growth-summary message suffixes each heading
+     * with " — before N% → after M%" (context scores), and a mock that echoed
+     * the suffix would put numbers into prose whose one hard rule bans them.
+     */
+    private static final Pattern PILLAR_LINE =
+            Pattern.compile("^PILLAR: (.+?)(?: — before .*)?$", Pattern.MULTILINE);
+    private static final Pattern DIRECTION_LINE =
+            Pattern.compile("^PILLAR DIRECTION: (.+)$", Pattern.MULTILINE);
+
+    /**
+     * A shift narrative grounded in the ACTUAL request, so eleven mocked pillars
+     * read as eleven different narratives instead of one canned block repeated —
+     * the difference between local QA exercising the flow and rubber-stamping it.
+     *
+     * <p>Each item names the pillar and quotes a short phrase copied from the
+     * matching input section (BEFORE / AFTER / a {@code <submission>} line),
+     * mirroring what the real prompt demands of the live model. Items whose
+     * section has no material are omitted, exactly as the prompt instructs
+     * ("a kind you have no evidence for is simply left out"). Falls back to the
+     * static default when the message does not carry the expected structure
+     * (unit tests, hand-rolled calls).
+     */
+    private static String shiftNarrativeFor(String userMessage) {
+        Matcher pillarMatch = PILLAR_LINE.matcher(userMessage);
+        if (!pillarMatch.find()) {
+            return SHIFT_NARRATIVE_DEFAULT;
+        }
+        String pillar = pillarMatch.group(1).trim();
+        Matcher directionMatch = DIRECTION_LINE.matcher(userMessage);
+        String direction = directionMatch.find() ? directionMatch.group(1).trim() : "held steady";
+
+        String beforeWorking = firstLineOf(section(userMessage, "BEFORE — what's working"));
+        String beforeImprove = firstLineOf(section(userMessage, "BEFORE — what can improve"));
+        String afterWorking = firstLineOf(section(userMessage, "AFTER — what's working"));
+        List<String> submissions = submissionLines(userMessage);
+
+        ObjectNode root = JSON.createObjectNode();
+        ArrayNode items = root.putArray("items");
+        if (beforeWorking != null && afterWorking != null) {
+            items.addObject().put("kind", "CARRIED_FORWARD").put("text",
+                    "The earlier reading on " + pillar + " named \"" + quote(beforeWorking)
+                            + "\" and the later one still shows it, now alongside \""
+                            + quote(afterWorking) + "\".");
+        } else if (beforeWorking != null) {
+            items.addObject().put("kind", "CARRIED_FORWARD").put("text",
+                    "\"" + quote(beforeWorking) + "\" was named as a strength on " + pillar
+                            + " at the start, and nothing in the later material contradicts it.");
+        }
+        if (beforeImprove != null) {
+            items.addObject().put("kind", "PERSISTED").put("text",
+                    "The growth edge \"" + quote(beforeImprove) + "\" from the earlier "
+                            + pillar + " reading still shows up, though how it appears has shifted.");
+        }
+        if (!submissions.isEmpty()) {
+            items.addObject().put("kind", "NEW").put("text",
+                    "Your submitted work on " + pillar + " shows something with no earlier "
+                            + "equivalent — \"" + quote(submissions.get(0)) + "\".");
+            if (submissions.size() > 1) {
+                // A SECOND observation of a kind already present. The real model
+                // routinely returns several of one kind — a mock that never
+                // repeats one cannot exercise the grouped rendering, so local QA
+                // would sign off a layout it never actually saw.
+                items.addObject().put("kind", "NEW").put("text",
+                        "A second strand with no earlier equivalent shows up in the same work: \""
+                                + quote(submissions.get(submissions.size() / 2)) + "\".");
+                items.addObject().put("kind", "RESOLVED").put("text",
+                        "What the earlier reading flagged no longer appears as a block: your own "
+                                + "work records \"" + quote(submissions.get(submissions.size() - 1))
+                                + "\".");
+            }
+        } else if (afterWorking != null) {
+            items.addObject().put("kind", "NEW").put("text",
+                    "\"" + quote(afterWorking) + "\" appears in the later " + pillar
+                            + " reading with no equivalent earlier.");
+        }
+        if (items.isEmpty()) {
+            return SHIFT_NARRATIVE_DEFAULT;
+        }
+        // Non-empty even off the decline path — a blank close on a mocked
+        // decline would read as a generation failure (same reason as the
+        // static default's).
+        root.put("closingAction", "declined".equals(direction)
+                ? "Pick the smallest piece of the " + pillar
+                        + " work still open and close it this week."
+                : "Keep the cadence that produced the " + pillar + " material above.");
+        return root.toString();
+    }
+
+    /**
+     * The member growth breakdown, naming the ACTUAL pillars the request carries
+     * — the rendered card then reads like a synthesis of this founder's pillars
+     * rather than a stranger's.
+     */
+    private static String memberGrowthBreakdownFor(String userMessage) {
+        List<String> pillars = new ArrayList<>();
+        Matcher matcher = PILLAR_LINE.matcher(userMessage);
+        while (matcher.find()) {
+            pillars.add(matcher.group(1).trim());
+        }
+        if (pillars.isEmpty()) {
+            return MEMBER_GROWTH_BREAKDOWN_DEFAULT;
+        }
+        String first = pillars.get(0);
+        String last = pillars.get(pillars.size() - 1);
+        String span = pillars.size() > 1 ? "across " + first + " and " + last : "in " + first;
+        ObjectNode root = JSON.createObjectNode();
+        ArrayNode items = root.putArray("items");
+        items.addObject().put("kind", "CARRIED_FORWARD").put("text",
+                "The ownership you described at intake still runs through most of your work, and "
+                        + span + " it now shows up as a fixed cadence rather than something you "
+                        + "reach for when time allows.");
+        items.addObject().put("kind", "PERSISTED").put("text",
+                "The distance between deciding and acting is still the recurring edge, and it "
+                        + "surfaces " + span + " just as it did before.");
+        if (pillars.size() > 2) {
+            items.addObject().put("kind", "NEW").put("text",
+                    "Naming a decision owner before a discussion starts appears across "
+                            + pillars.get(1) + " and " + last + " with no equivalent earlier.");
+        }
+        return root.toString();
+    }
+
+    /** The lines of one titled block, up to the next blank line — null when absent or "(none recorded)". */
+    private static List<String> section(String userMessage, String title) {
+        int start = userMessage.indexOf(title + ":");
+        if (start < 0) {
+            return List.of();
+        }
+        List<String> lines = new ArrayList<>();
+        for (String line : userMessage.substring(start + title.length() + 1).split("\n")) {
+            String cleaned = line.strip();
+            if (cleaned.isEmpty()) {
+                // The title line ends in "\n", so the block's own content starts
+                // on the NEXT line — a blank only terminates once content began.
+                if (lines.isEmpty()) {
+                    continue;
+                }
+                break;
+            }
+            if (!cleaned.startsWith("- ")) {
+                break;
+            }
+            String item = cleaned.substring(2);
+            if (!item.equals("(none recorded)")) {
+                lines.add(item);
+            }
+        }
+        return lines;
+    }
+
+    private static String firstLineOf(List<String> lines) {
+        return lines.isEmpty() ? null : lines.get(0);
+    }
+
+    /** Content lines inside {@code <submission>} fences, in order. */
+    private static List<String> submissionLines(String userMessage) {
+        List<String> lines = new ArrayList<>();
+        Matcher matcher = Pattern.compile("<submission>(.*?)</submission>", Pattern.DOTALL)
+                .matcher(userMessage);
+        while (matcher.find()) {
+            for (String line : matcher.group(1).split("\n")) {
+                String cleaned = line.strip();
+                // Skip the table header — quoting column titles back as the
+                // founder's own words is exactly the confusion the "(column
+                // titles)" marker exists to prevent. And quote prose, not
+                // plumbing: structured-JSON remnants read as a bug, not a mock.
+                if (!cleaned.isEmpty() && !cleaned.contains("(column titles)")
+                        && !cleaned.contains("{\"") && !cleaned.contains("[{")) {
+                    lines.add(cleaned);
+                }
+            }
+        }
+        return lines;
+    }
+
+    /**
+     * A quotable phrase, clipped the way the prompt asks the live model to quote
+     * (a few words, verbatim). Splits on whitespace, keeps the first eight words,
+     * and drops a trailing "label:" remnant so an exercise line quotes the
+     * founder's value rather than the grid's column name.
+     */
+    private static String quote(String line) {
+        String value = line.contains(": ") ? line.substring(line.indexOf(": ") + 2) : line;
+        // Table rows are pipe-separated cells — quote the meatiest cell, the
+        // way the live model is asked to quote the founder's prose.
+        if (value.contains(" | ")) {
+            String longest = "";
+            for (String cell : value.split(" \\| ")) {
+                if (cell.strip().length() > longest.length() && !cell.strip().equals("—")) {
+                    longest = cell.strip();
+                }
+            }
+            value = longest.isEmpty() ? value : longest;
+        }
+        String[] words = value.strip().split("\\s+");
+        int keep = Math.min(words.length, 8);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < keep; i++) {
+            if (i > 0) {
+                sb.append(' ');
+            }
+            sb.append(words[i]);
+        }
+        return sb.toString();
     }
 
     private static final String PILLAR_DEFAULT = """
@@ -131,7 +363,13 @@ public class MockLangChainChatModel implements ChatModel {
             reading, with no equivalent earlier."},
                 {"kind": "FADED",
                  "text": "The appetite for open-ended exploration that the earlier text singled out is \
-            absent from the later reading."}
+            absent from the later reading."},
+                {"kind": "REGRESSED",
+                 "text": "Protecting the first hour of the day was a strength in the earlier \
+            reading; the later one describes it as the thing that keeps slipping."},
+                {"kind": "EMERGED",
+                 "text": "Fatigue late in the week appears as an edge only in the later reading, \
+            with no equivalent earlier."}
               ],
               "closingAction": "Pick the one decision currently being revisited and close it this week, \
             writing down what would have to be true to reopen it."
@@ -139,7 +377,7 @@ public class MockLangChainChatModel implements ChatModel {
             """;
 
     /**
-     * The member-level growth breakdown (V193) — all five kinds, so a mocked
+     * The member-level growth breakdown (V193) — all seven kinds, so a mocked
      * generation exercises every badge the card renders.
      */
     private static final String MEMBER_GROWTH_BREAKDOWN_DEFAULT = """
@@ -160,7 +398,13 @@ public class MockLangChainChatModel implements ChatModel {
             several pillars with no equivalent earlier."},
                 {"kind": "FADED",
                  "text": "The appetite for open-ended exploration the earlier readings singled \
-            out is absent from the later ones."}
+            out is absent from the later ones."},
+                {"kind": "REGRESSED",
+                 "text": "The clean separation between planning and delivery the earlier readings \
+            singled out now reads as an edge in the later ones."},
+                {"kind": "EMERGED",
+                 "text": "Carrying too many parallel commitments shows up as an edge across the \
+            later readings, with nothing equivalent earlier."}
               ]
             }
             """;

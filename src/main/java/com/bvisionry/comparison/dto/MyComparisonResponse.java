@@ -21,6 +21,18 @@ import java.util.UUID;
  * compute is swallowed on failure). Telling a founder their distance was "not
  * taken" when the data exists is the lie this field is here to prevent — the
  * copy must key off it, never off {@code state} alone.
+ *
+ * <p>{@code pillars} are the cohort's BASELINE instrument's scored pillars —
+ * what the member will be measured on, so the growth surfaces can say what a
+ * pillar is before a single score exists. Carried in every state that NAMES a
+ * baseline instrument, which includes {@code pending} and the {@code none} a
+ * same-pipeline pair with no DISTANCE milestone produces. The one state that
+ * carries an EMPTY list is {@code none}-by-no-pair: with no designated pair
+ * nothing names a baseline instrument, so there is no pillar set to describe.
+ * A caller must therefore treat the list as possibly empty, not as a guarantee.
+ * PERSONAL pillars ("General Information") are excluded: they carry zero weight
+ * and no maturity thresholds, so they are data collection, not a mindset the
+ * member is scored on.
  */
 public record MyComparisonResponse(
         String state,
@@ -28,7 +40,16 @@ public record MyComparisonResponse(
         String cohortName,
         FounderComparisonDto comparison,
         List<TrajectoryPoint> trajectory,
-        String pendingReason) {
+        String pendingReason,
+        List<PillarBlurb> pillars) {
+
+    /** A scored pillar of the baseline instrument, in the order it is asked. */
+    public record PillarBlurb(
+            UUID pillarId,
+            String name,
+            String description,
+            int displayOrder) {
+    }
 
     public record TrajectoryPoint(
             UUID submissionId,

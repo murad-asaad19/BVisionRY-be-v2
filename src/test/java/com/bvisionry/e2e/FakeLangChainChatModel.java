@@ -75,14 +75,21 @@ public class FakeLangChainChatModel implements ChatModel {
         if (systemPrompt.contains("COHORT-WIDE")) {
             return COHORT_GROWTH_SUMMARY_DEFAULT;
         }
-        if (systemPrompt.contains("closingAction")) {
-            return SHIFT_NARRATIVE_DEFAULT;
-        }
         if (systemPrompt.contains("teamThemes")) {
             return TEAM_INSIGHT_DEFAULT;
         }
         if (systemPrompt.contains("overallScorePercentage")) {
             return OVERALL_SUMMARY_DEFAULT;
+        }
+        // The per-pillar narrative (§6), routed on a KIND — same discriminator
+        // MockLangChainChatModel uses, and checked last for the same reason: it
+        // is the one arm whose marker also appears in the growth-summary prompts
+        // above. It used to match on the literal "closingAction", which V202
+        // took out of the prompt when EMERGED gave the growth-edge-only case a
+        // kind of its own; every narrative test then silently fell through to
+        // PILLAR_DEFAULT and read as "the AI returned an empty narrative".
+        if (systemPrompt.contains("CARRIED_FORWARD")) {
+            return SHIFT_NARRATIVE_DEFAULT;
         }
         return PILLAR_DEFAULT;
     }

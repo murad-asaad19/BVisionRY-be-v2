@@ -86,4 +86,49 @@ class MockLangChainChatModelTest {
         assertThat(model.chat(request).aiMessage().text()).isEqualTo("not json");
         assertThat(model.chat(request).aiMessage().text()).contains("\"kind\"");
     }
+
+    /**
+     * The data-grounded arm: a shift-narrative request in the real
+     * {@code ShiftNarrativeService.userMessage} shape comes back naming the
+     * pillar and quoting the founder's own material — so eleven local pillars
+     * yield eleven different narratives, not one canned block. The bare-string
+     * fallback above stays pinned by {@link #aShiftNarrativePromptYieldsAGuardrailPassingNarrative}.
+     */
+    @Test
+    void aShiftNarrativeAnswerQuotesTheActualRequest() throws Exception {
+        String body = new MockLangChainChatModel()
+                .chat(ChatRequest.builder()
+                        .messages(SystemMessage.from("… RESOLVED / CARRIED_FORWARD / NEW …"),
+                                UserMessage.from("""
+                                        PILLAR: HANDLING OBSTACLES
+                                        PILLAR DIRECTION: declined
+
+                                        BEFORE — what's working:
+                                        - Names the obstacle in plain terms
+
+                                        BEFORE — what can improve:
+                                        - Stops at diagnosis without an action step
+
+                                        AFTER — what's working:
+                                        - Writes one action with a deadline
+
+                                        ACTIVITY — programme work tagged to this pillar:
+
+                                        TASK: Obstacles & Fears (EXERCISE) — status: done
+                                          <submission>
+                                          Row 1 · Obstacle: Customs broker wasted an entire month
+                                          </submission>
+                                        """))
+                        .build())
+                .aiMessage().text();
+
+        ShiftNarrativeResult result = JSON.readValue(body, ShiftNarrativeResult.class);
+        assertThat(result.items()).isNotEmpty();
+        String all = result.items().stream().map(ShiftNarrativeResult.Item::text)
+                .reduce("", String::concat);
+        assertThat(all).contains("HANDLING OBSTACLES")
+                .contains("Customs broker wasted an entire month");
+        // Direction word "declined" → the mandatory forward-looking close.
+        assertThat(result.closingAction()).isNotBlank();
+    }
 }

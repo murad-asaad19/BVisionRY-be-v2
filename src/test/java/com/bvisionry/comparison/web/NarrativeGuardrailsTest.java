@@ -112,10 +112,19 @@ class NarrativeGuardrailsTest {
     /* ---------------------------------------------------- (c) kind sanity */
 
     @Test
-    void everyOneOfTheFiveKindsParses_andNothingElseDoes() {
+    void everyKindParses_andNothingElseDoes() {
         for (NarrativeKind kind : NarrativeKind.values()) {
             assertThat(NarrativeKind.parse(kind.name())).contains(kind);
         }
+        // V202's two. parse() is the ONLY gate on what the model may return —
+        // the JSON schema types "kind" as a free string — so a kind the prompt
+        // now teaches but the enum does not know comes back BAD_KIND.
+        assertThat(NarrativeKind.parse("REGRESSED")).contains(NarrativeKind.REGRESSED);
+        assertThat(NarrativeKind.parse("emerged")).contains(NarrativeKind.EMERGED);
+        assertThat(NarrativeGuardrails.validate(
+                result("REGRESSED", "Your focus slipped into an edge.", ""), false)).isEmpty();
+        assertThat(NarrativeGuardrails.validate(
+                result("EMERGED", "A new distraction shows up.", ""), false)).isEmpty();
         assertThat(NarrativeKind.parse("carried forward")).contains(NarrativeKind.CARRIED_FORWARD);
         assertThat(NarrativeKind.parse("Carried-Forward")).contains(NarrativeKind.CARRIED_FORWARD);
         // "Decline" is a BAND, never a kind — the classic model mistake.
@@ -225,10 +234,13 @@ class NarrativeGuardrailsTest {
     }
 
     @Test
-    void kindCorrection_restatesTheFiveKinds() {
-        assertThat(NarrativeGuardrails.correction(Rejection.BAD_KIND, "ignored"))
-                .contains("RESOLVED").contains("CARRIED_FORWARD").contains("NEW")
-                .contains("PERSISTED").contains("FADED");
+    void kindCorrection_restatesEveryKindTheParserAccepts() {
+        // Read off the enum, not a list kept by hand here: a re-ask that omits a
+        // legal kind steers the model away from the very cell it belongs in.
+        String correction = NarrativeGuardrails.correction(Rejection.BAD_KIND, "ignored");
+        for (NarrativeKind kind : NarrativeKind.values()) {
+            assertThat(correction).contains(kind.name());
+        }
     }
 
     @Test

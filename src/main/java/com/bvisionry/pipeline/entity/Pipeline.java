@@ -30,6 +30,11 @@ public class Pipeline extends BaseEntity {
 
     private String description;
 
+    /** Short code quoted where a full name will not fit — e.g. "MRA" on the
+     *  cohort roster's "MRA → MDA" column. Null until an author sets one. */
+    @Column(length = 12)
+    private String abbreviation;
+
     @Column(nullable = false)
     private int version = 1;
 

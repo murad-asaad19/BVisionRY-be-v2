@@ -12,7 +12,9 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -80,11 +82,69 @@ public class MyGrowthExportService {
      * {@code FounderComparisonDto.narratives} is filtered in the service, so
      * neither export can leak a draft.
      */
-    public record NarrativeRow(String pillarName, List<NarrativeItemRow> items,
+    public record NarrativeRow(String pillarName, String scoreLine, List<NarrativeGroup> groups,
                                String closingAction) {}
 
     /** One observation of the breakdown — or the whole of a pre-V189 narrative. */
     public record NarrativeItemRow(String kindLabel, String text) {}
+
+    /**
+     * Every observation of one kind, under one heading (spec §2 presentation,
+     * operator review 2026-08-19).
+     *
+     * <p>The model routinely returns several observations sharing a kind, and
+     * rendering each with its own label repeated "RESOLVED" three times down the
+     * page — the classification read as noise rather than structure. One heading,
+     * bullets underneath.
+     *
+     * @param shift the before → after move the kind describes, which is what
+     *        makes the label legible: "Carried forward" is ambiguous on its own,
+     *        {@code Strength → Strength} is not
+     * @param gloss the same thing as a sentence, for readers who want it spelled out
+     */
+    public record NarrativeGroup(String kindLabel, String shift, String gloss,
+                                 List<String> texts) {}
+
+    /**
+     * What each kind IS. Every kind is defined in the prompt as exactly one
+     * transition between a strength and a growth edge, so the export states the
+     * transition rather than leaving the reader to infer it from a bare tag.
+     * Same vocabulary and same wording as the web (`KIND_SHIFT` in
+     * {@code narrative-types.ts}) — the member reads both.
+     */
+    private static final Map<String, String[]> KIND_META = Map.of(
+            "NEW", new String[] {"Not present → Strength",
+                    "A strength in the later reading with no earlier equivalent."},
+            // The ONLY kind whose "after" is two outcomes: the prompt defines
+            // RESOLVED as a growth edge "absent from AFTER, OR now appears there
+            // as a strength". Naming only the flattering half would overstate
+            // what the evidence shows.
+            "RESOLVED", new String[] {"Growth edge → Strength or gone",
+                    "A growth edge named earlier that no longer holds them back — it now "
+                            + "reads as a strength, or has stopped appearing altogether."},
+            // No arrow where nothing moved: `X → X` made a non-event look like a
+            // shift. An arrow now always means something actually changed.
+            "CARRIED_FORWARD", new String[] {"Strength · held",
+                    "A strength they had before and still have."},
+            "PERSISTED", new String[] {"Growth edge · still open",
+                    "A growth edge that is still an active edge."},
+            "FADED", new String[] {"Strength → Not present",
+                    "A strength named earlier that no longer appears."},
+            // The two negative moves (V202). Both MOVE, so both keep an arrow —
+            // the state on either side is genuinely different.
+            "EMERGED", new String[] {"Not present → Growth edge",
+                    "A growth edge in the later reading with no earlier equivalent."},
+            "REGRESSED", new String[] {"Strength → Growth edge",
+                    "A strength they had before that now reads as a growth edge."});
+
+    /**
+     * Reading order: what they gained, resolved, held, still carry, newly picked
+     * up, let slip, lost. Fixed rather than the model's order, so the same kind
+     * sits in the same place on every pillar and the seven read as one arc —
+     * the same arc `NARRATIVE_KIND_ORDER` gives the web.
+     */
+    static final List<String> KIND_ORDER = List.of("NEW", "RESOLVED",
+            "CARRIED_FORWARD", "PERSISTED", "EMERGED", "REGRESSED", "FADED");
 
     /**
      * @param staffVoice third-person copy for the two STAFF doors — "GROWTH
@@ -164,10 +224,14 @@ public class MyGrowthExportService {
                 if (c.growthSummary() != null) {
                     overview.labeledRow("Growth summary", c.growthSummary());
                 }
-                // The V193 breakdown: one labelled row per kind, so the overall
-                // story reads the same way the pillar sheet does.
-                for (NarrativeItemRow item : summaryItemRows(c)) {
-                    overview.labeledRow("Growth summary · " + item.kindLabel(), item.text());
+                // The V193 breakdown: one labelled row per KIND, so a kind with
+                // three observations is one row of three bullets rather than
+                // three rows repeating the same label.
+                for (NarrativeGroup group : summaryItemRows(c)) {
+                    overview.labeledRow(
+                            "Growth summary · " + kindHeader(group.kindLabel()),
+                            group.texts().stream().map(t -> "• " + t)
+                                    .collect(Collectors.joining("\n\n")));
                 }
             }
             overview.autoSize();
@@ -252,13 +316,39 @@ public class MyGrowthExportService {
      * pre-V193 summary — that one is a paragraph, rendered as {@code
      * growthSummary} instead, so the two never both appear.
      */
-    private static List<NarrativeItemRow> summaryItemRows(FounderComparisonDto c) {
+    private static List<NarrativeGroup> summaryItemRows(FounderComparisonDto c) {
         if (c == null || c.growthSummaryItems() == null) {
             return List.of();
         }
-        return c.growthSummaryItems().stream()
-                .map(i -> new NarrativeItemRow(kindLabel(i.kind()), i.text()))
-                .toList();
+        return groupByKind(c.growthSummaryItems().stream()
+                .map(i -> new NarrativeItemRow(i.kind(), i.text()))
+                .toList());
+    }
+
+    /**
+     * One group per kind, in {@link #KIND_ORDER}, carrying every observation of
+     * that kind. Unknown kinds — a hand-edited row, or one newer than this build
+     * — keep a group of their own at the end with no transition rather than
+     * being dropped or given an invented one.
+     *
+     * @param items raw observations whose {@code kindLabel} is still the KEY
+     *        ({@code CARRIED_FORWARD}), not the display label
+     */
+    private static List<NarrativeGroup> groupByKind(List<NarrativeItemRow> items) {
+        Map<String, List<String>> byKind = new LinkedHashMap<>();
+        for (NarrativeItemRow item : items) {
+            byKind.computeIfAbsent(item.kindLabel(), k -> new ArrayList<>()).add(item.text());
+        }
+        List<String> order = new ArrayList<>(KIND_ORDER.stream().filter(byKind::containsKey).toList());
+        byKind.keySet().stream().filter(k -> !KIND_ORDER.contains(k)).forEach(order::add);
+
+        return order.stream().map(kind -> {
+            String[] meta = KIND_META.get(kind);
+            return new NarrativeGroup(kindLabel(kind),
+                    meta == null ? null : meta[0],
+                    meta == null ? null : meta[1],
+                    byKind.get(kind));
+        }).toList();
     }
 
     /**
@@ -266,26 +356,35 @@ public class MyGrowthExportService {
      *
      * <p>The long shape (a row per observation) repeated the pillar name on
      * every row and repeated the closing action — which is per pillar, not per
-     * observation — beside each one, so a five-kind breakdown read as five
-     * near-duplicate rows. Wide, the pillar is the row key the reader scans
+     * observation — beside each one, so a breakdown read as one near-duplicate
+     * row per kind. Wide, the pillar is the row key the reader scans
      * for and each kind is answerable at a glance across pillars.
      *
      * <p>A pillar may carry more than one observation of a kind; those share
-     * the cell, blank-line separated. Columns are the five kinds in enum order
-     * plus — defensively — any unknown kind present in the data, so a corrupt
+     * the cell, blank-line separated. Columns are the kinds in {@link #KIND_ORDER}
+     * — the reading arc, not enum order — plus, defensively, any unknown kind
+     * present in the data, so a corrupt
      * row loses its column heading rather than its text.
      */
     private static void writeNarrativeSheet(ExcelWorkbookBuilder wb, List<NarrativeRow> narratives) {
-        List<String> kinds = new ArrayList<>(Arrays.stream(NarrativeKind.values())
-                .map(k -> kindLabel(k.name())).toList());
-        narratives.stream().flatMap(n -> n.items().stream())
-                .map(NarrativeItemRow::kindLabel)
+        // Column order is KIND_ORDER (the reading arc), not enum order, so the
+        // sheet and the PDF tell the same story left-to-right.
+        List<String> kinds = new ArrayList<>(KIND_ORDER.stream().map(
+                MyGrowthExportService::kindLabel).toList());
+        Arrays.stream(NarrativeKind.values()).map(k -> kindLabel(k.name()))
+                .filter(label -> !kinds.contains(label)).forEach(kinds::add);
+        narratives.stream().flatMap(n -> n.groups().stream())
+                .map(NarrativeGroup::kindLabel)
                 .filter(label -> !label.isBlank() && !kinds.contains(label))
                 .forEach(kinds::add);
 
         List<String> headers = new ArrayList<>();
         headers.add("Pillar");
-        headers.addAll(kinds);
+        headers.add("Before → after");
+        // The header carries the transition, so a reader never has to guess
+        // whether "Carried forward" is a strength or a gap. A legend sheet would
+        // put the answer one navigation away from the question.
+        kinds.stream().map(MyGrowthExportService::kindHeader).forEach(headers::add);
         headers.add("Next step");
         ExcelWorkbookBuilder.SheetBuilder sheet = wb.newSheet("Shift narratives")
                 .headers(headers.toArray(String[]::new));
@@ -293,10 +392,15 @@ public class MyGrowthExportService {
         for (NarrativeRow n : narratives) {
             List<Object> cells = new ArrayList<>();
             cells.add(n.pillarName());
+            cells.add(n.scoreLine() == null ? "—" : n.scoreLine());
             for (String kind : kinds) {
-                cells.add(n.items().stream()
-                        .filter(item -> kind.equals(item.kindLabel()))
-                        .map(NarrativeItemRow::text)
+                cells.add(n.groups().stream()
+                        .filter(g -> kind.equals(g.kindLabel()))
+                        .flatMap(g -> g.texts().stream())
+                        // Several observations of one kind share the cell, one
+                        // per line with a bullet so the cell reads as a list
+                        // rather than a wall.
+                        .map(text -> "• " + text)
                         .collect(Collectors.joining("\n\n")));
             }
             cells.add(n.closingAction() == null ? "—" : n.closingAction());
@@ -315,15 +419,46 @@ public class MyGrowthExportService {
         if (c == null || c.narratives() == null) {
             return List.of();
         }
+        // The pillar's numbers, printed by CODE next to the AI's prose — the
+        // narrative itself never states a number (operator decision 2026-08-19:
+        // deterministic figures belong to the report layout, not the model).
+        Map<UUID, ComparisonPillarDto> byDistancePillar = c.pillars() == null ? Map.of()
+                : c.pillars().stream()
+                        .filter(p -> p.distancePillarId() != null)
+                        .collect(Collectors.toMap(ComparisonPillarDto::distancePillarId,
+                                p -> p, (a, b) -> a));
         return c.narratives().stream()
                 .map(n -> new NarrativeRow(n.pillarName(),
-                        n.items() == null || n.items().isEmpty()
-                                ? List.of(new NarrativeItemRow(kindLabel(n.kind()), n.body()))
+                        scoreLine(byDistancePillar.get(n.distancePillarId())),
+                        groupByKind(n.items() == null || n.items().isEmpty()
+                                ? List.of(new NarrativeItemRow(n.kind(), n.body()))
                                 : n.items().stream()
-                                        .map(i -> new NarrativeItemRow(kindLabel(i.kind()), i.text()))
-                                        .toList(),
+                                        .map(i -> new NarrativeItemRow(i.kind(), i.text()))
+                                        .toList()),
                         n.closingAction()))
                 .toList();
+    }
+
+    /** "44 → 69 · +25 · High" — same formatting as the pillar table, or null when unmapped. */
+    private static String scoreLine(ComparisonPillarDto pillar) {
+        if (pillar == null || pillar.beforePct() == null || pillar.afterPct() == null) {
+            return null;
+        }
+        return score(pillar.beforePct()) + " → " + score(pillar.afterPct())
+                + " · " + shiftLabel(pillar.delta(), pillar.bandLabel());
+    }
+
+    /**
+     * A column header that explains itself: "Carried forward (strength →
+     * strength)". Falls back to the bare label for a kind with no known
+     * transition.
+     */
+    private static String kindHeader(String label) {
+        return KIND_ORDER.stream()
+                .filter(k -> kindLabel(k).equals(label))
+                .findFirst()
+                .map(k -> label + " (" + KIND_META.get(k)[0].toLowerCase() + ")")
+                .orElse(label);
     }
 
     /** {@code CARRIED_FORWARD} → "Carried forward" — display only, the key is identity. */

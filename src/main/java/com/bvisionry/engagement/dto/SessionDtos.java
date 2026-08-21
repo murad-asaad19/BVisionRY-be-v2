@@ -30,7 +30,9 @@ public final class SessionDtos {
             @NotNull SessionType type,
             @Size(max = 200) String title,
             @NotNull Instant sessionDate,
-            List<UUID> expectedMemberIds) {
+            List<UUID> expectedMemberIds,
+            /** Distance pillar ids this session grows (V207); null/empty = untagged. */
+            List<UUID> pillarIds) {
     }
 
     public record AttendanceRequest(boolean present) {
@@ -51,6 +53,8 @@ public final class SessionDtos {
             Integer expectedCount,
             /** Empty = the whole cohort; ids drive the edit path + roll call. */
             List<UUID> expectedMemberIds,
+            /** Distance pillar ids this session grows (V207). */
+            List<UUID> pillarIds,
             List<AttendanceMark> attendance) {
     }
 

@@ -146,6 +146,47 @@ public class NarrativeActivityRepository {
         return byPillar;
     }
 
+    /**
+     * One held session tagged to a pillar, and whether the member showed up.
+     * No date on purpose (operator decision 2026-08-21): the title and type
+     * carry all the signal the narrative uses.
+     */
+    public record SessionActivity(UUID pillarId, String type, String title, boolean attended) {
+    }
+
+    /**
+     * Every HELD session of the cohort tagged to a (distance) pillar where the
+     * member was expected, keyed by pillar id. The expected-attendee predicate
+     * is {@code EngagementReadRepository.MEMBER_IS_EXPECTED}'s rule restated:
+     * a 1:1 that named someone else was never this member's to attend, so
+     * counting it as a miss would be a lie. Future sessions are neither
+     * attended nor missed and are excluded, as every engagement read does.
+     */
+    public Map<UUID, List<SessionActivity>> sessionsByPillar(UUID cohortId, UUID userId) {
+        List<SessionActivity> rows = jdbc.query("""
+                SELECT sp.pillar_id, s.type, s.title,
+                       (sa.member_id IS NOT NULL) AS attended
+                FROM session_pillars sp
+                JOIN sessions s ON s.id = sp.session_id
+                LEFT JOIN session_attendance sa ON sa.session_id = s.id
+                                               AND sa.member_id = :userId
+                WHERE s.cohort_id = :cohortId AND s.session_date <= now()
+                  AND (NOT EXISTS (SELECT 1 FROM session_expected_attendees sea
+                                   WHERE sea.session_id = s.id)
+                       OR EXISTS (SELECT 1 FROM session_expected_attendees sea
+                                  WHERE sea.session_id = s.id AND sea.member_id = :userId))
+                ORDER BY s.session_date
+                """,
+                new MapSqlParameterSource("cohortId", cohortId).addValue("userId", userId),
+                (rs, i) -> new SessionActivity(rs.getObject("pillar_id", UUID.class),
+                        rs.getString("type"), rs.getString("title"), rs.getBoolean("attended")));
+        Map<UUID, List<SessionActivity>> byPillar = new LinkedHashMap<>();
+        for (SessionActivity row : rows) {
+            byPillar.computeIfAbsent(row.pillarId(), k -> new ArrayList<>()).add(row);
+        }
+        return byPillar;
+    }
+
     /* ------------------------------------------------- per-type content reads */
 
     /**

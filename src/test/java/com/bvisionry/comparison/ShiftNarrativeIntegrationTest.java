@@ -456,6 +456,48 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
         }
 
         /**
+         * V207: tagged cohort sessions reach the prompt as title + type +
+         * attended/missed — no dates (operator decision 2026-08-21), untitled
+         * sessions of a type collapsed to one counted line, a 1:1 naming
+         * someone else excluded, and the exposure-not-achievement rule riding
+         * the call.
+         */
+        @Test
+        void taggedSessions_reachThePrompt_titledByLine_untitledCounted_datesOmitted() {
+            seedTaggedSession(bigGain, "WORKSHOP", "The Art of Listening", true, null);
+            seedTaggedSession(bigGain, "WORKSHOP", "Holding Space", false, null);
+            seedTaggedSession(bigGain, "COACHING_1ON1", null, true, founder.getId());
+            seedTaggedSession(bigGain, "COACHING_1ON1", null, false, founder.getId());
+            // A 1:1 naming someone else was never this founder's to attend.
+            seedTaggedSession(bigGain, "COACHING_1ON1", "Not yours", false, admin.getId());
+
+            narrativeService.generateForPillar(founder.getId(), bigGain, admin.getId());
+
+            String prompt = responses.lastUserMessage();
+            assertThat(prompt).contains("SESSIONS — cohort sessions tagged to this pillar")
+                    .contains("- Workshop \"The Art of Listening\" — attended")
+                    .contains("- Workshop \"Holding Space\" — missed")
+                    .contains("- Coaching · 1:1 (untitled) — attended 1 of 2")
+                    .doesNotContain("Not yours")
+                    // Attendance is exposure, not achievement — the rule rides
+                    // every call, so it binds on customised templates too.
+                    .contains("never evidence of a shift on its own");
+            // No date in the LISTED SESSIONS — the title is the signal. Scoped to
+            // the block: a due-dated task anywhere else in the fixture would
+            // otherwise fail this on a property it says nothing about.
+            assertThat(prompt.substring(prompt.indexOf("SESSIONS —"),
+                    prompt.indexOf("RULE: the SESSIONS list")))
+                    .doesNotContain("2026-");
+        }
+
+        /** A pillar with no tagged sessions gets no SESSIONS block at all. */
+        @Test
+        void noTaggedSessions_noSessionsBlock() {
+            narrativeService.generateForPillar(founder.getId(), bigGain, admin.getId());
+            assertThat(responses.lastUserMessage()).doesNotContain("SESSIONS —");
+        }
+
+        /**
          * A MEMBERS module the founder is not on is not their work. Without the
          * audience predicate the prompt claimed they were overdue on a task
          * never assigned to them — and named it, which is the whole point of
@@ -1532,6 +1574,33 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
                  "declineCloseInstruction":"Close every decline with a next step.",
                  "autoApprove":true}
                 """);
+    }
+
+    /**
+     * A held session tagged to a pillar (V207). {@code expectedMemberId} null =
+     * the whole cohort is expected; an id narrows the session to that member.
+     */
+    private void seedTaggedSession(UUID pillarId, String type, String title,
+                                   boolean attended, UUID expectedMemberId) {
+        UUID sessionId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO sessions (id, cohort_id, type, title, session_date)
+                VALUES (?, ?, ?, ?, now() - interval '7 days')
+                """, sessionId, cohortId, type, title);
+        jdbc.update("INSERT INTO session_pillars (session_id, pillar_id) VALUES (?, ?)",
+                sessionId, pillarId);
+        if (expectedMemberId != null) {
+            jdbc.update("""
+                    INSERT INTO session_expected_attendees (session_id, member_id)
+                    VALUES (?, ?)
+                    """, sessionId, expectedMemberId);
+        }
+        if (attended) {
+            jdbc.update("""
+                    INSERT INTO session_attendance (session_id, member_id, marked_by)
+                    VALUES (?, ?, ?)
+                    """, sessionId, founder.getId(), admin.getId());
+        }
     }
 
     /**

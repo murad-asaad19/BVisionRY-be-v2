@@ -41,8 +41,10 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -343,7 +345,9 @@ public class ShiftNarrativeService {
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             AIResponse<ShiftNarrativeResult> attemptResponse =
                     chat.generateShiftNarrative(userMessage, correction, metadata);
-            rejection = NarrativeGuardrails.validate(attemptResponse.parsed(), decline);
+            // One .parsed() call per attempt — the frozen ratchet counts each one.
+            ShiftNarrativeResult attemptResult = attemptResponse.parsed();
+            rejection = NarrativeGuardrails.validate(attemptResult, decline);
             if (rejection.isPresent()) {
                 correction = NarrativeGuardrails.correction(
                         rejection.get(), ctx.wording().declineCloseInstruction());
@@ -352,7 +356,7 @@ public class ShiftNarrativeService {
                 continue;
             }
             response = attemptResponse;
-            result = attemptResponse.parsed();
+            result = attemptResult;
             uncovered = NarrativeGuardrails.uncoveredBeforeIds(result, issuedIds);
             if (uncovered.isEmpty()) {
                 break;
@@ -392,7 +396,7 @@ public class ShiftNarrativeService {
         // kind/body stay NULL: this row is born in the §2 breakdown shape, and
         // back-filling the legacy pair from the first item would invent a
         // "primary" observation the model never nominated.
-        String reason = needsAttentionReason(candidate.activity());
+        String reason = needsAttentionReason(candidate.activity(), candidate.sessions());
         List<ShiftNarrative.Item> items = new ArrayList<>(items(result, reason));
         boolean coverageGap = !uncovered.isEmpty();
         if (coverageGap) {
@@ -469,40 +473,55 @@ public class ShiftNarrativeService {
      *
      * <p>Only INCOMPLETE practice can explain a slip, so fully-completed work —
      * or a pillar with no tagged work at all — returns null rather than a
-     * reason that explains nothing. Workshop attendance and coach notes join
-     * here once they carry a pillar link; today neither does.
+     * reason that explains nothing. Missed tagged sessions (V207) count for
+     * the same reason open tasks do: a slip on a pillar whose workshop the
+     * founder skipped has a nameable cause. Coach notes join here once they
+     * carry a pillar link; today they do not.
      */
-    static String needsAttentionReason(List<NarrativeActivityRepository.TaskActivity> activity) {
-        if (activity.isEmpty()) {
-            return null;
-        }
+    static String needsAttentionReason(List<NarrativeActivityRepository.TaskActivity> activity,
+                                       List<NarrativeActivityRepository.SessionActivity> sessions) {
         LocalDate today = LocalDate.now();
         long overdue = activity.stream().filter(t -> "overdue".equals(t.status(today))).count();
         long pending = activity.stream().filter(t -> "pending".equals(t.status(today))).count();
         long open = overdue + pending;
-        if (open == 0) {
+        long missed = sessions.stream()
+                .filter(s -> !s.attended())
+                .count();
+        if (open == 0 && missed == 0) {
             return null;
         }
-        int total = activity.size();
         StringBuilder sb = new StringBuilder();
-        sb.append(open).append(" of the ").append(total)
-                .append(total == 1 ? " practice task" : " practice tasks")
-                .append(" tied to this pillar ").append(open == 1 ? "is" : "are")
-                .append(" still open");
-        if (overdue > 0) {
-            sb.append(" (").append(overdue).append(" overdue)");
+        if (open > 0) {
+            int total = activity.size();
+            sb.append(open).append(" of the ").append(total)
+                    .append(total == 1 ? " practice task" : " practice tasks")
+                    .append(" tied to this pillar ").append(open == 1 ? "is" : "are")
+                    .append(" still open");
+            if (overdue > 0) {
+                sb.append(" (").append(overdue).append(" overdue)");
+            }
+            Optional<Instant> lastDone = activity.stream()
+                    .map(NarrativeActivityRepository.TaskActivity::completedAt)
+                    .filter(Objects::nonNull)
+                    .max(Comparator.naturalOrder());
+            if (lastDone.isPresent()) {
+                sb.append("; practice was last completed on ")
+                        .append(lastDone.get().atZone(ZoneId.systemDefault()).toLocalDate());
+            } else {
+                sb.append("; no practice has been completed on this pillar yet");
+            }
+            sb.append('.');
         }
-        Optional<Instant> lastDone = activity.stream()
-                .map(NarrativeActivityRepository.TaskActivity::completedAt)
-                .filter(java.util.Objects::nonNull)
-                .max(Comparator.naturalOrder());
-        if (lastDone.isPresent()) {
-            sb.append("; practice was last completed on ")
-                    .append(lastDone.get().atZone(ZoneId.systemDefault()).toLocalDate());
-        } else {
-            sb.append("; no practice has been completed on this pillar yet");
+        if (missed > 0) {
+            if (sb.length() > 0) {
+                sb.append(' ');
+            }
+            sb.append(missed).append(" of the ").append(sessions.size())
+                    .append(sessions.size() == 1 ? " session" : " sessions")
+                    .append(" tied to this pillar ").append(missed == 1 ? "was" : "were")
+                    .append(" missed.");
         }
-        return sb.append('.').toString();
+        return sb.toString();
     }
 
     /**
@@ -535,6 +554,7 @@ public class ShiftNarrativeService {
         appendBlock(sb, "AFTER — what's working", candidate.afterWorking());
         appendBlock(sb, "AFTER — what can improve", candidate.afterImprove());
         appendActivity(sb, candidate.activity());
+        appendSessions(sb, candidate.sessions());
         sb.append(RESOLVED_NOTE);
         sb.append(COVERAGE_NOTE);
         if (candidate.afterTextMissing()) {
@@ -650,6 +670,66 @@ public class ShiftNarrativeService {
                     .append("\n  </facilitator_note>\n"));
             sb.append('\n');
         }
+    }
+
+    /**
+     * Attendance is exposure, not achievement — the rule rides from Java for
+     * {@link #RESOLVED_NOTE}'s reason: a guarded migration cannot reach
+     * admin-customised templates, and a session has no content, so left alone
+     * the model narrates learning from a tick ("your growth reflects the
+     * listening workshop you attended") on zero evidence — in a narrative a
+     * member reads once approved.
+     */
+    private static final String SESSIONS_NOTE = """
+            RULE: the SESSIONS list records what the founder was exposed to, never what \
+            they learned. A session may explain WHY a shift already visible in the AFTER \
+            text or the ACTIVITY section happened; it is never evidence of a shift on its \
+            own, and attending is not an achievement to praise.
+            """;
+
+    /**
+     * The pillar's tagged cohort sessions: title, type, attended or missed.
+     * No dates (operator decision 2026-08-21) — the title carries the signal.
+     * Untitled sessions of a type are collapsed into one counted line
+     * ("attended 2 of 3"): three identical "Coaching · 1:1 — attended" lines
+     * carry no information a model won't miscount. Titles are fenced-stripped
+     * like every other interpolated text.
+     */
+    private static void appendSessions(StringBuilder sb,
+                                       List<NarrativeActivityRepository.SessionActivity> sessions) {
+        if (sessions.isEmpty()) {
+            return;
+        }
+        sb.append("SESSIONS — cohort sessions tagged to this pillar:\n");
+        Map<String, int[]> untitled = new LinkedHashMap<>();
+        for (NarrativeActivityRepository.SessionActivity s : sessions) {
+            String type = sessionTypeLabel(s.type());
+            if (s.title() == null || s.title().isBlank()) {
+                int[] counts = untitled.computeIfAbsent(type, k -> new int[2]);
+                counts[1]++;
+                if (s.attended()) {
+                    counts[0]++;
+                }
+            } else {
+                sb.append("- ").append(type).append(" \"")
+                        .append(fenced(s.title()).strip().replace('\n', ' ')).append("\" — ")
+                        .append(s.attended() ? "attended" : "missed").append('\n');
+            }
+        }
+        untitled.forEach((type, counts) -> sb.append("- ").append(type)
+                .append(" (untitled) — attended ").append(counts[0])
+                .append(" of ").append(counts[1]).append('\n'));
+        sb.append('\n').append(SESSIONS_NOTE);
+    }
+
+    /** The stored type as the words the Sessions tab shows for it. */
+    private static String sessionTypeLabel(String storedType) {
+        return switch (storedType) {
+            case "WORKSHOP" -> "Workshop";
+            case "COACHING_1ON1" -> "Coaching · 1:1";
+            case "COACHING_GROUP" -> "Coaching · group";
+            default -> storedType;
+        };
     }
 
     /**
@@ -972,7 +1052,8 @@ public class ShiftNarrativeService {
     /** A mapped pillar with both sides' text and its tagged work in hand — a narrative candidate. */
     record Candidate(FounderComparisonPillar pillar, List<String> beforeWorking,
                      List<String> beforeImprove, List<String> afterWorking, List<String> afterImprove,
-                     List<NarrativeActivityRepository.TaskActivity> activity) {
+                     List<NarrativeActivityRepository.TaskActivity> activity,
+                     List<NarrativeActivityRepository.SessionActivity> sessions) {
 
         UUID distancePillarId() {
             return pillar.getDistancePillarId();
@@ -1057,6 +1138,8 @@ public class ShiftNarrativeService {
         // round-trips by the pillar count for nothing.
         Map<UUID, List<NarrativeActivityRepository.TaskActivity>> activity =
                 activityReads.activityByPillar(cohortId, userId);
+        Map<UUID, List<NarrativeActivityRepository.SessionActivity>> sessions =
+                activityReads.sessionsByPillar(cohortId, userId);
 
         List<Candidate> candidates = comparisonPillars.findByComparisonId(comparison.getId()).stream()
                 // Only MAPPED rows can carry a narrative: a newly-measured pillar
@@ -1070,7 +1153,8 @@ public class ShiftNarrativeService {
                         lines(before.get(p.getBaselinePillarId()), false),
                         lines(after.get(p.getDistancePillarId()), true),
                         lines(after.get(p.getDistancePillarId()), false),
-                        activity.getOrDefault(p.getDistancePillarId(), List.of())))
+                        activity.getOrDefault(p.getDistancePillarId(), List.of()),
+                        sessions.getOrDefault(p.getDistancePillarId(), List.of())))
                 .toList();
 
         // Keyed rows, not just ids: regeneration overwrites the existing row in

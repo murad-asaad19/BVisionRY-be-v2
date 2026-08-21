@@ -392,6 +392,38 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(jsonPath("$.cohorts[0].sessions[0].type", is("WORKSHOP")));
         }
 
+        /**
+         * V207: pillar tags round-trip on the upsert, and only the cohort's
+         * fully-mapped distance pillars are taggable — the board task save's
+         * rule, restated here.
+         */
+        @Test
+        void pillarTagsRoundTrip_andOnlyMappedPairsAreTaggable() throws Exception {
+            TestAuthentication.authenticate(superAdmin);
+            UUID mapped = insertMappedPillarPair(cohort1, "Vision");
+
+            mockMvc.perform(post(sessionsUrl(cohort1))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"type":"WORKSHOP","title":"Vision lab",
+                                     "sessionDate":"2026-08-01T15:00:00Z",
+                                     "pillarIds":["%s"]}
+                                    """.formatted(mapped)))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.pillarIds", hasSize(1)))
+                    .andExpect(jsonPath("$.pillarIds[0]", is(mapped.toString())));
+
+            // An id that is no cohort pair feeds no narrative — rejected.
+            mockMvc.perform(post(sessionsUrl(cohort1))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"type":"WORKSHOP",
+                                     "sessionDate":"2026-08-01T15:00:00Z",
+                                     "pillarIds":["%s"]}
+                                    """.formatted(UUID.randomUUID())))
+                    .andExpect(status().isBadRequest());
+        }
+
         @Test
         void expectedAttendeesMustBeCohortMembers() throws Exception {
             TestAuthentication.authenticate(superAdmin);
@@ -772,6 +804,35 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
         jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, ?, 'LAUNCHED')", id, name);
         jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)", id, orgId);
         jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)", id, memberId);
+        return id;
+    }
+
+    /** A fully-mapped baseline↔distance pair for the cohort; returns the distance pillar id. */
+    private UUID insertMappedPillarPair(UUID cohortId, String name) {
+        UUID baselinePipeline = insertPipeline(name + " baseline");
+        UUID distancePipeline = insertPipeline(name + " distance");
+        UUID baselinePillar = insertPillar(baselinePipeline, name);
+        UUID distancePillar = insertPillar(distancePipeline, name);
+        jdbc.update("""
+                INSERT INTO comparison_pillar_mappings
+                    (cohort_id, baseline_pipeline_id, distance_pipeline_id,
+                     baseline_pillar_id, distance_pillar_id, source)
+                VALUES (?, ?, ?, ?, ?, 'AUTO')
+                """, cohortId, baselinePipeline, distancePipeline, baselinePillar, distancePillar);
+        return distancePillar;
+    }
+
+    private UUID insertPipeline(String name) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("INSERT INTO pipelines (id, name, status, created_by) VALUES (?, ?, 'PUBLISHED', ?)",
+                id, name, admin.getId());
+        return id;
+    }
+
+    private UUID insertPillar(UUID pipelineId, String name) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("INSERT INTO pillars (id, pipeline_id, name, display_order) VALUES (?, ?, ?, 0)",
+                id, pipelineId, name);
         return id;
     }
 

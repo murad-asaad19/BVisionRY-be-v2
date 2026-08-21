@@ -28,7 +28,7 @@
 -- WHAT IT GUARANTEES
 -- ------------------
 --   * The five identities `web/e2e/_helpers.ts` ROLES signs in, all ACTIVE, all
---     on the documented local password `Password123!`, plus three extra members
+--     on the documented local password `root`, plus three extra members
 --     the specs address BY NAME (see the roster note below).
 --   * The org family the suite pins: root "Test Organization" on an
 --     unlimited-cohort tier, sub-org "General" on the UUID `_helpers.SUB_ORG_ID`
@@ -87,12 +87,12 @@ BEGIN;
 -- -----------------------------------------------------------------------------
 -- 0. The super admin. V16 created it, V113 revoked it. Repair, do not insert:
 --    `users.email` is unique and SuperAdminBootstrap will not touch an existing
---    row. The hash below is bcrypt cost 10 of `Password123!`, produced by the
---    application's own BCryptPasswordEncoder (SecurityConfig, no-arg ⇒ 10) and
---    verified by a real POST /api/auth/login.
+--    row. The hash below is bcrypt cost 10 of `root` — the same algorithm and
+--    cost the application's own BCryptPasswordEncoder uses (SecurityConfig,
+--    no-arg ⇒ 10), so it verifies through the normal login path.
 -- -----------------------------------------------------------------------------
 UPDATE users
-   SET password_hash = '$2a$10$WCoWNvqyUxJqcfrfr.rzZue79yaOw5nOQTmufnn1hPdi4XAW3xzGC',
+   SET password_hash = '$2a$10$x6g8Db/WWYHlzZ4xQRFmKe.qOhoMKp0xgUT94UCIEUDI0lGa6Mid.',
        status        = 'ACTIVE',
        name          = 'Super Admin',
        user_type     = 'LEADER',
@@ -130,7 +130,7 @@ INSERT INTO program_surface_orgs (org_id, surface) VALUES
 
 -- -----------------------------------------------------------------------------
 -- 2. The roster
---    Every account shares the local password `Password123!` and the same hash as
+--    Every account shares the local password `root` and the same hash as
 --    the super admin above. status must be ACTIVE: AuthService.login refuses any
 --    other value, and the coach console's visible-founder rule and the cohort
 --    member counts both filter on role='MEMBER' AND status='ACTIVE'.
@@ -160,7 +160,7 @@ INSERT INTO program_surface_orgs (org_id, surface) VALUES
 -- -----------------------------------------------------------------------------
 INSERT INTO users (id, email, name, password_hash, role, organization_id, status, user_type, activated_at) VALUES
   ('e2e5eed0-0001-4000-8000-000000000001', 'orgadmin@bvisionry.com',      'Test Org Admin',
-   '$2a$10$WCoWNvqyUxJqcfrfr.rzZue79yaOw5nOQTmufnn1hPdi4XAW3xzGC', 'ORG_ADMIN',
+   '$2a$10$x6g8Db/WWYHlzZ4xQRFmKe.qOhoMKp0xgUT94UCIEUDI0lGa6Mid.', 'ORG_ADMIN',
    '2a93054a-f352-4220-a321-a84063924096', 'ACTIVE', 'LEADER', now()),
 
   -- ROLES.DEMO_MEMBER — the auth-flow subject and the populated dashboard:
@@ -168,7 +168,7 @@ INSERT INTO users (id, email, name, password_hash, role, organization_id, status
   -- Deliberately in NEITHER coach cohort, because coach-booking.spec.ts asserts
   -- this account sees "No coach assigned yet".
   ('e2e5eed0-0001-4000-8000-000000000002', 'member@bvisionry.com',        'Test Member',
-   '$2a$10$WCoWNvqyUxJqcfrfr.rzZue79yaOw5nOQTmufnn1hPdi4XAW3xzGC', 'MEMBER',
+   '$2a$10$x6g8Db/WWYHlzZ4xQRFmKe.qOhoMKp0xgUT94UCIEUDI0lGa6Mid.', 'MEMBER',
    '2a93054a-f352-4220-a321-a84063924096', 'ACTIVE', 'LEADER', now()),
 
   -- ROLES.MEMBER — the EMPTY dashboard variant, on purpose: no assignment, no
@@ -177,13 +177,13 @@ INSERT INTO users (id, email, name, password_hash, role, organization_id, status
   -- competency-matrix.spec.ts asserts it shows zero competency-matrix regions.
   -- Its exercises are the subject of release-flows.spec.ts.
   ('e2e5eed0-0001-4000-8000-000000000003', 'exercise.tester@example.com', 'Exercise Tester',
-   '$2a$10$WCoWNvqyUxJqcfrfr.rzZue79yaOw5nOQTmufnn1hPdi4XAW3xzGC', 'MEMBER',
+   '$2a$10$x6g8Db/WWYHlzZ4xQRFmKe.qOhoMKp0xgUT94UCIEUDI0lGa6Mid.', 'MEMBER',
    '2a93054a-f352-4220-a321-a84063924096', 'ACTIVE', 'LEADER', now()),
 
   -- ROLES.RESET_MEMBER — release-flows.spec.ts drives the real password-reset
   -- loop against this address and resets it back to the same value.
   ('e2e5eed0-0001-4000-8000-000000000004', 'member.e2e@example.com',      'Reset Member',
-   '$2a$10$WCoWNvqyUxJqcfrfr.rzZue79yaOw5nOQTmufnn1hPdi4XAW3xzGC', 'MEMBER',
+   '$2a$10$x6g8Db/WWYHlzZ4xQRFmKe.qOhoMKp0xgUT94UCIEUDI0lGa6Mid.', 'MEMBER',
    '2a93054a-f352-4220-a321-a84063924096', 'ACTIVE', 'LEADER', now()),
 
   -- Not in ROLES, but auth.setup.ts enrols all three by email into its two coach
@@ -191,17 +191,17 @@ INSERT INTO users (id, email, name, password_hash, role, organization_id, status
   -- setup, and therefore entirely, without them.
   -- invite-flow carries the evaluated assessment the coach console shows scores for.
   ('e2e5eed0-0001-4000-8000-000000000005', 'invite-flow@example.com',     'Invite Flow Tester',
-   '$2a$10$WCoWNvqyUxJqcfrfr.rzZue79yaOw5nOQTmufnn1hPdi4XAW3xzGC', 'MEMBER',
+   '$2a$10$x6g8Db/WWYHlzZ4xQRFmKe.qOhoMKp0xgUT94UCIEUDI0lGa6Mid.', 'MEMBER',
    '2a93054a-f352-4220-a321-a84063924096', 'ACTIVE', 'LEADER', now()),
   -- loop-test is the founder the coach must NEVER see; it holds an exercise
   -- assignment so the grant boundary is asserted against real data, not absence.
   ('e2e5eed0-0001-4000-8000-000000000006', 'loop-test@example.com',       'Loop Test Member',
-   '$2a$10$WCoWNvqyUxJqcfrfr.rzZue79yaOw5nOQTmufnn1hPdi4XAW3xzGC', 'MEMBER',
+   '$2a$10$x6g8Db/WWYHlzZ4xQRFmKe.qOhoMKp0xgUT94UCIEUDI0lGa6Mid.', 'MEMBER',
    '2a93054a-f352-4220-a321-a84063924096', 'ACTIVE', 'LEADER', now()),
   -- coach-console.spec.ts picks this one out of a member picker by the substring
   -- /join-flow-test/ and asserts the display name "Join Flow Tester".
   ('e2e5eed0-0001-4000-8000-000000000007', 'join-flow-test@example.com',  'Join Flow Tester',
-   '$2a$10$WCoWNvqyUxJqcfrfr.rzZue79yaOw5nOQTmufnn1hPdi4XAW3xzGC', 'MEMBER',
+   '$2a$10$x6g8Db/WWYHlzZ4xQRFmKe.qOhoMKp0xgUT94UCIEUDI0lGa6Mid.', 'MEMBER',
    '2a93054a-f352-4220-a321-a84063924096', 'ACTIVE', 'LEADER', now()),
 
   -- The twice-measured founder. Lives in the OTHER sub-org so the org-admin
@@ -209,7 +209,7 @@ INSERT INTO users (id, email, name, password_hash, role, organization_id, status
   -- roi-report.spec.ts asserts, while the movement case is driven separately
   -- with the super-admin session.
   ('e2e5eed0-0001-4000-8000-000000000008', 'alumni.founder@example.com',  'Alumni Founder',
-   '$2a$10$WCoWNvqyUxJqcfrfr.rzZue79yaOw5nOQTmufnn1hPdi4XAW3xzGC', 'MEMBER',
+   '$2a$10$x6g8Db/WWYHlzZ4xQRFmKe.qOhoMKp0xgUT94UCIEUDI0lGa6Mid.', 'MEMBER',
    'e0077f30-1008-4362-9969-a759e8dfd5e8', 'ACTIVE', 'LEADER', now());
 
 -- -----------------------------------------------------------------------------

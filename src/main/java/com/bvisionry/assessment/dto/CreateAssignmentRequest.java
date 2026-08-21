@@ -1,17 +1,20 @@
 package com.bvisionry.assessment.dto;
 
+import com.bvisionry.common.enums.UserRole;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 import java.time.Instant;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
  * Assignment create request. {@code assignedBy} is intentionally absent — the
  * server derives it from the authenticated principal via
- * {@link com.bvisionry.auth.SecurityUtils#getCurrentUserId()} so a client
+ * {@link com.bvisionry.common.security.CurrentUserAccessor} so a client
  * can't ascribe the action to another user.
  */
 public record CreateAssignmentRequest(
@@ -60,7 +63,19 @@ public record CreateAssignmentRequest(
          * behavior). Must be >= 1.
          */
         @Min(value = 1, message = "maxCheckIns must be at least 1")
-        Integer maxCheckIns
+        Integer maxCheckIns,
+
+        /*
+         * Which ROLES the auto-assign rule should fire for (V158). Only
+         * meaningful alongside {@link #autoAssignFutureMembers}.
+         *
+         * Omitted or empty means MEMBER alone — NOT "everyone". The defect this
+         * field exists to close was an absent filter being read as universal,
+         * which handed founder assessments to every coach and org admin who
+         * joined, so the permissive default is deliberately not reinstated for
+         * an omitted property.
+         */
+        Set<UserRole> targetRoles
 ) {
     /**
      * Normalize optional flags so an omitted (null) JSON property defaults to
@@ -70,6 +85,13 @@ public record CreateAssignmentRequest(
     public CreateAssignmentRequest {
         assignToOrganization = assignToOrganization != null && assignToOrganization;
         autoAssignFutureMembers = autoAssignFutureMembers != null && autoAssignFutureMembers;
+    }
+
+    /** The rule's role scope, with the fail-closed default applied. */
+    public Set<UserRole> targetRolesOrDefault() {
+        return targetRoles == null || targetRoles.isEmpty()
+                ? EnumSet.of(UserRole.MEMBER)
+                : EnumSet.copyOf(targetRoles);
     }
 
     public int maxCheckInsOrDefault() {

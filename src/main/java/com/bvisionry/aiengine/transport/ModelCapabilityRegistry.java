@@ -23,7 +23,8 @@ import java.util.stream.Collectors;
  *
  * <p>Self-contained on purpose: it owns a minimal {@link RestClient} and parses
  * only the few fields it needs ({@code id}, {@code context_length},
- * {@code supported_parameters}), leaving the admin-facing {@code AIModelCatalogService}
+ * {@code supported_parameters}, {@code pricing.input_cache_write}), leaving the
+ * admin-facing {@code AIModelCatalogService}
  * and its DTOs untouched.
  *
  * <p>Degrades safely. The metadata is cached with a TTL; a fetch failure (no key,
@@ -105,8 +106,9 @@ public class ModelCapabilityRegistry {
                     .filter(d -> d.id() != null)
                     .collect(Collectors.toMap(
                             ModelData::id,
-                            d -> ModelCapabilities.fromSupportedParameters(
-                                    d.id(), d.context_length(), d.supported_parameters()),
+                            d -> ModelCapabilities.fromProviderMetadata(
+                                    d.id(), d.context_length(), d.supported_parameters(),
+                                    d.pricing() == null ? null : d.pricing().input_cache_write()),
                             (a, b) -> a,
                             ConcurrentHashMap::new));
         } catch (Exception e) {
@@ -130,5 +132,13 @@ public class ModelCapabilityRegistry {
     private record ModelsResponse(List<ModelData> data) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record ModelData(String id, int context_length, List<String> supported_parameters) {}
+    private record ModelData(String id, int context_length, List<String> supported_parameters, Pricing pricing) {}
+
+    /**
+     * Only the one price we read. {@code input_cache_write} is absent for models
+     * that cache automatically and present (non-zero) for those whose caching has
+     * to be asked for — see {@link ModelCapabilities#supportsExplicitPromptCaching()}.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record Pricing(String input_cache_write) {}
 }

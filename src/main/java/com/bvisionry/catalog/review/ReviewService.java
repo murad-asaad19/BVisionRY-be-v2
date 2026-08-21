@@ -1,16 +1,15 @@
 package com.bvisionry.catalog.review;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Optional;
 import java.util.UUID;
 
-import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.catalog.domain.Course;
 import com.bvisionry.catalog.domain.Review;
 import com.bvisionry.catalog.repository.CourseRepository;
@@ -35,13 +34,16 @@ public class ReviewService {
     private final CourseRepository courses;
     private final ReviewRepository reviews;
     private final EnrollmentRepository enrollments;
+    private final CurrentUserAccessor currentUser;
 
     public ReviewService(CourseRepository courses,
                          ReviewRepository reviews,
-                         EnrollmentRepository enrollments) {
+                         EnrollmentRepository enrollments,
+                         CurrentUserAccessor currentUser) {
         this.courses = courses;
         this.reviews = reviews;
         this.enrollments = enrollments;
+        this.currentUser = currentUser;
     }
 
     // -------------------------------------------------------------------------
@@ -59,7 +61,7 @@ public class ReviewService {
         Course course = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
 
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
 
         // Learner must be enrolled to leave a review.
         if (!enrollments.existsByUserIdAndCourseId(userId, course.getId())) {
@@ -76,7 +78,7 @@ public class ReviewService {
                     return r;
                 });
 
-        String authorName = SecurityUtils.getCurrentUser().getName();
+        String authorName = currentUser.require().name();
         review.setRating(rating);
         review.setComment(comment);
         review.setAuthorName(authorName);
@@ -92,18 +94,21 @@ public class ReviewService {
     // -------------------------------------------------------------------------
 
     /**
-     * Returns the current user's review for {@code slug}, or raises a 404.
+     * Returns the current user's review for {@code slug}, or empty when they
+     * have not reviewed it yet — "no review yet" is the NORMAL state on every
+     * player load, not an error, so it must not surface as a 404 (the browser
+     * logs one to the console on every visit and there is no client-side way to
+     * silence that). The controller maps empty to 204.
      */
     @Transactional(readOnly = true)
-    public ReviewDto getMyReview(String slug) {
+    public Optional<ReviewDto> getMyReview(String slug) {
         Course course = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
 
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
 
         return reviews.findByCourse_IdAndUserId(course.getId(), userId)
-                .map(r -> toDto(r, course.getId()))
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No review found"));
+                .map(r -> toDto(r, course.getId()));
     }
 
     // -------------------------------------------------------------------------

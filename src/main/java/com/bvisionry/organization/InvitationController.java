@@ -1,7 +1,7 @@
 package com.bvisionry.organization;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.aiconfig.service.RateLimitService;
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.auth.dto.AuthResponse;
 import com.bvisionry.common.web.ClientIpResolver;
 import com.bvisionry.organization.dto.AcceptInvitationRequest;
@@ -24,6 +24,7 @@ import java.util.UUID;
 @PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId))")
 public class InvitationController {
 
+    private final CurrentUserAccessor currentUser;
     private final InvitationService invitationService;
     private final RateLimitService rateLimitService;
     private final ClientIpResolver clientIpResolver;
@@ -33,7 +34,7 @@ public class InvitationController {
                                                             @Valid @RequestBody InviteMembersRequest request) {
         // Override client-supplied invitedBy with the authenticated user
         InviteMembersRequest securedRequest = new InviteMembersRequest(
-                request.emails(), request.role(), SecurityUtils.getCurrentUserId());
+                request.emails(), request.role(), currentUser.require().userId());
         return ResponseEntity.status(HttpStatus.CREATED).body(invitationService.inviteMembers(orgId, securedRequest));
     }
 

@@ -8,12 +8,13 @@ import java.util.UUID;
 
 /**
  * Flat comment view — the client groups replies under {@code parentId} and
- * anchors threads by (rowId, columnId).
+ * anchors threads by (rowId, columnId, entryId).
  */
 public record ExerciseCommentResponse(
         UUID id,
         UUID rowId,
         UUID columnId,
+        String entryId,
         UUID parentId,
         UUID authorId,
         String authorName,
@@ -29,6 +30,7 @@ public record ExerciseCommentResponse(
                 comment.getId(),
                 comment.getRow() != null ? comment.getRow().getId() : null,
                 comment.getColumn() != null ? comment.getColumn().getId() : null,
+                comment.getEntryId(),
                 comment.getParent() != null ? comment.getParent().getId() : null,
                 comment.getAuthor().getId(),
                 comment.getAuthor().getName(),

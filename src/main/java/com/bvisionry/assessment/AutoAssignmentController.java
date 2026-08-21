@@ -1,7 +1,7 @@
 package com.bvisionry.assessment;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.assessment.dto.AutoAssignmentResponse;
-import com.bvisionry.auth.SecurityUtils;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -20,6 +20,7 @@ import java.util.UUID;
 @PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId))")
 public class AutoAssignmentController {
 
+    private final CurrentUserAccessor currentUser;
     private final PipelineAutoAssignmentService autoAssignmentService;
 
     @GetMapping
@@ -29,7 +30,7 @@ public class AutoAssignmentController {
 
     @DeleteMapping("/{ruleId}")
     public ResponseEntity<Void> deleteRule(@PathVariable UUID orgId, @PathVariable UUID ruleId) {
-        autoAssignmentService.deleteRule(orgId, ruleId, SecurityUtils.getCurrentUserId());
+        autoAssignmentService.deleteRule(orgId, ruleId, currentUser.require().userId());
         return ResponseEntity.noContent().build();
     }
 }

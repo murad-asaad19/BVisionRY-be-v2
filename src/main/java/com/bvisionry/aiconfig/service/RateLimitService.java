@@ -1,6 +1,7 @@
 package com.bvisionry.aiconfig.service;
 
 import com.bvisionry.common.exception.RateLimitExceededException;
+import com.bvisionry.common.security.LoginBackoffPort;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -9,6 +10,7 @@ import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -31,7 +33,7 @@ import java.util.concurrent.ConcurrentLinkedDeque;
  */
 @Service
 @Slf4j
-public class RateLimitService {
+public class RateLimitService implements LoginBackoffPort {
 
     /** Atomic INCR + first-write EXPIRE; returns the new counter value for the window. */
     private static final RedisScript<Long> INCREMENT_WINDOW = RedisScript.of(
@@ -41,12 +43,68 @@ public class RateLimitService {
             Long.class);
 
     /**
+     * Login backoff: count one failure and derive its refusal in ONE atomic step.
+     *
+     * <p>KEYS: {@code 1} = decaying failure counter, {@code 2} = the refusal ("block")
+     * key {@link #checkLoginBackoff} reads. ARGV: {@code 1} = counter TTL,
+     * {@code 2} = free attempts, {@code 3} = base delay, {@code 4} = max delay,
+     * {@code 5} = max steps. Returns the seconds this failure armed, {@code 0} if it
+     * armed nothing.
+     *
+     * <p><b>Why one script and not INCR-then-SET.</b> The controller checks the block
+     * key, authenticates, and only then records — so N concurrent bad logins all pass
+     * the check before any block exists. If each then merely INCR'd, one burst would
+     * walk the counter to N and arm {@code backoff(N)}: a single round trip could pin
+     * a victim at the 900s cap instead of serving the 5s/10s/20s… ladder one rung at a
+     * time. Deriving the block FROM the counter here, and refusing to count while a
+     * refusal is already live, bounds any burst to exactly one rung — the losers of
+     * the race read the block the winner just created.
+     *
+     * <p>The counter's TTL is pushed forward on every hit, counted or not, so "quiet
+     * for 15 minutes" forgets while "hammered for an hour" does not.
+     */
+    private static final RedisScript<Long> RECORD_LOGIN_FAILURE = RedisScript.of(
+            "if redis.call('EXISTS', KEYS[2]) == 1 then "
+                    + "redis.call('EXPIRE', KEYS[1], ARGV[1]) return 0 end "
+                    + "local free = tonumber(ARGV[2]) "
+                    + "local steps = tonumber(ARGV[5]) "
+                    + "local c = redis.call('INCR', KEYS[1]) "
+                    + "if c > free + steps + 1 then "
+                    + "c = free + steps + 1 redis.call('SET', KEYS[1], c) end "
+                    + "redis.call('EXPIRE', KEYS[1], ARGV[1]) "
+                    + "local step = c - free "
+                    + "if step <= 0 then return 0 end "
+                    + "local delay = math.min(tonumber(ARGV[3]) * 2 ^ math.min(step - 1, steps), "
+                    + "tonumber(ARGV[4])) "
+                    + "redis.call('SET', KEYS[2], '1', 'EX', delay) "
+                    + "return delay",
+            Long.class);
+
+    /**
      * Optional — present only when a Redis connection is configured. Field-injected
      * (not via the constructor) so the limiter still constructs cleanly in unit tests
      * and simply uses the in-memory path when Redis is absent.
      */
     @Autowired(required = false)
     private StringRedisTemplate redisTemplate;
+
+    /**
+     * The service's only source of "now". Swapped by tests, never in production — and
+     * NOT a constructor parameter, so every existing construction site (and the frozen
+     * ArchUnit descriptors) stay as they are.
+     *
+     * <p>It exists because the thing worth proving about this backoff is that a refusal
+     * LIFTS. Without a movable clock the only way to observe that is to sleep for the
+     * armed delay — 5 seconds at the first rung, 15 minutes at the cap — so in practice
+     * nobody asserts it, and "the backoff is deliberately not a lock" becomes a comment
+     * no test can contradict.
+     */
+    private Clock clock = Clock.systemUTC();
+
+    /** Test seam — see {@link #clock}. */
+    void setClock(Clock clock) {
+        this.clock = clock;
+    }
 
     private final int tryItOutRequestsPerMinute;
     private final int evaluationRequestsPerMinute;
@@ -60,6 +118,9 @@ public class RateLimitService {
     private final int passwordResetRequestsPerHour;
     private final int contactRequestsPerMinute;
     private final int leadMagnetRequestsPerMinute;
+    private final int errorReportRequestsPerMinute;
+    private final int loginFreeAttempts;
+    private final int loginFailureTtlSeconds;
 
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> tryItOutWindows =
             new ConcurrentHashMap<>();
@@ -85,6 +146,8 @@ public class RateLimitService {
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> leadMagnetWindows =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> errorReportWindows =
+            new ConcurrentHashMap<>();
 
     public RateLimitService(
             @Value("${bvisionry.rate-limit.try-it-out.requests-per-minute:10}") int tryItOutRequestsPerMinute,
@@ -98,7 +161,10 @@ public class RateLimitService {
             @Value("${bvisionry.rate-limit.accept.requests-per-hour:10}") int acceptRequestsPerHour,
             @Value("${bvisionry.rate-limit.password-reset.requests-per-hour:5}") int passwordResetRequestsPerHour,
             @Value("${bvisionry.rate-limit.contact.requests-per-minute:100}") int contactRequestsPerMinute,
-            @Value("${bvisionry.rate-limit.lead-magnet.requests-per-minute:20}") int leadMagnetRequestsPerMinute) {
+            @Value("${bvisionry.rate-limit.lead-magnet.requests-per-minute:20}") int leadMagnetRequestsPerMinute,
+            @Value("${bvisionry.rate-limit.error-report.requests-per-minute:30}") int errorReportRequestsPerMinute,
+            @Value("${bvisionry.rate-limit.login.free-attempts:5}") int loginFreeAttempts,
+            @Value("${bvisionry.rate-limit.login.failure-ttl-seconds:900}") int loginFailureTtlSeconds) {
         this.tryItOutRequestsPerMinute = tryItOutRequestsPerMinute;
         this.evaluationRequestsPerMinute = evaluationRequestsPerMinute;
         this.authRequestsPerMinute = authRequestsPerMinute;
@@ -111,6 +177,9 @@ public class RateLimitService {
         this.passwordResetRequestsPerHour = passwordResetRequestsPerHour;
         this.contactRequestsPerMinute = contactRequestsPerMinute;
         this.leadMagnetRequestsPerMinute = leadMagnetRequestsPerMinute;
+        this.errorReportRequestsPerMinute = errorReportRequestsPerMinute;
+        this.loginFreeAttempts = loginFreeAttempts;
+        this.loginFailureTtlSeconds = loginFailureTtlSeconds;
     }
 
     /**
@@ -210,6 +279,18 @@ public class RateLimitService {
     }
 
     /**
+     * Rate limit for the public web-tier error-report ingest
+     * ({@code POST /api/v1/error-events}). Its own per-IP bucket so a browser stuck
+     * in a render-crash loop — or a bot pointed at the endpoint — cannot flood the
+     * error store and bury the real regression signal it exists to carry. The
+     * ceiling is deliberately higher than contact's: a genuinely broken page can
+     * legitimately report a handful of errors per navigation.
+     */
+    public void checkErrorReportLimit(String key) {
+        checkLimit(errorReportWindows, key, errorReportRequestsPerMinute, 60, "error-report");
+    }
+
+    /**
      * Rate limit for the public lead-magnet capture ("the science behind the 11
      * pillars"). Its own per-IP bucket and ceiling so it is isolated from the AI
      * "try it out" limiter and can be tuned independently against a bot flooding the
@@ -217,6 +298,180 @@ public class RateLimitService {
      */
     public void checkLeadMagnetLimit(String key) {
         checkLimit(leadMagnetWindows, key, leadMagnetRequestsPerMinute, 60, "lead-magnet");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Per-account password-login backoff
+    // ---------------------------------------------------------------------------
+    //
+    // Deliberately NOT a lock. No flag on the user, no admin-unlock flow: a hard
+    // lockout hands an attacker a denial-of-service against any address they can
+    // guess. Failures decay by TTL, so a quiet account always recovers by itself.
+    //
+    // Keyed on the SUBMITTED email whether or not that account exists, and the
+    // refusal is one constant string. If the throttle only bit on real accounts —
+    // or said anything different for them — its presence would itself be an
+    // account-enumeration oracle, which is the thing the rest of the auth surface
+    // (always-204 forgot-password, one "Invalid email or password") pays to avoid.
+    //
+    // This is the INNER layer. The per-IP `authentication` bucket above still caps
+    // how fast any single host may try, independently of this.
+
+    /** Delay after the first throttled failure; doubles per failure from there. */
+    private static final int LOGIN_BACKOFF_BASE_SECONDS = 5;
+    /** Ceiling on the delay — long enough to kill a brute force, short enough to forgive. */
+    private static final int LOGIN_BACKOFF_MAX_SECONDS = 900;
+    /**
+     * Past this many throttled failures the delay is already pinned at the cap, so
+     * counting further buys nothing. Bounds both the shift below and the stored
+     * counter, so hammering a throttled account cannot run the exponent into overflow.
+     */
+    private static final int LOGIN_BACKOFF_MAX_STEPS = 20;
+    /**
+     * The one and only refusal. Constant on purpose: a message carrying the attempt
+     * count or the remaining delay would differ between accounts at different
+     * counter states, and byte-identical refusals are the whole point.
+     */
+    private static final String LOGIN_THROTTLED_MESSAGE =
+            "Too many failed sign-in attempts. Try again later.";
+
+    /** In-memory fallback state. {@code blockedUntil} is EPOCH while still inside the free attempts. */
+    private record LoginBackoff(int failures, Instant countExpiresAt, Instant blockedUntil) {}
+
+    private final ConcurrentHashMap<String, LoginBackoff> loginBackoffs = new ConcurrentHashMap<>();
+
+    /**
+     * Refuse a password login whose account is currently backing off. Read-only —
+     * it never counts the attempt; only {@link #recordLoginFailure} does.
+     *
+     * <p>Called only AFTER the credential check has rejected the attempt: the backoff
+     * throttles wrong guesses and must never refuse a proven-correct password, or an
+     * attacker who knows the address could keep a block armed and lock the owner out
+     * — the hard lockout this section's design notes reject.
+     *
+     * @param emailKey the submitted email, lowercased and trimmed, existing or not
+     */
+    @Override
+    public void checkLoginBackoff(String emailKey) {
+        StringRedisTemplate redis = this.redisTemplate;
+        if (redis != null) {
+            try {
+                if (Boolean.TRUE.equals(redis.hasKey(loginBlockKey(emailKey)))) {
+                    throw new RateLimitExceededException(LOGIN_THROTTLED_MESSAGE);
+                }
+                return;
+            } catch (RateLimitExceededException e) {
+                throw e;
+            } catch (RuntimeException e) {
+                log.warn("Redis rate-limit backend unavailable ({}) — falling back to per-instance login backoff",
+                        e.getMessage());
+            }
+        }
+        LoginBackoff state = loginBackoffs.get(emailKey);
+        if (state != null && state.blockedUntil().isAfter(Instant.now(clock))) {
+            throw new RateLimitExceededException(LOGIN_THROTTLED_MESSAGE);
+        }
+    }
+
+    /**
+     * Count one rejected password login and (re)arm the backoff for that email.
+     *
+     * <p>Counting and arming are ONE atomic step per key — see
+     * {@link #RECORD_LOGIN_FAILURE} for why, and for the identical bound the
+     * in-memory fallback below reproduces with {@link ConcurrentHashMap#compute}.
+     *
+     * @return the seconds this failure armed a refusal for, or {@code 0} when it armed
+     *         nothing — either still inside the free budget, or a refusal was already
+     *         live and this attempt (which raced past {@link #checkLoginBackoff}) must
+     *         not advance the ladder a second time
+     */
+    @Override
+    public int recordLoginFailure(String emailKey) {
+        StringRedisTemplate redis = this.redisTemplate;
+        if (redis != null) {
+            try {
+                Long delay = redis.execute(RECORD_LOGIN_FAILURE,
+                        List.of(loginFailKey(emailKey), loginBlockKey(emailKey)),
+                        String.valueOf(loginFailureTtlSeconds),
+                        String.valueOf(loginFreeAttempts),
+                        String.valueOf(LOGIN_BACKOFF_BASE_SECONDS),
+                        String.valueOf(LOGIN_BACKOFF_MAX_SECONDS),
+                        String.valueOf(LOGIN_BACKOFF_MAX_STEPS));
+                if (delay != null) {
+                    return delay.intValue();
+                }
+            } catch (RuntimeException e) {
+                log.warn("Redis rate-limit backend unavailable ({}) — falling back to per-instance login backoff",
+                        e.getMessage());
+            }
+        }
+        Instant now = Instant.now(clock);
+        int[] armed = {0};
+        loginBackoffs.compute(emailKey, (k, prev) -> {
+            if (prev != null && prev.blockedUntil().isAfter(now)) {
+                // Same bound as the script: a refusal is already live, so this attempt
+                // is not counted. Only the TTL moves, keeping the memory alive under a
+                // sustained attack without handing the attacker another rung.
+                return new LoginBackoff(prev.failures(),
+                        now.plusSeconds(loginFailureTtlSeconds), prev.blockedUntil());
+            }
+            int failures = prev == null || !prev.countExpiresAt().isAfter(now)
+                    ? 1
+                    : clampFailures(prev.failures() + 1L);
+            armed[0] = loginBackoffSeconds(failures);
+            return new LoginBackoff(failures, now.plusSeconds(loginFailureTtlSeconds),
+                    armed[0] > 0 ? now.plusSeconds(armed[0]) : Instant.EPOCH);
+        });
+        return armed[0];
+    }
+
+    /**
+     * Wipe an email's failure history once control of the account has been proven
+     * some other way — a successful sign-in (only reachable when the account was NOT
+     * throttled) or a completed password reset, whose emailed single-use token proves
+     * mailbox ownership. The reset case is the escape hatch that keeps the backoff
+     * from becoming the lockout it exists to avoid: without it a guessed-at victim
+     * would still be refused after choosing a new password.
+     */
+    @Override
+    public void clearLoginFailures(String emailKey) {
+        loginBackoffs.remove(emailKey);
+        StringRedisTemplate redis = this.redisTemplate;
+        if (redis == null) {
+            return;
+        }
+        try {
+            redis.delete(List.of(loginFailKey(emailKey), loginBlockKey(emailKey)));
+        } catch (RuntimeException e) {
+            log.warn("Redis rate-limit backend unavailable ({}) — login failure counter not cleared remotely",
+                    e.getMessage());
+        }
+    }
+
+    /**
+     * Seconds to refuse for, after {@code failures} rejected attempts: 0 while inside
+     * the free budget, then {@code 5s, 10s, 20s …} doubling up to the 15-minute cap.
+     */
+    int loginBackoffSeconds(int failures) {
+        int step = failures - loginFreeAttempts;
+        if (step <= 0) {
+            return 0;
+        }
+        int shift = Math.min(step - 1, LOGIN_BACKOFF_MAX_STEPS);
+        return Math.min(LOGIN_BACKOFF_BASE_SECONDS << shift, LOGIN_BACKOFF_MAX_SECONDS);
+    }
+
+    /** Pin the counter once the delay has saturated — see {@link #LOGIN_BACKOFF_MAX_STEPS}. */
+    private int clampFailures(long failures) {
+        return (int) Math.min(failures, loginFreeAttempts + LOGIN_BACKOFF_MAX_STEPS + 1L);
+    }
+
+    private static String loginFailKey(String emailKey) {
+        return "rl:login-fail:" + emailKey;
+    }
+
+    private static String loginBlockKey(String emailKey) {
+        return "rl:login-block:" + emailKey;
     }
 
     /**
@@ -263,7 +518,7 @@ public class RateLimitService {
     /** Per-instance sliding window — fallback only (used when Redis is down or in tests). */
     private void checkLimitInMemory(ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> windows,
                                     String key, int maxRequests, int windowSeconds, String limitType) {
-        Instant now = Instant.now();
+        Instant now = Instant.now(clock);
         Instant windowStart = now.minusSeconds(windowSeconds);
 
         ConcurrentLinkedDeque<Instant> timestamps = windows.computeIfAbsent(key,
@@ -298,14 +553,23 @@ public class RateLimitService {
     @Scheduled(fixedDelay = 60_000)
     void evictStaleWindows() {
         // Per-minute windows: drop entries older than 60s.
-        Instant minuteCutoff = Instant.now().minusSeconds(60);
+        Instant minuteCutoff = Instant.now(clock).minusSeconds(60);
         evictOlderThan(List.of(tryItOutWindows, evaluationWindows, authWindows,
                 surveySubmitWindows, publicAssessmentWindows, publicAssessmentSaveWindows,
-                businessCardWindows, refreshWindows, contactWindows, leadMagnetWindows), minuteCutoff);
+                businessCardWindows, refreshWindows, contactWindows, leadMagnetWindows,
+                errorReportWindows), minuteCutoff);
 
         // Per-hour windows: drop entries older than 3600s.
-        Instant hourCutoff = Instant.now().minusSeconds(3600);
+        Instant hourCutoff = Instant.now(clock).minusSeconds(3600);
         evictOlderThan(List.of(acceptWindows, passwordResetWindows), hourCutoff);
+
+        // Login backoff: an entry is dead only once BOTH its counter and its active
+        // refusal have expired — a short configured TTL can leave a live block behind
+        // a dead counter, and evicting that would hand back a free attempt. Same
+        // reasoning as above: this is this JVM's own memory, so every replica runs it.
+        Instant now = Instant.now(clock);
+        loginBackoffs.entrySet().removeIf(e -> !e.getValue().countExpiresAt().isAfter(now)
+                && !e.getValue().blockedUntil().isAfter(now));
     }
 
     private static void evictOlderThan(

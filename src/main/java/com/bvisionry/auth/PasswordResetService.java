@@ -3,6 +3,7 @@ package com.bvisionry.auth;
 import com.bvisionry.auth.entity.PasswordResetToken;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.security.LoginBackoffPort;
 import com.bvisionry.common.web.RequestContextUtils;
 import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.EmailService;
@@ -36,6 +37,7 @@ public class PasswordResetService {
     private final PasswordEncoder passwordEncoder;
     private final EmailService emailService;
     private final FrontendUrls frontendUrls;
+    private final LoginBackoffPort loginBackoff;
 
     /**
      * Issues a reset token and emails the link. Deliberately silent for an
@@ -75,6 +77,13 @@ public class PasswordResetService {
      * outstanding token for that user and revokes all refresh tokens (symmetric
      * with {@link AuthService#changePassword} — any session predating the reset
      * must die).
+     *
+     * <p>The per-account login backoff is cleared too. It is keyed on the submitted
+     * ADDRESS, not on the password, so a victim being guessed at would otherwise pick
+     * a new password and still be refused for up to fifteen minutes — turning the
+     * deliberately lock-free throttle into the denial-of-service it was designed to
+     * avoid. Reaching here proves mailbox control (single-use emailed token), which
+     * is exactly the out-of-band proof {@link LoginBackoffPort} requires.
      */
     @Transactional
     public void resetPassword(UUID token, String newPassword) {
@@ -92,5 +101,7 @@ public class PasswordResetService {
         Instant now = Instant.now();
         tokenRepository.markAllUsedForUser(user.getId(), now);
         refreshTokenRepository.revokeAllForUser(user.getId(), now);
+
+        loginBackoff.clearLoginFailures(user.getEmail().toLowerCase().trim());
     }
 }

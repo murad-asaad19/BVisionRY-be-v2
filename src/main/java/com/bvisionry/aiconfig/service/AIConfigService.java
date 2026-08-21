@@ -5,7 +5,8 @@ import com.bvisionry.aiconfig.dto.AIConfigUpdateRequest;
 import com.bvisionry.aiconfig.dto.ApiKeyUpdateRequest;
 import com.bvisionry.aiconfig.entity.AIConfiguration;
 import com.bvisionry.aiconfig.repository.AIConfigurationRepository;
-import com.bvisionry.audit.AuditService;
+import com.bvisionry.common.audit.AuditLogger;
+import com.bvisionry.common.crypto.SecretEncryptionService;
 import com.bvisionry.common.enums.AIProvider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,8 +34,18 @@ public class AIConfigService {
     public static final String INVALIDATE_CHANNEL = "ai-config:invalidate";
 
     private final AIConfigurationRepository configRepository;
-    private final ApiKeyEncryptionService encryptionService;
-    private final AuditService auditService;
+    private final SecretEncryptionService encryptionService;
+    /**
+     * The shared-kernel audit PORT, not {@code audit.AuditService} directly. Switched
+     * when the cipher moved to {@code common.crypto}: the ArchUnit ratchet records a
+     * frozen violation as the WHOLE constructor descriptor, so changing one parameter's
+     * package re-describes the pre-existing {@code aiconfig -> audit} edge and the store
+     * would need a line ADDED for it — which the policy forbids. Routing the last two
+     * cross-feature calls in this class through the port that already exists for exactly
+     * this reason removes the edge instead, so the baseline only shrinks.
+     * {@code AuditServiceAuditLogger} is a pass-through, so the rows written are identical.
+     */
+    private final AuditLogger auditLogger;
 
     /**
      * Optional — present only when a Redis connection is configured. Field-injected
@@ -100,7 +111,7 @@ public class AIConfigService {
         configRepository.save(config);
         invalidateAfterCommit();
 
-        auditService.log(null, null, "AI_CONFIG_UPDATED", "AIConfiguration", config.getId(),
+        auditLogger.log(null, null, "AI_CONFIG_UPDATED", "AIConfiguration", config.getId(),
                 Map.of("provider", request.provider().name(),
                        "evaluationModel", request.defaultEvaluationModel(),
                        "publicAssessmentModel",
@@ -121,7 +132,7 @@ public class AIConfigService {
         configRepository.save(config);
         invalidateAfterCommit();
 
-        auditService.log(null, null, "API_KEY_UPDATED", "AIConfiguration", config.getId(),
+        auditLogger.log(null, null, "API_KEY_UPDATED", "AIConfiguration", config.getId(),
                 Map.of("provider", request.provider().name()));
     }
 
@@ -255,7 +266,7 @@ public class AIConfigService {
             // as unconfigured so the UI prompts a re-entry, with a masked note explaining why.
             return new KeySummary(false, "Stored key can't be decrypted — re-enter to fix");
         }
-        return new KeySummary(true, ApiKeyEncryptionService.maskApiKey(decrypted));
+        return new KeySummary(true, SecretEncryptionService.maskApiKey(decrypted));
     }
 
     private record KeySummary(boolean configured, String masked) {}

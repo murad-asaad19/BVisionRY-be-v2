@@ -36,8 +36,31 @@ public class ExerciseTemplate extends BaseEntity {
     @Column(nullable = false)
     private String name;
 
+    /**
+     * The brief the member reads above their sheet, as a serialised tiptap
+     * document (same shape and column style as {@code content.body}). Rows
+     * written before V177 were plain text and were lifted into a document by
+     * that migration, so readers have exactly one format to handle.
+     */
     @Column(columnDefinition = "TEXT")
     private String description;
+
+    /**
+     * Cover art shown above the brief. Holds either a {@code minio://bucket/key}
+     * marker resolved at read time or an external URL — see
+     * {@link com.bvisionry.common.media.MediaUrlPort}.
+     */
+    @Column(name = "cover_image_url", length = 500)
+    private String coverImageUrl;
+
+    /**
+     * Staff-only brief for the AI: what this exercise is for, written by an
+     * admin in the builder and NEVER shown to members. The shift narrative's
+     * ACTIVITY section includes it so the model reads a submission knowing what
+     * the task was asking, instead of inferring purpose from column names.
+     */
+    @Column(name = "ai_context", columnDefinition = "TEXT")
+    private String aiContext;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

@@ -1,0 +1,114 @@
+# OSV-Scanner BASELINE — the supply-chain twin of the ArchUnit frozen store.
+#
+# Same contract as `src/test/resources/architecture/frozen-violations/`: this file
+# is a RATCHET. It may shrink, never grow. Every id below is a vulnerability that
+# was already in the resolved dependency tree when scanning was switched on, and
+# every one of them is a debt, not an acquittal. A pull request that ADDS an id
+# here is adding accepted risk and needs a reviewer who agrees with the risk —
+# not a green pipeline.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY A BASELINE AND NOT A SEVERITY THRESHOLD
+# ─────────────────────────────────────────────────────────────────────────────
+# A severity gate was the first choice and it is not available here. Measured on
+# the tree at the time this file was written (250 resolved packages):
+#
+#     80 findings / 67 distinct advisories across 26 packages
+#     11 critical · 29 high · 32 medium · 7 low · 1 unscored
+#
+# There is no severity floor that is green today — `--fail-on-severity=critical`
+# is red on eleven, including tomcat-embed-core (CVSS 9.8) and thymeleaf (9.0).
+# Shipping a gate that is red on the day it lands does not make anyone safer; it
+# teaches the team that this check is always red and therefore means nothing.
+# That is the same reasoning that keeps e2e.yml on `workflow_dispatch` over in
+# the web repo, and it applies with more force here because this gate BLOCKS.
+#
+# So the threshold is not a severity, it is a DATE: everything already present is
+# recorded, and anything new fails the build at any severity. A new dependency
+# that arrives with a known critical cannot merge. The existing 67 are visible,
+# counted, and in one place instead of nowhere.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY IDS AND NOT PACKAGES
+# ─────────────────────────────────────────────────────────────────────────────
+# OSV-Scanner also offers `[[PackageOverrides]] ignore = true`, which would
+# collapse these entries into one-per-package and pin each to the exact version,
+# so the entry lapses automatically on upgrade. It is smaller and it self-prunes,
+# and it is still the wrong shape: silencing a PACKAGE also silences advisories
+# that do not exist yet. A new CVE published against spring-webmvc 7.0.6 tomorrow
+# would be swallowed. An id-based ignore cannot do that — it names one advisory,
+# so the next one still fails the build. Bigger file, correct blast radius.
+#
+# The cost of the id form is that entries go stale rather than lapsing: once a
+# package is upgraded its ids simply stop matching. Stale entries are inert (an
+# id that matches nothing silences nothing), so this is untidiness, not risk.
+# Re-record after any significant upgrade and they disappear.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-08-07 RE-RECORD (security dependency bumps, roadmap §11)
+# ─────────────────────────────────────────────────────────────────────────────
+# spring-boot-starter-parent 4.0.5 -> 4.0.7 (latest 4.0.x on Central) plus five
+# independently-versioned coordinates bumped to clear their own advisories:
+#
+#     io.minio:minio                    8.5.14 -> 8.6.0
+#     org.bitbucket.b_c:jose4j          0.7.9  -> 0.9.6
+#     org.bouncycastle:bcprov-jdk18on   1.81   -> 1.84
+#     org.bouncycastle:bcpkix-jdk18on   1.77   -> 1.84 (was transitive-only via
+#                                                 opensaml-security-api; now an
+#                                                 explicit pin alongside bcprov)
+#     org.apache.poi:poi-ooxml          5.3.0  -> 5.4.0
+#
+# minio 8.6.0 pulls okhttp 5.1.0, whose plain "okhttp" Central artifact is a
+# classless Kotlin-Multiplatform root POM under non-Gradle resolution — pom.xml
+# adds an explicit `com.squareup.okhttp3:okhttp-jvm:5.1.0` (the artifact that
+# actually carries the class files) to make the tree compile; not an advisory.
+#
+# Result: 67 -> 5 distinct advisories (248 resolved packages, non-test scope).
+# The baseline shrank by 62 ids; nothing was added. The 5 that remain are all on
+# packages Spring Boot's own dependencyManagement BOM pins (not independently
+# versioned in this pom), and every one is exactly one patch short of the fixed
+# release — overriding a Boot-managed transitive ahead of Boot's own next patch
+# is out of this ticket's scope (parent bump + the five named coordinates only)
+# and risks fighting the BOM's own tested combination:
+#
+#     com.fasterxml.jackson.core:jackson-databind 2.21.4 -> fixed in 2.21.5
+#       (GHSA-5gvw-p9qm-jgwh, GHSA-5jmj-h7xm-6q6v, GHSA-mhm7-754m-9p8w — all MODERATE)
+#     io.netty:netty-codec-dns 4.2.15.Final -> fixed in 4.2.16.Final
+#       (GHSA-mfg7-5gfp-c4w3 — MODERATE)
+#     org.postgresql:postgresql 42.7.11 -> fixed in 42.7.12
+#       (GHSA-j92g-9f8w-j867 — HIGH, but AC:H/AT:P — not network-trivial)
+#
+# These close themselves on the next Spring Boot parent patch that re-manages
+# them; no action needed here beyond letting this baseline shrink further then.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# REGENERATING
+# ─────────────────────────────────────────────────────────────────────────────
+# The scan input is a CycloneDX SBOM produced by Maven itself (see ci.yml for
+# why: Maven is the only resolver that honours the Shibboleth repository, the
+# .mvn/rrf containment and the .mvn/checksums pinning). To re-record:
+#
+#   ./mvnw -B org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom \
+#          -DoutputFormat=json -DoutputName=bom -DincludeTestScope=false
+#   osv-scanner scan source --lockfile target/bom.json --format json
+#
+# and rewrite the entries below from the result. Do not re-record casually: a
+# blanket re-record is how a real new vulnerability gets baselined by accident.
+# The comment above each group carries the fixed version, so the file doubles as
+# the upgrade worklist.
+
+# com.fasterxml.jackson.core:jackson-databind 2.21.4 -> fixed in 2.21.5 (Boot-managed)
+[[IgnoredVulns]]
+id = "GHSA-5gvw-p9qm-jgwh"
+[[IgnoredVulns]]
+id = "GHSA-5jmj-h7xm-6q6v"
+[[IgnoredVulns]]
+id = "GHSA-mhm7-754m-9p8w"
+
+# io.netty:netty-codec-dns 4.2.15.Final -> fixed in 4.2.16.Final (Boot-managed)
+[[IgnoredVulns]]
+id = "GHSA-mfg7-5gfp-c4w3"
+
+# org.postgresql:postgresql 42.7.11 -> fixed in 42.7.12 (Boot-managed)
+[[IgnoredVulns]]
+id = "GHSA-j92g-9f8w-j867"

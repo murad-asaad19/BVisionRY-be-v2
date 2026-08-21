@@ -11,8 +11,9 @@ import org.springframework.context.annotation.Profile;
 /**
  * E2E-only beans that swap the live AI transport for a deterministic fake.
  *
- * <p>Because {@code com.bvisionry.config.AIConfig#lc4jChatModelProvider} is
- * {@code @Profile("!e2e & !mock")}, the provider below is the <em>only</em>
+ * <p>Because both non-e2e providers ({@code config.AIConfig} and
+ * {@code config.mock.MockAiConfig}) are {@code @Profile("!e2e")}, the provider
+ * below is the <em>only</em>
  * {@link Lc4jChatModelProvider} bean in the e2e context — no {@code @Primary}
  * needed. Every model resolves to a {@link FakeLangChainChatModel} sharing the
  * scripted-response registry, so the full evaluation pipeline runs deterministically
@@ -33,7 +34,8 @@ public class E2eAiConfig {
                                                        ModelCapabilityRegistry capabilityRegistry) {
         return new Lc4jChatModelProvider(configService, capabilityRegistry) {
             @Override
-            public ChatModel modelFor(String modelName, double temperature, int maxTokens) {
+            public ChatModel modelFor(String modelName, double temperature, int maxTokens,
+                                      boolean cachePrompt) {
                 return new FakeLangChainChatModel(registry);
             }
         };

@@ -6,6 +6,7 @@ import com.bvisionry.common.exception.AuthenticationException;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.exception.SsoFlowException;
+import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import com.bvisionry.common.web.ClientIpResolver;
 import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.organization.InvitationService;
@@ -63,6 +64,7 @@ public class OAuth2Controller {
 
     // ========== Initiation endpoints ==========
 
+    @AuthorizedInSecurityConfig("permitAll: pre-auth entry point - starts the SSO handshake for an anonymous visitor")
     @GetMapping("/google")
     public ResponseEntity<Void> initiateGoogle(
             @RequestParam(required = false) String invitation,
@@ -95,6 +97,7 @@ public class OAuth2Controller {
 
     // ========== Callback endpoints ==========
 
+    @AuthorizedInSecurityConfig("permitAll: pre-auth entry point - Google redirects the browser here before any session exists")
     @GetMapping("/google/callback")
     public ResponseEntity<Void> googleCallback(@RequestParam(required = false) String code,
                                                 @RequestParam(required = false) String error,

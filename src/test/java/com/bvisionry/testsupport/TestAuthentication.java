@@ -58,8 +58,25 @@ public final class TestAuthentication {
                 new UsernamePasswordAuthenticationToken(user, null, authorities));
     }
 
+    /**
+     * Upsert by email, not blind insert: the helper emails are FIXED, and a
+     * non-{@code @Transactional} test class that committed one (cleanup here
+     * is typically {@code @BeforeEach}-only) would otherwise make every later
+     * transactional caller die on {@code users_email_key} — a suite-order
+     * flake, not a real failure. Role/org/status are overwritten so a stale
+     * committed row can never leak another test's tenancy into this one.
+     */
     private static User persistAndAuthenticate(UserRepository userRepository, User user) {
-        User saved = userRepository.save(user);
+        User target = userRepository.findByEmail(user.getEmail())
+                .map(existing -> {
+                    existing.setName(user.getName());
+                    existing.setRole(user.getRole());
+                    existing.setStatus(user.getStatus());
+                    existing.setOrganization(user.getOrganization());
+                    return existing;
+                })
+                .orElse(user);
+        User saved = userRepository.save(target);
         authenticate(saved);
         return saved;
     }

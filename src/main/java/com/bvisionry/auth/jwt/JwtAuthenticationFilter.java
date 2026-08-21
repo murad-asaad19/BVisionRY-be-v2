@@ -3,7 +3,6 @@ package com.bvisionry.auth.jwt;
 import com.bvisionry.auth.CookieService;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
-import com.bvisionry.common.enums.UserStatus;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -54,13 +53,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 if (user == null) {
                     return;
                 }
-                if (user.getOrganization() != null && !user.getOrganization().isActive()) {
-                    return;
-                }
-                // Suspended/deactivated users must lose access immediately, not only after the
-                // access-token TTL expires. Login/refresh already require ACTIVE; mirror that here
-                // so a status change takes effect on the next request (treat as unauthenticated).
-                if (user.getStatus() != UserStatus.ACTIVE) {
+                // Shared predicate — see AuthenticationEligibility for why the
+                // organization read stays here rather than inside it.
+                boolean organizationActive = user.getOrganization() == null
+                        || user.getOrganization().isActive();
+                if (!AuthenticationEligibility.mayAuthenticate(user, organizationActive)) {
                     return;
                 }
                 var authorities = List.of(new SimpleGrantedAuthority(user.getRole().name()));

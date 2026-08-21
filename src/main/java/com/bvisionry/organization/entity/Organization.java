@@ -39,6 +39,41 @@ public class Organization extends BaseEntity {
     private Instant trialEndsAt;
 
     /**
+     * Days without progress on an active course enrolment before a founder is
+     * nudged (roadmap §7 items 7 + 18). {@code 0} disables nudging for the org;
+     * the DB default is 14 (policy {@code defaults.inactivity_threshold_days})
+     * and V149 bounds it to 0..90 — see that migration for why 90 is the cap.
+     *
+     * <p>Read by {@code InactivityNudgeJob}'s org-scoped query, not by Java:
+     * the job never imports this entity (feature boundary), it reads the column.
+     */
+    @Column(name = "inactivity_nudge_days", nullable = false)
+    private int inactivityNudgeDays = 14;
+
+    /**
+     * The org's single white-label brand colour as lower-case {@code #rrggbb},
+     * or null for "no branding — render the stock theme". Every derived token
+     * (button label colour, dark-mode variant, focus ring) is computed from
+     * this ONE value by WCAG relative luminance in the web app, so an admin
+     * cannot compose an unreadable palette.
+     *
+     * <p>V154's CHECK constrains the stored shape; the value is interpolated
+     * into an SSR {@code <style>} block, so the six-hex-digit guarantee has to
+     * hold of the DATA and not merely of the code path that last wrote it.
+     */
+    @Column(name = "brand_color", length = 7)
+    private String brandColor;
+
+    /**
+     * {@code minio://bucket/objectKey} marker for the org's logo, or null.
+     * Always under {@code org/<this org's id>/branding/} — see
+     * {@code OrganizationBrandingService} and V154's CHECK for why that prefix
+     * is the tenant boundary and not a naming convention.
+     */
+    @Column(name = "brand_logo_marker", length = 512)
+    private String brandLogoMarker;
+
+    /**
      * Parent organization when this org is a sub-organization; null for root
      * orgs. The hierarchy is ONE level deep — the service layer rejects
      * creating a sub-org under another sub-org.
@@ -69,12 +104,15 @@ public class Organization extends BaseEntity {
     }
 
     /**
-     * True iff this org currently has an active Premium trial.
+     * True iff this org currently has an active trial.
      * Defensive against a manual tier-downgrade leaving a future trial_ends_at:
-     * "on trial" requires both PREMIUM tier and a future expiry.
+     * "on trial" requires both a PAID tier and a future expiry. (Was
+     * {@code == PREMIUM} before V156 split paid into three sold plans; a trial
+     * grants {@code GROWTH}, and a super admin may reclassify a trialling org
+     * to any paid tier without that ending the trial.)
      */
     public boolean isOnTrial() {
-        return subscriptionTier == SubscriptionTier.PREMIUM
+        return subscriptionTier.isPaid()
             && trialEndsAt != null
             && trialEndsAt.isAfter(Instant.now());
     }

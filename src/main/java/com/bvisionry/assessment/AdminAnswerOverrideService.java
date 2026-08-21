@@ -1,10 +1,10 @@
 package com.bvisionry.assessment;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.assessment.dto.OverrideAnswersRequest;
 import com.bvisionry.assessment.entity.Answer;
 import com.bvisionry.assessment.entity.Assignment;
 import com.bvisionry.assessment.entity.Submission;
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.common.enums.PillarType;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.exception.BadRequestException;
@@ -54,6 +54,7 @@ import java.util.stream.Collectors;
 @Slf4j
 public class AdminAnswerOverrideService {
 
+    private final CurrentUserAccessor currentUser;
     private final AssignmentRepository assignmentRepository;
     private final SubmissionRepository submissionRepository;
     private final AnswerRepository answerRepository;
@@ -195,9 +196,9 @@ public class AdminAnswerOverrideService {
                 assignment, "No submission exists for this assignment.");
     }
 
-    private static UUID currentAdminIdOrNull() {
+    private UUID currentAdminIdOrNull() {
         try {
-            return SecurityUtils.getCurrentUserId();
+            return currentUser.require().userId();
         } catch (RuntimeException e) {
             return null;
         }

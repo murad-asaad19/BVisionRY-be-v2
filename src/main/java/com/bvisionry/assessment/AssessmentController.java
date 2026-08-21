@@ -1,5 +1,6 @@
 package com.bvisionry.assessment;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.assessment.dto.AnswerResponse;
 import com.bvisionry.assessment.dto.AssessmentDetailResponse;
 import com.bvisionry.assessment.dto.AssessmentSummaryResponse;
@@ -8,7 +9,6 @@ import com.bvisionry.assessment.dto.ReviewResponse;
 import com.bvisionry.assessment.dto.SaveAnswerRequest;
 import com.bvisionry.assessment.dto.SubmissionStatusResponse;
 import com.bvisionry.assessment.dto.SubmitAssessmentResponse;
-import com.bvisionry.auth.SecurityUtils;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -34,16 +34,17 @@ import java.util.UUID;
 @PreAuthorize("isAuthenticated()")
 public class AssessmentController {
 
+    private final CurrentUserAccessor currentUser;
     private final AssessmentService assessmentService;
 
     @GetMapping
     public ResponseEntity<List<AssessmentSummaryResponse>> listAssessments() {
-        return ResponseEntity.ok(assessmentService.listAssessments(SecurityUtils.getCurrentUserId()));
+        return ResponseEntity.ok(assessmentService.listAssessments(currentUser.require().userId()));
     }
 
     @GetMapping("/{submissionId}")
     public ResponseEntity<AssessmentDetailResponse> getAssessment(@PathVariable UUID submissionId) {
-        return ResponseEntity.ok(assessmentService.getAssessment(submissionId, SecurityUtils.getCurrentUserId()));
+        return ResponseEntity.ok(assessmentService.getAssessment(submissionId, currentUser.require().userId()));
     }
 
     @PutMapping("/{submissionId}/answers/{questionId}")
@@ -52,7 +53,7 @@ public class AssessmentController {
             @PathVariable UUID questionId,
             @Valid @RequestBody SaveAnswerRequest request) {
         return ResponseEntity.ok(
-                assessmentService.saveAnswer(submissionId, questionId, SecurityUtils.getCurrentUserId(), request));
+                assessmentService.saveAnswer(submissionId, questionId, currentUser.require().userId(), request));
     }
 
     @PostMapping("/{submissionId}/answers/batch")
@@ -60,21 +61,21 @@ public class AssessmentController {
             @PathVariable UUID submissionId,
             @Valid @RequestBody BatchSaveAnswersRequest request) {
         return ResponseEntity.ok(
-                assessmentService.batchSaveAnswers(submissionId, SecurityUtils.getCurrentUserId(), request));
+                assessmentService.batchSaveAnswers(submissionId, currentUser.require().userId(), request));
     }
 
     @GetMapping("/{submissionId}/review")
     public ResponseEntity<ReviewResponse> getReview(@PathVariable UUID submissionId) {
-        return ResponseEntity.ok(assessmentService.getReview(submissionId, SecurityUtils.getCurrentUserId()));
+        return ResponseEntity.ok(assessmentService.getReview(submissionId, currentUser.require().userId()));
     }
 
     @PostMapping("/{submissionId}/submit")
     public ResponseEntity<SubmitAssessmentResponse> submitAssessment(@PathVariable UUID submissionId) {
-        return ResponseEntity.ok(assessmentService.submitAssessment(submissionId, SecurityUtils.getCurrentUserId()));
+        return ResponseEntity.ok(assessmentService.submitAssessment(submissionId, currentUser.require().userId()));
     }
 
     @GetMapping("/{submissionId}/status")
     public ResponseEntity<SubmissionStatusResponse> getStatus(@PathVariable UUID submissionId) {
-        return ResponseEntity.ok(assessmentService.getStatus(submissionId, SecurityUtils.getCurrentUserId()));
+        return ResponseEntity.ok(assessmentService.getStatus(submissionId, currentUser.require().userId()));
     }
 }

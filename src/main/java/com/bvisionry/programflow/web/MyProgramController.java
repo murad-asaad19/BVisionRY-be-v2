@@ -69,6 +69,16 @@ public class MyProgramController {
         return service.player(taskId);
     }
 
+    /**
+     * Idempotent typed-task open (spec §2.1): ensures the prerequisite
+     * (enrollment / exercise copy / tagged assessment submission) exists and
+     * returns the route target.
+     */
+    @PostMapping("/tasks/{taskId}/open")
+    public com.bvisionry.programflow.dto.OpenTaskResponse open(@PathVariable UUID taskId) {
+        return service.open(taskId);
+    }
+
     @PutMapping("/tasks/{taskId}/answers")
     public SaveAnswersResponse saveAnswers(
             @PathVariable UUID taskId,

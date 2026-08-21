@@ -23,6 +23,8 @@ public record PillarCreateRequest(
         @Size(max = 10000, message = "AI rubric instructions must be at most 10000 characters")
         String aiRubricInstructions,
 
+        // Optional. Omit it and a STANDARD pillar starts on
+        // MaturityThresholdValidator.PLATFORM_DEFAULT; ignored for PERSONAL.
         Map<String, List<Integer>> maturityThresholds,
 
         String type

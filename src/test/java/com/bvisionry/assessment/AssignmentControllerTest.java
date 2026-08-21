@@ -46,6 +46,11 @@ class AssignmentControllerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
+    // GlobalExceptionHandler is a @RestControllerAdvice, so it IS part of every
+    // @WebMvcTest slice — and it depends on the error-event recorder.
+    @MockitoBean
+    private com.bvisionry.common.errortracking.ErrorEventRecorder errorEventRecorder;
+
     @MockitoBean
     private AssignmentService assignmentService;
 
@@ -86,7 +91,7 @@ class AssignmentControllerTest {
         UUID userId = UUID.randomUUID();
 
         CreateAssignmentRequest request = new CreateAssignmentRequest(
-                pipelineId, null, null, null, false, false, null);
+                pipelineId, null, null, null, false, false, null, null);
 
         AssignmentResponse response = new AssignmentResponse(
                 UUID.randomUUID(), pipelineId, "Test Pipeline",

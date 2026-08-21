@@ -10,8 +10,11 @@ import com.bvisionry.aiconfig.validation.AIResponseValidator;
 import com.bvisionry.aiengine.guardrail.SchemaValidationException;
 import com.bvisionry.aiengine.service.AiEvaluationEngine;
 import com.bvisionry.common.dto.AiUseDetectionResult;
+import com.bvisionry.common.dto.CohortGrowthSummaryResult;
+import com.bvisionry.common.dto.MemberGrowthSummaryResult;
 import com.bvisionry.common.dto.OverallSummaryResult;
 import com.bvisionry.common.dto.PillarEvaluationResult;
+import com.bvisionry.common.dto.ShiftNarrativeResult;
 import com.bvisionry.common.dto.TeamInsightResult;
 import com.bvisionry.common.enums.AICallStatus;
 import com.bvisionry.common.enums.PromptType;
@@ -252,6 +255,105 @@ public class OpenRouterChatService {
                 provenance, model, metadata, attemptLog,
                 () -> aiEngine.detectAiUse(systemPrompt, assessmentXml, model, asDouble(temperature), maxTokens,
                         attemptLog));
+    }
+
+    /**
+     * One pillar's qualitative shift narrative (redesign spec §6).
+     *
+     * <p>Routed on the INSIGHT model/temperature/token budget, not the evaluation
+     * ones: this call writes prose about text, it scores nothing, and the insight
+     * knobs are exactly the "generate readable narrative" profile the console
+     * already exposes. No new AI-config column — the smallest honest reuse.
+     *
+     * @param userMessage the ONLY input: pillar name + before/after text blocks.
+     *                    Never contains a score (enforced by the caller's
+     *                    projection, which does not select one).
+     * @param correction  appended to the system prompt on the single corrective
+     *                    retry (spec §6: re-ask once with the decline-close
+     *                    instruction); {@code null} on the first attempt.
+     */
+    public AIResponse<ShiftNarrativeResult> generateShiftNarrative(String userMessage, String correction,
+                                                                   CallMetadata metadata) {
+        AIConfiguration config = configService.getConfigEntity();
+
+        String model = config.getDefaultInsightModel();
+        BigDecimal temperature = config.getInsightTemperature();
+        int maxTokens = config.getMaxTokensInsight();
+
+        PromptTemplateResponse systemPromptTemplate =
+                promptTemplateService.getActivePrompt(PromptType.SHIFT_NARRATIVE);
+        String systemPrompt = correction == null || correction.isBlank()
+                ? systemPromptTemplate.content()
+                : systemPromptTemplate.content() + "\n\nCORRECTION — your previous answer was rejected: "
+                        + correction;
+
+        Provenance provenance = new Provenance(model, temperature, promptVersionId(systemPromptTemplate));
+        AttemptLog attemptLog = new AttemptLog();
+        return run("shift-narrative", systemPrompt, userMessage, null,
+                provenance, model, metadata, attemptLog,
+                () -> aiEngine.generateShiftNarrative(systemPrompt, userMessage, model,
+                        asDouble(temperature), maxTokens, attemptLog));
+    }
+
+    /**
+     * One founder's overall growth summary (redesign spec §3).
+     *
+     * <p>On the same INSIGHT knobs as {@link #generateShiftNarrative}, and for
+     * the same reason: it writes prose about prose and scores nothing.
+     *
+     * @param userMessage the ONLY input: the founder's APPROVED per-pillar
+     *                    narratives. No scores and no facilitator notes are in
+     *                    hand at the call site to leak into it.
+     */
+    public AIResponse<MemberGrowthSummaryResult> generateMemberGrowthSummary(String userMessage,
+                                                                             CallMetadata metadata) {
+        AIConfiguration config = configService.getConfigEntity();
+
+        String model = config.getDefaultInsightModel();
+        BigDecimal temperature = config.getInsightTemperature();
+        int maxTokens = config.getMaxTokensInsight();
+
+        PromptTemplateResponse systemPromptTemplate =
+                promptTemplateService.getActivePrompt(PromptType.MEMBER_GROWTH_SUMMARY);
+        String systemPrompt = systemPromptTemplate.content();
+
+        Provenance provenance = new Provenance(model, temperature, promptVersionId(systemPromptTemplate));
+        AttemptLog attemptLog = new AttemptLog();
+        return run("member-growth-summary", systemPrompt, userMessage, null,
+                provenance, model, metadata, attemptLog,
+                () -> aiEngine.generateMemberGrowthSummary(systemPrompt, userMessage, model,
+                        asDouble(temperature), maxTokens, attemptLog));
+    }
+
+    /**
+     * The cohort-level growth report (redesign spec §4).
+     *
+     * <p>On the INSIGHT knobs like {@link #generateTeamInsight}, whose staff-facing
+     * job this is the cohort-scoped version of.
+     *
+     * @param cohortData the ONLY input: per-member comparison rows, the approved
+     *                   narratives across the cohort, and the pillar aggregate.
+     *                   Member names appear ONLY when the generation asked for
+     *                   them (§4) — the caller decides, not this method.
+     */
+    public AIResponse<CohortGrowthSummaryResult> generateCohortGrowthSummary(String cohortData,
+                                                                             CallMetadata metadata) {
+        AIConfiguration config = configService.getConfigEntity();
+
+        String model = config.getDefaultInsightModel();
+        BigDecimal temperature = config.getInsightTemperature();
+        int maxTokens = config.getMaxTokensInsight();
+
+        PromptTemplateResponse systemPromptTemplate =
+                promptTemplateService.getActivePrompt(PromptType.COHORT_GROWTH_SUMMARY);
+        String systemPrompt = systemPromptTemplate.content();
+
+        Provenance provenance = new Provenance(model, temperature, promptVersionId(systemPromptTemplate));
+        AttemptLog attemptLog = new AttemptLog();
+        return run("cohort-growth-summary", systemPrompt, cohortData, null,
+                provenance, model, metadata, attemptLog,
+                () -> aiEngine.generateCohortGrowthSummary(systemPrompt, cohortData, model,
+                        asDouble(temperature), maxTokens, attemptLog));
     }
 
     // ========== Call execution + observability ==========

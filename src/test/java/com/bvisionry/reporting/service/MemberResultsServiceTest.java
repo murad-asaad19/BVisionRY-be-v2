@@ -3,6 +3,7 @@ package com.bvisionry.reporting.service;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.assessment.entity.Assignment;
 import com.bvisionry.assessment.entity.Submission;
+import com.bvisionry.common.security.PremiumFeatureGuard;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.enums.SubscriptionTier;
@@ -25,6 +26,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
+import com.bvisionry.config.SecurityContextCurrentUserAccessor;
+import com.bvisionry.common.security.CurrentUserAccessor;
+import org.mockito.Spy;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -67,6 +71,11 @@ class MemberResultsServiceTest {
     @Mock
     private PersonalInfoResolver personalInfoResolver;
 
+    // The service resolves the caller through this port; the spy delegates to
+    // the real adapter, which reads the same SecurityContextHolder the tests set.
+    @Spy
+    private CurrentUserAccessor currentUser = new SecurityContextCurrentUserAccessor();
+
     @InjectMocks
     private MemberResultsService memberResultsService;
 
@@ -107,7 +116,7 @@ class MemberResultsServiceTest {
 
         Organization org = new Organization();
         org.setId(orgId);
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
 
         Pipeline pipeline = new Pipeline();
         pipeline.setName("Leadership Assessment");
@@ -219,7 +228,7 @@ class MemberResultsServiceTest {
 
         Organization org = new Organization();
         org.setId(orgId);
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
 
         Pipeline pipeline = new Pipeline();
         pipeline.setName("Pipeline With Survey");
@@ -252,6 +261,67 @@ class MemberResultsServiceTest {
 
         assertThat(response.surveyResponse()).isNull();
         assertThat(response.survey()).isNull();
+    }
+
+    /**
+     * Murad 2026-08-10: PERSONAL-pillar intake demographics are deliberately
+     * org-admin-visible — they are intake data, not assessment answers; §2.4's
+     * invariant covers mindset answers only.
+     */
+    @Test
+    void getResults_orgAdmin_keepsPersonalInfo() {
+        UUID submissionId = UUID.randomUUID();
+        UUID orgId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+
+        Organization org = new Organization();
+        org.setId(orgId);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
+
+        Pipeline pipeline = new Pipeline();
+        pipeline.setName("Founder Readiness");
+
+        Assignment assignment = new Assignment();
+        assignment.setPipeline(pipeline);
+        assignment.setOrganization(org);
+
+        User owner = new User();
+        owner.setId(ownerId);
+
+        Submission submission = new Submission();
+        submission.setId(submissionId);
+        submission.setAssignment(assignment);
+        submission.setUser(owner);
+        submission.setStatus(SubmissionStatus.EVALUATED);
+        submission.setEvaluatedAt(Instant.now());
+
+        OverallSummary summary = new OverallSummary();
+        summary.setOverallScorePercentage(new BigDecimal("70.00"));
+
+        when(submissionRepository.findById(submissionId)).thenReturn(Optional.of(submission));
+        when(pillarEvaluationRepository.findBySubmissionId(submissionId)).thenReturn(List.of());
+        when(overallSummaryRepository.findBySubmissionId(submissionId)).thenReturn(Optional.of(summary));
+        when(premiumFeatureGuard.isPremiumOrSuperAdmin(orgId)).thenReturn(true);
+        when(personalInfoResolver.resolve(submissionId)).thenReturn(
+                List.of(new com.bvisionry.reporting.dto.PersonalInfoEntry(
+                        "What keeps you up at night?", "Runway.")));
+
+        // An ORG ADMIN of the same org, i.e. not the owner and not a super admin.
+        authenticateAs(UserRole.ORG_ADMIN);
+        assertThat(memberResultsService.getResults(submissionId).personalInfo())
+                .extracting(com.bvisionry.reporting.dto.PersonalInfoEntry::value)
+                .containsExactly("Runway.");
+
+        // The founder reading their own report keeps every word of it.
+        SecurityContextHolder.clearContext();
+        User self = new User();
+        self.setId(ownerId);
+        self.setRole(UserRole.MEMBER);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(self, null, List.of()));
+        assertThat(memberResultsService.getResults(submissionId).personalInfo())
+                .extracting(com.bvisionry.reporting.dto.PersonalInfoEntry::value)
+                .containsExactly("Runway.");
     }
 
     @Test

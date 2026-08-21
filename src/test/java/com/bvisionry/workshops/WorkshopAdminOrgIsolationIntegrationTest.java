@@ -36,17 +36,23 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Pins the workshop admin org boundary: an Org A admin can never read or
- * mutate Org B's workshop/exercise/task, whichever way the ids are smuggled.
+ * Pins the workshop admin ORG-SCOPING of the ids, independent of who calls:
+ * a workshop/exercise/task from another org can never be read or mutated
+ * through an org path it does not belong to, whichever way the ids are
+ * smuggled.
+ *
+ * <p>The caller is a SUPER_ADMIN because the console is SUPER_ADMIN-only
+ * (see {@code WorkshopAdminController}) — which makes these cases stronger,
+ * not weaker: the most privileged caller there is still cannot cross the
+ * workshop→org binding. That ORG_ADMIN is refused outright is pinned in
+ * {@code EndpointAuthorizationMatrixIntegrationTest.WorkshopConsole}.
  *
  * <ul>
- *   <li>Foreign workshop id under the caller's own org path → 404
+ *   <li>Foreign workshop id under another org's path → 404
  *       ({@code requireWorkshop} treats an org mismatch as not-found so the
  *       foreign workshop's existence never leaks).</li>
- *   <li>Foreign org id in the path → 403 (the controller's
- *       {@code @orgAccess.isInOrg} gate).</li>
- *   <li>Foreign exercise/task ids nested under the caller's own draft
- *       workshop → 404 (parent-binding checks in {@code requireExercise}/
+ *   <li>Foreign exercise/task ids nested under another workshop → 404
+ *       (parent-binding checks in {@code requireExercise}/
  *       {@code requireTask}).</li>
  *   <li>{@code dealCards} with a task whose exercise belongs to a different
  *       workshop → 404, even inside the same org.</li>
@@ -68,9 +74,9 @@ class WorkshopAdminOrgIsolationIntegrationTest extends AbstractPostgresIntegrati
 
     private Organization orgA;
     private Organization orgB;
-    private Workshop workshopA;      // DRAFT, owned by org A (the caller's org)
+    private Workshop workshopA;      // DRAFT, owned by org A
     private WorkshopExercise exerciseA;
-    private Workshop workshopB;      // DRAFT, owned by org B (foreign)
+    private Workshop workshopB;      // DRAFT, owned by org B
     private WorkshopExercise exerciseB;
     private WorkshopExerciseTask taskB;
 
@@ -84,7 +90,7 @@ class WorkshopAdminOrgIsolationIntegrationTest extends AbstractPostgresIntegrati
         exerciseB = newExercise(workshopB);
         taskB = newSortTask(exerciseB);
 
-        TestAuthentication.authenticateAsOrgAdmin(userRepository, orgA);
+        TestAuthentication.authenticateAsSuperAdmin(userRepository);
     }
 
     @AfterEach
@@ -93,8 +99,8 @@ class WorkshopAdminOrgIsolationIntegrationTest extends AbstractPostgresIntegrati
     }
 
     @Test
-    void foreignWorkshop_underOwnOrgPath_readsAndMutationsAre404() throws Exception {
-        // Positive control: the caller's own workshop is reachable.
+    void foreignWorkshop_underAnotherOrgsPath_readsAndMutationsAre404() throws Exception {
+        // Positive control: the workshop under its OWN org path is reachable.
         mockMvc.perform(get("/api/organizations/{orgId}/workshops/{id}/builder",
                         orgA.getId(), workshopA.getId()))
                 .andExpect(status().isOk());
@@ -114,13 +120,7 @@ class WorkshopAdminOrgIsolationIntegrationTest extends AbstractPostgresIntegrati
     }
 
     @Test
-    void foreignOrgPath_isForbiddenByPreAuthorize() throws Exception {
-        mockMvc.perform(get("/api/organizations/{orgId}/workshops", orgB.getId()))
-                .andExpect(status().isForbidden());
-    }
-
-    @Test
-    void foreignExercise_smuggledUnderOwnWorkshop_is404() throws Exception {
+    void foreignExercise_smuggledUnderAnotherWorkshop_is404() throws Exception {
         mockMvc.perform(put("/api/organizations/{orgId}/workshops/{wId}/exercises/{eId}",
                         orgA.getId(), workshopA.getId(), exerciseB.getId())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -133,7 +133,7 @@ class WorkshopAdminOrgIsolationIntegrationTest extends AbstractPostgresIntegrati
     }
 
     @Test
-    void foreignTask_smuggledUnderOwnExercise_is404() throws Exception {
+    void foreignTask_smuggledUnderAnotherExercise_is404() throws Exception {
         mockMvc.perform(delete("/api/organizations/{orgId}/workshops/{wId}/exercises/{eId}/tasks/{tId}",
                         orgA.getId(), workshopA.getId(), exerciseA.getId(), taskB.getId()))
                 .andExpect(status().isNotFound());

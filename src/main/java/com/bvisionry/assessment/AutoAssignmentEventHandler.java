@@ -1,8 +1,7 @@
 package com.bvisionry.assessment;
 
 import com.bvisionry.assessment.entity.PipelineAutoAssignment;
-import com.bvisionry.organization.event.MemberJoinedEvent;
-import com.bvisionry.organization.event.MemberMovedEvent;
+import com.bvisionry.common.event.OrganizationEvents;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -35,7 +34,7 @@ public class AutoAssignmentEventHandler {
      * single failure does not abort the rest of the batch.
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    public void onMemberJoined(MemberJoinedEvent event) {
+    public void onMemberJoined(OrganizationEvents.MemberJoined event) {
         applyApplicableRules(event.organizationId(), event.userId(), event.userType());
     }
 
@@ -46,7 +45,7 @@ public class AutoAssignmentEventHandler {
      * the user still appears to belong to the source org and would be skipped.
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    public void onMemberMoved(MemberMovedEvent event) {
+    public void onMemberMoved(OrganizationEvents.MemberMoved event) {
         applyApplicableRules(event.toOrganizationId(), event.userId(), event.userType());
     }
 

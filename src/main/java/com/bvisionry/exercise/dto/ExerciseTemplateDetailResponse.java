@@ -11,7 +11,19 @@ import java.util.UUID;
 public record ExerciseTemplateDetailResponse(
         UUID id,
         String name,
+        /** Serialised tiptap document (see {@link ExerciseTemplate#getDescription()}). */
         String description,
+        /**
+         * The cover EXACTLY as stored — a {@code minio://bucket/key} marker or
+         * an external URL. The admin form edits this field and sends it back,
+         * so it must round-trip: writing a resolved presigned URL here would
+         * persist a link that expires within the hour.
+         */
+        String coverImageUrl,
+        /** The same cover, resolved for display. Never sent back. */
+        String coverImageDisplayUrl,
+        /** Staff-only brief for the AI — admin surface only, never in member payloads. */
+        String aiContext,
         ExerciseTemplateStatus status,
         List<ExerciseColumnResponse> columns,
         /** Read-only sample row (columnId → value) shown above the sheet, or null. */
@@ -25,11 +37,22 @@ public record ExerciseTemplateDetailResponse(
         Instant createdAt,
         Instant updatedAt
 ) {
-    public static ExerciseTemplateDetailResponse from(ExerciseTemplate template, boolean structureLocked) {
+    /**
+     * @param coverImageDisplayUrl the stored cover put through
+     *                             {@link com.bvisionry.common.media.MediaUrlPort}
+     *                             — a raw {@code minio://} marker is not loadable
+     *                             by a browser, but is the only safe thing to
+     *                             store, so both travel.
+     */
+    public static ExerciseTemplateDetailResponse from(ExerciseTemplate template,
+            boolean structureLocked, String coverImageDisplayUrl) {
         return new ExerciseTemplateDetailResponse(
                 template.getId(),
                 template.getName(),
                 template.getDescription(),
+                template.getCoverImageUrl(),
+                coverImageDisplayUrl,
+                template.getAiContext(),
                 template.getStatus(),
                 template.getColumns().stream().map(ExerciseColumnResponse::from).toList(),
                 template.getExampleRow(),

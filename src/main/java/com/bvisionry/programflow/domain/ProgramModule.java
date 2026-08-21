@@ -45,10 +45,7 @@ public class ProgramModule {
     @Column(name = "id", nullable = false, updatable = false, insertable = false)
     private UUID id;
 
-    @Column(name = "org_id", nullable = false)
-    private UUID orgId;
-
-    /** Owning cohort. org_id is kept alongside since audience (teams/members) is org-scoped. */
+    /** Owning cohort — the module's whole scope; audience is roster-scoped (spec §13). */
     @Column(name = "cohort_id", nullable = false)
     private UUID cohortId;
 
@@ -57,6 +54,22 @@ public class ProgramModule {
 
     @Column(name = "summary")
     private String summary;
+
+    /**
+     * The module's pillar/area chip (spec §2.3; D2 journey seam). Free label
+     * this phase — a structured pillar reference is a later, deliberate change.
+     */
+    @Column(name = "pillar_label", length = 120)
+    private String pillarLabel;
+
+    /**
+     * Whether this module is a NUMBERED STAGE of the drip ("Week 01") or
+     * always-on material that sits outside the pacing — a welcome section, a
+     * closing letter. False suppresses the stage kicker everywhere it renders.
+     * Orthogonal to {@code lockMode}: an unpaced module may still be gated.
+     */
+    @Column(nullable = false)
+    private boolean paced = true;
 
     @Column(name = "position", nullable = false)
     private int position = 0;
@@ -75,11 +88,6 @@ public class ProgramModule {
     @Enumerated(EnumType.STRING)
     @Column(name = "assign_mode", nullable = false, length = 20)
     private AudienceMode assignMode = AudienceMode.ALL;
-
-    @ElementCollection(fetch = FetchType.LAZY)
-    @CollectionTable(name = "program_module_teams", joinColumns = @JoinColumn(name = "module_id"))
-    @Column(name = "team_id", nullable = false)
-    private Set<UUID> teamIds = new LinkedHashSet<>();
 
     @ElementCollection(fetch = FetchType.LAZY)
     @CollectionTable(name = "program_module_members", joinColumns = @JoinColumn(name = "module_id"))

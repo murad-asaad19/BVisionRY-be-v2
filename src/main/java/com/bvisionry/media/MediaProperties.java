@@ -39,6 +39,14 @@ public class MediaProperties {
      * {@code true} to exercise the fetch path against a localhost fixture server.
      */
     private boolean externalFetchAllowPrivate = false;
+    /**
+     * Platform-wide default ceiling on an org's total object-storage usage
+     * (roadmap §11 — uploads were unbounded in count). Bytes, not MiB/GiB, to
+     * match every other size field in this class. An org's own
+     * {@code organizations.storage_quota_bytes} (V160), when set, overrides
+     * this per-org; NULL there means "use this default". 2 GiB.
+     */
+    private long orgDefaultQuotaBytes = 2L * 1024 * 1024 * 1024;
 
     // ----- getters / setters -----
 
@@ -68,4 +76,7 @@ public class MediaProperties {
 
     public boolean isExternalFetchAllowPrivate() { return externalFetchAllowPrivate; }
     public void setExternalFetchAllowPrivate(boolean externalFetchAllowPrivate) { this.externalFetchAllowPrivate = externalFetchAllowPrivate; }
+
+    public long getOrgDefaultQuotaBytes() { return orgDefaultQuotaBytes; }
+    public void setOrgDefaultQuotaBytes(long orgDefaultQuotaBytes) { this.orgDefaultQuotaBytes = orgDefaultQuotaBytes; }
 }

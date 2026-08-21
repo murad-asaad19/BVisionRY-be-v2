@@ -4,6 +4,7 @@ import com.bvisionry.aiconfig.service.RateLimitService;
 import com.bvisionry.common.exception.RateLimitExceededException;
 import com.bvisionry.common.web.ClientIpResolver;
 import com.bvisionry.common.web.ProblemDetailResponseWriter;
+import com.bvisionry.common.web.RequestPaths;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -34,14 +35,15 @@ public class SurveySubmitRateLimitFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
+        String path = RequestPaths.decoded(request);
         if (!"POST".equalsIgnoreCase(request.getMethod())
-                || !MATCHER.match(PATTERN, request.getRequestURI())) {
+                || !MATCHER.match(PATTERN, path)) {
             filterChain.doFilter(request, response);
             return;
         }
 
         String ip = clientIpResolver.resolve(request);
-        String token = extractToken(request.getRequestURI());
+        String token = extractToken(path);
 
         try {
             rateLimitService.checkSurveySubmitLimit("ip:" + ip);

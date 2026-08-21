@@ -1,5 +1,6 @@
 package com.bvisionry.membertype;
 
+import com.bvisionry.common.security.AuthorizedInSecurityConfig;
 import com.bvisionry.membertype.dto.CreateMemberTypeRequest;
 import com.bvisionry.membertype.dto.MemberTypeResponse;
 import com.bvisionry.membertype.dto.UpdateMemberTypeRequest;
@@ -31,6 +32,7 @@ public class MemberTypeController {
      * Read is open to any authenticated user — dropdowns in member/assignment
      * UI need the list. Writes are super admin only.
      */
+    @AuthorizedInSecurityConfig("authenticated(): deliberately open read - every member/assignment dropdown needs the list; writes below are SUPER_ADMIN")
     @GetMapping
     public ResponseEntity<List<MemberTypeResponse>> list() {
         return ResponseEntity.ok(memberTypeService.list());

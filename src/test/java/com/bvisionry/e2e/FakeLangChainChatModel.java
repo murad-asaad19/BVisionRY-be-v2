@@ -27,6 +27,7 @@ public class FakeLangChainChatModel implements ChatModel {
 
     @Override
     public ChatResponse chat(ChatRequest chatRequest) {
+        registry.recordUserMessage(userText(chatRequest));
         String scripted = registry.pollNext();
         String body = scripted != null ? scripted : defaultFor(systemText(chatRequest));
         return ChatResponse.builder()
@@ -34,6 +35,16 @@ public class FakeLangChainChatModel implements ChatModel {
                 .tokenUsage(new TokenUsage(0, 0))
                 .finishReason(FinishReason.STOP)
                 .build();
+    }
+
+    /** The FIRST user message — the data the call was built on, not a repair re-ask. */
+    private static String userText(ChatRequest request) {
+        for (ChatMessage message : request.messages()) {
+            if (message instanceof dev.langchain4j.data.message.UserMessage user) {
+                return user.singleText();
+            }
+        }
+        return "";
     }
 
     private static String systemText(ChatRequest request) {
@@ -46,11 +57,39 @@ public class FakeLangChainChatModel implements ChatModel {
     }
 
     private static String defaultFor(String systemPrompt) {
+        // The member growth summary (§3). Checked BEFORE the narrative arm:
+        // since V193 both prompts carry the five kinds, so "overall growth
+        // breakdown" — which appears only here — is what tells them apart.
+        if (systemPrompt.contains("overall growth breakdown")) {
+            return MEMBER_GROWTH_BREAKDOWN_DEFAULT;
+        }
+        // Its pre-V193 contract: the only prompt that names {"summary".
+        if (systemPrompt.contains("{\"summary\"")) {
+            return MEMBER_GROWTH_SUMMARY_DEFAULT;
+        }
+        // The cohort growth summary (§4). Routed on the INSTRUCTION, not the
+        // schema: V194 took the JSON envelope out of the prompt (LangChain4j
+        // derives it from CohortGrowthSummaryResult), so {"overview" is no
+        // longer there to match on. "COHORT-WIDE" is that prompt's whole job
+        // and appears in no other.
+        if (systemPrompt.contains("COHORT-WIDE")) {
+            return COHORT_GROWTH_SUMMARY_DEFAULT;
+        }
         if (systemPrompt.contains("teamThemes")) {
             return TEAM_INSIGHT_DEFAULT;
         }
         if (systemPrompt.contains("overallScorePercentage")) {
             return OVERALL_SUMMARY_DEFAULT;
+        }
+        // The per-pillar narrative (§6), routed on a KIND — same discriminator
+        // MockLangChainChatModel uses, and checked last for the same reason: it
+        // is the one arm whose marker also appears in the growth-summary prompts
+        // above. It used to match on the literal "closingAction", which V202
+        // took out of the prompt when EMERGED gave the growth-edge-only case a
+        // kind of its own; every narrative test then silently fell through to
+        // PILLAR_DEFAULT and read as "the AI returned an empty narrative".
+        if (systemPrompt.contains("CARRIED_FORWARD")) {
+            return SHIFT_NARRATIVE_DEFAULT;
         }
         return PILLAR_DEFAULT;
     }
@@ -74,6 +113,64 @@ public class FakeLangChainChatModel implements ChatModel {
               "developmentAreas": ["Feedback loop latency"],
               "corePattern": "Reflection without rapid follow-through.",
               "movingForward": "Pick one improvement, ship it, measure within two weeks."
+            }
+            """;
+
+    /**
+     * Shift-narrative default (redesign spec §6). Carries a non-empty
+     * {@code closingAction} so it also satisfies the decline guardrail — a spec
+     * that wants to exercise the retry path scripts the failing draft itself.
+     * "covers" names both of the fixture's numbered BEFORE items (B1 strength,
+     * B2 gap) so the no-vanishing audit passes — a spec that wants to exercise
+     * the coverage-gap synthesis scripts an uncovering response itself.
+     */
+    private static final String SHIFT_NARRATIVE_DEFAULT = """
+            {
+              "items": [
+                {"kind": "CARRIED_FORWARD", "covers": ["B1", "B2"],
+                 "text": "The habit named in the first assessment is still here, and it has sharpened."},
+                {"kind": "NEW", "covers": [],
+                 "text": "A weekly review appears in the later text with no equivalent before it."}
+              ],
+              "closingAction": "Name the next constraint before it becomes the bottleneck."
+            }
+            """;
+
+    /** The member-level growth breakdown (V193) — the five kinds, merged across pillars. */
+    private static final String MEMBER_GROWTH_BREAKDOWN_DEFAULT = """
+            {
+              "items": [
+                {"kind": "CARRIED_FORWARD",
+                 "text": "The habits named at intake have taken hold, and across most pillars \
+            decisions now get written down and revisited on a cadence."},
+                {"kind": "PERSISTED",
+                 "text": "Turning that steadiness outward is still the open edge, and the \
+            follow-through thins in the same places it did before."},
+                {"kind": "RESOLVED",
+                 "text": "The hesitation about asking for help no longer appears anywhere in \
+            the later readings."}
+              ]
+            }
+            """;
+
+    /** The member-level growth summary's pre-V193 single-paragraph contract. */
+    private static final String MEMBER_GROWTH_SUMMARY_DEFAULT = """
+            {
+              "summary": "The habits named at intake have taken hold, and the later work reads \
+            steadier than the first: decisions get written down and revisited on a cadence. \
+            What is still open is turning that steadiness outward, where the follow-through \
+            thins out."
+            }
+            """;
+
+    /** The cohort-level growth report (redesign spec §4). */
+    private static final String COHORT_GROWTH_SUMMARY_DEFAULT = """
+            {
+              "overview": "The cohort moved together on the habits the programme drilled, \
+            and split on the ones it only talked about.",
+              "sharedWins": ["Written decisions are now the norm across most of the group"],
+              "sharedRisks": ["Follow-through thins out once the work leaves the founder's desk"],
+              "recommendations": ["Run one session on handing work over, using the group's own examples"]
             }
             """;
 

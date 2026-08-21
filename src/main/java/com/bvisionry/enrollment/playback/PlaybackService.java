@@ -1,12 +1,12 @@
 package com.bvisionry.enrollment.playback;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import java.util.UUID;
 
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.enrollment.domain.ContentProgress;
 import com.bvisionry.enrollment.domain.Enrollment;
 import com.bvisionry.enrollment.repository.ContentProgressRepository;
@@ -26,13 +26,16 @@ public class PlaybackService {
     private final EnrollmentRepository enrollments;
     private final ContentProgressRepository progresses;
     private final EnrollmentService enrollmentService;
+    private final CurrentUserAccessor currentUser;
 
     public PlaybackService(EnrollmentRepository enrollments,
                            ContentProgressRepository progresses,
-                           EnrollmentService enrollmentService) {
+                           EnrollmentService enrollmentService,
+                           CurrentUserAccessor currentUser) {
         this.enrollments = enrollments;
         this.progresses = progresses;
         this.enrollmentService = enrollmentService;
+        this.currentUser = currentUser;
     }
 
     // -------------------------------------------------------------------------
@@ -100,7 +103,7 @@ public class PlaybackService {
         Enrollment enrollment = enrollments.findById(enrollmentId)
                 .orElseThrow(() -> new IllegalArgumentException("Enrollment not found: " + enrollmentId));
 
-        UUID currentUserId = SecurityUtils.getCurrentUserId();
+        UUID currentUserId = currentUser.require().userId();
         if (!enrollment.getUserId().equals(currentUserId)) {
             throw new AccessDeniedException("Not your enrollment");
         }

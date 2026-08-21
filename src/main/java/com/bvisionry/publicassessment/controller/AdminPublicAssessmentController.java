@@ -1,7 +1,7 @@
 package com.bvisionry.publicassessment.controller;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.assessment.dto.SubmissionStatusResponse;
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.publicassessment.dto.CreatePublicAssessmentLinkRequest;
 import com.bvisionry.publicassessment.dto.PublicAssessmentLinkDto;
 import com.bvisionry.publicassessment.dto.PublicSubmissionResponsePageDto;
@@ -34,6 +34,7 @@ import java.util.UUID;
 @PreAuthorize("hasAuthority('SUPER_ADMIN')")
 public class AdminPublicAssessmentController {
 
+    private final CurrentUserAccessor currentUser;
     private final PublicAssessmentService publicAssessmentService;
 
     @GetMapping
@@ -47,7 +48,7 @@ public class AdminPublicAssessmentController {
     public ResponseEntity<PublicAssessmentLinkDto> create(
             @Valid @RequestBody CreatePublicAssessmentLinkRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(publicAssessmentService.createLink(request, SecurityUtils.getCurrentUserId()));
+                .body(publicAssessmentService.createLink(request, currentUser.require().userId()));
     }
 
     @GetMapping("/{linkId}")

@@ -1,5 +1,6 @@
 package com.bvisionry.enrollment.web;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
@@ -11,10 +12,11 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.auth.UserRepository;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.catalog.domain.Content;
+import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
+import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.catalog.domain.Course;
 import com.bvisionry.catalog.domain.CourseState;
 import com.bvisionry.catalog.domain.Section;
@@ -48,6 +50,8 @@ public class EnrollmentService {
     private final MediaService mediaService;
     private final CertificateService certificateService;
     private final UserRepository users;
+    private final CourseVisibilityAccess courseVisibility;
+    private final CurrentUserAccessor currentUser;
 
     public EnrollmentService(EnrollmentRepository enrollments,
                              ContentProgressRepository progresses,
@@ -56,7 +60,9 @@ public class EnrollmentService {
                              ContentRepository contents,
                              MediaService mediaService,
                              CertificateService certificateService,
-                             UserRepository users) {
+                             UserRepository users,
+                             CourseVisibilityAccess courseVisibility,
+                             CurrentUserAccessor currentUser) {
         this.enrollments = enrollments;
         this.progresses = progresses;
         this.courses = courses;
@@ -65,6 +71,8 @@ public class EnrollmentService {
         this.mediaService = mediaService;
         this.certificateService = certificateService;
         this.users = users;
+        this.courseVisibility = courseVisibility;
+        this.currentUser = currentUser;
     }
 
     // -------------------------------------------------------------------------
@@ -74,16 +82,74 @@ public class EnrollmentService {
     /**
      * Creates or returns the existing enrollment for the current user and the
      * course identified by {@code slug}.
+     *
+     * <p>Uses {@code findAny...} — the one read here that still sees an
+     * admin-removed (CANCELLED) row — for two reasons. The mechanical one: the row
+     * keeps its slot in {@code uq_enrollment_user_course}, so the filtered read
+     * would report "not enrolled" and send this straight into a constraint
+     * violation. The deliberate one: {@link #reactivateIfRemoved} then hands the
+     * founder their course back with every lesson they had completed still ticked.
      */
     @Transactional
     public EnrollmentDto enroll(String slug) {
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
         var course = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
 
-        return enrollments.findByUserIdAndCourseId(userId, course.getId())
-                .map(e -> toDto(e, course))
+        // Spec §3 visibility: an org's members may only take up what the platform
+        // has made visible to that org. Enforced HERE rather than on the catalog
+        // list because this is the act that creates a seat — a filtered list an
+        // attacker can skip past is not a control. Org-less users (super admins)
+        // are not gated; see CourseVisibilityAccess#isVisibleToUser.
+        // One getId() call, reused: the ArchUnit ratchet counts each cross-feature
+        // call SITE, so a second one is a new frozen violation for an edge that
+        // already exists.
+        UUID enrolledCourseId = course.getId();
+        if (!courseVisibility.isVisibleToUser(userId, enrolledCourseId)) {
+            throw new NotEnrolledException(slug);
+        }
+
+        // An admin removed this member from this course (spec §2.4 exclusion /
+        // V157 override). REFUSED, not silently re-granted — see the note on
+        // reactivateIfRemoved below for why this reverses the pre-§3 reading.
+        if (enrollments.isRemovedByAdmin(userId, enrolledCourseId)) {
+            throw new BadRequestException(
+                    "Your organization removed you from this course. Ask your admin to add it back.");
+        }
+
+        return enrollments.findAnyByUserIdAndCourseId(userId, enrolledCourseId)
+                .map(e -> live(toDto(reactivateIfRemoved(e), course), e))
                 .orElseGet(() -> createEnrollment(userId, course));
+    }
+
+    /**
+     * A founder self-enrolling in a course an admin removed them from gets it back,
+     * progress intact.
+     *
+     * <p><strong>An overridden course no longer reaches here at all.</strong>
+     * The override used to be read narrowly — "an admin overrides the ENGINE's
+     * automatic decision, not a public catalog" — and self-enrolment was allowed
+     * to restore access. Spec §3 makes the override the member-level EXCLUSION
+     * that beats an org-level rule, which only means anything if the member
+     * cannot undo it: an admin who removes someone from a required course would
+     * otherwise be one click from being overruled. {@link #enroll} now refuses
+     * before it gets here, so this method's remaining job is the CANCELLED rows
+     * nothing excludes any more — remove-for-everyone stamps an override per
+     * affected member, but those {@code scope = 'ORG'} rows are deleted again by
+     * the next org-wide assign (V184), leaving the cancelled row free to revive.
+     *
+     * <p>The restored status is derived rather than assumed ACTIVE: removal only
+     * ever changed {@code status}, so a founder who had FINISHED the course comes
+     * back COMPLETED, with their certificate still valid.
+     */
+    private Enrollment reactivateIfRemoved(Enrollment enrollment) {
+        if (enrollment.getStatus() != EnrollmentStatus.CANCELLED) {
+            return enrollment;
+        }
+        enrollment.setStatus(enrollment.getCompletedAt() != null
+                ? EnrollmentStatus.COMPLETED
+                : EnrollmentStatus.ACTIVE);
+        return enrollments.save(enrollment);
     }
 
     /**
@@ -102,7 +168,7 @@ public class EnrollmentService {
             return toDto(enrollments.saveAndFlush(e), course);
         } catch (DataIntegrityViolationException ex) {
             return enrollments.findByUserIdAndCourseId(userId, course.getId())
-                    .map(existing -> toDto(existing, course))
+                    .map(existing -> live(toDto(existing, course), existing))
                     .orElseThrow(() -> ex);
         }
     }
@@ -113,7 +179,7 @@ public class EnrollmentService {
 
     @Transactional(readOnly = true)
     public List<EnrollmentDto> myEnrollments() {
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
         List<Enrollment> list = enrollments.findByUserId(userId);
         // Batch-load the courses (incl. DRAFT/ARCHIVED) so each DTO carries its
         // title/slug — the catalog endpoint is published-only, so client joins
@@ -121,8 +187,9 @@ public class EnrollmentService {
         Map<UUID, Course> byId = courses.findAllById(
                         list.stream().map(Enrollment::getCourseId).collect(Collectors.toSet()))
                 .stream().collect(Collectors.toMap(Course::getId, c -> c));
+        Map<UUID, Integer> pct = livePct(list);
         return list.stream()
-                .map(e -> toDto(e, byId.get(e.getCourseId())))
+                .map(e -> live(toDto(e, byId.get(e.getCourseId())), e, pct))
                 .toList();
     }
 
@@ -136,7 +203,7 @@ public class EnrollmentService {
      */
     @Transactional(readOnly = true)
     public LearnViewDto learnView(String slug) {
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
         var course = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
 
@@ -158,7 +225,7 @@ public class EnrollmentService {
                 course.getId().toString(),
                 course.getSlug(),
                 course.getTitle(),
-                toDto(enrollment, course),
+                live(toDto(enrollment, course), enrollment),
                 sectionViews);
     }
 
@@ -178,9 +245,19 @@ public class EnrollmentService {
                 .orElseThrow(() -> new IllegalArgumentException("Enrollment not found: " + enrollmentId));
 
         // Ownership check
-        UUID userId = SecurityUtils.getCurrentUserId();
+        UUID userId = currentUser.require().userId();
         if (!enrollment.getUserId().equals(userId)) {
             throw new org.springframework.security.access.AccessDeniedException("Not your enrollment");
+        }
+
+        // Removal check. This is the one enrolment read in the codebase that is
+        // BY ID rather than by (user, course), so the repository's status filter
+        // cannot cover it — and a player tab already open when an admin removed
+        // the founder still holds a perfectly valid enrollment id. Without this,
+        // that tab could keep completing lessons, drive progress to 100% and
+        // mint a certificate for a course they are no longer on.
+        if (enrollment.getStatus() == EnrollmentStatus.CANCELLED) {
+            throw new NotEnrolledException(enrollment.getCourseId().toString());
         }
 
         // Cross-course guard: completing a content item recomputes progress_pct and can
@@ -250,10 +327,21 @@ public class EnrollmentService {
         // OR the content is explicitly preview-enabled on a PUBLISHED course. The
         // allowPreview flag is HONORED (gates access), not merely echoed. An unenrolled
         // user of ANY org still cannot read locked content.
-        boolean enrolled = enrollments.existsByUserIdAndCourseId(
-                SecurityUtils.getCurrentUserId(), course.getId());
+        UUID viewerId = currentUser.require().userId();
+        UUID openCourseId = course.getId();
+        boolean enrolled = enrollments.existsByUserIdAndCourseId(viewerId, openCourseId);
         boolean previewable = content.isAllowPreview() && course.getState() == CourseState.PUBLISHED;
         if (!enrolled && !previewable) {
+            throw new NotEnrolledException(slug);
+        }
+
+        // Spec §3 downgrade policy: "keep progress, block new content, never
+        // delete data". A course the caller's org can no longer see keeps its
+        // enrollment, its progress bar, its certificate and its place in every
+        // report — but no further lesson BODY opens. Enforced at content-open
+        // rather than at enrollment because that is the smallest honest reading
+        // of "block new content"; the learn view still renders the outline.
+        if (!courseVisibility.isVisibleToUser(viewerId, openCourseId)) {
             throw new NotEnrolledException(slug);
         }
 
@@ -283,6 +371,45 @@ public class EnrollmentService {
                 e.getProgressPct(),
                 e.getEnrolledAt(),
                 e.getCompletedAt());
+    }
+
+    /**
+     * The same DTO with progress counted against the course's CURRENT lessons
+     * instead of the {@code progress_pct} column.
+     *
+     * <p>That column is a cache only the learner's own completions ever write, and
+     * its denominator lives in another slice: an author who adds, deletes or
+     * replaces lessons moves the lesson count (and cascade-deletes the
+     * {@code content_progress} rows pointing at the old ones) without any write
+     * touching the enrolment, so every enrolment keeps reporting the percentage
+     * that was true at the last click. Derived here rather than repaired on the
+     * authoring path because no schedule of "recompute on lesson change" survives
+     * the next mutation someone forgets. Shared with the five raw-SQL reads in
+     * other slices via {@link com.bvisionry.common.progress.CourseProgressSql}.
+     *
+     * <p>A patch on the record rather than a parameter on {@code toDto}: the
+     * ArchUnit ratchet freezes the exact signature that may name a
+     * {@code catalog.Course}, and a new one is a new frozen violation.
+     */
+    private EnrollmentDto live(EnrollmentDto dto, Enrollment e, Map<UUID, Integer> livePct) {
+        return new EnrollmentDto(dto.id(), dto.courseId(), dto.courseTitle(), dto.courseSlug(),
+                dto.status(), livePct.getOrDefault(e.getId(), e.getProgressPct()),
+                dto.enrolledAt(), dto.completedAt());
+    }
+
+    private EnrollmentDto live(EnrollmentDto dto, Enrollment e) {
+        return live(dto, e, livePct(List.of(e)));
+    }
+
+    /** See {@link #live}. Falls back to the stored value for any row not returned. */
+    private Map<UUID, Integer> livePct(List<Enrollment> list) {
+        if (list.isEmpty()) {
+            return Map.of();
+        }
+        return enrollments.livePct(list.stream().map(Enrollment::getId).toList())
+                .stream()
+                .collect(Collectors.toMap(EnrollmentRepository.LivePct::getId,
+                        EnrollmentRepository.LivePct::getPct));
     }
 
     private LearnViewDto.SectionView toSectionView(Section s, Set<UUID> completed) {

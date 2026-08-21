@@ -45,10 +45,16 @@ public class PlatformAnalyticsService {
                         .multiply(BigDecimal.valueOf(100))
                         .divide(BigDecimal.valueOf(totalSubmissions), 2, RoundingMode.HALF_UP);
 
-        long premiumOrgs = organizationRepository
-                .countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.PREMIUM);
+        // "Premium" here has always meant "paying", which since V156 spans three
+        // tiers (Starter / Growth / Founder Success). Derived by subtraction
+        // rather than a countByTierNot query for two reasons: a new repository
+        // method would be a BRAND-NEW cross-feature edge under ArchUnit rule 1
+        // (the frozen store is never-write, and both calls below are already in
+        // it), and subtraction cannot silently drop a tier when a fourth plan
+        // is added — an enumerated query can.
         long freeOrgs = organizationRepository
                 .countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.FREE);
+        long premiumOrgs = totalOrgs - freeOrgs;
 
         BigDecimal avgScore = overallSummaryRepository.findPlatformAverageScore();
         if (avgScore == null) avgScore = BigDecimal.ZERO;

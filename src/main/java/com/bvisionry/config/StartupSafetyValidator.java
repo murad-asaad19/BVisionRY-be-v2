@@ -64,6 +64,7 @@ public class StartupSafetyValidator implements InitializingBean {
     private final String proxySharedSecret;
     private final String vapidPrivateKey;
     private final String minioSecretKey;
+    private final boolean aiMockEnabled;
 
     public StartupSafetyValidator(
             Environment environment,
@@ -72,7 +73,8 @@ public class StartupSafetyValidator implements InitializingBean {
             @Value("${bvisionry.encryption.secret-key:}") String encryptionKey,
             @Value("${bvisionry.proxy.shared-secret:}") String proxySharedSecret,
             @Value("${bvisionry.push.vapid.private-key:}") String vapidPrivateKey,
-            @Value("${bvisionry.minio.secret-key:}") String minioSecretKey) {
+            @Value("${bvisionry.minio.secret-key:}") String minioSecretKey,
+            @Value("${bvisionry.ai.mock.enabled:false}") boolean aiMockEnabled) {
         this.environment = environment;
         this.cookiesSecure = cookiesSecure;
         this.jwtSecret = jwtSecret;
@@ -80,6 +82,7 @@ public class StartupSafetyValidator implements InitializingBean {
         this.proxySharedSecret = proxySharedSecret;
         this.vapidPrivateKey = vapidPrivateKey;
         this.minioSecretKey = minioSecretKey;
+        this.aiMockEnabled = aiMockEnabled;
     }
 
     @Override
@@ -94,6 +97,21 @@ public class StartupSafetyValidator implements InitializingBean {
                     "Refusing to start: 'prod' profile is active but bvisionry.security.cookies.secure=false. "
                             + "Auth cookies would be sent without the Secure flag — this usually means prod is "
                             + "running with dev configuration.");
+        }
+        // The AI transport is not a secret, so it gets its own check: the failure
+        // it prevents is customers being served CANNED narratives from a green,
+        // fully healthy-looking deployment. Nothing else would report it — the
+        // mock answers every call successfully. This became reachable when the
+        // switch moved from "remember to add the mock profile" to a property,
+        // because `application-mock.properties` is profile-specific and so beats
+        // `application-prod.properties` on a `prod,mock` boot, and because any
+        // BVISIONRY_AI_MOCK_ENABLED=true in the environment wins outright.
+        if (aiMockEnabled) {
+            throw new IllegalStateException(
+                    "Refusing to start: 'prod' profile is active but bvisionry.ai.mock.enabled=true. "
+                            + "Every AI result would be canned static text with no provider call, and nothing "
+                            + "downstream would report it. Remove the 'mock' profile from SPRING_PROFILES_ACTIVE "
+                            + "and unset BVISIONRY_AI_MOCK_ENABLED.");
         }
         // One row per guarded secret: adding the next one is a single entry here.
         // requiredInProd=false means blank is acceptable ("feature not configured").
@@ -125,7 +143,8 @@ public class StartupSafetyValidator implements InitializingBean {
             }
         }
 
-        log.info("StartupSafetyValidator: production safety checks passed (secure cookies + non-default secrets).");
+        log.info("StartupSafetyValidator: production safety checks passed "
+                + "(secure cookies + non-default secrets + live AI transport).");
     }
 
     private record SecretCheck(String value, boolean requiredInProd, Set<String> blockedValues, String message) {}

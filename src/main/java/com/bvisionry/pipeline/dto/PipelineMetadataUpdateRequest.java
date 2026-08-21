@@ -11,6 +11,10 @@ public record PipelineMetadataUpdateRequest(
         @Size(max = 5000, message = "Description must be at most 5000 characters")
         String description,
 
+        /** Short code for column headers ("MRA"); blank/absent clears it. */
+        @Size(max = 12, message = "Abbreviation must be at most 12 characters")
+        String abbreviation,
+
         @Size(max = 20000, message = "Free tier prompt must be at most 20000 characters")
         String freeTierPrompt,
 

@@ -1,6 +1,6 @@
 package com.bvisionry.upgrade;
 
-import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.upgrade.UpgradePromptLoader.UpgradePrompt;
 import com.bvisionry.upgrade.dto.UpgradeRequestCreateRequest;
 import com.bvisionry.upgrade.dto.UpgradeRequestResponse;
@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 @PreAuthorize("isAuthenticated()")
 public class UpgradeRequestController {
 
+    private final CurrentUserAccessor currentUser;
     private final UpgradeRequestService service;
     private final UpgradePromptService promptService;
 
@@ -34,7 +35,7 @@ public class UpgradeRequestController {
     @PostMapping
     public ResponseEntity<UpgradeRequestResponse> create(
             @Valid @RequestBody UpgradeRequestCreateRequest req) {
-        UpgradeRequestResponse created = service.create(SecurityUtils.getCurrentUserId(), req);
+        UpgradeRequestResponse created = service.create(currentUser.require().userId(), req);
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
@@ -45,7 +46,7 @@ public class UpgradeRequestController {
      */
     @GetMapping("/latest")
     public ResponseEntity<UpgradeRequestResponse> latest() {
-        return service.findLatestForCurrentUser(SecurityUtils.getCurrentUserId())
+        return service.findLatestForCurrentUser(currentUser.require().userId())
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.noContent().build());
     }

@@ -6,7 +6,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.0.5</version>
+        <version>4.0.7</version>
         <relativePath/>
     </parent>
 
@@ -23,7 +23,69 @@
         <resilience4j.version>2.2.0</resilience4j.version>
         <!-- 7.x is the line that targets Spring Boot 4 / Spring 7 and requires JVM 17+. -->
         <shedlock.version>7.7.0</shedlock.version>
+        <!-- OpenSAML is declared `optional` by spring-security-saml2-service-provider,
+             so the two artifacts we compile against must be requested explicitly. Pinned
+             exactly (never a range) because they resolve from the Shibboleth repository
+             declared below, where a floating version is a supply-chain surface. NOTE this
+             pins only the two coordinates we declare; their transitives (opensaml-core-*,
+             opensaml-xmlsec-*, net.shibboleth:shib-*) are pinned by OpenSAML's own poms,
+             not here — `./mvnw dependency:list` is the way to see the resolved set. -->
+        <opensaml.version>5.1.6</opensaml.version>
+
+        <!-- SECURITY BUMPS over what spring-boot-starter-parent 4.0.7 manages.
+             Each one is an advisory the OSV gate below (see osv-scanner.toml)
+             flagged as FIXABLE, so it is fixed here rather than baselined —
+             the baseline is for debt that has no upgrade, and adding an id to
+             it that a property override would close is accepted risk nobody
+             needed to accept. Drop each line once the parent's own managed
+             version reaches it (`./mvnw help:evaluate -Dexpression=<prop>`). -->
+        <!-- GHSA-hjcp-jmpx-g3qm (5.3) — parent manages 5.5.2. -->
+        <httpclient5.version>5.6.3</httpclient5.version>
+        <!-- GHSA-hf6x-8p5f-cgmf + GHSA-v3jc-474w-2wm6 (7.5) — parent manages
+             5.3.6, and this property versions httpcore5 and httpcore5-h2. -->
+        <httpcore5.version>5.4.3</httpcore5.version>
+        <!-- GHSA-qv9r-c865-cp47 (6.3) — parent manages 2.25.4. -->
+        <log4j2.version>2.25.5</log4j2.version>
     </properties>
+
+    <!--
+      Maven Central carried OpenSAML up to 4.0.1 and stops there; the 5.x line — the only
+      one Spring Security 7 supports — is published solely by the Shibboleth Foundation,
+      so spring-security-saml2-service-provider cannot resolve without this repository.
+
+      RELEASES ONLY: snapshots are disabled, so a build can never silently pick up an
+      unreviewed artifact.
+
+      CONTAINMENT. A POM-declared repository is searched BEFORE the inherited Central
+      (`mvn help:effective-pom` shows the order as shibboleth-releases, central), so
+      declaring it alone would send every artifact in the build to Shibboleth first on a
+      cold cache, and take its checksums from there. That is closed in `.mvn/maven.config`
+      by Resolver's groupId remote-repository filter: `.mvn/rrf/groupId-shibboleth-releases.txt`
+      allows exactly `org.opensaml` and `net.shibboleth` from this repository, and nothing
+      else is ever requested from it. Central has no filter file, and `noInputOutcome`
+      defaults to true, so Central stays unfiltered and still serves the whole build.
+      The allowlist was generated, not guessed, with
+      `-Daether.remoteRepositoryFilter.groupId.record=true`.
+
+      TRUST. Containment says WHAT may come from here; it does not say the bytes are the
+      bytes we reviewed. `.mvn/checksums/checksums-shibboleth-releases.sha1` pins every
+      artifact this repository serves, and Resolver refuses any mismatch — including on a
+      warm-cache offline build. Bumping ${opensaml.version} therefore also means
+      re-recording that file; `.mvn/maven.config` carries the command.
+    -->
+    <repositories>
+        <repository>
+            <id>shibboleth-releases</id>
+            <name>Shibboleth Releases</name>
+            <url>https://build.shibboleth.net/maven/releases/</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
 
     <dependencies>
         <!-- Web -->
@@ -75,6 +137,44 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!-- Enterprise SSO. Both are Spring Security's own modules (versions managed by
+             the Boot parent), deliberately NOT the `spring-boot-starter-oauth2-client`
+             starter: registrations are per-tenant rows in the DB, so the starter's
+             properties-driven auto-config has nothing to build and would only add a
+             second, competing ClientRegistrationRepository source.
+
+             saml2-service-provider brings OpenSaml5AuthenticationProvider, which does the
+             signature / audience / InResponseTo / recipient validation. oauth2-client
+             brings OidcAuthorizationCodeAuthenticationProvider + (transitively)
+             spring-security-oauth2-jose, which verifies the id_token's JWS against the
+             issuer's JWKS. Neither validation is ever hand-rolled here. -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-saml2-service-provider</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-client</artifactId>
+        </dependency>
+        <!-- oauth2-client declares this `optional`, but OidcAuthorizationCodeAuthenticationProvider
+             needs it: it is the JWS/JWKS verification of the id_token. Omitting it would leave
+             the OIDC half unable to verify a signature at all. -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-jose</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.opensaml</groupId>
+            <artifactId>opensaml-saml-api</artifactId>
+            <version>${opensaml.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.opensaml</groupId>
+            <artifactId>opensaml-saml-impl</artifactId>
+            <version>${opensaml.version}</version>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- JWT -->
@@ -158,7 +258,7 @@
         <dependency>
             <groupId>org.apache.poi</groupId>
             <artifactId>poi-ooxml</artifactId>
-            <version>5.3.0</version>
+            <version>5.4.0</version>
             <exclusions>
                 <exclusion>
                     <groupId>org.apache.logging.log4j</groupId>
@@ -171,7 +271,20 @@
         <dependency>
             <groupId>io.minio</groupId>
             <artifactId>minio</artifactId>
-            <version>8.5.14</version>
+            <version>8.6.0</version>
+        </dependency>
+        <!-- minio 8.6.0 moved to okhttp 5.x, which Maven (unlike Gradle) resolves to
+             the "okhttp" root artifact's Kotlin-Multiplatform capability POM — it ships
+             no class files at all (verified: okhttp-5.1.0.jar is 767 bytes). The real
+             JVM implementation is the separately published okhttp-jvm artifact, which
+             okhttp's own pom does not declare as a dependency (unlike okio, which does
+             declare its -jvm split correctly). Pinned to the exact version minio's pom
+             resolves so there is one okhttp version in the tree, just backed by the jar
+             that actually has classes in it. -->
+        <dependency>
+            <groupId>com.squareup.okhttp3</groupId>
+            <artifactId>okhttp-jvm</artifactId>
+            <version>5.1.0</version>
         </dependency>
 
         <!-- AI: LangChain4j — model-agnostic engine. Core carries AiServices +
@@ -257,7 +370,14 @@
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.81</version>
+            <version>1.84</version>
+        </dependency>
+        <!-- Transitive of opensaml-security-api (pinned there at a vulnerable 1.77);
+             declared explicitly to bring it in line with bcprov above. -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>1.84</version>
         </dependency>
         <!-- web-push declares these runtime-scoped, but PushService's API
              surface leaks them (send returns org.apache.http.HttpResponse and
@@ -271,7 +391,7 @@
         <dependency>
             <groupId>org.bitbucket.b_c</groupId>
             <artifactId>jose4j</artifactId>
-            <version>0.7.9</version>
+            <version>0.9.6</version>
         </dependency>
 
         <!-- Test -->

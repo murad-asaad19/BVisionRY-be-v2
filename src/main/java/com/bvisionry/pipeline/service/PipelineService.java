@@ -1,12 +1,12 @@
 package com.bvisionry.pipeline.service;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.assessment.AnswerRepository;
 import com.bvisionry.assessment.AssignmentRepository;
 import com.bvisionry.assessment.PipelineAutoAssignmentRepository;
 import com.bvisionry.assessment.PipelineAutoAssignmentService;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.audit.AuditService;
-import com.bvisionry.auth.SecurityUtils;
 import com.bvisionry.common.enums.PillarType;
 import com.bvisionry.common.enums.PipelineStatus;
 import com.bvisionry.common.enums.QuestionType;
@@ -47,6 +47,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class PipelineService {
 
+    private final CurrentUserAccessor currentUser;
     private final PipelineRepository pipelineRepository;
     private final AuditService auditService;
     private final AssignmentRepository assignmentRepository;
@@ -60,7 +61,7 @@ public class PipelineService {
     public PipelineResponse create(PipelineCreateRequest request) {
         // Derive the creator from the authenticated principal — never trust a
         // client-supplied {@code createdBy} field for audit attribution.
-        UUID creatorId = SecurityUtils.getCurrentUserId();
+        UUID creatorId = currentUser.require().userId();
 
         Pipeline pipeline = new Pipeline();
         pipeline.setName(request.name());
@@ -190,6 +191,7 @@ public class PipelineService {
 
         pipeline.setName(request.name());
         pipeline.setDescription(request.description());
+        pipeline.setAbbreviation(blankToNull(request.abbreviation()));
         pipeline.setFreeTierPrompt(request.freeTierPrompt());
         pipeline.setOverallSummaryPrompt(request.overallSummaryPrompt());
 
@@ -283,6 +285,10 @@ public class PipelineService {
         Pipeline cloned = new Pipeline();
         cloned.setName(original.getName());
         cloned.setDescription(original.getDescription());
+        // The short code travels with the version: a cohort repointed at the new
+        // one still heads its roster column "MRA → MDA" rather than silently
+        // falling back to the role names.
+        cloned.setAbbreviation(original.getAbbreviation());
         cloned.setCreatedBy(original.getCreatedBy());
         cloned.setStatus(PipelineStatus.DRAFT);
         cloned.setVersion(maxVersion + 1);
@@ -395,21 +401,48 @@ public class PipelineService {
         return cloned;
     }
 
+    /**
+     * The published assessments assigned to ONE organisation — the catalogue
+     * behind the org console's reporting selectors (Dashboard, Insights,
+     * Reports).
+     *
+     * <p>Scoped by the org being VIEWED, not by the caller's own org, and
+     * identically for every role. {@link #getPublishedCatalog()} keys off the
+     * caller instead, which meant a SUPER_ADMIN opening one org's dashboard got
+     * every published pipeline on the platform: other tenants' assessments, the
+     * test pipelines somebody published, and two different pipelines sharing a
+     * name with nothing to tell them apart. Picking one of those returned an
+     * all-zeros dashboard indistinguishable from "nobody has started".
+     *
+     * <p>Sub-org aware via
+     * {@code AssignmentRepository#findDistinctPipelineIdsByOrganizationId}:
+     * admins sit on the root org while assignments live in sub-orgs (V136), so
+     * a root-only match would always be empty.
+     *
+     * <p>NOT for the assigning and authoring pickers — assign-dialog, the
+     * course lesson picker, public assessments and the cohort task picker all
+     * need the full catalogue, because you cannot assign a pipeline that this
+     * list would already have filtered out.
+     */
+    @Transactional(readOnly = true)
+    public List<PipelineSummaryResponse> getPublishedCatalogForOrg(UUID orgId) {
+        List<UUID> assignedIds = assignmentRepository
+                .findDistinctPipelineIdsByOrganizationId(orgId);
+        if (assignedIds.isEmpty()) {
+            return List.of();
+        }
+        return toSummaryResponsesWithOrgs(
+                pipelineRepository.findByStatusAndIdIn(PipelineStatus.PUBLISHED, assignedIds));
+    }
+
     @Transactional(readOnly = true)
     public List<PipelineSummaryResponse> getPublishedCatalog() {
         // Org admins only see assessments assigned to their org; super admins see all.
-        com.bvisionry.auth.entity.User caller = SecurityUtils.getCurrentUser();
-        if (caller.getRole() == com.bvisionry.common.enums.UserRole.ORG_ADMIN) {
-            if (caller.getOrganization() == null) {
-                return List.of();
-            }
-            List<UUID> assignedIds = assignmentRepository
-                    .findDistinctPipelineIdsByOrganizationId(caller.getOrganization().getId());
-            if (assignedIds.isEmpty()) {
-                return List.of();
-            }
-            return toSummaryResponsesWithOrgs(
-                    pipelineRepository.findByStatusAndIdIn(PipelineStatus.PUBLISHED, assignedIds));
+        // Delegates the org-scoped half rather than repeating the assignment
+        // lookup: one cross-feature reach into the assessment package, not two.
+        com.bvisionry.common.security.CurrentUser caller = currentUser.require();
+        if (com.bvisionry.common.enums.UserRole.ORG_ADMIN.name().equals(caller.role())) {
+            return caller.orgId() == null ? List.of() : getPublishedCatalogForOrg(caller.orgId());
         }
         return toSummaryResponsesWithOrgs(pipelineRepository.findByStatus(PipelineStatus.PUBLISHED));
     }
@@ -465,6 +498,16 @@ public class PipelineService {
 
         Pipeline saved = pipelineRepository.save(pipeline);
         return toFullResponse(saved);
+    }
+
+    /**
+     * Whether this pipeline is assigned to {@code orgId} (or one of its
+     * sub-orgs) — the tenancy predicate behind both the published catalog and
+     * the band read. Kept next to {@link #getPublishedCatalog()} so the two
+     * cannot answer "is this pipeline yours?" differently.
+     */
+    boolean isAssignedToOrg(UUID pipelineId, UUID orgId) {
+        return pipelineRepository.countAssignmentsToOrg(pipelineId, orgId) > 0;
     }
 
     void requireDraft(Pipeline pipeline) {
@@ -526,7 +569,7 @@ public class PipelineService {
         boolean includePostCompletion = isSuperAdminSafe();
 
         return new PipelineResponse(
-                p.getId(), p.getName(), p.getDescription(), p.getVersion(),
+                p.getId(), p.getName(), p.getDescription(), p.getAbbreviation(), p.getVersion(),
                 p.getStatus(), p.getCreatedBy(),
                 p.getFreeTierPrompt(),
                 p.getOverallSummaryPrompt(),
@@ -537,9 +580,14 @@ public class PipelineService {
         );
     }
 
-    private static boolean isSuperAdminSafe() {
+    /** Optional free text: an emptied form field clears the column, never stores "". */
+    private static String blankToNull(String s) {
+        return (s == null || s.isBlank()) ? null : s.trim();
+    }
+
+    private boolean isSuperAdminSafe() {
         try {
-            return SecurityUtils.isSuperAdmin();
+            return currentUser.require().isSuperAdmin();
         } catch (RuntimeException ignored) {
             return false;
         }
@@ -635,7 +683,7 @@ public class PipelineService {
                 ? (int) p.getPillars().stream().filter(pillar -> pillar.getType() != PillarType.PERSONAL).count()
                 : 0;
         return new PipelineSummaryResponse(
-                p.getId(), p.getName(), p.getDescription(), p.getVersion(),
+                p.getId(), p.getName(), p.getDescription(), p.getAbbreviation(), p.getVersion(),
                 p.getStatus(), p.getCreatedBy(),
                 pillarCount, assignedOrganizations, p.getCreatedAt(), p.getUpdatedAt()
         );

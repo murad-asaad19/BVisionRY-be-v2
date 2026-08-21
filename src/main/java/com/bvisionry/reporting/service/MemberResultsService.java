@@ -1,8 +1,9 @@
 package com.bvisionry.reporting.service;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.assessment.entity.Submission;
-import com.bvisionry.auth.SecurityUtils;
+import com.bvisionry.common.security.PremiumFeatureGuard;
 import com.bvisionry.common.enums.SubmissionStatus;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.config.CacheConfig;
@@ -39,6 +40,7 @@ import java.util.stream.Collectors;
 @Transactional(readOnly = true)
 public class MemberResultsService {
 
+    private final CurrentUserAccessor currentUser;
     private final SubmissionRepository submissionRepository;
     private final PillarEvaluationRepository pillarEvaluationRepository;
     private final OverallSummaryRepository overallSummaryRepository;
@@ -79,7 +81,7 @@ public class MemberResultsService {
         }
         CachedMemberResults cached = self.getCachedResults(submissionId);
         boolean isPremium = premiumFeatureGuard.isPremiumOrSuperAdmin(cached.organizationId());
-        boolean isSuperAdmin = SecurityUtils.isSuperAdmin();
+        boolean isSuperAdmin = currentUser.require().isSuperAdmin();
         return applyViewerScope(cached.response(), isPremium, isSuperAdmin);
     }
 
@@ -174,11 +176,14 @@ public class MemberResultsService {
                                                    boolean premium,
                                                    boolean superAdmin) {
         boolean premiumDetailUnavailable = premium && isLegacyBlankPremium(r);
+        // The lists are never null on the wire: the API contract says array,
+        // and a cached payload may carry null (see isNullOrEmpty) — passing
+        // that through crashed the web report on strengths.length.
         return new MemberResultsResponse(
                 r.submissionId(), r.pipelineName(), r.overallScore(), r.summaryNarrative(),
-                premium ? r.strengths() : List.of(),
-                premium ? r.developmentAreas() : List.of(),
-                r.pillarScores(),
+                premium ? orEmpty(r.strengths()) : List.of(),
+                premium ? orEmpty(r.developmentAreas()) : List.of(),
+                orEmpty(r.pillarScores()),
                 premium, r.evaluatedAt(), r.freeTierSummary(), r.topStrengths(),
                 r.maturityIndication(), r.premiumTeaser(),
                 premium ? r.corePattern() : null,
@@ -207,6 +212,10 @@ public class MemberResultsService {
 
     private boolean isNullOrEmpty(List<String> list) {
         return list == null || list.isEmpty();
+    }
+
+    private static <T> List<T> orEmpty(List<T> list) {
+        return list == null ? List.of() : list;
     }
 
     /**

@@ -19,8 +19,9 @@ import java.util.UUID;
 
 /**
  * A review comment on an exercise submission. Anchor semantics: {@link #row} +
- * {@link #column} = one cell, column only = the whole column, row only = the
- * whole row, neither = the submission overall. Admins open root comments;
+ * {@link #column} = one cell (narrowed to a single LIST entry by
+ * {@link #entryId}), column only = the whole column, row only = the whole
+ * row, neither = the submission overall. Admins open root comments;
  * members reply via {@link #parent}. Status/resolved fields are only
  * meaningful on roots — replies inherit their root's lifecycle.
  */
@@ -53,6 +54,15 @@ public class ExerciseComment extends BaseEntity {
 
     @Column(nullable = false, columnDefinition = "TEXT")
     private String body;
+
+    /**
+     * Which entry of a LIST cell this thread is about, by the entry's stable
+     * id; null = the whole cell. Only meaningful when both {@link #row} and
+     * {@link #column} are set. Survives the member editing that entry's text
+     * or removing the ones around it.
+     */
+    @Column(name = "entry_id")
+    private String entryId;
 
     /**
      * The commented cell's value frozen at comment time, so the thread stays

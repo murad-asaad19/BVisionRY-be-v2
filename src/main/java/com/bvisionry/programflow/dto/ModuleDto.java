@@ -11,6 +11,10 @@ public record ModuleDto(
         UUID id,
         String name,
         String summary,
+        /** The module's pillar/area chip (free label this phase, spec §2.3). */
+        String pillarLabel,
+        /** False = always-on material; the "Week NN" kicker is suppressed. */
+        boolean paced,
         int position,
         ModuleLockMode lockMode,
         OffsetDateTime unlockAt,

@@ -14,6 +14,7 @@ import com.bvisionry.assessment.entity.Submission;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.QuestionType;
 import com.bvisionry.common.enums.SubmissionStatus;
+import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.evaluation.EvaluationService;
@@ -26,9 +27,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -50,7 +53,7 @@ class AssessmentServiceTest {
     @Mock private EvaluationService evaluationService;
     @Mock private PostCompletionLinkResolver postCompletionLinkResolver;
     @Mock private com.bvisionry.audit.AuditService auditService;
-    @Mock private com.bvisionry.notification.push.PushNotificationService pushNotificationService;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private AssessmentService assessmentService;
@@ -290,6 +293,17 @@ class AssessmentServiceTest {
             assertThat(result.status()).isEqualTo(SubmissionStatus.SUBMITTED);
             assertThat(result.submittedAt()).isNotNull();
             verify(evaluationService).evaluateSubmissionAsync(submissionId);
+
+            // Published, not called directly (see the field comment on
+            // AssessmentService.eventPublisher) — ProgramFlowPushHandler is what
+            // turns this into the org-admin push AND, new in this pass, the
+            // coach-of-this-learner push.
+            ArgumentCaptor<ProgramFlowEvents.AssessmentSubmitted> captor =
+                    ArgumentCaptor.forClass(ProgramFlowEvents.AssessmentSubmitted.class);
+            verify(eventPublisher).publishEvent(captor.capture());
+            assertThat(captor.getValue().orgId()).isEqualTo(assignment.getOrganization().getId());
+            assertThat(captor.getValue().learnerId()).isEqualTo(userId);
+            assertThat(captor.getValue().pipelineName()).isEqualTo("Test Pipeline");
         }
 
         @Test

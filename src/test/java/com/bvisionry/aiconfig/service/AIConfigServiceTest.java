@@ -5,7 +5,8 @@ import com.bvisionry.aiconfig.dto.AIConfigUpdateRequest;
 import com.bvisionry.aiconfig.dto.ApiKeyUpdateRequest;
 import com.bvisionry.aiconfig.entity.AIConfiguration;
 import com.bvisionry.aiconfig.repository.AIConfigurationRepository;
-import com.bvisionry.audit.AuditService;
+import com.bvisionry.common.audit.AuditLogger;
+import com.bvisionry.common.crypto.SecretEncryptionService;
 import com.bvisionry.common.enums.AIProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,10 +32,10 @@ class AIConfigServiceTest {
     private AIConfigurationRepository configRepository;
 
     @Mock
-    private ApiKeyEncryptionService encryptionService;
+    private SecretEncryptionService encryptionService;
 
     @Mock
-    private AuditService auditService;
+    private AuditLogger auditLogger;
 
     @InjectMocks
     private AIConfigService configService;
@@ -169,7 +170,7 @@ class AIConfigServiceTest {
         assertThat(captor.getValue().getOpenRouterApiKeyEncrypted()).isEqualTo("encrypted-or-new");
         assertThat(captor.getValue().getAnthropicApiKeyEncrypted()).isNull();
 
-        verify(auditService).log(any(), eq(null), eq("API_KEY_UPDATED"), eq("AIConfiguration"), any(), any());
+        verify(auditLogger).log(any(), eq(null), eq("API_KEY_UPDATED"), eq("AIConfiguration"), any(), any());
     }
 
     @Test

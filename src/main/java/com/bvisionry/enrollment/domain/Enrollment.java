@@ -1,5 +1,7 @@
 package com.bvisionry.enrollment.domain;
 
+import com.bvisionry.common.enums.EnrollmentSource;
+
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -59,6 +61,28 @@ public class Enrollment {
 
     @Column(name = "completed_at")
     private OffsetDateTime completedAt;
+
+    /**
+     * WHY the member has this course (spec §3, V168). Defaults to SELF — the
+     * only path that existed before an admin or a rule could put someone on a
+     * course, and the weakest claim, so a mis-stamped row under-states rather
+     * than over-states.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "source", nullable = false, length = 20)
+    private EnrollmentSource source = EnrollmentSource.SELF;
+
+    /** §7b: who assigned it. Null for SELF and for the AI engine. */
+    @Column(name = "assigned_by")
+    private UUID assignedBy;
+
+    /** Spec §3: optional, same field as the exercise dialog. Overdue shows in the journey. */
+    @Column(name = "deadline")
+    private OffsetDateTime deadline;
+
+    /** Spec §3/§11: required gates journey progress, and is mutable after assignment. */
+    @Column(name = "required", nullable = false)
+    private boolean required = false;
 
     @OneToMany(mappedBy = "enrollment", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private List<ContentProgress> contentProgresses = new ArrayList<>();

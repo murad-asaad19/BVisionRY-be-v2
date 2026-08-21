@@ -3,7 +3,9 @@ package com.bvisionry.programflow.domain;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import org.hibernate.annotations.ColumnDefault;
@@ -12,7 +14,9 @@ import org.hibernate.annotations.Generated;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
 import jakarta.persistence.CascadeType;
+import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
+import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
@@ -52,6 +56,24 @@ public class ProgramTask {
     @Column(name = "name", nullable = false, length = 200)
     private String name;
 
+    /** What kind of work this task is; LESSON keeps the form-fields flow. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "task_type", nullable = false, length = 20)
+    private ProgramTaskType taskType = ProgramTaskType.LESSON;
+
+    /**
+     * The referenced course / exercise template / pipeline / workshop / survey
+     * — a bare uuid (no FK across slices). Null for LESSON; required before a
+     * non-LESSON task may go LIVE.
+     */
+    @Column(name = "ref_id")
+    private UUID refId;
+
+    /** Spec §5 milestone role; set iff {@link #taskType} is ASSESSMENT. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "milestone_role", length = 20)
+    private MilestoneRole milestoneRole;
+
     @Column(name = "due_date")
     private LocalDate dueDate;
 
@@ -72,6 +94,18 @@ public class ProgramTask {
     @OneToMany(mappedBy = "task", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @OrderBy("position ASC")
     private List<ProgramTaskField> fields = new ArrayList<>();
+
+    /**
+     * The pillars this task grows (redesign spec §1) — DISTANCE pillar ids, so a
+     * tag lines up 1:1 with the narrative it feeds. Optional and never set on an
+     * ASSESSMENT task: a pipeline assessment is already pillar-linked through
+     * its pipeline. Read-only here — the board Save's raw-SQL restore is the
+     * only writer, exactly like the module audience.
+     */
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "program_task_pillars", joinColumns = @JoinColumn(name = "task_id"))
+    @Column(name = "pillar_id", nullable = false)
+    private Set<UUID> pillarIds = new HashSet<>();
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;

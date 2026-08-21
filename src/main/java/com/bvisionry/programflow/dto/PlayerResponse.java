@@ -15,7 +15,13 @@ public record PlayerResponse(
         LocalDate dueDate,
         UUID moduleId,
         String moduleName,
-        int moduleIndex,
+        /**
+         * The module's 1-based position counting ONLY paced modules, so the
+         * kicker reads "Week 03" for the third week however many always-on
+         * sections sit between them. 0 when the module itself is unpaced and
+         * has no stage number to show.
+         */
+        int stageNumber,
         String stageLabel,
         int dueSoonDays,
         List<FieldDto> fields,

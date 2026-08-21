@@ -97,7 +97,7 @@ class TrialServiceTest {
 
         OrganizationResponse resp = trialService.startTrial(orgId, 7, actorId);
 
-        assertThat(resp.subscriptionTier()).isEqualTo(SubscriptionTier.PREMIUM);
+        assertThat(resp.subscriptionTier()).isEqualTo(SubscriptionTier.GROWTH);
         assertThat(resp.trialEndsAt()).isAfter(Instant.now());
         assertThat(resp.trialEndsAt()).isBefore(Instant.now().plus(8, ChronoUnit.DAYS));
 
@@ -110,7 +110,7 @@ class TrialServiceTest {
 
     @Test
     void startTrial_alreadyOnTrial_throws() {
-        freeOrg.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        freeOrg.setSubscriptionTier(SubscriptionTier.GROWTH);
         freeOrg.setTrialEndsAt(Instant.now().plus(3, ChronoUnit.DAYS));
         when(orgRepo.findById(orgId)).thenReturn(Optional.of(freeOrg));
 
@@ -121,13 +121,13 @@ class TrialServiceTest {
 
     @Test
     void startTrial_alreadyPremiumNoTrial_throws() {
-        freeOrg.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        freeOrg.setSubscriptionTier(SubscriptionTier.GROWTH);
         freeOrg.setTrialEndsAt(null);
         when(orgRepo.findById(orgId)).thenReturn(Optional.of(freeOrg));
 
         assertThatThrownBy(() -> trialService.startTrial(orgId, 7, actorId))
                 .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("already on Premium");
+                .hasMessageContaining("already on the Growth plan");
     }
 
     @Test
@@ -181,7 +181,7 @@ class TrialServiceTest {
     @Test
     void extendTrial_addsDaysToExisting_logsAudit() {
         Instant currentEnd = Instant.now().plus(3, ChronoUnit.DAYS);
-        freeOrg.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        freeOrg.setSubscriptionTier(SubscriptionTier.GROWTH);
         freeOrg.setTrialEndsAt(currentEnd);
         when(orgRepo.findById(orgId)).thenReturn(Optional.of(freeOrg));
         when(orgRepo.save(any(Organization.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -209,7 +209,7 @@ class TrialServiceTest {
     @Test
     void endTrialEarly_setsFreeAndTrialEndsNow_logsAudit() {
         Instant futureEnd = Instant.now().plus(5, ChronoUnit.DAYS);
-        freeOrg.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        freeOrg.setSubscriptionTier(SubscriptionTier.GROWTH);
         freeOrg.setTrialEndsAt(futureEnd);
         when(orgRepo.findById(orgId)).thenReturn(Optional.of(freeOrg));
         when(orgRepo.save(any(Organization.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -235,9 +235,9 @@ class TrialServiceTest {
 
     @Test
     void expireLapsed_flipsExpiredTrialsToFree_logsAuditPerOrg_emailsAdmins() {
-        Organization a = new Organization(); a.setId(UUID.randomUUID()); a.setName("A"); a.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        Organization a = new Organization(); a.setId(UUID.randomUUID()); a.setName("A"); a.setSubscriptionTier(SubscriptionTier.GROWTH);
         a.setTrialEndsAt(Instant.now().minus(1, ChronoUnit.HOURS));
-        Organization b = new Organization(); b.setId(UUID.randomUUID()); b.setName("B"); b.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        Organization b = new Organization(); b.setId(UUID.randomUUID()); b.setName("B"); b.setSubscriptionTier(SubscriptionTier.GROWTH);
         b.setTrialEndsAt(Instant.now().minus(2, ChronoUnit.HOURS));
         when(orgRepo.findLapsedTrials(any())).thenReturn(List.of(a, b));
         // expireOne re-reads each org by id inside its own REQUIRES_NEW transaction.
@@ -277,7 +277,7 @@ class TrialServiceTest {
     @Test
     void expireLapsed_fallsBackToAllMembersWhenNoOrgAdmin() {
         Organization c = new Organization(); c.setId(UUID.randomUUID()); c.setName("C");
-        c.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        c.setSubscriptionTier(SubscriptionTier.GROWTH);
         c.setTrialEndsAt(Instant.now().minus(1, ChronoUnit.HOURS));
         when(orgRepo.findLapsedTrials(any())).thenReturn(List.of(c));
         when(orgRepo.findById(c.getId())).thenReturn(Optional.of(c));
@@ -312,7 +312,7 @@ class TrialServiceTest {
         Organization directPremium = new Organization();
         directPremium.setId(UUID.randomUUID());
         directPremium.setName("Test Organization");
-        directPremium.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        directPremium.setSubscriptionTier(SubscriptionTier.GROWTH);
         directPremium.setTrialEndsAt(null);
         assertThat(directPremium.isOnTrial()).isFalse();
 
@@ -323,7 +323,7 @@ class TrialServiceTest {
 
         assertThat(expired).isEmpty();
         // Tier untouched — the directly-promoted PREMIUM stays PREMIUM.
-        assertThat(directPremium.getSubscriptionTier()).isEqualTo(SubscriptionTier.PREMIUM);
+        assertThat(directPremium.getSubscriptionTier()).isEqualTo(SubscriptionTier.GROWTH);
         verifyNoInteractions(emailService);
     }
 
@@ -337,7 +337,7 @@ class TrialServiceTest {
         Organization genuineTrial = new Organization();
         genuineTrial.setId(UUID.randomUUID());
         genuineTrial.setName("Trialing Co");
-        genuineTrial.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        genuineTrial.setSubscriptionTier(SubscriptionTier.GROWTH);
         genuineTrial.setTrialEndsAt(Instant.now().minus(1, ChronoUnit.HOURS));
         when(orgRepo.findLapsedTrials(any())).thenReturn(List.of(genuineTrial));
         when(orgRepo.findById(genuineTrial.getId())).thenReturn(Optional.of(genuineTrial));
@@ -360,7 +360,7 @@ class TrialServiceTest {
         Organization org = new Organization();
         org.setId(UUID.randomUUID());
         org.setName("EndingSoon Co");
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         Instant endsAt = Instant.now().plus(2, ChronoUnit.DAYS);
         org.setTrialEndsAt(endsAt);
         when(orgRepo.findEndingTrialsWithin(any(), any())).thenReturn(List.of(org));
@@ -396,7 +396,7 @@ class TrialServiceTest {
         Organization org = new Organization();
         org.setId(UUID.randomUUID());
         org.setName("AlreadyNotified Co");
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         Instant endsAt = Instant.now().plus(2, ChronoUnit.DAYS);
         org.setTrialEndsAt(endsAt);
         when(orgRepo.findEndingTrialsWithin(any(), any())).thenReturn(List.of(org));
@@ -421,7 +421,7 @@ class TrialServiceTest {
         Organization org = new Organization();
         org.setId(UUID.randomUUID());
         org.setName("NewCycle Co");
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         // Trial extended — ends 2 days from now, but a stale notification exists from
         // a previous trial cycle 30 days ago.
         Instant endsAt = Instant.now().plus(2, ChronoUnit.DAYS);

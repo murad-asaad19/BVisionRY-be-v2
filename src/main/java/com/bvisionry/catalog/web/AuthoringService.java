@@ -1,5 +1,6 @@
 package com.bvisionry.catalog.web;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -8,8 +9,7 @@ import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.bvisionry.auth.SecurityUtils;
-import com.bvisionry.auth.entity.User;
+import com.bvisionry.common.security.OrgScope;
 import com.bvisionry.catalog.domain.Content;
 import com.bvisionry.catalog.domain.ContentType;
 import com.bvisionry.catalog.domain.Course;
@@ -32,6 +32,7 @@ import com.bvisionry.catalog.repository.ContentRepository;
 import com.bvisionry.catalog.repository.CourseRepository;
 import com.bvisionry.catalog.repository.SectionRepository;
 import com.bvisionry.catalog.repository.TagRepository;
+import com.bvisionry.common.exception.BadRequestException;
 
 /**
  * Write-side service for course authoring (SUPER_ADMIN / INSTRUCTOR only).
@@ -44,17 +45,23 @@ public class AuthoringService {
     private final ContentRepository contents;
     private final TagRepository tags;
     private final CourseMapper mapper;
+    private final OrgScope orgScope;
+    private final CurrentUserAccessor currentUser;
 
     public AuthoringService(CourseRepository courses,
                             SectionRepository sections,
                             ContentRepository contents,
                             TagRepository tags,
-                            CourseMapper mapper) {
+                            CourseMapper mapper,
+                            OrgScope orgScope,
+                            CurrentUserAccessor currentUser) {
         this.courses = courses;
         this.sections = sections;
         this.contents = contents;
         this.tags = tags;
         this.mapper = mapper;
+        this.orgScope = orgScope;
+        this.currentUser = currentUser;
     }
 
     // -------------------------------------------------------------------------
@@ -65,7 +72,7 @@ public class AuthoringService {
     public Section createSection(String slug, UpsertSectionRequest req) {
         var course = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
-        SecurityUtils.requireOrgAccess(course.getOrgId());
+        orgScope.require(course.getOrgId());
         Section s = new Section();
         s.setCourse(course);
         s.setOrgId(course.getOrgId());
@@ -78,7 +85,7 @@ public class AuthoringService {
     public Section updateSection(String sectionId, UpsertSectionRequest req) {
         Section s = sections.findById(UUID.fromString(sectionId))
                 .orElseThrow(() -> new IllegalArgumentException("Section not found: " + sectionId));
-        SecurityUtils.requireOrgAccess(s.getOrgId());
+        orgScope.require(s.getOrgId());
         s.setTitle(req.title());
         s.setSequence(req.sequence());
         return sections.save(s);
@@ -90,7 +97,7 @@ public class AuthoringService {
         // controller is role-gated but not org-scoped — see class header).
         Section s = sections.findById(UUID.fromString(sectionId))
                 .orElseThrow(() -> new IllegalArgumentException("Section not found: " + sectionId));
-        SecurityUtils.requireOrgAccess(s.getOrgId());
+        orgScope.require(s.getOrgId());
         sections.delete(s);
     }
 
@@ -98,7 +105,7 @@ public class AuthoringService {
     public void reorderSections(String slug, ReorderRequest req) {
         Course course = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
-        SecurityUtils.requireOrgAccess(course.getOrgId());
+        orgScope.require(course.getOrgId());
         List<String> ids = req.ids();
         for (int i = 0; i < ids.size(); i++) {
             int seq = i;
@@ -122,7 +129,7 @@ public class AuthoringService {
     public Content createContent(String sectionId, UpsertContentRequest req) {
         Section section = sections.findById(UUID.fromString(sectionId))
                 .orElseThrow(() -> new IllegalArgumentException("Section not found: " + sectionId));
-        SecurityUtils.requireOrgAccess(section.getOrgId());
+        orgScope.require(section.getOrgId());
         Content c = new Content();
         c.setSection(section);
         c.setOrgId(section.getOrgId());
@@ -134,7 +141,7 @@ public class AuthoringService {
     public Content updateContent(String contentId, UpsertContentRequest req) {
         Content c = contents.findById(UUID.fromString(contentId))
                 .orElseThrow(() -> new IllegalArgumentException("Content not found: " + contentId));
-        SecurityUtils.requireOrgAccess(c.getOrgId());
+        orgScope.require(c.getOrgId());
         applyContentRequest(c, req);
         return contents.save(c);
     }
@@ -145,7 +152,7 @@ public class AuthoringService {
         // controller is role-gated but not org-scoped — see class header).
         Content c = contents.findById(UUID.fromString(contentId))
                 .orElseThrow(() -> new IllegalArgumentException("Content not found: " + contentId));
-        SecurityUtils.requireOrgAccess(c.getOrgId());
+        orgScope.require(c.getOrgId());
         contents.delete(c);
     }
 
@@ -153,7 +160,7 @@ public class AuthoringService {
     public void reorderContents(String sectionId, ReorderRequest req) {
         Section section = sections.findById(UUID.fromString(sectionId))
                 .orElseThrow(() -> new IllegalArgumentException("Section not found: " + sectionId));
-        SecurityUtils.requireOrgAccess(section.getOrgId());
+        orgScope.require(section.getOrgId());
         List<String> ids = req.ids();
         for (int i = 0; i < ids.size(); i++) {
             int seq = i;
@@ -172,9 +179,34 @@ public class AuthoringService {
     // Helpers
     // -------------------------------------------------------------------------
 
+    /**
+     * Resolves the requested lesson type, rejecting both unknown names and types
+     * the player has no runtime for (see {@link ContentType} "Retired types").
+     * Retired values stay READABLE — legacy rows, including the seeded SCORM
+     * lessons, still hydrate — but they can never be written again.
+     *
+     * <p>Note this also turns a garbage type name from a 500 into a 400:
+     * {@code valueOf}'s {@code IllegalArgumentException} has no handler in
+     * {@code GlobalExceptionHandler} and fell through to the catch-all.
+     */
+    private static ContentType requireAuthorableType(String raw) {
+        ContentType type;
+        try {
+            type = ContentType.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new BadRequestException("Unknown lesson type: " + raw);
+        }
+        if (!type.isAuthorable()) {
+            throw new BadRequestException("Lesson type " + type
+                    + " is retired and can no longer be authored — the player cannot play it. Use one of: "
+                    + ContentType.authorable());
+        }
+        return type;
+    }
+
     private void applyContentRequest(Content c, UpsertContentRequest req) {
         c.setTitle(req.title());
-        c.setContentType(ContentType.valueOf(req.contentType().toUpperCase()));
+        c.setContentType(requireAuthorableType(req.contentType()));
         c.setSequence(req.sequence());
         c.setDurationMin(req.durationMin());
         c.setAllowPreview(req.allowPreview());
@@ -204,7 +236,7 @@ public class AuthoringService {
         Course course = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
         // Editing read: scope to the owning org (controller is role-gated only).
-        SecurityUtils.requireOrgAccess(course.getOrgId());
+        orgScope.require(course.getOrgId());
         List<Section> hydratedSections = sections.findByCourseIdWithContents(course.getId());
         // Attach outcomes + tags onto the same managed instance (same tx).
         courses.fetchOutcomes(course.getId());
@@ -215,9 +247,9 @@ public class AuthoringService {
     /** Lists authorable courses incl. DRAFT/ARCHIVED: SUPER_ADMIN → all orgs, else the caller's org. */
     @Transactional(readOnly = true)
     public List<CourseAdminDto> listForAuthoring() {
-        List<Course> found = SecurityUtils.isSuperAdmin()
+        List<Course> found = currentUser.require().isSuperAdmin()
                 ? courses.findAllByOrderByUpdatedAtDesc()
-                : courses.findByOrgIdOrderByUpdatedAtDesc(orgIdOf(SecurityUtils.getCurrentUser()));
+                : courses.findByOrgIdOrderByUpdatedAtDesc(orgIdOf(currentUser.require()));
         return found.stream().map(this::toAdminDto).toList();
     }
 
@@ -231,7 +263,7 @@ public class AuthoringService {
             throw new IllegalArgumentException("A course with slug '" + slug + "' already exists");
         }
         Course c = new Course();
-        c.setOrgId(orgIdOf(SecurityUtils.getCurrentUser()));
+        c.setOrgId(orgIdOf(currentUser.require()));
         c.setState(CourseState.DRAFT); // new courses start unpublished
         applyCourseRequest(c, req, true);
         Course saved = courses.save(c);
@@ -243,7 +275,7 @@ public class AuthoringService {
     public CourseAdminDto updateCourse(String slug, UpsertCourseRequest req) {
         Course c = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
-        SecurityUtils.requireOrgAccess(c.getOrgId());
+        orgScope.require(c.getOrgId());
         String newSlug = req.slug() == null ? null : req.slug().trim();
         if (newSlug != null && !newSlug.equals(c.getSlug()) && courses.existsBySlug(newSlug)) {
             throw new IllegalArgumentException("A course with slug '" + newSlug + "' already exists");
@@ -257,7 +289,7 @@ public class AuthoringService {
     public void deleteCourse(String slug) {
         Course c = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
-        SecurityUtils.requireOrgAccess(c.getOrgId());
+        orgScope.require(c.getOrgId());
         courses.delete(c);
     }
 
@@ -265,7 +297,7 @@ public class AuthoringService {
     public CourseAdminDto setState(String slug, String stateRaw) {
         Course c = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
-        SecurityUtils.requireOrgAccess(c.getOrgId());
+        orgScope.require(c.getOrgId());
         CourseState state;
         try {
             state = CourseState.valueOf(stateRaw == null ? "" : stateRaw.trim().toUpperCase());
@@ -290,8 +322,8 @@ public class AuthoringService {
         return mapper.toAdminDto(c, sectionCount, lessonCount);
     }
 
-    private static UUID orgIdOf(User user) {
-        return user.getOrganization() != null ? user.getOrganization().getId() : ACADEMY_ORG_ID;
+    private static UUID orgIdOf(com.bvisionry.common.security.CurrentUser user) {
+        return user.orgId() != null ? user.orgId() : ACADEMY_ORG_ID;
     }
 
     /**

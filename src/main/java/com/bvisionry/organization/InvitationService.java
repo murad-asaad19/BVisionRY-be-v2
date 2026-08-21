@@ -7,6 +7,7 @@ import com.bvisionry.auth.dto.AuthResponse;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.common.event.OrganizationEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.exception.SsoFlowException;
@@ -20,7 +21,6 @@ import com.bvisionry.organization.dto.InvitationResponse;
 import com.bvisionry.organization.dto.InviteMembersRequest;
 import com.bvisionry.organization.entity.Invitation;
 import com.bvisionry.organization.entity.Organization;
-import com.bvisionry.organization.event.MemberJoinedEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -57,7 +57,8 @@ public class InvitationService {
     public List<InvitationResponse> inviteMembers(UUID orgId, InviteMembersRequest request) {
         Organization org = organizationService.findActiveOrThrow(orgId);
         // Members live in sub-orgs only: a root org holds ORG_ADMINs and
-        // INSTRUCTORs, so MEMBER/MANAGER invites must target a sub-org.
+        // INSTRUCTORs, so MEMBER/COACH invites must target a sub-org (a coach
+        // works the cohorts of a sub-org, which is where cohorts live).
         if (!org.isSubOrganization()
                 && request.role() != UserRole.ORG_ADMIN && request.role() != UserRole.INSTRUCTOR) {
             throw new BadRequestException(
@@ -94,7 +95,7 @@ public class InvitationService {
                     OrgAuditActions.ENTITY_ORGANIZATION, orgId,
                     Map.of("email", normalizedEmail, "invitationId", saved.getId().toString(),
                             "role", request.role().name()));
-            responses.add(InvitationResponse.from(saved));
+            responses.add(InvitationResponse.withToken(saved));
         }
         return responses;
     }
@@ -111,7 +112,9 @@ public class InvitationService {
         if (invitation.getStatus() == Invitation.InvitationStatus.PENDING) {
             invitationAttemptService.recordView(invitation.getId());
         }
-        return InvitationResponse.from(invitation);
+        // The caller proved possession of the token by putting it in the path, so
+        // echoing it back discloses nothing it did not already have.
+        return InvitationResponse.withToken(invitation);
     }
 
     @Transactional
@@ -159,7 +162,7 @@ public class InvitationService {
             invitationRepository.save(invitation);
 
             if (isNewMembership) {
-                eventPublisher.publishEvent(new MemberJoinedEvent(
+                eventPublisher.publishEvent(new OrganizationEvents.MemberJoined(
                         invitation.getOrganization().getId(), savedUser.getId(), savedUser.getUserType()));
             }
 
@@ -229,7 +232,7 @@ public class InvitationService {
             invitationRepository.save(invitation);
 
             if (isNewMembership) {
-                eventPublisher.publishEvent(new MemberJoinedEvent(
+                eventPublisher.publishEvent(new OrganizationEvents.MemberJoined(
                         invitation.getOrganization().getId(), savedUser.getId(), savedUser.getUserType()));
             }
 
@@ -325,8 +328,10 @@ public class InvitationService {
         for (InvitationAttemptSummary s : attemptRepository.summarize(ids)) {
             byId.put(s.invitationId(), s);
         }
+        // withoutToken, NOT withToken: an administrator listing invitations must not
+        // be handed the redeemable secret of an invitation someone else issued.
         return invitations.stream()
-                .map(inv -> InvitationResponse.from(inv,
+                .map(inv -> InvitationResponse.withoutToken(inv,
                         byId.getOrDefault(inv.getId(), InvitationAttemptSummary.empty(inv.getId()))))
                 .toList();
     }

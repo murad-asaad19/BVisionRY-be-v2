@@ -3,6 +3,7 @@ package com.bvisionry.assessment;
 import com.bvisionry.assessment.dto.AutoAssignmentResponse;
 import com.bvisionry.assessment.entity.PipelineAutoAssignment;
 import com.bvisionry.audit.AuditService;
+import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.organization.OrgAuditActions;
 import com.bvisionry.organization.entity.Organization;
@@ -13,10 +14,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -38,14 +41,24 @@ public class PipelineAutoAssignmentService {
      * Idempotent: if a rule already exists for {@code (org, pipeline, userType)}
      * its deadline/createdBy are refreshed instead of inserting a duplicate
      * (which would violate the partial unique indexes on the table).
+     *
+     * <p>{@code targetRoles} is the V158 role scope. Null or empty resolves to
+     * {@code MEMBER} alone rather than "everyone": the bug this closes was
+     * precisely an absent filter being read as universal, so the permissive
+     * reading is not reinstated for an omitted field. The set participates in
+     * the UPDATE branch too — an admin narrowing an existing rule must take
+     * effect, not be silently ignored because the rule already existed.
      */
     @Transactional
     public void upsertRule(Organization org, Pipeline pipeline, String userType,
-                           Instant deadline, UUID actorId, int maxCheckIns) {
+                           Instant deadline, UUID actorId, int maxCheckIns,
+                           Set<UserRole> targetRoles) {
+        Set<UserRole> roles = normaliseRoles(targetRoles);
         repository.findRule(org.getId(), pipeline.getId(), userType)
                 .ifPresentOrElse(existing -> {
                     existing.setDeadline(deadline);
                     existing.setMaxCheckIns(maxCheckIns);
+                    existing.setTargetRoles(roles);
                     // Preserve original createdBy — the admin who first set up
                     // the rule is the meaningful audit attribution; subsequent
                     // tweaks land in updatedBy.
@@ -62,11 +75,19 @@ public class PipelineAutoAssignmentService {
                     rule.setDeadline(deadline);
                     rule.setCreatedBy(actorId);
                     rule.setMaxCheckIns(maxCheckIns);
+                    rule.setTargetRoles(roles);
                     PipelineAutoAssignment saved = repository.save(rule);
                     auditService.log(actorId, org.getId(), OrgAuditActions.AUTO_ASSIGN_RULE_CREATED,
                             OrgAuditActions.ENTITY_ORGANIZATION, org.getId(),
                             ruleAuditPayload(pipeline, userType, deadline, saved.getId()));
                 });
+    }
+
+    /** Null/empty → {@code MEMBER} only. Copied into an EnumSet so the caller cannot mutate the persisted set. */
+    private static Set<UserRole> normaliseRoles(Set<UserRole> requested) {
+        return requested == null || requested.isEmpty()
+                ? EnumSet.of(UserRole.MEMBER)
+                : EnumSet.copyOf(requested);
     }
 
     @Transactional(readOnly = true)

@@ -10,6 +10,7 @@ public record PipelineResponse(
         UUID id,
         String name,
         String description,
+        String abbreviation,
         int version,
         PipelineStatus status,
         UUID createdBy,

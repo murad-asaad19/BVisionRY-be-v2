@@ -41,8 +41,6 @@ class PlatformAnalyticsServiceTest {
         // Root-only variants: sub-org rows (always FREE) must not inflate the
         // org total or the tier mix.
         when(organizationRepository.countByParentOrganizationIsNull()).thenReturn(15L);
-        when(organizationRepository.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.PREMIUM))
-                .thenReturn(5L);
         when(organizationRepository.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.FREE))
                 .thenReturn(10L);
         when(userRepository.count()).thenReturn(200L);
@@ -56,6 +54,7 @@ class PlatformAnalyticsServiceTest {
         assertThat(response.totalSubmissions()).isEqualTo(500);
         assertThat(response.evaluatedSubmissions()).isEqualTo(350);
         assertThat(response.completionRate()).isEqualByComparingTo(new BigDecimal("70.00"));
+        // Paying = root total - FREE, whatever mix of paid plans those 5 are.
         assertThat(response.premiumOrganizations()).isEqualTo(5);
         assertThat(response.freeOrganizations()).isEqualTo(10);
     }

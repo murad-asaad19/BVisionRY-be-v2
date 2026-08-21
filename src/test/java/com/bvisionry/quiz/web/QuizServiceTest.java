@@ -75,8 +75,11 @@ class QuizServiceTest {
     @Mock private EnrollmentService enrollmentService;
     @Mock private ContentRepository contents;
     @Mock private EnrollmentRepository enrollments;
+    // A REAL predicate over the test's security context, so the foreign-org
+    // paths still throw AccessDeniedException (the hierarchy arm degrades to
+    // same-org equality — the unstubbed provider resolves to null).
+    @Mock private org.springframework.beans.factory.ObjectProvider<com.bvisionry.common.security.OrgHierarchyPort> hierarchyProvider;
 
-    @InjectMocks
     private QuizService service;
 
     private UUID currentUserId;
@@ -90,6 +93,9 @@ class QuizServiceTest {
 
     @BeforeEach
     void setUp() {
+        service = new QuizService(quizzes, attempts, enrollmentService, contents, enrollments,
+                new com.bvisionry.config.SecurityContextOrgScope(hierarchyProvider),
+                new com.bvisionry.config.SecurityContextCurrentUserAccessor());
         orgId = UUID.randomUUID();
         currentUserId = UUID.randomUUID();
 

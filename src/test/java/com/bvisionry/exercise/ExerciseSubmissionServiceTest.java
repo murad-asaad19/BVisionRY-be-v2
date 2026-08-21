@@ -3,11 +3,13 @@ package com.bvisionry.exercise;
 import com.bvisionry.audit.AuditService;
 import com.bvisionry.auth.entity.User;
 import com.bvisionry.common.enums.UserRole;
+import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.exercise.dto.ExerciseRowPayload;
 import com.bvisionry.exercise.dto.SaveExerciseRowsRequest;
 import com.bvisionry.exercise.entity.ExerciseAssignment;
 import com.bvisionry.exercise.entity.ExerciseColumn;
 import com.bvisionry.exercise.entity.ExerciseColumnType;
+import com.bvisionry.exercise.entity.ExerciseComment;
 import com.bvisionry.exercise.entity.ExerciseRow;
 import com.bvisionry.exercise.entity.ExerciseSubmission;
 import com.bvisionry.exercise.entity.ExerciseSubmissionStatus;
@@ -16,14 +18,15 @@ import com.bvisionry.exercise.repository.ExerciseColumnRepository;
 import com.bvisionry.exercise.repository.ExerciseCommentRepository;
 import com.bvisionry.exercise.repository.ExerciseRowRepository;
 import com.bvisionry.exercise.repository.ExerciseSubmissionRepository;
-import com.bvisionry.notification.push.PushNotificationService;
 import com.bvisionry.organization.entity.Organization;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.Instant;
 import java.util.HashMap;
@@ -32,7 +35,10 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class ExerciseSubmissionServiceTest {
@@ -41,8 +47,9 @@ class ExerciseSubmissionServiceTest {
     @Mock private ExerciseRowRepository rowRepository;
     @Mock private ExerciseColumnRepository columnRepository;
     @Mock private ExerciseCommentRepository commentRepository;
+    @Mock private com.bvisionry.common.media.MediaUrlPort mediaUrlPort;
     @Mock private AuditService auditService;
-    @Mock private PushNotificationService pushNotificationService;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks private ExerciseSubmissionService service;
 
@@ -126,5 +133,78 @@ class ExerciseSubmissionServiceTest {
 
         assertThat(submission.getStatus()).isEqualTo(ExerciseSubmissionStatus.REVIEWED);
         assertThat(submission.getReviewedAt()).isNotNull();
+    }
+
+    /**
+     * The editor autosaves a LIST cell nobody typed into as {@code []}. That is
+     * not an edit — persisting it would make the row differ from an absent cell
+     * and pull a finished review back open behind the member's back.
+     */
+    @Test
+    void saveRows_blankListCellOnReviewedSubmission_staysReviewed() {
+        row.setCells(new HashMap<>());
+        SaveExerciseRowsRequest request = new SaveExerciseRowsRequest(List.of(
+                new ExerciseRowPayload(row.getId(), Map.of(columnId.toString(), List.of()))));
+
+        service.saveRows(submissionId, userId, request);
+
+        assertThat(row.getCells()).doesNotContainKey(columnId.toString());
+        assertThat(submission.getStatus()).isEqualTo(ExerciseSubmissionStatus.REVIEWED);
+        assertThat(submission.getReviewedAt()).isNotNull();
+    }
+
+    @Test
+    void overrideRows_writesCellsWithoutReopeningReview() {
+        SaveExerciseRowsRequest request = new SaveExerciseRowsRequest(List.of(
+                new ExerciseRowPayload(row.getId(), Map.of(columnId.toString(), "admin value"))));
+
+        service.overrideRows(submission, request);
+
+        assertThat(row.getCells()).containsEntry(columnId.toString(), "admin value");
+        // The admin's own edit must not push the sheet back into the queue.
+        assertThat(submission.getStatus()).isEqualTo(ExerciseSubmissionStatus.REVIEWED);
+        assertThat(submission.getReviewedAt()).isNotNull();
+    }
+
+    // Published, not called directly: see ExerciseSubmissionService.eventPublisher's
+    // field comment. ProgramFlowPushHandler turns this into the org-admin push AND,
+    // new in this pass, the coach-of-this-learner push (redesign spec §2.2).
+    @Test
+    void submit_publishesExerciseSubmittedEvent() {
+        submission.setStatus(ExerciseSubmissionStatus.IN_PROGRESS);
+        when(rowRepository.findBySubmissionIdAndDeletedAtIsNullOrderByDisplayOrder(submissionId))
+                .thenReturn(List.of(row));
+
+        service.submit(submissionId, userId);
+
+        ArgumentCaptor<ProgramFlowEvents.ExerciseSubmitted> captor =
+                ArgumentCaptor.forClass(ProgramFlowEvents.ExerciseSubmitted.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().orgId())
+                .isEqualTo(submission.getAssignment().getOrganization().getId());
+        assertThat(captor.getValue().learnerId()).isEqualTo(userId);
+        assertThat(captor.getValue().learnerName()).isEqualTo("Member");
+        assertThat(captor.getValue().exerciseName()).isEqualTo("Exercise");
+    }
+
+    @Test
+    void reply_publishesExerciseFeedbackRepliedEvent() {
+        UUID commentId = UUID.randomUUID();
+        ExerciseComment root = new ExerciseComment();
+        root.setId(commentId);
+        root.setSubmission(submission);
+        root.setRow(row);
+        when(commentRepository.findById(commentId)).thenReturn(java.util.Optional.of(root));
+        when(commentRepository.save(any(ExerciseComment.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.reply(submissionId, userId, commentId, "Fixed, please re-check.");
+
+        ArgumentCaptor<ProgramFlowEvents.ExerciseFeedbackReplied> captor =
+                ArgumentCaptor.forClass(ProgramFlowEvents.ExerciseFeedbackReplied.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().orgId())
+                .isEqualTo(submission.getAssignment().getOrganization().getId());
+        assertThat(captor.getValue().learnerId()).isEqualTo(userId);
+        assertThat(captor.getValue().exerciseName()).isEqualTo("Exercise");
     }
 }

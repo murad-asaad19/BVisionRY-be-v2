@@ -1,5 +1,6 @@
 package com.bvisionry.auth;
 
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.auth.dto.ChangeUserRoleRequest;
 import com.bvisionry.auth.dto.CreateUserRequest;
 import com.bvisionry.auth.dto.UpdateUserRequest;
@@ -23,6 +24,7 @@ import java.util.UUID;
 @PreAuthorize("hasAuthority('SUPER_ADMIN')")
 public class UserController {
 
+    private final CurrentUserAccessor currentUser;
     private final UserService userService;
     private final MoveMemberService moveMemberService;
 
@@ -45,7 +47,7 @@ public class UserController {
     @PatchMapping("/{id}/role")
     public ResponseEntity<UserResponse> changeRole(@PathVariable UUID id,
                                                    @Valid @RequestBody ChangeUserRoleRequest request) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         return ResponseEntity.ok(userService.changeRole(id, request, actorId));
     }
 
@@ -80,7 +82,7 @@ public class UserController {
     public ResponseEntity<MoveMemberResponse> moveOrganization(
             @PathVariable UUID id,
             @Valid @RequestBody MoveMemberRequest request) {
-        UUID actorId = SecurityUtils.getCurrentUserId();
+        UUID actorId = currentUser.require().userId();
         return ResponseEntity.ok(
                 moveMemberService.move(id, request.targetOrganizationId(), actorId));
     }

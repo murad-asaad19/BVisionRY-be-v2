@@ -1,6 +1,7 @@
 package com.bvisionry.pipeline.controller;
 
 import com.bvisionry.common.enums.PipelineStatus;
+import com.bvisionry.pipeline.dto.PillarBandsResponse;
 import com.bvisionry.pipeline.dto.PipelineCreateRequest;
 import com.bvisionry.pipeline.dto.PipelinePostCompletionRequest;
 import com.bvisionry.pipeline.dto.PipelinePreviewResponse;
@@ -10,6 +11,7 @@ import com.bvisionry.pipeline.dto.PipelineSummaryResponse;
 import com.bvisionry.pipeline.dto.PipelineMetadataUpdateRequest;
 import com.bvisionry.pipeline.dto.PipelineUpdateRequest;
 import com.bvisionry.pipeline.dto.SimulateRequest;
+import com.bvisionry.pipeline.service.PillarService;
 import com.bvisionry.pipeline.service.PipelineService;
 import com.bvisionry.pipeline.service.PipelineSimulationService;
 import jakarta.validation.Valid;
@@ -39,6 +41,7 @@ public class PipelineController {
 
     private final PipelineService pipelineService;
     private final PipelineSimulationService simulationService;
+    private final PillarService pillarService;
 
     @PostMapping
     public ResponseEntity<PipelineResponse> create(@Valid @RequestBody PipelineCreateRequest request) {
@@ -101,6 +104,19 @@ public class PipelineController {
         return ResponseEntity.ok(pipelineService.getPublishedCatalog());
     }
 
+    /**
+     * The maturity bands of a pipeline's scored pillars — the yardstick a
+     * founder's score is read against. Any authenticated caller may read it for
+     * a PUBLISHED pipeline assigned to their org; SUPER_ADMIN is unrestricted.
+     * The service re-checks the assignment at the data layer, and authoring the
+     * bands stays SUPER_ADMIN on {@code PillarController}.
+     */
+    @GetMapping("/{id}/bands")
+    @PreAuthorize("isAuthenticated()")
+    public ResponseEntity<List<PillarBandsResponse>> getBands(@PathVariable UUID id) {
+        return ResponseEntity.ok(pillarService.listBands(id));
+    }
+
     @GetMapping("/{id}/preview")
     public ResponseEntity<PipelinePreviewResponse> getPreview(@PathVariable UUID id) {
         return ResponseEntity.ok(pipelineService.getPreview(id));
@@ -108,7 +124,7 @@ public class PipelineController {
 
     /**
      * Simulate a full assessment evaluation without persisting.
-     * Admin provides sample answers + tier (FREE/PREMIUM) and gets back the full results
+     * Admin provides sample answers + tier (FREE or any paid plan) and gets back the full results
      * as if a real member had submitted and been evaluated.
      */
     @PostMapping("/{id}/simulate")

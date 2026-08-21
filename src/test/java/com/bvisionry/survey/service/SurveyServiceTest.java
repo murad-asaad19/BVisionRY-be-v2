@@ -122,6 +122,17 @@ class SurveyServiceTest {
     }
 
     @Test
+    void metadataRequest_omittedClearGiftFlag_coalescesToFalse() {
+        // Pins the boxed-Boolean fix: a partial PATCH (e.g. the visibility
+        // toggle) omits the flag, which reaches the record as null. As a
+        // primitive this 400'd every such request at the Jackson layer.
+        var request = new com.bvisionry.survey.dto.SurveyMetadataUpdateRequest(
+                "X", null, SurveyVisibility.PUBLIC, null, null, null, null);
+
+        assertThat(request.clearGiftPublicAssessmentLink()).isFalse();
+    }
+
+    @Test
     void flipVisibilityToPublic_mintsPublicToken() {
         Survey survey = buildPublishedSurvey();
         survey.setVisibility(SurveyVisibility.PRIVATE);

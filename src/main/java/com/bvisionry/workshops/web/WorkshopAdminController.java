@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.bvisionry.common.excel.XlsxResponse;
+import com.bvisionry.common.security.ExportNameGuard;
 
 import com.bvisionry.workshops.dto.AssignmentsResponse;
 import com.bvisionry.workshops.dto.BoardStyleRequest;
@@ -42,10 +43,18 @@ import jakarta.validation.Valid;
 /**
  * Admin workshop management for an org: workshop lifecycle, the exercise
  * pipeline builder, and analytics.
+ *
+ * <p><b>SUPER_ADMIN only, deliberately.</b> Workshops are authored and run by
+ * the platform, never by the customer: an ORG_ADMIN gets no authoring or
+ * detail access here at all. They still see their members' workshop PROGRESS —
+ * cohort Pulse, the member profile Work tab and participation all read the
+ * spine/profile repositories directly, not this console API — and an org admin
+ * who is themselves assigned to a workshop plays it through
+ * {@link MyWorkshopController}, which stays {@code isAuthenticated()}.
  */
 @RestController
 @RequestMapping(path = "/api/organizations/{orgId}/workshops", produces = MediaType.APPLICATION_JSON_VALUE)
-@PreAuthorize("hasAuthority('SUPER_ADMIN') or (hasAuthority('ORG_ADMIN') and @orgAccess.isInOrg(#orgId))")
+@PreAuthorize("hasAuthority('SUPER_ADMIN')")
 @Tag(name = "Workshops (admin)", description = "Workshop lifecycle, exercise builder, analytics.")
 public class WorkshopAdminController {
 
@@ -187,13 +196,26 @@ public class WorkshopAdminController {
         return service.analytics(orgId, workshopId);
     }
 
-    /** Branded PDF of every team's member answers (scope=all|leads, names maskable). */
+    /**
+     * Branded PDF of every team's member answers (scope=all|leads, names
+     * maskable). {@code showNames=true} is SUPER_ADMIN-only
+     * ({@link ExportNameGuard}).
+     *
+     * <p>The whole controller is now SUPER_ADMIN-only, so this guard no longer
+     * separates two roles — it is kept as defence in depth (the masking default
+     * still applies, and the guard survives if the class gate is ever widened
+     * again). It never was an anonymity boundary: the JSON siblings on this
+     * controller ({@code /analytics}, {@code /members/{userId}/answers}) carry
+     * the same names unmasked. Do not write anything here implying the roster is
+     * protected.
+     */
     @GetMapping("/{workshopId}/answers/pdf")
     public ResponseEntity<byte[]> answersPdf(
             @PathVariable UUID orgId, @PathVariable UUID workshopId,
             @RequestParam(defaultValue = "all") String scope,
             @RequestParam(defaultValue = "false") boolean showNames,
             @RequestParam(defaultValue = "download") String mode) {
+        ExportNameGuard.checkShowNames(showNames);
         byte[] pdf = answersExport.pdf(orgId, workshopId, "leads".equals(scope), showNames);
         String filename = "Workshop_Answers_" + XlsxResponse.sanitizeFilename(
                 answersExport.workshopName(orgId, workshopId)) + ".pdf";
@@ -206,13 +228,14 @@ public class WorkshopAdminController {
                 .body(pdf);
     }
 
-    /** Excel workbook of every team's member answers (scope=all|leads, names maskable). */
+    /** Same answers as the PDF, same SUPER_ADMIN-only {@code showNames}. */
     @GetMapping("/{workshopId}/answers/excel")
     public ResponseEntity<byte[]> answersExcel(
             @PathVariable UUID orgId, @PathVariable UUID workshopId,
             @RequestParam(defaultValue = "all") String scope,
             @RequestParam(defaultValue = "false") boolean showNames,
             @RequestParam(defaultValue = "download") String mode) {
+        ExportNameGuard.checkShowNames(showNames);
         byte[] xlsx = answersExport.excel(orgId, workshopId, "leads".equals(scope), showNames);
         String filename = "Workshop_Answers_" + XlsxResponse.sanitizeFilename(
                 answersExport.workshopName(orgId, workshopId)) + ".xlsx";

@@ -1,6 +1,8 @@
 package com.bvisionry.reporting.controller;
 
-import com.bvisionry.auth.SecurityUtils;
+
+import com.bvisionry.common.security.CurrentUser;
+import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.assessment.SubmissionRepository;
 import com.bvisionry.assessment.entity.Submission;
 import com.bvisionry.common.excel.XlsxResponse;
@@ -13,7 +15,8 @@ import com.bvisionry.reporting.service.MemberDisplayNameResolver;
 import com.bvisionry.reporting.service.MemberResultsExcelService;
 import com.bvisionry.reporting.service.MemberResultsService;
 import com.bvisionry.reporting.service.PdfReportService;
-import com.bvisionry.reporting.service.PremiumFeatureGuard;
+import com.bvisionry.common.security.NamesVisibleToSelf;
+import com.bvisionry.common.security.PremiumFeatureGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -33,6 +36,7 @@ import java.util.UUID;
 @PreAuthorize("isAuthenticated()")
 public class MemberResultsController {
 
+    private final CurrentUserAccessor currentUser;
     private final MemberResultsService memberResultsService;
     private final PdfReportService pdfReportService;
     private final MemberResultsExcelService memberResultsExcelService;
@@ -56,6 +60,9 @@ public class MemberResultsController {
         return ResponseEntity.ok(memberResultsService.getPillarDetail(submissionId, pillarId));
     }
 
+    @NamesVisibleToSelf("verifySubmissionOwnership pins the submission to the caller before "
+            + "any name is read; its only bypass is SUPER_ADMIN, whom ExportNameGuard would "
+            + "have admitted anyway")
     @GetMapping("/assessments/{submissionId}/results/pdf")
     public ResponseEntity<byte[]> getPdf(
             @PathVariable UUID submissionId,
@@ -78,6 +85,9 @@ public class MemberResultsController {
                 .body(pdf);
     }
 
+    @NamesVisibleToSelf("verifySubmissionOwnership pins the submission to the caller before "
+            + "any name is read; its only bypass is SUPER_ADMIN, whom ExportNameGuard would "
+            + "have admitted anyway")
     @GetMapping("/assessments/{submissionId}/results/excel")
     public ResponseEntity<byte[]> getExcel(
             @PathVariable UUID submissionId,
@@ -97,12 +107,13 @@ public class MemberResultsController {
 
     @GetMapping("/history")
     public ResponseEntity<MemberHistoryResponse> getHistory() {
-        return ResponseEntity.ok(memberResultsService.getHistory(SecurityUtils.getCurrentUserId()));
+        return ResponseEntity.ok(memberResultsService.getHistory(currentUser.require().userId()));
     }
 
     private void verifySubmissionOwnership(UUID submissionId) {
-        if (SecurityUtils.isSuperAdmin()) return;
-        UUID currentUserId = SecurityUtils.getCurrentUserId();
+        CurrentUser me = currentUser.require();
+        if (me.isSuperAdmin()) return;
+        UUID currentUserId = me.userId();
         Submission submission = submissionRepository.findByIdWithAssignmentAndPipeline(submissionId)
                 .orElseThrow(() -> new ResourceNotFoundException("Submission", submissionId.toString()));
         // Public (anonymous) submissions have no owning user — no member can

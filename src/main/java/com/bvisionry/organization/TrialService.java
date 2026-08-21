@@ -76,12 +76,16 @@ public class TrialService {
         if (org.isOnTrial()) {
             throw new BadRequestException("Organization is already on an active trial. Use Extend instead.");
         }
-        if (org.getSubscriptionTier() == SubscriptionTier.PREMIUM) {
-            throw new BadRequestException("Organization is already on Premium. No trial needed.");
+        if (org.getSubscriptionTier().isPaid()) {
+            throw new BadRequestException("Organization is already on the "
+                    + org.getSubscriptionTier().label() + " plan. No trial needed.");
         }
 
         Instant endsAt = Instant.now().plus(durationDays, ChronoUnit.DAYS);
-        org.setSubscriptionTier(SubscriptionTier.PREMIUM);
+        // A trial grants GROWTH: it is what PREMIUM meant before V156 (and where
+        // V156 moved every PREMIUM org), so a trial buys the same capability it
+        // always bought — the top self-serve ceiling, not the Contact-Sales tier.
+        org.setSubscriptionTier(SubscriptionTier.GROWTH);
         org.setTrialEndsAt(endsAt);
         Organization saved = orgRepo.save(org);
 

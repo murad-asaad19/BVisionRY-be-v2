@@ -2,7 +2,6 @@ package com.bvisionry.organization;
 
 import com.bvisionry.audit.AuditRepository;
 import com.bvisionry.auth.UserRepository;
-import com.bvisionry.common.enums.SubscriptionTier;
 import com.bvisionry.config.CacheConfig;
 import com.bvisionry.organization.dto.AttentionItem;
 import com.bvisionry.organization.dto.DashboardResponse;
@@ -45,8 +44,6 @@ public class DashboardService {
         long suspendedCount = totalOrgs - activeCount;
         long onTrial = orgRepo.countOnActiveTrial(now);
         long trialsExpiring = orgRepo.countTrialsExpiringWithin(now, in7d);
-        long premiumTotal = orgRepo.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.PREMIUM);
-        long freeTotal = orgRepo.countBySubscriptionTierAndParentOrganizationIsNull(SubscriptionTier.FREE);
         long totalMembers = userRepo.count();
 
         long createdLast30d = auditRepo.countByActionTypeAndOccurredAtAfter(
@@ -69,8 +66,14 @@ public class DashboardService {
                 totalMembers, invitedLast7d
         );
 
-        // Tier mix: Trial slice = active trials; Premium = total Premium - active trials.
-        TierMix mix = new TierMix(premiumTotal - onTrial, onTrial, freeTotal);
+        // Tier mix, per tier. Grouped in the database rather than counted per
+        // enum constant, so a tier added later cannot silently vanish from the
+        // panel — which is the failure the old subtraction was guarding against,
+        // at the cost of the breakdown itself (see TierMix's javadoc).
+        // Trials stay a SEPARATE figure: a trial is a status held while on a
+        // tier, not a tier, so subtracting it out of one would understate that
+        // tier's real population.
+        TierMix mix = TierMix.from(orgRepo.countRootOrgsByTier(), onTrial);
 
         List<AttentionItem> attention = attentionService.evaluate();
 

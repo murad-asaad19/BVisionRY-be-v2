@@ -6,7 +6,7 @@ import jakarta.validation.constraints.Size;
 /**
  * Pipeline create request. {@code createdBy} is intentionally absent — the
  * server derives it from the authenticated principal via
- * {@link com.bvisionry.auth.SecurityUtils#getCurrentUserId()} so a client
+ * {@link com.bvisionry.common.security.CurrentUserAccessor} so a client
  * can't ascribe creation to another user.
  */
 public record PipelineCreateRequest(

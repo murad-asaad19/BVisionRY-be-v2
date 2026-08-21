@@ -51,6 +51,7 @@ class AuthoringServiceOrgScopingTest {
     @Mock private ContentRepository contents;
     @Mock private TagRepository tags;
     @Mock private CourseMapper mapper;
+    @Mock private org.springframework.beans.factory.ObjectProvider<com.bvisionry.common.security.OrgHierarchyPort> hierarchyProvider;
 
     private AuthoringService service;
 
@@ -59,7 +60,9 @@ class AuthoringServiceOrgScopingTest {
 
     @BeforeEach
     void setUp() {
-        service = new AuthoringService(courses, sections, contents, tags, mapper);
+        service = new AuthoringService(courses, sections, contents, tags, mapper,
+                new com.bvisionry.config.SecurityContextOrgScope(hierarchyProvider),
+                new com.bvisionry.config.SecurityContextCurrentUserAccessor());
         lenient().when(sections.save(any(Section.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 

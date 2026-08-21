@@ -26,8 +26,10 @@ public interface OrgHierarchyPort {
     /**
      * The tier that governs feature access for {@code orgId}: sub-orgs
      * inherit the parent's plan; root orgs use their own. Consumed by
-     * {@code reporting} (PremiumFeatureGuard) which, like {@code auth},
-     * must not grow new dependency edges on the organization package.
+     * {@link PremiumFeatureGuard}, which for exactly this reason now lives
+     * here in the shared kernel rather than in a feature package — it must
+     * not grow new dependency edges, and every gated surface would otherwise
+     * have to import across a feature line to reach it.
      *
      * @throws com.bvisionry.common.exception.ResourceNotFoundException if the org doesn't exist
      */

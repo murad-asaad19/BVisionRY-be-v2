@@ -53,6 +53,11 @@ class PromptTemplateControllerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
+    // GlobalExceptionHandler is a @RestControllerAdvice, so it IS part of every
+    // @WebMvcTest slice — and it depends on the error-event recorder.
+    @MockitoBean
+    private com.bvisionry.common.errortracking.ErrorEventRecorder errorEventRecorder;
+
     @MockitoBean
     private PromptTemplateService promptService;
 

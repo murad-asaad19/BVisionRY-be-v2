@@ -81,6 +81,39 @@ class PipelineControllerTest extends AbstractPostgresIntegrationTest {
                 .andExpect(status().isBadRequest());
     }
 
+    /**
+     * The short code (V201) an author writes beside the name: it round-trips,
+     * and an emptied field CLEARS it rather than storing "" — cohort surfaces
+     * fall back to the role name on null, and a blank would head a column with
+     * nothing at all.
+     */
+    @Test
+    void updateMetadata_roundTripsTheAbbreviationAndClearsItWhenBlanked() throws Exception {
+        String id = com.jayway.jsonpath.JsonPath.read(
+                mockMvc.perform(post("/api/pipelines")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("""
+                                        {"name": "Mindset Readiness Assessment", "createdBy": "%s"}
+                                        """.formatted(adminId)))
+                        .andReturn().getResponse().getContentAsString(), "$.id");
+
+        mockMvc.perform(patch("/api/pipelines/" + id + "/metadata")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name": "Mindset Readiness Assessment", "abbreviation": " mra "}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.abbreviation", is("mra")));
+
+        mockMvc.perform(patch("/api/pipelines/" + id + "/metadata")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"name": "Mindset Readiness Assessment", "abbreviation": "   "}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.abbreviation", nullValue()));
+    }
+
     @Test
     void getPipeline_notFound_returns404() throws Exception {
         mockMvc.perform(get("/api/pipelines/" + java.util.UUID.randomUUID()))

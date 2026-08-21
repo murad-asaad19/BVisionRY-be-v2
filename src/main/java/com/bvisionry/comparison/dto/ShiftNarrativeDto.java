@@ -45,6 +45,13 @@ public record ShiftNarrativeDto(
         boolean detached,
         /** Band label/key at generation — DISPLAY ONLY, never a guard. */
         String bandKey,
+        /**
+         * The "nothing disappears" audit came back short and code-synthesised
+         * fallback items were appended (second reading redesign) — the review
+         * UI badges these so a coach checks them by hand. Always DRAFT when
+         * freshly generated, even under auto-approve.
+         */
+        boolean coverageGap,
         String status,
         Instant generatedAt,
         UUID approvedBy,
@@ -54,7 +61,11 @@ public record ShiftNarrativeDto(
         String editedByName,
         Instant editedAt) {
 
-    /** One observation of the breakdown: one {@code NarrativeKind} + its 1-2 sentences. */
-    public record NarrativeItemDto(String kind, String text) {
+    /**
+     * One observation of the breakdown: one {@code NarrativeKind}, its 1-2
+     * sentences, and — on the needs-attention kinds only — the deterministic
+     * tracking-data reason (null elsewhere and on rows written before it).
+     */
+    public record NarrativeItemDto(String kind, String text, String reason) {
     }
 }

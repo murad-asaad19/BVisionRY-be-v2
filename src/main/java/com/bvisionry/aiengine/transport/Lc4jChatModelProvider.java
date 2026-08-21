@@ -34,6 +34,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * accuracy). Otherwise the model is plain and shape is enforced downstream by the
  * output guardrails — the universal path that works for every model.
  *
+ * <p>Prompt caching is gated the same way, on the same principle. A caller asks for
+ * it per call ({@code cachePrompt}); it is only ever sent to a model whose metadata
+ * says caching there is explicit, so the directive never rides along to a provider
+ * that did not ask for it. See {@link ModelCapabilities#supportsExplicitPromptCaching()}.
+ *
  * <p>Built models are cached and reused; the cache key folds in a collision-resistant
  * (SHA-256) fingerprint of the API key so a key rotation transparently rebuilds the
  * client and never reuses a stale-key model.
@@ -44,6 +49,17 @@ public class Lc4jChatModelProvider {
 
     /** OpenRouter's OpenAI-compatible base; LangChain4j appends {@code /chat/completions}. */
     private static final String OPENROUTER_OPENAI_BASE_URL = "https://openrouter.ai/api/v1";
+
+    /**
+     * OpenRouter's request-root prompt-caching directive: it places the cache
+     * breakpoint on the last cacheable block, so the whole prompt becomes the
+     * cached prefix and a REPEAT of the same prompt reads it back instead of being
+     * billed again. {@code ephemeral} is the 5-minute tier (writes 1.25×, reads
+     * 0.1× base input); the 1-hour tier ({@code "ttl": "1h"}) doubles the write and
+     * is not worth it for a reviewer pressing Regenerate seconds later.
+     */
+    private static final Map<String, Object> CACHE_CONTROL_EPHEMERAL =
+            Map.of("cache_control", Map.of("type", "ephemeral"));
 
     private final AIConfigService configService;
     private final ModelCapabilityRegistry capabilityRegistry;
@@ -78,11 +94,21 @@ public class Lc4jChatModelProvider {
     /**
      * A {@link ChatModel} for {@code modelName} tuned for one call type.
      *
+     * <p>This is the single seam between the engine and the network: the mock and
+     * e2e transports exist by overriding exactly this method, so it deliberately
+     * has NO convenience overload — an overload would be a way for a call to slip
+     * past a mock and reach (and bill) the real provider.
+     *
      * @param modelName   provider model id, e.g. {@code anthropic/claude-sonnet-4}
      * @param temperature sampling temperature
      * @param maxTokens   max output tokens
+     * @param cachePrompt ask the provider to cache this prompt, so a repeat of it reads
+     *                    the cache instead of being billed again. Honoured only where the
+     *                    model declares explicit caching; pass {@code true}
+     *                    for calls whose input genuinely repeats, {@code false} otherwise — a cache
+     *                    write costs 1.25× and a prompt that never repeats never earns it back.
      */
-    public ChatModel modelFor(String modelName, double temperature, int maxTokens) {
+    public ChatModel modelFor(String modelName, double temperature, int maxTokens, boolean cachePrompt) {
         if (modelName == null || modelName.isBlank()) {
             throw new AIServiceException("No AI model configured for this call.");
         }
@@ -95,6 +121,7 @@ public class Lc4jChatModelProvider {
         }
 
         ModelCapabilities caps = capabilityRegistry.getCapabilities(modelName);
+        boolean promptCaching = cachePrompt && caps.supportsExplicitPromptCaching();
         // Fold a collision-resistant digest of the key material — never String.hashCode(),
         // whose 32-bit space can collide an old and a rotated key onto the same cache slot
         // and so reuse a ChatModel built with the stale key (401s until restart).
@@ -103,9 +130,11 @@ public class Lc4jChatModelProvider {
                 Double.toString(temperature),
                 Integer.toString(maxTokens),
                 Boolean.toString(caps.supportsStructuredOutputs()),
+                Boolean.toString(promptCaching),
                 apiKeyFingerprint(apiKey));
 
-        return cache.computeIfAbsent(cacheKey, k -> build(modelName, temperature, maxTokens, apiKey, caps));
+        return cache.computeIfAbsent(cacheKey,
+                k -> build(modelName, temperature, maxTokens, apiKey, caps, promptCaching));
     }
 
     /**
@@ -141,7 +170,7 @@ public class Lc4jChatModelProvider {
     }
 
     private ChatModel build(String modelName, double temperature, int maxTokens, String apiKey,
-                            ModelCapabilities caps) {
+                            ModelCapabilities caps, boolean promptCaching) {
         OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder()
                 .baseUrl(OPENROUTER_OPENAI_BASE_URL)
                 .apiKey(apiKey)
@@ -159,6 +188,15 @@ public class Lc4jChatModelProvider {
             log.debug("Model '{}' supports strict structured output — enabling native JSON schema.", modelName);
         } else {
             log.debug("Model '{}' lacks strict structured output — relying on prompt + output guardrails.", modelName);
+        }
+
+        if (promptCaching) {
+            // Lands as a TOP-LEVEL body field: LangChain4j threads customParameters
+            // through to ChatCompletionRequest, whose accessor is @JsonAnyGetter, so
+            // the map is flattened into the request root rather than nested under a
+            // property. That is where OpenRouter reads the directive.
+            builder.customParameters(CACHE_CONTROL_EPHEMERAL);
+            log.debug("Model '{}' prices cache writes — asking OpenRouter to cache this prompt.", modelName);
         }
 
         return builder.build();

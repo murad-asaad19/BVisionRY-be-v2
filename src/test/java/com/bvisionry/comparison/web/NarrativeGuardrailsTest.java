@@ -147,16 +147,15 @@ class NarrativeGuardrailsTest {
         assertThat(NarrativeGuardrails.validate(null, false)).contains(Rejection.EMPTY_NARRATIVE);
     }
 
-    /* --------------------------------------- (d) numbers are the prompt's job */
+    /* ------------------------------------------- (d) figures are not rejected */
 
     @Test
     void figuresInMemberFacingProse_areNotRejected() {
-        // §2's no-numbers rule is asked for in the prompt and NOT enforced here.
-        // The rejecting guardrail was removed: the input is full of figures the
-        // model is told to quote back ("scored at 100%", "rated Easy (4/5)"), so
-        // it fired mostly on the founder's own words — and each false reject
-        // burned the single corrective retry and surfaced the pillar as
-        // ungeneratable to the reviewer. This test fails if it is reinstated.
+        // Figures are allowed in the output (V205, operator decision
+        // 2026-08-20). Even before that, the rejecting guardrail had been
+        // removed: it fired mostly on the founder's own words quoted back, and
+        // each false reject burned the single corrective retry and surfaced
+        // the pillar as ungeneratable. This test fails if it is reinstated.
         for (String withFigure : List.of(
                 "Your focus score moved to 80%.",
                 "You rated it Easy (4/5) this time.",
@@ -221,6 +220,28 @@ class NarrativeGuardrailsTest {
         assertThat(NarrativeGuardrails.validate(
                 result("PERSISTED", "The edge is still there.", ""), false))
                 .isEqualTo(Optional.empty());
+    }
+
+    /* -------------------------------------------------- the coverage audit */
+
+    @Test
+    void coverageAudit_matchesEchoedIdsCaseInsensitively() {
+        // "b1" for issued B1 is observed model behaviour — the same drift
+        // NarrativeKind.parse uppercases for. Covered is covered.
+        ShiftNarrativeResult result = new ShiftNarrativeResult(List.of(
+                new ShiftNarrativeResult.Item("CARRIED_FORWARD", "Still here.",
+                        List.of("b1", " B2 ")),
+                new ShiftNarrativeResult.Item("NEW", "Appeared.", List.of())), "");
+        assertThat(NarrativeGuardrails.uncoveredBeforeIds(result, List.of("B1", "B2", "B3")))
+                .containsExactly("B3");
+    }
+
+    @Test
+    void coverageAudit_ignoresIdsThePromptNeverIssued() {
+        ShiftNarrativeResult result = new ShiftNarrativeResult(List.of(
+                new ShiftNarrativeResult.Item("NEW", "Appeared.", List.of("B9"))), "");
+        assertThat(NarrativeGuardrails.uncoveredBeforeIds(result, List.of("B1")))
+                .containsExactly("B1");
     }
 
     /* ------------------------------------------------- corrective retries */

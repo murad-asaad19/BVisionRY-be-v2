@@ -96,7 +96,7 @@ class AiTransportDefaultTest {
 
     /** The mock arm overrides `modelFor`; the real arm is the plain class. */
     private static boolean isMockTransport(Lc4jChatModelProvider provider) {
-        return provider.modelFor("any/model", 0, 1) instanceof MockLangChainChatModel;
+        return provider.modelFor("any/model", 0, 1, false) instanceof MockLangChainChatModel;
     }
 
     @Test

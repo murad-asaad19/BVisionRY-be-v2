@@ -154,27 +154,35 @@ public class MockLangChainChatModel implements ChatModel {
         Matcher directionMatch = DIRECTION_LINE.matcher(userMessage);
         String direction = directionMatch.find() ? directionMatch.group(1).trim() : "held steady";
 
-        String beforeWorking = firstLineOf(section(userMessage, "BEFORE — what's working"));
-        String beforeImprove = firstLineOf(section(userMessage, "BEFORE — what can improve"));
+        List<String> workingLines = section(userMessage, "BEFORE — what's working");
+        List<String> improveLines = section(userMessage, "BEFORE — what can improve");
+        String beforeWorking = firstLineOf(workingLines);
+        String beforeImprove = firstLineOf(improveLines);
         String afterWorking = firstLineOf(section(userMessage, "AFTER — what's working"));
         List<String> submissions = submissionLines(userMessage);
 
         ObjectNode root = JSON.createObjectNode();
         ArrayNode items = root.putArray("items");
+        // Every issued BEFORE id (B1…) must land in some item's "covers" or the
+        // no-vanishing audit flags a coverage gap on every mocked pillar — the
+        // CARRIED_FORWARD item claims the working ids, PERSISTED the improve
+        // ids, exactly as the live model is asked to declare them.
         if (beforeWorking != null && afterWorking != null) {
-            items.addObject().put("kind", "CARRIED_FORWARD").put("text",
+            covers(items.addObject().put("kind", "CARRIED_FORWARD").put("text",
                     "The earlier reading on " + pillar + " named \"" + quote(beforeWorking)
                             + "\" and the later one still shows it, now alongside \""
-                            + quote(afterWorking) + "\".");
+                            + quote(afterWorking) + "\"."), workingLines);
         } else if (beforeWorking != null) {
-            items.addObject().put("kind", "CARRIED_FORWARD").put("text",
+            covers(items.addObject().put("kind", "CARRIED_FORWARD").put("text",
                     "\"" + quote(beforeWorking) + "\" was named as a strength on " + pillar
-                            + " at the start, and nothing in the later material contradicts it.");
+                            + " at the start, and nothing in the later material contradicts it."),
+                    workingLines);
         }
         if (beforeImprove != null) {
-            items.addObject().put("kind", "PERSISTED").put("text",
+            covers(items.addObject().put("kind", "PERSISTED").put("text",
                     "The growth edge \"" + quote(beforeImprove) + "\" from the earlier "
-                            + pillar + " reading still shows up, though how it appears has shifted.");
+                            + pillar + " reading still shows up, though how it appears has shifted."),
+                    improveLines);
         }
         if (!submissions.isEmpty()) {
             items.addObject().put("kind", "NEW").put("text",
@@ -243,6 +251,20 @@ public class MockLangChainChatModel implements ChatModel {
                             + pillars.get(1) + " and " + last + " with no equivalent earlier.");
         }
         return root.toString();
+    }
+
+    /** A numbered BEFORE line's coverage id — "B3: …" → "B3". */
+    private static final Pattern BEFORE_ID = Pattern.compile("^(B\\d+):");
+
+    /** Declare the given BEFORE lines' ids as this item's "covers" array. */
+    private static void covers(ObjectNode item, List<String> beforeLines) {
+        ArrayNode covers = item.putArray("covers");
+        for (String line : beforeLines) {
+            Matcher m = BEFORE_ID.matcher(line);
+            if (m.find()) {
+                covers.add(m.group(1));
+            }
+        }
     }
 
     /** The lines of one titled block, up to the next blank line — null when absent or "(none recorded)". */
@@ -344,30 +366,32 @@ public class MockLangChainChatModel implements ChatModel {
      * A shift narrative (§6). {@code closingAction} is deliberately non-empty:
      * a declining pillar MUST come back with a next step, and a mock that
      * returned "" would make every decline look like a generation failure on a
-     * sandbox lane.
+     * sandbox lane. The static "covers" spread satisfies the no-vanishing audit
+     * for small fixtures (unissued ids are ignored); real mock traffic gets its
+     * covers from {@link #shiftNarrativeFor}.
      */
     private static final String SHIFT_NARRATIVE_DEFAULT = """
             {
               "items": [
-                {"kind": "PERSISTED",
+                {"kind": "PERSISTED", "covers": ["B2", "B6"],
                  "text": "The earlier assessment named ownership of outcomes as the strength here, \
             and the later text still leans on it, but the follow-through it described has thinned."},
-                {"kind": "CARRIED_FORWARD",
+                {"kind": "CARRIED_FORWARD", "covers": ["B1"],
                  "text": "Structured reflection shows up in both readings, and the later one describes \
             it running on a fixed cadence rather than when time allowed."},
-                {"kind": "RESOLVED",
+                {"kind": "RESOLVED", "covers": ["B3"],
                  "text": "The hesitation about asking for help that the earlier text described no longer \
             appears; the later reading treats it as something already handled."},
-                {"kind": "NEW",
+                {"kind": "NEW", "covers": [],
                  "text": "Naming a decision owner before a discussion starts appears only in the later \
             reading, with no equivalent earlier."},
-                {"kind": "FADED",
+                {"kind": "FADED", "covers": ["B4"],
                  "text": "The appetite for open-ended exploration that the earlier text singled out is \
             absent from the later reading."},
-                {"kind": "REGRESSED",
+                {"kind": "REGRESSED", "covers": ["B5"],
                  "text": "Protecting the first hour of the day was a strength in the earlier \
             reading; the later one describes it as the thing that keeps slipping."},
-                {"kind": "EMERGED",
+                {"kind": "EMERGED", "covers": [],
                  "text": "Fatigue late in the week appears as an edge only in the later reading, \
             with no equivalent earlier."}
               ],

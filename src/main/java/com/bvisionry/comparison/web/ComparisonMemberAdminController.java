@@ -80,7 +80,7 @@ public class ComparisonMemberAdminController {
         ExportNameGuard.checkShowNames(showNames);
         requireMemberAndPremium(orgId, userId);
         return XlsxResponse.build(
-                exports.excel(userId, showNames, MyGrowthExportService.zoneOrUtc(tz)),
+                exports.excel(userId, showNames, true, MyGrowthExportService.zoneOrUtc(tz)),
                 exports.reportFilename(userId, "xlsx", showNames), mode);
     }
 

@@ -176,7 +176,9 @@ public class MyProgramService {
         return new JourneyResponse(s, new JourneyResponse.Progress(done, total),
                 gamification(ctx.mySubmissions()), journeyModules,
                 cohort.getId(),
-                cohort.getMemberIds().size(), direct);
+                // Active roster only — the same filter the leaderboard uses, so the
+                // hero's "N founders in your cohort" matches the list a member sees.
+                cohorts.countRoster(cohort.getId()), direct);
     }
 
     /** One typed journey row: LESSON keeps the legacy fields; other types read their slice. */

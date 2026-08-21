@@ -86,7 +86,7 @@ public class MyGrowthExportService {
                                String closingAction) {}
 
     /** One observation of the breakdown — or the whole of a pre-V189 narrative. */
-    public record NarrativeItemRow(String kindLabel, String text) {}
+    public record NarrativeItemRow(String kindLabel, String text, String reason) {}
 
     /**
      * Every observation of one kind, under one heading (spec §2 presentation,
@@ -115,13 +115,10 @@ public class MyGrowthExportService {
     private static final Map<String, String[]> KIND_META = Map.of(
             "NEW", new String[] {"Not present → Strength",
                     "A strength in the later reading with no earlier equivalent."},
-            // The ONLY kind whose "after" is two outcomes: the prompt defines
-            // RESOLVED as a growth edge "absent from AFTER, OR now appears there
-            // as a strength". Naming only the flattering half would overstate
-            // what the evidence shows.
-            "RESOLVED", new String[] {"Growth edge → Strength or gone",
-                    "A growth edge named earlier that no longer holds them back — it now "
-                            + "reads as a strength, or has stopped appearing altogether."},
+            // Strength-only since V203: a growth edge that merely stopped
+            // appearing is PERSISTED now, so RESOLVED can claim the win.
+            "RESOLVED", new String[] {"Growth edge → Strength",
+                    "A growth edge named earlier that now reads as a strength."},
             // No arrow where nothing moved: `X → X` made a non-event look like a
             // shift. An arrow now always means something actually changed.
             "CARRIED_FORWARD", new String[] {"Strength · held",
@@ -145,6 +142,86 @@ public class MyGrowthExportService {
      */
     static final List<String> KIND_ORDER = List.of("NEW", "RESOLVED",
             "CARRIED_FORWARD", "PERSISTED", "EMERGED", "REGRESSED", "FADED");
+
+    /* --------------------------------------------- founder situations */
+
+    /**
+     * The founder-facing vocabulary (second reading redesign, Aug 2026): the
+     * member-voice export folds the seven kinds into six fixed situations under
+     * two headings, exactly as the web's My Growth does (`SITUATION_META` in
+     * {@code narrative-types.ts} — same labels, same headlines, same order).
+     * The staff-voice export keeps the kind vocabulary, which the spec allows.
+     */
+    private record Situation(String label, String column, String headline) {}
+
+    private static final List<String> SITUATION_ORDER = List.of("CLOSED_THE_GAP",
+            "NEW_STRENGTH", "STILL_A_STRENGTH", "NEEDS_ATTENTION", "NEW_GROWTH_EDGE",
+            "STILL_WORKING_ON_IT");
+
+    private static final Map<String, Situation> SITUATIONS = Map.of(
+            "CLOSED_THE_GAP", new Situation("Closed the gap", "What's strong",
+                    "You closed this gap."),
+            "NEW_STRENGTH", new Situation("New strength", "What's strong",
+                    "This is a new strength since your first assessment."),
+            "STILL_A_STRENGTH", new Situation("Still a strength", "What's strong",
+                    "This has stayed one of your strengths."),
+            "NEEDS_ATTENTION", new Situation("Needs attention", "What you're working on",
+                    "This was a strength before. It needs attention now."),
+            "NEW_GROWTH_EDGE", new Situation("New growth edge", "What you're working on",
+                    "This is a new area to focus on."),
+            "STILL_WORKING_ON_IT", new Situation("Still working on it", "What you're working on",
+                    "This is still an area you are working on."));
+
+    /**
+     * Kind → situation, mirroring the web's `KIND_SITUATION`. An unknown kind
+     * folds into NEEDS_ATTENTION — the no-vanishing rule's display default —
+     * rather than leaking a raw key into a founder document.
+     */
+    private static String situationOf(String kind) {
+        return switch (kind == null ? "" : kind) {
+            case "RESOLVED" -> "CLOSED_THE_GAP";
+            case "NEW" -> "NEW_STRENGTH";
+            case "CARRIED_FORWARD" -> "STILL_A_STRENGTH";
+            case "EMERGED" -> "NEW_GROWTH_EDGE";
+            case "PERSISTED" -> "STILL_WORKING_ON_IT";
+            default -> "NEEDS_ATTENTION";
+        };
+    }
+
+    /**
+     * The member-voice grouping: same {@link NarrativeGroup} shape the template
+     * already renders (label bold, tag beside it, sentence underneath), fed the
+     * situation vocabulary — so founder language costs zero template surgery.
+     * A needs-attention group appends its tracking-data reason as a final
+     * bullet; when there is none, the honest fallback sentence (the reason box
+     * is never blank — second reading redesign).
+     */
+    private static List<NarrativeGroup> groupBySituations(List<NarrativeItemRow> items) {
+        Map<String, List<NarrativeItemRow>> bySituation = new LinkedHashMap<>();
+        for (NarrativeItemRow item : items) {
+            bySituation.computeIfAbsent(situationOf(item.kindLabel()), k -> new ArrayList<>())
+                    .add(item);
+        }
+        return SITUATION_ORDER.stream().filter(bySituation::containsKey).map(key -> {
+            Situation situation = SITUATIONS.get(key);
+            List<NarrativeItemRow> rows = bySituation.get(key);
+            List<String> texts = new ArrayList<>(rows.stream().map(NarrativeItemRow::text).toList());
+            if ("NEEDS_ATTENTION".equals(key)) {
+                List<String> reasons = rows.stream().map(NarrativeItemRow::reason)
+                        .filter(r -> r != null && !r.isBlank()).distinct().toList();
+                if (reasons.isEmpty()) {
+                    // No flag artifact exists, so the copy must not promise one
+                    // — it points the member at their coach instead.
+                    texts.add("Why: we do not have a clear reason from the data — this is "
+                            + "worth raising with your coach.");
+                } else {
+                    reasons.forEach(r -> texts.add("Why, based on your tracking data: " + r));
+                }
+            }
+            return new NarrativeGroup(situation.label(), situation.column(),
+                    situation.headline(), texts);
+        }).toList();
+    }
 
     /**
      * @param staffVoice third-person copy for the two STAFF doors — "GROWTH
@@ -186,14 +263,19 @@ public class MyGrowthExportService {
         // Spec §3: the overall summary leads the report. Approved-only already,
         // straight off the member payload.
         ctx.setVariable("growthSummary", c == null ? null : c.growthSummary());
-        ctx.setVariable("growthSummaryItems", summaryItemRows(c));
-        ctx.setVariable("narratives", narrativeRows(c));
+        ctx.setVariable("growthSummaryItems", summaryItemRows(c, staffVoice));
+        ctx.setVariable("narratives", narrativeRows(c, staffVoice));
         return pdfRenderer.renderTemplate("growth-report", ctx);
     }
 
-    /** Same {@code zone} contract as {@link #pdf}; the Excel copy is voice-neutral already. */
+    /**
+     * Same {@code zone} contract as {@link #pdf}. The prose copy is voice-neutral,
+     * but the classification vocabulary is not: {@code staffVoice} keeps the kind
+     * tags for the two staff doors while the member's own door reads the six
+     * founder situations, same as the PDF and the web.
+     */
     @Transactional(readOnly = true)
-    public byte[] excel(UUID userId, boolean showNames, ZoneId zone) {
+    public byte[] excel(UUID userId, boolean showNames, boolean staffVoice, ZoneId zone) {
         MyComparisonResponse data = queries.myComparison(userId);
         String name = displayName(userId, showNames);
         FounderComparisonDto c = data.comparison();
@@ -224,12 +306,14 @@ public class MyGrowthExportService {
                 if (c.growthSummary() != null) {
                     overview.labeledRow("Growth summary", c.growthSummary());
                 }
-                // The V193 breakdown: one labelled row per KIND, so a kind with
-                // three observations is one row of three bullets rather than
-                // three rows repeating the same label.
-                for (NarrativeGroup group : summaryItemRows(c)) {
+                // The V193 breakdown: one labelled row per KIND (or founder
+                // situation, on the member's door), so a group with three
+                // observations is one row of three bullets rather than three
+                // rows repeating the same label.
+                for (NarrativeGroup group : summaryItemRows(c, staffVoice)) {
                     overview.labeledRow(
-                            "Growth summary · " + kindHeader(group.kindLabel()),
+                            "Growth summary · " + (staffVoice
+                                    ? kindHeader(group.kindLabel()) : group.kindLabel()),
                             group.texts().stream().map(t -> "• " + t)
                                     .collect(Collectors.joining("\n\n")));
                 }
@@ -244,9 +328,9 @@ public class MyGrowthExportService {
                 }
                 shifts.autoSize();
 
-                List<NarrativeRow> narratives = narrativeRows(c);
+                List<NarrativeRow> narratives = narrativeRows(c, staffVoice);
                 if (!narratives.isEmpty()) {
-                    writeNarrativeSheet(wb, narratives);
+                    writeNarrativeSheet(wb, narratives, staffVoice);
                 }
             }
 
@@ -316,13 +400,14 @@ public class MyGrowthExportService {
      * pre-V193 summary — that one is a paragraph, rendered as {@code
      * growthSummary} instead, so the two never both appear.
      */
-    private static List<NarrativeGroup> summaryItemRows(FounderComparisonDto c) {
+    private static List<NarrativeGroup> summaryItemRows(FounderComparisonDto c, boolean staffVoice) {
         if (c == null || c.growthSummaryItems() == null) {
             return List.of();
         }
-        return groupByKind(c.growthSummaryItems().stream()
-                .map(i -> new NarrativeItemRow(i.kind(), i.text()))
-                .toList());
+        List<NarrativeItemRow> rows = c.growthSummaryItems().stream()
+                .map(i -> new NarrativeItemRow(i.kind(), i.text(), i.reason()))
+                .toList();
+        return staffVoice ? groupByKind(rows) : groupBySituations(rows);
     }
 
     /**
@@ -366,25 +451,36 @@ public class MyGrowthExportService {
      * present in the data, so a corrupt
      * row loses its column heading rather than its text.
      */
-    private static void writeNarrativeSheet(ExcelWorkbookBuilder wb, List<NarrativeRow> narratives) {
-        // Column order is KIND_ORDER (the reading arc), not enum order, so the
-        // sheet and the PDF tell the same story left-to-right.
-        List<String> kinds = new ArrayList<>(KIND_ORDER.stream().map(
-                MyGrowthExportService::kindLabel).toList());
-        Arrays.stream(NarrativeKind.values()).map(k -> kindLabel(k.name()))
-                .filter(label -> !kinds.contains(label)).forEach(kinds::add);
-        narratives.stream().flatMap(n -> n.groups().stream())
-                .map(NarrativeGroup::kindLabel)
-                .filter(label -> !label.isBlank() && !kinds.contains(label))
-                .forEach(kinds::add);
+    private static void writeNarrativeSheet(ExcelWorkbookBuilder wb, List<NarrativeRow> narratives,
+                                            boolean staffVoice) {
+        // Column order is the reading arc, not enum order, so the sheet and the
+        // PDF tell the same story left-to-right. Member voice: the six founder
+        // situations; staff voice: the seven kinds.
+        List<String> kinds;
+        if (staffVoice) {
+            kinds = new ArrayList<>(KIND_ORDER.stream().map(
+                    MyGrowthExportService::kindLabel).toList());
+            Arrays.stream(NarrativeKind.values()).map(k -> kindLabel(k.name()))
+                    .filter(label -> !kinds.contains(label)).forEach(kinds::add);
+            narratives.stream().flatMap(n -> n.groups().stream())
+                    .map(NarrativeGroup::kindLabel)
+                    .filter(label -> !label.isBlank() && !kinds.contains(label))
+                    .forEach(kinds::add);
+        } else {
+            kinds = new ArrayList<>(SITUATION_ORDER.stream()
+                    .map(key -> SITUATIONS.get(key).label()).toList());
+        }
 
         List<String> headers = new ArrayList<>();
         headers.add("Pillar");
         headers.add("Before → after");
-        // The header carries the transition, so a reader never has to guess
-        // whether "Carried forward" is a strength or a gap. A legend sheet would
-        // put the answer one navigation away from the question.
-        kinds.stream().map(MyGrowthExportService::kindHeader).forEach(headers::add);
+        // The header carries the context, so a reader never has to guess what a
+        // label means. Staff: the transition ("Carried forward (strength →
+        // strength)"); member: the heading the situation lives under.
+        kinds.stream()
+                .map(label -> staffVoice ? kindHeader(label)
+                        : label + " (" + situationColumnOf(label).toLowerCase() + ")")
+                .forEach(headers::add);
         headers.add("Next step");
         ExcelWorkbookBuilder.SheetBuilder sheet = wb.newSheet("Shift narratives")
                 .headers(headers.toArray(String[]::new));
@@ -415,27 +511,30 @@ public class MyGrowthExportService {
      * breakdown — rendering it as one observation keeps every export honest
      * without a data migration that would invent a split nobody made.
      */
-    private List<NarrativeRow> narrativeRows(FounderComparisonDto c) {
+    private List<NarrativeRow> narrativeRows(FounderComparisonDto c, boolean staffVoice) {
         if (c == null || c.narratives() == null) {
             return List.of();
         }
-        // The pillar's numbers, printed by CODE next to the AI's prose — the
-        // narrative itself never states a number (operator decision 2026-08-19:
-        // deterministic figures belong to the report layout, not the model).
+        // The pillar's numbers, printed by CODE next to the AI's prose, so the
+        // report always carries the deterministic figures whatever the
+        // narrative says.
         Map<UUID, ComparisonPillarDto> byDistancePillar = c.pillars() == null ? Map.of()
                 : c.pillars().stream()
                         .filter(p -> p.distancePillarId() != null)
                         .collect(Collectors.toMap(ComparisonPillarDto::distancePillarId,
                                 p -> p, (a, b) -> a));
         return c.narratives().stream()
-                .map(n -> new NarrativeRow(n.pillarName(),
-                        scoreLine(byDistancePillar.get(n.distancePillarId())),
-                        groupByKind(n.items() == null || n.items().isEmpty()
-                                ? List.of(new NarrativeItemRow(n.kind(), n.body()))
-                                : n.items().stream()
-                                        .map(i -> new NarrativeItemRow(i.kind(), i.text()))
-                                        .toList()),
-                        n.closingAction()))
+                .map(n -> {
+                    List<NarrativeItemRow> rows = n.items() == null || n.items().isEmpty()
+                            ? List.of(new NarrativeItemRow(n.kind(), n.body(), null))
+                            : n.items().stream()
+                                    .map(i -> new NarrativeItemRow(i.kind(), i.text(), i.reason()))
+                                    .toList();
+                    return new NarrativeRow(n.pillarName(),
+                            scoreLine(byDistancePillar.get(n.distancePillarId())),
+                            staffVoice ? groupByKind(rows) : groupBySituations(rows),
+                            n.closingAction());
+                })
                 .toList();
     }
 
@@ -459,6 +558,13 @@ public class MyGrowthExportService {
                 .findFirst()
                 .map(k -> label + " (" + KIND_META.get(k)[0].toLowerCase() + ")")
                 .orElse(label);
+    }
+
+    /** The heading a situation label lives under — for the member-voice sheet headers. */
+    private static String situationColumnOf(String label) {
+        return SITUATIONS.values().stream()
+                .filter(s -> s.label().equals(label))
+                .findFirst().map(Situation::column).orElse("");
     }
 
     /** {@code CARRIED_FORWARD} → "Carried forward" — display only, the key is identity. */

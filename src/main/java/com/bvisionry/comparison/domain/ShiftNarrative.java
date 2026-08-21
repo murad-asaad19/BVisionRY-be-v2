@@ -132,7 +132,26 @@ public class ShiftNarrative extends BaseEntity {
     public record Snapshot(NarrativeWording wording, String bandKey, String bandLabel) {
     }
 
-    /** One observation of the breakdown: its kind, and the sentence or two describing it. */
-    public record Item(NarrativeKind kind, String text) {
+    /**
+     * The "nothing disappears" audit came back short even after the corrective
+     * retry: one or more baseline items had no counterpart in the model's
+     * breakdown, so code-synthesised fallback items were appended and the row
+     * needs a human eye (second reading redesign, Aug 2026). Forces DRAFT even
+     * under auto-approve — a synthesised guess must never auto-publish.
+     */
+    @Column(name = "coverage_gap", nullable = false)
+    private boolean coverageGap;
+
+    /**
+     * One observation of the breakdown: its kind, the sentence or two describing
+     * it, and — on the needs-attention kinds only — the deterministic
+     * tracking-data reason computed by code, never by the model. Null elsewhere
+     * and on every row written before it existed.
+     */
+    public record Item(NarrativeKind kind, String text, String reason) {
+
+        public Item(NarrativeKind kind, String text) {
+            this(kind, text, null);
+        }
     }
 }

@@ -104,10 +104,10 @@ class MockLangChainChatModelTest {
                                         PILLAR DIRECTION: declined
 
                                         BEFORE — what's working:
-                                        - Names the obstacle in plain terms
+                                        - B1: Names the obstacle in plain terms
 
                                         BEFORE — what can improve:
-                                        - Stops at diagnosis without an action step
+                                        - B2: Stops at diagnosis without an action step
 
                                         AFTER — what's working:
                                         - Writes one action with a deadline
@@ -130,5 +130,10 @@ class MockLangChainChatModelTest {
                 .contains("Customs broker wasted an entire month");
         // Direction word "declined" → the mandatory forward-looking close.
         assertThat(result.closingAction()).isNotBlank();
+        // Every issued BEFORE id must be declared covered, or the no-vanishing
+        // audit flags a coverage gap on every mocked pillar and holds the whole
+        // dev lane's rows in DRAFT.
+        assertThat(result.items().stream().flatMap(i -> i.covers().stream()))
+                .contains("B1", "B2");
     }
 }

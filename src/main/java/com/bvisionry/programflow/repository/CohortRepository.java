@@ -92,6 +92,20 @@ public interface CohortRepository extends JpaRepository<Cohort, UUID> {
     List<CohortMemberRow> findRoster(@Param("cohortId") UUID cohortId);
 
     /**
+     * {@link #findRoster}'s COUNT — for callers that only need the number (the
+     * journey hero's "N founders in your cohort") without materialising every
+     * row. Keep this WHERE in sync with {@code findRoster}.
+     */
+    @Query(value = """
+            SELECT COUNT(*)
+            FROM cohort_members cm
+            JOIN users u ON u.id = cm.user_id
+            WHERE cm.cohort_id = :cohortId
+              AND u.status = 'ACTIVE'
+              AND u.""" + Learner.ROLE_IN, nativeQuery = true)
+    int countRoster(@Param("cohortId") UUID cohortId);
+
+    /**
      * The cohorts a learner is enrolled in AND may see (spec §8: members see
      * LAUNCHED only; DRAFT is invisible) — by position. Every member-facing
      * read routes through this, so the visibility rule cannot fork; the

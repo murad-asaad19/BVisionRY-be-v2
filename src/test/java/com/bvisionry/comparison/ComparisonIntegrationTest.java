@@ -1266,8 +1266,8 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                 assertThat(sheet).isNotNull();
                 var header = sheet.getRow(0);
                 assertThat(header.getCell(0).getStringCellValue()).isEqualTo("Pillar");
-                // The pillar's numbers ride beside the prose — printed by code,
-                // never stated by the model (operator decision 2026-08-19).
+                // The pillar's numbers ride beside the prose, printed by code
+                // so the figures are always the deterministic ones.
                 assertThat(header.getCell(1).getStringCellValue()).isEqualTo("Before → after");
                 // Columns run in the reading arc — gained, resolved, held, still
                 // open, newly picked up, slipped, lost — and each header states the
@@ -1279,7 +1279,8 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                         // Two outcomes, not one — RESOLVED covers a growth edge
                         // that became a strength AND one that simply stopped
                         // appearing. Naming only the first overstates it.
-                        .isEqualTo("Resolved (growth edge → strength or gone)");
+                        // Strength-only since V203 — absence is not resolution.
+                        .isEqualTo("Resolved (growth edge → strength)");
                 assertThat(header.getCell(4).getStringCellValue())
                         // No arrow where nothing moved — an arrow in this sheet
                         // now always means the state actually changed.

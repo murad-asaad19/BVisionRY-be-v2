@@ -168,8 +168,8 @@
             What changed — in your own words</p>
         <div class="narrative" th:each="n : ${narratives}">
             <p class="narrative-head" th:text="${n.pillarName()}">Pillar</p>
-            <!-- The pillar's numbers, printed by code beside the AI's prose —
-                 the narrative itself never states a figure, so the report does. -->
+            <!-- The pillar's numbers, printed by code beside the AI's prose,
+                 so the report always carries the deterministic figures. -->
             <p class="narrative-score" th:if="${n.scoreLine() != null}"
                th:text="${n.scoreLine()}">44 → 69 · +25 · High</p>
             <!-- One heading per kind, its before → after move beside it, then a

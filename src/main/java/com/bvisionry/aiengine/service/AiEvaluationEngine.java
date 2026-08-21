@@ -218,7 +218,7 @@ public class AiEvaluationEngine {
         StructuredOutputGuardrail guardrail =
                 new StructuredOutputGuardrail(MAPPER, List.of("items"), null, attemptLog);
         ShiftNarrativeWriter service = AiServices.builder(ShiftNarrativeWriter.class)
-                .chatModel(modelFor(model, temperature, maxTokens))
+                .chatModel(cachedPromptModelFor(model, temperature, maxTokens))
                 // Per-call memory — see evaluatePillar for why the repair loop needs it.
                 .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
                 .systemMessageProvider(memoryId -> systemPrompt)
@@ -251,7 +251,7 @@ public class AiEvaluationEngine {
         StructuredOutputGuardrail guardrail =
                 new StructuredOutputGuardrail(MAPPER, List.of(), null, attemptLog);
         MemberGrowthSummaryWriter service = AiServices.builder(MemberGrowthSummaryWriter.class)
-                .chatModel(modelFor(model, temperature, maxTokens))
+                .chatModel(cachedPromptModelFor(model, temperature, maxTokens))
                 // Per-call memory — see evaluatePillar for why the repair loop needs it.
                 .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
                 .systemMessageProvider(memoryId -> systemPrompt)
@@ -277,7 +277,7 @@ public class AiEvaluationEngine {
         StructuredOutputGuardrail guardrail =
                 new StructuredOutputGuardrail(MAPPER, List.of("overview"), null, attemptLog);
         CohortGrowthSummaryWriter service = AiServices.builder(CohortGrowthSummaryWriter.class)
-                .chatModel(modelFor(model, temperature, maxTokens))
+                .chatModel(cachedPromptModelFor(model, temperature, maxTokens))
                 // Per-call memory — see evaluatePillar for why the repair loop needs it.
                 .chatMemory(MessageWindowChatMemory.withMaxMessages(10))
                 .systemMessageProvider(memoryId -> systemPrompt)
@@ -292,7 +292,22 @@ public class AiEvaluationEngine {
     }
 
     private ChatModel modelFor(String model, double temperature, int maxTokens) {
-        return modelProvider.modelFor(model, temperature, maxTokens);
+        return modelProvider.modelFor(model, temperature, maxTokens, false);
+    }
+
+    /**
+     * The transport for the three review-gate writers (spec §2/§3/§4), and the only
+     * calls that ask the provider to cache the prompt.
+     *
+     * <p>They are the ones whose input genuinely repeats: a reviewer who dislikes a
+     * draft presses Regenerate, which re-sends a byte-identical prompt seconds later,
+     * and unlike {@link #evaluatePillar} these have no {@code ai_evaluation_cache} in
+     * front of them to absorb the repeat. The other calls deliberately stay off — a
+     * cache write costs 1.25×, so paying it on a prompt that is never seen twice is
+     * a straight loss.
+     */
+    private ChatModel cachedPromptModelFor(String model, double temperature, int maxTokens) {
+        return modelProvider.modelFor(model, temperature, maxTokens, true);
     }
 
     private OutputGuardrailsConfig retryConfig() {

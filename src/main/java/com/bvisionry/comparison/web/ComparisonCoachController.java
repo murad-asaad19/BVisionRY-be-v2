@@ -78,7 +78,7 @@ public class ComparisonCoachController {
         ExportNameGuard.checkShowNames(showNames);
         requireSeesAndPremium(founderId);
         return XlsxResponse.build(
-                exports.excel(founderId, false, MyGrowthExportService.zoneOrUtc(tz)),
+                exports.excel(founderId, false, true, MyGrowthExportService.zoneOrUtc(tz)),
                 exports.reportFilename(founderId, "xlsx", false), mode);
     }
 

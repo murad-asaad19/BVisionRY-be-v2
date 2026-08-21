@@ -187,11 +187,9 @@ public class MemberGrowthSummaryService {
         StringBuilder sb = new StringBuilder("APPROVED PILLAR NARRATIVES:\n");
         // Scores as CONTEXT (operator decision 2026-08-19, same as the pillar
         // prompt): without them the model weighs a +2 pillar and a +40 pillar
-        // identically. The no-numbers OUTPUT rule is restated inline so it
-        // binds even on installations with a customised system prompt.
-        sb.append("(each pillar's before → after scores, and the OVERALL line, are context "
-                + "for weighing what mattered most ONLY — never repeat or state any number "
-                + "in the output)\n\n");
+        // identically. Repeating them in the output is allowed since
+        // 2026-08-20 (V205).
+        sb.append('\n');
         if (comparison.getOverallBefore() != null && comparison.getOverallAfter() != null) {
             sb.append("OVERALL: before ").append(ShiftNarrativeService.pct(comparison.getOverallBefore()))
                     .append("% → after ").append(ShiftNarrativeService.pct(comparison.getOverallAfter())).append("%\n\n");
@@ -351,7 +349,7 @@ public class MemberGrowthSummaryService {
     /** Null (not an empty list) on a legacy row, so a reader can tell the shapes apart. */
     private static List<ShiftNarrativeDto.NarrativeItemDto> itemDtos(MemberGrowthSummary s) {
         return s.getItems() == null ? null : s.getItems().stream()
-                .map(i -> new ShiftNarrativeDto.NarrativeItemDto(i.kind().name(), i.text()))
+                .map(i -> new ShiftNarrativeDto.NarrativeItemDto(i.kind().name(), i.text(), null))
                 .toList();
     }
 

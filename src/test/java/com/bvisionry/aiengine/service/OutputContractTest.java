@@ -89,7 +89,8 @@ class OutputContractTest {
         Lc4jChatModelProvider provider = new Lc4jChatModelProvider(
                 mock(AIConfigService.class), mock(ModelCapabilityRegistry.class)) {
             @Override
-            public ChatModel modelFor(String modelName, double temperature, int maxTokens) {
+            public ChatModel modelFor(String modelName, double temperature, int maxTokens,
+                                      boolean cachePrompt) {
                 return model;
             }
         };

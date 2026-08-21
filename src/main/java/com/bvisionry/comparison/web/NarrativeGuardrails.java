@@ -152,6 +152,38 @@ public final class NarrativeGuardrails {
         };
     }
 
+    /**
+     * The "nothing disappears" rule (second reading redesign, Aug 2026): which
+     * numbered BEFORE items no observation accounts for. The prompt issues the
+     * ids ({@code B1}…) and asks every observation to declare its {@code covers};
+     * this is the code-side audit of that declaration. Ids the prompt never
+     * issued are ignored — a hallucinated {@code B9} cannot cover anything.
+     */
+    public static List<String> uncoveredBeforeIds(ShiftNarrativeResult result,
+                                                  List<String> issuedIds) {
+        // Case-insensitive, like every other model-echoed token in this
+        // pipeline (NarrativeKind.parse uppercases for the same reason): a
+        // model that echoes "b1" for issued B1 has covered it.
+        java.util.Set<String> covered = result.items().stream()
+                .flatMap(i -> i.covers().stream())
+                .map(c -> c.trim().toUpperCase(java.util.Locale.ROOT))
+                .collect(Collectors.toSet());
+        return issuedIds.stream()
+                .filter(id -> !covered.contains(id.trim().toUpperCase(java.util.Locale.ROOT)))
+                .toList();
+    }
+
+    /** The corrective re-ask when coverage came back short — names the exact gaps. */
+    public static String coverageCorrection(List<String> uncoveredIds) {
+        return "Your response left these BEFORE items unaccounted for: "
+                + String.join(", ", uncoveredIds)
+                + ". EVERY numbered BEFORE item must appear in some observation's \"covers\" "
+                + "array — an item from the first assessment is never allowed to silently "
+                + "disappear. Classify each one from the AFTER text and the ACTIVITY section "
+                + "(a strength with no later evidence is FADED; a growth edge with no later "
+                + "evidence is PERSISTED).";
+    }
+
     /** Human-readable failure reason for the review UI — what went wrong, reader-facing. */
     public static String reasonLabel(Rejection rejection) {
         return switch (rejection) {

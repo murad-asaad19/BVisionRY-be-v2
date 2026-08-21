@@ -34,7 +34,8 @@ public class E2eAiConfig {
                                                        ModelCapabilityRegistry capabilityRegistry) {
         return new Lc4jChatModelProvider(configService, capabilityRegistry) {
             @Override
-            public ChatModel modelFor(String modelName, double temperature, int maxTokens) {
+            public ChatModel modelFor(String modelName, double temperature, int maxTokens,
+                                      boolean cachePrompt) {
                 return new FakeLangChainChatModel(registry);
             }
         };

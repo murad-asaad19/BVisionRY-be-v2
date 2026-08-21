@@ -22,12 +22,25 @@ public record ShiftNarrativeResult(
         @JsonProperty("items") List<Item> items,
         @JsonProperty("closingAction") String closingAction) {
 
-    /** One observation: what kind of change it is, and the sentence or two describing it. */
-    public record Item(@JsonProperty("kind") String kind, @JsonProperty("text") String text) {
+    /**
+     * One observation: what kind of change it is, the sentence or two describing
+     * it, and which numbered BEFORE items ({@code B1}, {@code B2}, …) it accounts
+     * for — the "nothing disappears" rule's bookkeeping. Empty is legal (a NEW or
+     * EMERGED observation has no earlier counterpart); an id the prompt never
+     * issued is simply ignored.
+     */
+    public record Item(@JsonProperty("kind") String kind, @JsonProperty("text") String text,
+                       @JsonProperty("covers") List<String> covers) {
 
         public Item {
             if (kind == null) kind = "";
             if (text == null) text = "";
+            covers = covers == null ? List.of()
+                    : covers.stream().filter(c -> c != null && !c.isBlank()).toList();
+        }
+
+        public Item(String kind, String text) {
+            this(kind, text, List.of());
         }
     }
 

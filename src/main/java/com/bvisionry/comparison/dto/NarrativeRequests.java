@@ -38,8 +38,13 @@ public final class NarrativeRequests {
     public record UpdateNarrativeRequest(@NotEmpty @Valid List<NarrativeItem> items,
                                          String closingAction) {
 
-        /** One observation: one {@code NarrativeKind} + its prose. */
-        public record NarrativeItem(@NotBlank String kind, @NotBlank String text) {
+        /**
+         * One observation: one {@code NarrativeKind} + its prose. {@code reason}
+         * is accepted for editor shape-parity and IGNORED: the needs-attention
+         * reason box is code-computed from tracking data, and the server
+         * re-attaches the row's own reason on every edit — never the client's.
+         */
+        public record NarrativeItem(@NotBlank String kind, @NotBlank String text, String reason) {
         }
     }
 
@@ -52,8 +57,10 @@ public final class NarrativeRequests {
      */
     public record UpdateGrowthSummaryRequest(@NotEmpty @Valid List<NarrativeItem> items) {
 
-        /** One observation: one {@code NarrativeKind} + its prose. */
-        public record NarrativeItem(@NotBlank String kind, @NotBlank String text) {
+        /** One observation: one {@code NarrativeKind} + its prose. {@code reason} is
+         *  accepted for shape-parity with the narrative editor and ignored — summary
+         *  items carry no reason box. */
+        public record NarrativeItem(@NotBlank String kind, @NotBlank String text, String reason) {
         }
     }
 

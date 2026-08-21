@@ -345,12 +345,10 @@ public class NarrativeActivityRepository {
      * there is nothing else honest to hand the model
      * ({@link CourseProgressSql} owns the percentage, cached columns lie).
      *
-     * <p>Banded into words rather than sent as a percentage. The narrative's one
-     * hard rule is that it must never state a number, and handing the model
-     * "IN_PROGRESS · 45%" is a temptation that buys nothing: the model cannot
-     * repeat the figure, so all it can ever use is the band. The banding happens
-     * in SQL, over a subquery, so {@link CourseProgressSql#LIVE_PROGRESS_PCT} is
-     * still evaluated exactly once per row.
+     * <p>Banded into words rather than sent as a percentage — the band is all a
+     * narrative has ever used of course progress. The banding happens in SQL,
+     * over a subquery, so {@link CourseProgressSql#LIVE_PROGRESS_PCT} is still
+     * evaluated exactly once per row.
      */
     private List<Line> courseProgress(Collection<UUID> taskIds, UUID userId) {
         return jdbc.query("""

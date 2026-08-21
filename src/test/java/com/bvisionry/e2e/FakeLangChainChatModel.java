@@ -120,13 +120,16 @@ public class FakeLangChainChatModel implements ChatModel {
      * Shift-narrative default (redesign spec §6). Carries a non-empty
      * {@code closingAction} so it also satisfies the decline guardrail — a spec
      * that wants to exercise the retry path scripts the failing draft itself.
+     * "covers" names both of the fixture's numbered BEFORE items (B1 strength,
+     * B2 gap) so the no-vanishing audit passes — a spec that wants to exercise
+     * the coverage-gap synthesis scripts an uncovering response itself.
      */
     private static final String SHIFT_NARRATIVE_DEFAULT = """
             {
               "items": [
-                {"kind": "CARRIED_FORWARD",
+                {"kind": "CARRIED_FORWARD", "covers": ["B1", "B2"],
                  "text": "The habit named in the first assessment is still here, and it has sharpened."},
-                {"kind": "NEW",
+                {"kind": "NEW", "covers": [],
                  "text": "A weekly review appears in the later text with no equivalent before it."}
               ],
               "closingAction": "Name the next constraint before it becomes the bottleneck."

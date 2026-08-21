@@ -60,7 +60,7 @@ public class MyGrowthController {
             @RequestParam(required = false) String tz) {
         CurrentUser me = requirePremium();
         return XlsxResponse.build(
-                exports.excel(me.userId(), true, MyGrowthExportService.zoneOrUtc(tz)),
+                exports.excel(me.userId(), true, false, MyGrowthExportService.zoneOrUtc(tz)),
                 "My_Growth_Report.xlsx", mode);
     }
 

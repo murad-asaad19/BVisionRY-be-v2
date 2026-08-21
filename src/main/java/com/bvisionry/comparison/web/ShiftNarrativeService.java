@@ -54,30 +54,25 @@ import java.util.regex.Pattern;
  *
  * <h2>What the model sees</h2>
  * The pillar name, the direction word, the before/after percentages (context
- * for gauging the size of the shift — operator decision 2026-08-19; the inline
- * note beside them restates the no-numbers OUTPUT rule), the two text blocks
- * ("what's working" / "what can improve") from the baseline and distance
- * evaluations, and the programme work tagged to that pillar
+ * for gauging the size of the shift — operator decision 2026-08-19), the two
+ * text blocks ("what's working" / "what can improve") from the baseline and
+ * distance evaluations, and the programme work tagged to that pillar
  * ({@link NarrativeActivityRepository}). "No generation from scores alone" still
  * holds: the length floors below refuse a pillar whose text is missing, so a
  * score with nothing to ground it never generates.
  *
- * <p>Figures DO reach the model inside the prose, though: the prior evaluations'
- * own text is full of percentages and ratings ("scored at 100%", "rated Easy
- * (4/5)"), as is anything the founder typed. §2's no-numbers rule is therefore
- * asked for in the prompt and NOT enforced in code — the rejecting guardrail was
- * removed because the figures it caught were overwhelmingly the founder's own
- * words quoted back, and each false reject burned the single corrective retry
- * and surfaced a pillar as ungeneratable. The prompt also carries the one rule
- * the data cannot: never quote the facilitator feedback the activity section
- * labels as such.
+ * <p>The output MAY state the figures it was given — the no-numbers rule was
+ * retired (operator decision 2026-08-20, V205); what the prompt still forbids
+ * is stating a figure the material does not contain. The prompt also carries
+ * the one rule the data cannot: never quote the facilitator feedback the
+ * activity section labels as such.
  *
  * <h2>Guardrails (code, not prompt-hope)</h2>
  * See {@link NarrativeGuardrails}. Either length floor — no "before" to compare
  * from, or nothing at all to compare it against — means no model call and NO row
  * (the review UI shows the configured standard sentence inline for that pillar;
  * a row would imply a narrative somebody could approve). Decline without a
- * forward-looking close, an empty breakdown, a leaked score, or a kind outside
+ * forward-looking close, an empty breakdown, or a kind outside
  * {@link NarrativeKind} → ONE corrective retry, then a generation failure that persists
  * nothing.
  *
@@ -330,23 +325,43 @@ public class ShiftNarrativeService {
         // loop rather than a copy-pasted second call so the retry budget is a
         // number, not a duplicated block — and so the aiconfig call site is one
         // place, not two (the architecture ratchet counts every one of them).
+        // Coverage shares the same single-retry budget: a hard-rule rejection
+        // claims the re-ask first, a coverage gap claims it otherwise — and a
+        // gap that SURVIVES the retry is not a failure but a synthesis case
+        // below (the no-vanishing rule must add material, never subtract it).
+        List<Candidate.BeforeItem> beforeItems = candidate.beforeItems();
+        List<String> issuedIds = beforeItems.stream().map(Candidate.BeforeItem::id).toList();
+        // The last attempt that PASSED the hard guardrails, kept even when a
+        // later attempt fails them: a coverage re-ask that comes back broken
+        // must not discard the persistable draft it was trying to improve —
+        // the gap synthesis below exists precisely to salvage it.
         AIResponse<ShiftNarrativeResult> response = null;
         ShiftNarrativeResult result = null;
         Optional<NarrativeGuardrails.Rejection> rejection = Optional.empty();
+        List<String> uncovered = List.of();
         String correction = null;
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            response = chat.generateShiftNarrative(userMessage, correction, metadata);
-            result = response.parsed();
-            rejection = NarrativeGuardrails.validate(result, decline);
-            if (rejection.isEmpty()) {
+            AIResponse<ShiftNarrativeResult> attemptResponse =
+                    chat.generateShiftNarrative(userMessage, correction, metadata);
+            rejection = NarrativeGuardrails.validate(attemptResponse.parsed(), decline);
+            if (rejection.isPresent()) {
+                correction = NarrativeGuardrails.correction(
+                        rejection.get(), ctx.wording().declineCloseInstruction());
+                log.info("Shift narrative rejected ({}) for pillar '{}' on attempt {}",
+                        rejection.get(), candidate.pillar().getPillarNameSnapshot(), attempt);
+                continue;
+            }
+            response = attemptResponse;
+            result = attemptResponse.parsed();
+            uncovered = NarrativeGuardrails.uncoveredBeforeIds(result, issuedIds);
+            if (uncovered.isEmpty()) {
                 break;
             }
-            correction = NarrativeGuardrails.correction(
-                    rejection.get(), ctx.wording().declineCloseInstruction());
-            log.info("Shift narrative rejected ({}) for pillar '{}' on attempt {}",
-                    rejection.get(), candidate.pillar().getPillarNameSnapshot(), attempt);
+            correction = NarrativeGuardrails.coverageCorrection(uncovered);
+            log.info("Shift narrative for pillar '{}' left {} BEFORE item(s) uncovered on attempt {}",
+                    candidate.pillar().getPillarNameSnapshot(), uncovered.size(), attempt);
         }
-        if (rejection.isPresent()) {
+        if (result == null) {
             log.warn("Shift narrative for pillar '{}' failed the {} guardrail {} times — not persisted",
                     candidate.pillar().getPillarNameSnapshot(), rejection.get(), MAX_ATTEMPTS);
             return new Generation(null, rejection.get());
@@ -377,7 +392,36 @@ public class ShiftNarrativeService {
         // kind/body stay NULL: this row is born in the §2 breakdown shape, and
         // back-filling the legacy pair from the first item would invent a
         // "primary" observation the model never nominated.
-        narrative.setItems(items(result));
+        String reason = needsAttentionReason(candidate.activity());
+        List<ShiftNarrative.Item> items = new ArrayList<>(items(result, reason));
+        boolean coverageGap = !uncovered.isEmpty();
+        if (coverageGap) {
+            // The no-vanishing default: every still-uncovered baseline item gets
+            // a code-synthesised fallback — a strength with no later evidence is
+            // FADED, a growth edge PERSISTED — and the row is flagged for the
+            // coach. Quoting the founder's own line verbatim is what makes the
+            // fallback reviewable rather than a bare apology.
+            Map<String, Candidate.BeforeItem> byId = beforeItems.stream()
+                    .collect(java.util.stream.Collectors.toMap(
+                            Candidate.BeforeItem::id, java.util.function.Function.identity()));
+            for (String id : uncovered) {
+                Candidate.BeforeItem before = byId.get(id);
+                NarrativeKind kind = before.working() ? NarrativeKind.FADED : NarrativeKind.PERSISTED;
+                // "flagged for your coach to review" was retired from this
+                // copy: by the time a founder reads it the coach HAS reviewed
+                // (the gap holds the row in DRAFT), so the sentence read stale.
+                items.add(new ShiftNarrative.Item(kind,
+                        "Your first assessment noted \"" + before.text().trim() + "\". The later "
+                                + "reading does not clearly account for this, so it is worth "
+                                + "revisiting with your coach.",
+                        kind == NarrativeKind.FADED ? reason : null));
+            }
+            log.info("Shift narrative for pillar '{}' synthesised {} fallback item(s) for "
+                            + "uncovered BEFORE items — flagged for review",
+                    candidate.pillar().getPillarNameSnapshot(), uncovered.size());
+        }
+        narrative.setItems(items);
+        narrative.setCoverageGap(coverageGap);
         narrative.setClosingAction(result.closingAction().isBlank() ? null : result.closingAction().trim());
         narrative.setBandKey(bandKey);
         narrative.setDecline(decline);
@@ -387,21 +431,78 @@ public class ShiftNarrativeService {
         narrative.setAiPromptVersionId(provenance.systemPromptVersionId());
         narrative.setConfigSnapshot(new ShiftNarrative.Snapshot(
                 ctx.wording(), bandKey, candidate.pillar().getBandLabel()));
-        if (ctx.wording().autoApprove()) {
+        if (ctx.wording().autoApprove() && !coverageGap) {
             // §6 auto-approve: stamped by the SYSTEM — approvedBy stays null so
-            // the UI never attributes a machine decision to a person.
+            // the UI never attributes a machine decision to a person. A coverage
+            // gap always holds the row in DRAFT: its synthesised fallback items
+            // exist precisely so a coach looks at them before a founder does.
             narrative.setStatus(NarrativeStatus.APPROVED);
             narrative.setApprovedAt(Instant.now());
         }
         return new Generation(narratives.save(narrative), null);
     }
 
-    /** The guardrail already proved every kind parses, so {@code orElseThrow} cannot fire. */
-    private static List<ShiftNarrative.Item> items(ShiftNarrativeResult result) {
+    /**
+     * The guardrail already proved every kind parses, so {@code orElseThrow}
+     * cannot fire. The needs-attention kinds (REGRESSED, FADED — what the
+     * founder view renders as "Needs attention") get the deterministic
+     * tracking-data reason attached; it is code-written from the pillar's
+     * tagged work, never the model's to invent (second reading redesign).
+     */
+    private static List<ShiftNarrative.Item> items(ShiftNarrativeResult result, String reason) {
         return result.items().stream()
-                .map(i -> new ShiftNarrative.Item(
-                        NarrativeKind.parse(i.kind()).orElseThrow(), i.text().trim()))
+                .map(i -> {
+                    NarrativeKind kind = NarrativeKind.parse(i.kind()).orElseThrow();
+                    boolean needsAttention =
+                            kind == NarrativeKind.REGRESSED || kind == NarrativeKind.FADED;
+                    return new ShiftNarrative.Item(kind, i.text().trim(),
+                            needsAttention ? reason : null);
+                })
                 .toList();
+    }
+
+    /**
+     * The needs-attention reason box, written by CODE from the pillar's tagged
+     * practice work — never invented, per the second reading redesign: either
+     * the tracking data explains the change, or the card falls back to the
+     * honest "no clear reason" sentence (a null here).
+     *
+     * <p>Only INCOMPLETE practice can explain a slip, so fully-completed work —
+     * or a pillar with no tagged work at all — returns null rather than a
+     * reason that explains nothing. Workshop attendance and coach notes join
+     * here once they carry a pillar link; today neither does.
+     */
+    static String needsAttentionReason(List<NarrativeActivityRepository.TaskActivity> activity) {
+        if (activity.isEmpty()) {
+            return null;
+        }
+        LocalDate today = LocalDate.now();
+        long overdue = activity.stream().filter(t -> "overdue".equals(t.status(today))).count();
+        long pending = activity.stream().filter(t -> "pending".equals(t.status(today))).count();
+        long open = overdue + pending;
+        if (open == 0) {
+            return null;
+        }
+        int total = activity.size();
+        StringBuilder sb = new StringBuilder();
+        sb.append(open).append(" of the ").append(total)
+                .append(total == 1 ? " practice task" : " practice tasks")
+                .append(" tied to this pillar ").append(open == 1 ? "is" : "are")
+                .append(" still open");
+        if (overdue > 0) {
+            sb.append(" (").append(overdue).append(" overdue)");
+        }
+        Optional<Instant> lastDone = activity.stream()
+                .map(NarrativeActivityRepository.TaskActivity::completedAt)
+                .filter(java.util.Objects::nonNull)
+                .max(Comparator.naturalOrder());
+        if (lastDone.isPresent()) {
+            sb.append("; practice was last completed on ")
+                    .append(lastDone.get().atZone(ZoneId.systemDefault()).toLocalDate());
+        } else {
+            sb.append("; no practice has been completed on this pillar yet");
+        }
+        return sb.append('.').toString();
     }
 
     /**
@@ -415,26 +516,61 @@ public class ShiftNarrativeService {
         sb.append("PILLAR DIRECTION: ").append(candidate.direction()).append('\n');
         // The before/after percentages, as CONTEXT for gauging the size of the
         // shift (operator decision 2026-08-19 — a direction word alone cannot
-        // distinguish +2 from +40). The §2 no-numbers rule is about the OUTPUT
-        // and is restated inline, where it binds even on installations whose
-        // admins customised the system prompt.
+        // distinguish +2 from +40). Repeating them in the output is allowed
+        // since 2026-08-20 (V205).
         if (candidate.pillar().getBeforePct() != null && candidate.pillar().getAfterPct() != null) {
             sb.append("PILLAR SCORE: before ").append(pct(candidate.pillar().getBeforePct()))
                     .append("% → after ").append(pct(candidate.pillar().getAfterPct()))
-                    .append("% (context for you only — never repeat or state any number "
-                            + "in the output)\n");
+                    .append("%\n");
         }
         sb.append('\n');
-        appendBlock(sb, "BEFORE — what's working", candidate.beforeWorking());
-        appendBlock(sb, "BEFORE — what can improve", candidate.beforeImprove());
+        // BEFORE items are NUMBERED (B1…): the ids are what the coverage audit
+        // checks the model's "covers" declarations against, so the no-vanishing
+        // rule is verifiable in code rather than hoped for in prose.
+        List<Candidate.BeforeItem> beforeItems = candidate.beforeItems();
+        appendNumberedBlock(sb, "BEFORE — what's working",
+                beforeItems.stream().filter(Candidate.BeforeItem::working).toList());
+        appendNumberedBlock(sb, "BEFORE — what can improve",
+                beforeItems.stream().filter(b -> !b.working()).toList());
         appendBlock(sb, "AFTER — what's working", candidate.afterWorking());
         appendBlock(sb, "AFTER — what can improve", candidate.afterImprove());
         appendActivity(sb, candidate.activity());
+        sb.append(RESOLVED_NOTE);
+        sb.append(COVERAGE_NOTE);
         if (candidate.afterTextMissing()) {
             sb.append(MISSING_AFTER_NOTE);
         }
         return sb.toString();
     }
+
+    /**
+     * The "nothing disappears" rule (second reading redesign, Aug 2026), riding
+     * every call from Java for the same reason {@link #RESOLVED_NOTE} does: a
+     * guarded migration cannot reach admin-customised templates, and this is the
+     * half that must not be optional. The code side of the contract is
+     * {@link NarrativeGuardrails#uncoveredBeforeIds}.
+     */
+    private static final String COVERAGE_NOTE = """
+            RULE: every numbered BEFORE item (B1, B2, …) must be accounted for. Give each \
+            entry in "items" a "covers" array naming the BEFORE ids that observation speaks \
+            to (for example "covers": ["B1", "B3"]); an observation with no earlier \
+            counterpart (NEW, EMERGED) uses an empty array. Nothing from the first \
+            assessment may silently disappear: a BEFORE item with no clear later evidence \
+            is still classified — FADED for a strength, PERSISTED for a growth edge.
+            """;
+
+    /**
+     * V203's half of the RESOLVED narrowing, in code for the same reason
+     * {@link #MISSING_AFTER_NOTE} is: the guarded migration cannot touch
+     * admin-customised templates, and "absence is not resolution" is the half
+     * that must not be optional — the founder view celebrates RESOLVED as a
+     * closed gap, so it may only ever mean growth edge → strength.
+     */
+    private static final String RESOLVED_NOTE = """
+            RULE: RESOLVED means the growth edge now shows as a strength in the AFTER text \
+            or the ACTIVITY section. A growth edge that is simply absent from AFTER is \
+            PERSISTED, not RESOLVED — absence of mention is not resolution.
+            """;
 
     /**
      * The other half of the empty-AFTER guardrail. A pillar only reaches the
@@ -488,9 +624,8 @@ public class ShiftNarrativeService {
                 sb.append(", due ").append(task.dueDate());
             }
             if (task.completedAt() != null) {
-                // A date, not the raw instant. "2026-08-13T12:00:00Z" is four
-                // more numbers in a prompt whose one hard rule is "never state a
-                // number", and no narrative has ever needed the seconds.
+                // A date, not the raw instant — no narrative has ever needed
+                // the seconds.
                 sb.append(", completed ")
                         .append(task.completedAt().atZone(ZoneId.systemDefault()).toLocalDate());
             }
@@ -539,6 +674,19 @@ public class ShiftNarrativeService {
 
     private static String fenced(String text) {
         return FENCE_TAG.matcher(text).replaceAll("");
+    }
+
+    /** {@link #appendBlock}, but each line carries its coverage id: {@code - B3: …}. */
+    private static void appendNumberedBlock(StringBuilder sb, String title,
+                                            List<Candidate.BeforeItem> items) {
+        sb.append(title).append(":\n");
+        if (items.isEmpty()) {
+            sb.append("- (none recorded)\n");
+        } else {
+            items.forEach(item -> sb.append("- ").append(item.id()).append(": ")
+                    .append(item.text()).append('\n'));
+        }
+        sb.append('\n');
     }
 
     private static void appendBlock(StringBuilder sb, String title, List<String> lines) {
@@ -672,11 +820,26 @@ public class ShiftNarrativeService {
     public ShiftNarrativeDto update(UUID userId, UUID narrativeId,
                                     UpdateNarrativeRequest request, UUID actorId) {
         ShiftNarrative narrative = requireOwned(userId, narrativeId);
+        // The reason box is CODE-computed from tracking data at generation and
+        // is per-pillar (every needs-attention item of a row carries the same
+        // one). It travels through an edit from the ROW, never from the request
+        // — accepting the client's string would let a reviewer fabricate a
+        // "based on your tracking data" claim.
+        String reason = narrative.getItems() == null ? null
+                : narrative.getItems().stream()
+                        .map(ShiftNarrative.Item::reason)
+                        .filter(r -> r != null && !r.isBlank())
+                        .findFirst().orElse(null);
         narrative.setItems(request.items().stream()
-                .map(i -> new ShiftNarrative.Item(NarrativeKind.parse(i.kind())
-                        .orElseThrow(() -> new BadRequestException(
-                                "Unknown narrative kind: " + i.kind())),
-                        i.text().trim()))
+                .map(i -> {
+                    NarrativeKind kind = NarrativeKind.parse(i.kind())
+                            .orElseThrow(() -> new BadRequestException(
+                                    "Unknown narrative kind: " + i.kind()));
+                    boolean needsAttention =
+                            kind == NarrativeKind.REGRESSED || kind == NarrativeKind.FADED;
+                    return new ShiftNarrative.Item(kind, i.text().trim(),
+                            needsAttention ? reason : null);
+                })
                 .toList());
         // A legacy row edited here MIGRATES: the reviewer just rewrote the whole
         // breakdown, so leaving the old paragraph beside it would be two
@@ -815,14 +978,34 @@ public class ShiftNarrativeService {
             return pillar.getDistancePillarId();
         }
 
+        /** One numbered baseline observation — the unit the no-vanishing rule audits. */
+        record BeforeItem(String id, String text, boolean working) {
+        }
+
+        /**
+         * The baseline text as numbered items ({@code B1}…), working block first
+         * — the SAME order {@link #userMessage} prints them in, which is what
+         * makes the ids the model echoes back auditable against this list.
+         */
+        List<BeforeItem> beforeItems() {
+            List<BeforeItem> out = new ArrayList<>();
+            for (String line : beforeWorking) {
+                out.add(new BeforeItem("B" + (out.size() + 1), line, true));
+            }
+            for (String line : beforeImprove) {
+                out.add(new BeforeItem("B" + (out.size() + 1), line, false));
+            }
+            return out;
+        }
+
         /**
          * Which way the pillar moved, as a WORD. The prompt makes the closing
          * action MANDATORY on a decline, and until now the model was never told
          * whether the pillar had declined — an unanswerable rule that
          * {@link NarrativeGuardrails.Rejection#MISSING_CLOSING_ACTION} then
-         * punished it for missing. A direction is not a number, so §2's rule is
-         * untouched; read from the same {@code signum()} the stamped decline flag
-         * uses, so the prompt and the guardrail can never disagree.
+         * punished it for missing. Read from the same {@code signum()} the
+         * stamped decline flag uses, so the prompt and the guardrail can never
+         * disagree.
          */
         String direction() {
             return switch (pillar.getDelta().signum()) {
@@ -955,13 +1138,14 @@ public class ShiftNarrativeService {
                                            boolean detached) {
         List<ShiftNarrativeDto.NarrativeItemDto> items = n.getItems() == null ? null
                 : n.getItems().stream()
-                        .map(i -> new ShiftNarrativeDto.NarrativeItemDto(i.kind().name(), i.text()))
+                        .map(i -> new ShiftNarrativeDto.NarrativeItemDto(
+                                i.kind().name(), i.text(), i.reason()))
                         .toList();
         return new ShiftNarrativeDto(n.getId(), n.getBaselinePillarId(), n.getDistancePillarId(),
                 n.getPillarNameSnapshot(), items,
                 n.getKind() == null ? null : n.getKind().name(), n.getBody(), n.getClosingAction(),
                 n.isDecline(), detached,
-                n.getBandKey(), n.getStatus().name(), n.getGeneratedAt(),
+                n.getBandKey(), n.isCoverageGap(), n.getStatus().name(), n.getGeneratedAt(),
                 n.getApprovedBy(), nameOf(actorNames, n.getApprovedBy()), n.getApprovedAt(),
                 n.getEditedBy(), nameOf(actorNames, n.getEditedBy()), n.getEditedAt());
     }

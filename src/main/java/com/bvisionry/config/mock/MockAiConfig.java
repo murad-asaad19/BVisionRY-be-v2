@@ -43,7 +43,8 @@ public class MockAiConfig {
                 + "No provider calls will be made and every AI result is canned.");
         return new Lc4jChatModelProvider(configService, capabilityRegistry) {
             @Override
-            public ChatModel modelFor(String modelName, double temperature, int maxTokens) {
+            public ChatModel modelFor(String modelName, double temperature, int maxTokens,
+                                      boolean cachePrompt) {
                 return new MockLangChainChatModel();
             }
         };

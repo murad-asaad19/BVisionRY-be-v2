@@ -35,7 +35,7 @@ class Lc4jChatModelProviderKeyRoutingTest {
         ReflectionTestUtils.setField(provider, "openRouterAppTitle", "Bvisionry");
 
         // Building the LangChain4j model does no network I/O, so a non-blank key is enough.
-        assertThat(provider.modelFor("anthropic/claude-sonnet-4", 0.3, 1024)).isNotNull();
+        assertThat(provider.modelFor("anthropic/claude-sonnet-4", 0.3, 1024, false)).isNotNull();
 
         // The transport must read the OpenRouter slot and must NOT consult the
         // provider-active accessor (which would return the Anthropic key here).

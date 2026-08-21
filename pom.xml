@@ -271,7 +271,7 @@
         <dependency>
             <groupId>io.minio</groupId>
             <artifactId>minio</artifactId>
-            <version>8.6.0</version>
+            <version>9.0.3</version>
         </dependency>
         <!-- minio 8.6.0 moved to okhttp 5.x, which Maven (unlike Gradle) resolves to
              the "okhttp" root artifact's Kotlin-Multiplatform capability POM — it ships

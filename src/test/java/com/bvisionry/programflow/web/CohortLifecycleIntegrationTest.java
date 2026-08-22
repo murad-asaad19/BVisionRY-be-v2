@@ -417,7 +417,7 @@ class CohortLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
 
         var req = new com.bvisionry.engagement.dto.SessionDtos.UpsertSessionRequest(
                 com.bvisionry.engagement.domain.SessionType.WORKSHOP, "Retro",
-                java.time.Instant.now(), List.of());
+                java.time.Instant.now(), List.of(), List.of());
         UUID sessionId = sessionService
                 .create(cohortId, org.getId(), req, admin.getId()).id();
         sessionService.setAttendance(cohortId, org.getId(), sessionId, member.getId(),

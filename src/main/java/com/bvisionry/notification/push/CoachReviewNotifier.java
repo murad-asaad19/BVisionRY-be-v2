@@ -107,7 +107,7 @@ public class CoachReviewNotifier {
 
     /** The coach's founder-profile deep link — its Work tab holds any exercise activity. */
     static String coachFounderUrl(UUID memberId) {
-        return "/app/coach/founders/" + memberId;
+        return "/app/team/founders/" + memberId;
     }
 
     /**
@@ -124,13 +124,13 @@ public class CoachReviewNotifier {
 
     /**
      * A route a COACH can actually open. Both of these live under
-     * {@code /app/coach/**}, whose pages are {@code requireRole("COACH")}; an
+     * {@code /app/team/**}, whose pages are {@code requireRole("COACH")}; an
      * {@code /app/admin/**} URL here would 404 for every recipient — the bug
      * {@link MemberJoinedPushHandler} and {@link ProgramFlowPushHandler} both
      * carry comments about.
      *
      * <p>Spec §2.2 names the Review Queue as the submission target and
-     * {@code /app/coach/queue} is exactly that — but it is EXERCISE-only
+     * {@code /app/team/queue} is exactly that — but it is EXERCISE-only
      * ({@code coaching}'s {@code reviewQueue} selects from
      * {@code exercise_submissions}), so an assessment or program-task
      * submission sent there opens a list that cannot contain it. Those land on
@@ -140,7 +140,7 @@ public class CoachReviewNotifier {
      */
     static String coachUrl(NotificationType type, UUID memberId) {
         return type == NotificationType.EXERCISE_ACTIVITY
-                ? "/app/coach/queue"
+                ? "/app/team/queue"
                 : coachFounderUrl(memberId);
     }
 }

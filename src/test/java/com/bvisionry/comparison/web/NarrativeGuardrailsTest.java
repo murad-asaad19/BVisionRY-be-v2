@@ -2,6 +2,7 @@ package com.bvisionry.comparison.web;
 
 import com.bvisionry.common.dto.ShiftNarrativeResult;
 import com.bvisionry.comparison.domain.NarrativeKind;
+import com.bvisionry.comparison.repository.NarrativeActivityRepository.SessionActivity;
 import com.bvisionry.comparison.web.NarrativeGuardrails.Rejection;
 import org.junit.jupiter.api.Test;
 
@@ -270,5 +271,20 @@ class NarrativeGuardrailsTest {
         // pre-§2 wording ("2-4 sentences") would send it back to one paragraph.
         assertThat(NarrativeGuardrails.correction(Rejection.EMPTY_NARRATIVE, "ignored"))
                 .contains("items").contains("text");
+    }
+
+    /* --------------------------------------------- the needs-attention box */
+
+    @Test
+    void missedTaggedSessions_areANeedsAttentionReason_evenWithNoOpenTasks() {
+        // V207: a slip on a pillar whose sessions the founder skipped has a
+        // nameable cause — with zero task activity at all.
+        var missed = new SessionActivity(null, "WORKSHOP", "Holding Space", false);
+        var attended = new SessionActivity(null, "WORKSHOP", "The Mirror Lab", true);
+        assertThat(ShiftNarrativeService.needsAttentionReason(List.of(), List.of(missed, attended)))
+                .isEqualTo("1 of the 2 sessions tied to this pillar was missed.");
+        // Fully attended sessions explain nothing — same rule as completed tasks.
+        assertThat(ShiftNarrativeService.needsAttentionReason(List.of(), List.of(attended)))
+                .isNull();
     }
 }

@@ -30,7 +30,7 @@
 --       PUBLISHED, enough structure for a real evaluated submission
 --     * survey "Mid-programme Reflection (Demo)" — 1 pillar, 2 questions
 --     * exercise template "Map the Competitive Field (Demo)" + 3 columns
---     * 2 COACH users and 5 MEMBER founders (password `Password123!`)
+--     * 2 COACH users and 5 MEMBER founders (password `root`)
 --     * both cohorts, their cohort_orgs assignment to the org below, their
 --       modules, tasks, fields, sessions, announcement
 --
@@ -127,9 +127,9 @@ DECLARE
     -- ...00a was the WORKSHOP task. V172 dropped the type and deleted the row;
     -- the id stays retired rather than reused.
 
-    -- bcrypt(10) of `Password123!` — the documented local password, same hash
+    -- bcrypt(10) of `root` — the documented local password, same hash
     -- backend/tools/e2e-seed/e2e-seed.sql uses.
-    pw text := '$2a$10$WCoWNvqyUxJqcfrfr.rzZue79yaOw5nOQTmufnn1hPdi4XAW3xzGC';
+    pw text := '$2a$10$x6g8Db/WWYHlzZ4xQRFmKe.qOhoMKp0xgUT94UCIEUDI0lGa6Mid.';
 
     r          record;
     v_assign   uuid;

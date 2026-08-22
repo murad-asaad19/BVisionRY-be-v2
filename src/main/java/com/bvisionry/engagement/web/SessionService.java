@@ -93,6 +93,19 @@ public class SessionService {
             }
         }
         s.setExpectedMemberIds(new LinkedHashSet<>(expected));
+        // Only a fully-mapped pair's distance pillar is taggable — the same
+        // rule the board task save enforces, for the same reason: an unmapped
+        // distance pillar feeds no narrative, so the tag would be dead weight
+        // the picker no longer even shows.
+        List<UUID> pillars = req.pillarIds() == null ? List.of() : req.pillarIds();
+        if (!pillars.isEmpty()) {
+            Set<UUID> mapped = Set.copyOf(reads.mappedDistancePillarIds(cohortId));
+            if (!mapped.containsAll(pillars)) {
+                throw new BadRequestException(
+                        "One or more pillars are not mapped baseline↔distance pairs of this cohort");
+            }
+        }
+        s.setPillarIds(new LinkedHashSet<>(pillars));
     }
 
     public void delete(UUID cohortId, UUID orgId, UUID sessionId) {
@@ -176,6 +189,7 @@ public class SessionService {
                 s.getUpdatedAt() == null ? null : s.getUpdatedAt().toInstant(),
                 expected.isEmpty() ? null : expected.size(),
                 expected,
+                List.copyOf(s.getPillarIds()),
                 att);
     }
 

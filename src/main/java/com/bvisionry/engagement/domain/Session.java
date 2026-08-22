@@ -63,6 +63,17 @@ public class Session {
     @Column(name = "member_id", nullable = false)
     private Set<UUID> expectedMemberIds = new LinkedHashSet<>();
 
+    /**
+     * The pillars this session grows (V207) — DISTANCE pillar ids, same as
+     * {@code program_task_pillars}, so a tag lines up 1:1 with the narrative it
+     * feeds. Optional; the upsert validates against the cohort's mapped pairs.
+     */
+    @ElementCollection(fetch = FetchType.LAZY)
+    @CollectionTable(name = "session_pillars",
+            joinColumns = @JoinColumn(name = "session_id"))
+    @Column(name = "pillar_id", nullable = false)
+    private Set<UUID> pillarIds = new LinkedHashSet<>();
+
     @Column(name = "created_by")
     private UUID createdBy;
 

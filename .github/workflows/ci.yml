@@ -278,7 +278,7 @@ jobs:
   #
   # WHY VERIFIED-ONLY, WHICH IS THE ENTIRE REASON THIS CAN STAY BLOCKING.
   # This repository intentionally commits strings that every pattern-matching or
-  # entropy-based scanner reports as secrets: `Password123!` in CLAUDE.md and in
+  # entropy-based scanner reports as secrets: `root` in CLAUDE.md and in
   # the web repo's e2e workflow, the compose credentials in docker/, the seeded
   # local accounts. They are documented local-development values and they are not
   # going away. A scanner that reports them fires on every pull request forever,

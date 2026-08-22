@@ -285,6 +285,24 @@ public class EngagementReadRepository {
                 (rs, i) -> new CohortRef(rs.getObject("id", UUID.class), rs.getString("name")));
     }
 
+    /**
+     * The cohort's taggable distance pillar ids — fully-mapped pairs only,
+     * exactly {@code TaskSpineRepository.mappedDistancePillarIds}'s rule (a
+     * one-sided row is not a pair to tag against, and unmap must kill the tag).
+     * Raw SQL for this class's usual reason: the mapping belongs to the
+     * comparison slice and the ArchUnit ratchet forbids the import.
+     */
+    public List<UUID> mappedDistancePillarIds(UUID cohortId) {
+        return jdbc.query("""
+                SELECT distance_pillar_id FROM comparison_pillar_mappings
+                WHERE cohort_id = :cohortId
+                  AND distance_pillar_id IS NOT NULL
+                  AND baseline_pillar_id IS NOT NULL
+                """,
+                new MapSqlParameterSource("cohortId", cohortId),
+                (rs, i) -> rs.getObject("distance_pillar_id", UUID.class));
+    }
+
     /* -------------------------------------------------------- platform config */
 
     /** The raw config document — parsed (with defaults) by the caller. */

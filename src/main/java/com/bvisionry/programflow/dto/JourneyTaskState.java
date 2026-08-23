@@ -23,9 +23,11 @@ public enum JourneyTaskState {
     DONE,
     /**
      * An exercise a super admin closed as never handed in (V208). The record
-     * is closed — nothing is left for the member to do — so it counts as done
-     * ({@code ProgramRules.done}) and never holds the drip chain; the member
-     * can still submit out of it later, which corrects the record by itself.
+     * is closed, so it never holds the drip chain — the journey flows past it
+     * ({@code ProgramRules.satisfiesDrip}) — but it does NOT count as done
+     * ({@code ProgramRules.done}): it is missing work and must not inflate
+     * completion or participation. The member can still submit out of it
+     * later, which corrects the record by itself.
      */
     NOT_SUBMITTED
 }

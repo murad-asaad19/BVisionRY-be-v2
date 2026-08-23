@@ -40,7 +40,8 @@ final class ProgramRules {
      * live tasks counts as done (there is nothing to complete in it).
      *
      * @param modules       the learner's visible modules, in board order
-     * @param submittedTaskIds live task ids the learner has submitted
+     * @param submittedTaskIds live task ids that release the drip — every
+     *        state {@link #satisfiesDrip} accepts, not only completed work
      */
     static LockState lockState(List<ProgramModule> modules, int index, boolean dripEnabled,
             Set<UUID> submittedTaskIds, Set<UUID> blockedCourseIds, OffsetDateTime now) {
@@ -185,20 +186,31 @@ final class ProgramRules {
     }
 
     /**
-     * Does this state count toward completion/progress/drip? Once the member
-     * has handed the work in ONCE, the journey never re-locks behind it:
-     * <ul>
-     *   <li>CHANGES_REQUESTED counts — the copy is back with the member for
-     *       another pass, but they already submitted it, so drip and progress
-     *       treat it as submitted (operator decision 2026-08-23) rather than
-     *       freezing the whole journey behind the review loop;</li>
-     *   <li>NOT_SUBMITTED counts — the operator closed the record (V208), so
-     *       nothing is left for the member to do and the journey continues as
-     *       if it were submitted.</li>
-     * </ul>
-     * Only NOT_STARTED and IN_PROGRESS hold the chain.
+     * Does this state count toward completion/progress (the engagement
+     * record's done fraction, participation, journey x/y)? The member's side
+     * of the work is done and stands: submitted, reviewed or evaluated. A
+     * returned CHANGES_REQUESTED copy is back with the member, and a
+     * NOT_SUBMITTED record (V208) is closed missing work — neither counts,
+     * or the completion and participation numbers would inflate. Both still
+     * release the drip lock — see {@link #satisfiesDrip}.
      */
     static boolean done(JourneyTaskState state) {
+        return state == JourneyTaskState.SUBMITTED
+                || state == JourneyTaskState.REVIEWED
+                || state == JourneyTaskState.EVALUATED
+                || state == JourneyTaskState.DONE;
+    }
+
+    /**
+     * Does this state release the sequential drip lock and the continue
+     * cursor (operator decision 2026-08-23)? Everything {@link #done} plus
+     * the two states that must not freeze the journey even though they never
+     * count as completed: CHANGES_REQUESTED (handed in once — the review
+     * loop is open feedback, not a lock) and NOT_SUBMITTED (the operator
+     * closed the record, V208, so the member navigates on past it). Only
+     * NOT_STARTED and IN_PROGRESS hold the chain.
+     */
+    static boolean satisfiesDrip(JourneyTaskState state) {
         return state != JourneyTaskState.NOT_STARTED
                 && state != JourneyTaskState.IN_PROGRESS;
     }

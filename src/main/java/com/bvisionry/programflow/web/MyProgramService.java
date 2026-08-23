@@ -138,7 +138,7 @@ public class MyProgramService {
         for (int i = 0; i < ctx.visibleModules().size(); i++) {
             ProgramModule m = ctx.visibleModules().get(i);
             LockState lock = ProgramRules.lockState(ctx.visibleModules(), i, s.dripEnabled(),
-                    ctx.doneTaskIds(), blockedCourses, OffsetDateTime.now());
+                    ctx.dripSatisfiedTaskIds(), blockedCourses, OffsetDateTime.now());
             List<JourneyTask> journeyTasks = new ArrayList<>();
             for (ProgramTask t : ProgramRules.liveTasks(m)) {
                 JourneyTask row = journeyTask(t, ctx, previousMilestoneScore, blockedCourses);
@@ -488,14 +488,16 @@ public class MyProgramService {
 
     /**
      * The learner's visible modules, submissions and typed-task states within
-     * one cohort, loaded once per request. {@code doneTaskIds} counts every
-     * task type (LESSON submitted, course completed, exercise past its first
-     * hand-in — submitted, reviewed, changes-requested or closed as
-     * not-submitted, …) — the drip lock and next-task cursor run on it.
+     * one cohort, loaded once per request. {@code dripSatisfiedTaskIds} holds
+     * every task the drip lock and next-task cursor may flow past
+     * ({@code ProgramRules.satisfiesDrip}): done work of every type plus
+     * returned CHANGES_REQUESTED copies and operator-closed NOT_SUBMITTED
+     * records (V208) — states that never count toward completion
+     * ({@code ProgramRules.done}) but must not hold the chain.
      */
     private record Context(UUID userId, UUID orgId, Cohort cohort, List<ProgramModule> visibleModules,
             List<ProgramSubmission> mySubmissions, Map<UUID, ProgramSubmission> myByTask,
-            Map<UUID, TypedState> typedStates, Set<UUID> doneTaskIds) {
+            Map<UUID, TypedState> typedStates, Set<UUID> dripSatisfiedTaskIds) {
     }
 
     /** {@code orgId} is the MEMBER's own org (spec §13) — it scopes course visibility and slice writes. */
@@ -520,17 +522,18 @@ public class MyProgramService {
         Map<UUID, TypedState> typedStates = typedStates(List.of(userId), typedTasks)
                 .getOrDefault(userId, Map.of());
 
-        Set<UUID> done = new HashSet<>();
+        Set<UUID> dripSatisfied = new HashSet<>();
         mine.stream()
                 .filter(s -> s.getStatus() == SubmissionStatus.SUBMITTED)
                 .map(ProgramSubmission::getTaskId)
-                .forEach(done::add);
+                .forEach(dripSatisfied::add);
         typedStates.forEach((taskId, ts) -> {
-            if (ProgramRules.done(ts.state())) {
-                done.add(taskId);
+            if (ProgramRules.satisfiesDrip(ts.state())) {
+                dripSatisfied.add(taskId);
             }
         });
-        return new Context(userId, orgId, cohort, visible, mine, byTask, typedStates, done);
+        return new Context(userId, orgId, cohort, visible, mine, byTask, typedStates,
+                dripSatisfied);
     }
 
     /**
@@ -683,7 +686,7 @@ public class MyProgramService {
         }
         boolean dripEnabled = settingsOf(cohort.getId()).dripEnabled();
         LockState lock = ProgramRules.lockState(ctx.visibleModules(), index, dripEnabled,
-                ctx.doneTaskIds(),
+                ctx.dripSatisfiedTaskIds(),
                 blockedCourseIds(ctx.orgId(), ctx.visibleModules()),
                 OffsetDateTime.now());
         if (lock != LockState.UNLOCKED) {
@@ -787,7 +790,7 @@ public class MyProgramService {
     private ProgramTask nextTask(Access access, UUID justSubmittedTaskId) {
         Context ctx = access.ctx();
         boolean dripEnabled = settingsOf(ctx.cohort().getId()).dripEnabled();
-        Set<UUID> submitted = new HashSet<>(ctx.doneTaskIds());
+        Set<UUID> submitted = new HashSet<>(ctx.dripSatisfiedTaskIds());
         submitted.add(justSubmittedTaskId);
         Set<UUID> blockedCourses = blockedCourseIds(ctx.orgId(), ctx.visibleModules());
         for (int i = 0; i < ctx.visibleModules().size(); i++) {

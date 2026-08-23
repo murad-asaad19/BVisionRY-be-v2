@@ -217,12 +217,17 @@ class ProgramRulesTest {
             assertThat(ProgramRules.done(JourneyTaskState.EVALUATED)).isTrue();
             assertThat(ProgramRules.done(JourneyTaskState.NOT_STARTED)).isFalse();
             assertThat(ProgramRules.done(JourneyTaskState.IN_PROGRESS)).isFalse();
-            // A returned exercise was already handed in once — the review
-            // loop must not re-lock the journey behind it.
-            assertThat(ProgramRules.done(JourneyTaskState.CHANGES_REQUESTED)).isTrue();
-            // A closed not-submitted record (V208) holds nothing: the journey
-            // continues as if it were submitted.
-            assertThat(ProgramRules.done(JourneyTaskState.NOT_SUBMITTED)).isTrue();
+            // A returned exercise is back with the member, and a closed
+            // not-submitted record (V208) is missing work — neither counts,
+            // or completion/participation numbers would inflate…
+            assertThat(ProgramRules.done(JourneyTaskState.CHANGES_REQUESTED)).isFalse();
+            assertThat(ProgramRules.done(JourneyTaskState.NOT_SUBMITTED)).isFalse();
+            // …but neither holds the drip chain: the journey flows past both.
+            assertThat(ProgramRules.satisfiesDrip(JourneyTaskState.CHANGES_REQUESTED)).isTrue();
+            assertThat(ProgramRules.satisfiesDrip(JourneyTaskState.NOT_SUBMITTED)).isTrue();
+            assertThat(ProgramRules.satisfiesDrip(JourneyTaskState.SUBMITTED)).isTrue();
+            assertThat(ProgramRules.satisfiesDrip(JourneyTaskState.NOT_STARTED)).isFalse();
+            assertThat(ProgramRules.satisfiesDrip(JourneyTaskState.IN_PROGRESS)).isFalse();
         }
     }
 

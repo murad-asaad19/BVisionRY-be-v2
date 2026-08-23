@@ -198,6 +198,8 @@ class ProgramRulesTest {
             assertThat(ProgramRules.exerciseState("CHANGES_REQUESTED"))
                     .isEqualTo(JourneyTaskState.CHANGES_REQUESTED);
             assertThat(ProgramRules.exerciseState("REVIEWED")).isEqualTo(JourneyTaskState.REVIEWED);
+            assertThat(ProgramRules.exerciseState("NOT_SUBMITTED"))
+                    .isEqualTo(JourneyTaskState.NOT_SUBMITTED);
             // ASSESSMENT — evaluation-side statuses collapse to SUBMITTED
             assertThat(ProgramRules.assessmentState(null)).isEqualTo(JourneyTaskState.NOT_STARTED);
             assertThat(ProgramRules.assessmentState("IN_PROGRESS")).isEqualTo(JourneyTaskState.IN_PROGRESS);
@@ -215,8 +217,12 @@ class ProgramRulesTest {
             assertThat(ProgramRules.done(JourneyTaskState.EVALUATED)).isTrue();
             assertThat(ProgramRules.done(JourneyTaskState.NOT_STARTED)).isFalse();
             assertThat(ProgramRules.done(JourneyTaskState.IN_PROGRESS)).isFalse();
-            // A returned exercise is back with the member — not done.
-            assertThat(ProgramRules.done(JourneyTaskState.CHANGES_REQUESTED)).isFalse();
+            // A returned exercise was already handed in once — the review
+            // loop must not re-lock the journey behind it.
+            assertThat(ProgramRules.done(JourneyTaskState.CHANGES_REQUESTED)).isTrue();
+            // A closed not-submitted record (V208) holds nothing: the journey
+            // continues as if it were submitted.
+            assertThat(ProgramRules.done(JourneyTaskState.NOT_SUBMITTED)).isTrue();
         }
     }
 

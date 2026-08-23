@@ -163,6 +163,7 @@ final class ProgramRules {
             case "SUBMITTED" -> JourneyTaskState.SUBMITTED;
             case "CHANGES_REQUESTED" -> JourneyTaskState.CHANGES_REQUESTED;
             case "REVIEWED" -> JourneyTaskState.REVIEWED;
+            case "NOT_SUBMITTED" -> JourneyTaskState.NOT_SUBMITTED;
             default -> JourneyTaskState.IN_PROGRESS;
         };
     }
@@ -184,15 +185,22 @@ final class ProgramRules {
     }
 
     /**
-     * Does this state count toward completion/progress/drip? The member's
-     * side of the work is done (a returned CHANGES_REQUESTED exercise is
-     * back with the member, so it does NOT count).
+     * Does this state count toward completion/progress/drip? Once the member
+     * has handed the work in ONCE, the journey never re-locks behind it:
+     * <ul>
+     *   <li>CHANGES_REQUESTED counts — the copy is back with the member for
+     *       another pass, but they already submitted it, so drip and progress
+     *       treat it as submitted (operator decision 2026-08-23) rather than
+     *       freezing the whole journey behind the review loop;</li>
+     *   <li>NOT_SUBMITTED counts — the operator closed the record (V208), so
+     *       nothing is left for the member to do and the journey continues as
+     *       if it were submitted.</li>
+     * </ul>
+     * Only NOT_STARTED and IN_PROGRESS hold the chain.
      */
     static boolean done(JourneyTaskState state) {
-        return state == JourneyTaskState.SUBMITTED
-                || state == JourneyTaskState.REVIEWED
-                || state == JourneyTaskState.EVALUATED
-                || state == JourneyTaskState.DONE;
+        return state != JourneyTaskState.NOT_STARTED
+                && state != JourneyTaskState.IN_PROGRESS;
     }
 
     /**

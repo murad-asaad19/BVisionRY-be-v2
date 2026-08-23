@@ -658,8 +658,23 @@ public class ShiftNarrativeService {
                 sb.append("  ABOUT: ").append(fenced(task.aiContext()).strip().replace('\n', ' '))
                         .append('\n');
             }
-            if (task.content().isEmpty()) {
+            if (task.notSubmitted()) {
+                // V208: a super admin recorded that the work never arrived. Any
+                // rows typed before it was closed are deliberately WITHHELD —
+                // an approved narrative is member-visible, so it must never
+                // quote text the founder never stood behind. The absence is the
+                // fact; there is nothing here to read as work.
+                sb.append("  NOT SUBMITTED — the member did not submit this. ");
+            } else if (task.content().isEmpty()) {
                 sb.append("  (nothing submitted)\n");
+            } else if (task.draft()) {
+                // Started, never handed in. Its OWN fence, because the model
+                // read an unfinished sheet as finished work when both arrived
+                // in <submission> — the status line said "pending" while the
+                // content said "done", and nothing said which to believe.
+                sb.append("  <draft_submission>\n");
+                task.content().forEach(line -> sb.append("  ").append(fenced(line)).append('\n'));
+                sb.append("  </draft_submission>\n");
             } else {
                 sb.append("  <submission>\n");
                 task.content().forEach(line -> sb.append("  ").append(fenced(line)).append('\n'));
@@ -669,6 +684,9 @@ public class ShiftNarrativeService {
                     .append("  <facilitator_note>\n  ").append(fenced(note))
                     .append("\n  </facilitator_note>\n"));
             sb.append('\n');
+        }
+        if (activity.stream().anyMatch(t -> t.notSubmitted() || (t.draft() && !t.content().isEmpty()))) {
+            sb.append(UNSUBMITTED_NOTE);
         }
     }
 
@@ -740,7 +758,25 @@ public class ShiftNarrativeService {
      * the data costs nothing anybody would miss.
      */
     private static final Pattern FENCE_TAG = Pattern.compile(
-            "</?\\s*(?:submission|facilitator_note)\\s*>", Pattern.CASE_INSENSITIVE);
+            "</?\\s*(?:submission|draft_submission|facilitator_note)\\s*>",
+            Pattern.CASE_INSENSITIVE);
+
+    /**
+     * The unsubmitted-work rule (V208), riding from Java for the same reason
+     * {@link #SESSIONS_NOTE} does: it must bind on installations whose admins
+     * customised their own SHIFT_NARRATIVE template.
+     *
+     * <p>Emitted only when the activity actually contains one of these states —
+     * a rule about a section the prompt does not have is noise the model has to
+     * reconcile against nothing.
+     */
+    private static final String UNSUBMITTED_NOTE = """
+            RULE: work marked NOT SUBMITTED is an ABSENCE, not evidence — say plainly that the \
+            founder did not submit it, never infer what they might have done. A \
+            <draft_submission> was started and never handed in: it shows what they were \
+            working on, but it is NOT finished work, so do not treat it as a completed \
+            practice or as proof a growth edge was closed.
+            """;
 
     /**
      * "44.00" → "44", "56.50" → "56.5" — the prompt reads like a person wrote

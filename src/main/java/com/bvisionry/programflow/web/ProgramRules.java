@@ -163,6 +163,7 @@ final class ProgramRules {
             case "SUBMITTED" -> JourneyTaskState.SUBMITTED;
             case "CHANGES_REQUESTED" -> JourneyTaskState.CHANGES_REQUESTED;
             case "REVIEWED" -> JourneyTaskState.REVIEWED;
+            case "NOT_SUBMITTED" -> JourneyTaskState.NOT_SUBMITTED;
             default -> JourneyTaskState.IN_PROGRESS;
         };
     }
@@ -186,13 +187,18 @@ final class ProgramRules {
     /**
      * Does this state count toward completion/progress/drip? The member's
      * side of the work is done (a returned CHANGES_REQUESTED exercise is
-     * back with the member, so it does NOT count).
+     * back with the member, so it does NOT count). A NOT_SUBMITTED exercise
+     * DOES count: the operator closed the record (V208), so nothing is left
+     * for the member to do and the journey continues as if it were submitted
+     * — otherwise the closed task would deadlock every sequential module
+     * behind it.
      */
     static boolean done(JourneyTaskState state) {
         return state == JourneyTaskState.SUBMITTED
                 || state == JourneyTaskState.REVIEWED
                 || state == JourneyTaskState.EVALUATED
-                || state == JourneyTaskState.DONE;
+                || state == JourneyTaskState.DONE
+                || state == JourneyTaskState.NOT_SUBMITTED;
     }
 
     /**

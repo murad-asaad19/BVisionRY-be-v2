@@ -489,8 +489,9 @@ public class MyProgramService {
     /**
      * The learner's visible modules, submissions and typed-task states within
      * one cohort, loaded once per request. {@code doneTaskIds} counts every
-     * task type (LESSON submitted, course completed, exercise submitted or
-     * reviewed, …) — the drip lock and next-task cursor run on it.
+     * task type (LESSON submitted, course completed, exercise submitted,
+     * reviewed or closed as not-submitted, …) — the drip lock and next-task
+     * cursor run on it.
      */
     private record Context(UUID userId, UUID orgId, Cohort cohort, List<ProgramModule> visibleModules,
             List<ProgramSubmission> mySubmissions, Map<UUID, ProgramSubmission> myByTask,

@@ -9,10 +9,11 @@ import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
  * <p><strong>Done-semantics source of truth:</strong>
  * {@code programflow.web.ProgramRules} ({@code done()} + the per-type state
  * mappings). The member's side of the work is done: LESSON = SUBMITTED program
- * submission, COURSE = COMPLETED enrollment, EXERCISE = SUBMITTED, REVIEWED or
- * NOT_SUBMITTED — the operator closed that record (V208), so the journey moves
- * on as if it were submitted — (a CHANGES_REQUESTED copy is back with the
- * member and does NOT count),
+ * submission, COURSE = COMPLETED enrollment, EXERCISE = any status past the
+ * first hand-in: SUBMITTED, REVIEWED, CHANGES_REQUESTED (already submitted
+ * once — the review loop must not freeze progress, operator decision
+ * 2026-08-23) or NOT_SUBMITTED (the operator closed the record, V208, so the
+ * journey moves on as if it were submitted),
  * ASSESSMENT = tagged submission submitted — or an ADOPTED sitting, below —
  * SURVEY = a tagged response exists.
  *
@@ -77,7 +78,8 @@ public final class TaskCompletion {
                     SELECT 1 FROM exercise_assignments dea
                     JOIN exercise_submissions des ON des.assignment_id = dea.id
                     WHERE dea.program_task_id = t.id AND dea.user_id = %1$s
-                      AND des.status IN ('SUBMITTED', 'REVIEWED', 'NOT_SUBMITTED'))
+                      AND des.status IN ('SUBMITTED', 'REVIEWED',
+                                         'CHANGES_REQUESTED', 'NOT_SUBMITTED'))
                 WHEN 'ASSESSMENT' THEN (EXISTS (
                     SELECT 1 FROM submissions dsu
                     WHERE dsu.program_task_id = t.id AND dsu.user_id = %1$s

@@ -217,8 +217,9 @@ class ProgramRulesTest {
             assertThat(ProgramRules.done(JourneyTaskState.EVALUATED)).isTrue();
             assertThat(ProgramRules.done(JourneyTaskState.NOT_STARTED)).isFalse();
             assertThat(ProgramRules.done(JourneyTaskState.IN_PROGRESS)).isFalse();
-            // A returned exercise is back with the member — not done.
-            assertThat(ProgramRules.done(JourneyTaskState.CHANGES_REQUESTED)).isFalse();
+            // A returned exercise was already handed in once — the review
+            // loop must not re-lock the journey behind it.
+            assertThat(ProgramRules.done(JourneyTaskState.CHANGES_REQUESTED)).isTrue();
             // A closed not-submitted record (V208) holds nothing: the journey
             // continues as if it were submitted.
             assertThat(ProgramRules.done(JourneyTaskState.NOT_SUBMITTED)).isTrue();

@@ -139,9 +139,9 @@ public class EngagementReadRepository {
      * <p>Done-semantics source of truth: {@code programflow.web.ProgramRules}
      * via the shared {@link TaskCompletion#DONE_FOR_USER} fragment (the same
      * rule the coach console, the ROI report and the due-reminder job count
-     * against). Exercises count when SUBMITTED, REVIEWED or NOT_SUBMITTED
-     * (the operator closed the record, V208) — a CHANGES_REQUESTED copy is
-     * back with the member and does NOT count, matching the journey.
+     * against). Exercises count once past the first hand-in — SUBMITTED,
+     * REVIEWED, CHANGES_REQUESTED (already submitted once) or NOT_SUBMITTED
+     * (the operator closed the record, V208) — matching the journey.
      */
     public Counts assignmentCounts(UUID cohortId, UUID memberId) {
         Counts program = jdbc.queryForObject("""
@@ -159,6 +159,7 @@ public class EngagementReadRepository {
         Counts exercises = jdbc.queryForObject("""
                 SELECT count(*) AS total,
                        count(*) FILTER (WHERE es.status IN ('SUBMITTED', 'REVIEWED',
+                                                            'CHANGES_REQUESTED',
                                                             'NOT_SUBMITTED')) AS done
                 FROM exercise_assignments ea
                 LEFT JOIN exercise_submissions es ON es.assignment_id = ea.id

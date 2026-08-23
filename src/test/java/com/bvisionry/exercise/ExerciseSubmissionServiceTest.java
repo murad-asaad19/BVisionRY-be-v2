@@ -187,6 +187,23 @@ class ExerciseSubmissionServiceTest {
         assertThat(captor.getValue().exerciseName()).isEqualTo("Exercise");
     }
 
+    /**
+     * V208: NOT_SUBMITTED closes the exercise but does not LOCK it (operator
+     * decision 2026-08-22) — a member who turns up late corrects the record by
+     * handing the work in, instead of needing a super admin to unlock them.
+     */
+    @Test
+    void submit_isAllowedOutOfNotSubmitted_soALateMemberCanStillHandItIn() {
+        submission.setStatus(ExerciseSubmissionStatus.NOT_SUBMITTED);
+        when(rowRepository.findBySubmissionIdAndDeletedAtIsNullOrderByDisplayOrder(submissionId))
+                .thenReturn(List.of(row));
+
+        service.submit(submissionId, userId);
+
+        assertThat(submission.getStatus()).isEqualTo(ExerciseSubmissionStatus.SUBMITTED);
+        assertThat(submission.getSubmittedAt()).isNotNull();
+    }
+
     @Test
     void reply_publishesExerciseFeedbackRepliedEvent() {
         UUID commentId = UUID.randomUUID();

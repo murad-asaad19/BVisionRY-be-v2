@@ -212,8 +212,12 @@ public class ExerciseSubmissionService {
     @Transactional
     public ExerciseSubmissionDetailResponse submit(UUID submissionId, UUID userId) {
         ExerciseSubmission submission = requireOwned(submissionId, userId);
+        // NOT_SUBMITTED is allowed through on purpose (V208, operator decision
+        // 2026-08-22): a member who turns up late corrects the record by
+        // handing the work in, rather than needing a super admin to unlock it.
         if (submission.getStatus() != ExerciseSubmissionStatus.IN_PROGRESS
-                && submission.getStatus() != ExerciseSubmissionStatus.CHANGES_REQUESTED) {
+                && submission.getStatus() != ExerciseSubmissionStatus.CHANGES_REQUESTED
+                && submission.getStatus() != ExerciseSubmissionStatus.NOT_SUBMITTED) {
             throw new BadRequestException(
                     "This exercise is already submitted (status was " + submission.getStatus() + ").");
         }

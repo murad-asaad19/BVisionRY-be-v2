@@ -60,6 +60,7 @@ public class NarrativeActivityRepository {
      */
     public record TaskActivity(UUID pillarId, UUID taskId, String taskName, String taskType,
                                String aiContext, LocalDate dueDate, boolean done, Instant completedAt,
+                               String submissionStatus,
                                List<String> content, List<String> facilitatorNotes) {
 
         /** Spec §2's three states; overdue is "past due and still not done". */
@@ -68,6 +69,25 @@ public class NarrativeActivityRepository {
                 return "done";
             }
             return dueDate != null && dueDate.isBefore(today) ? "overdue" : "pending";
+        }
+
+        /**
+         * A super admin recorded that the work never arrived (V208). Its rows
+         * must not reach the model as a submission — see
+         * {@link com.bvisionry.exercise.entity.ExerciseSubmissionStatus#NOT_SUBMITTED}.
+         */
+        public boolean notSubmitted() {
+            return "NOT_SUBMITTED".equals(submissionStatus);
+        }
+
+        /**
+         * Content exists but the member never handed it in. Real evidence of
+         * what they were working on, and NOT finished work — the prompt fences
+         * and labels it separately so the model cannot read one as the other.
+         */
+        public boolean draft() {
+            return "IN_PROGRESS".equals(submissionStatus)
+                    || "CHANGES_REQUESTED".equals(submissionStatus);
         }
     }
 
@@ -90,6 +110,16 @@ public class NarrativeActivityRepository {
         List<TaskRow> tasks = jdbc.query("""
                 SELECT ptp.pillar_id, t.id AS task_id, t.name, t.task_type, t.due_date,
                        tmpl.ai_context,
+                       -- The EXERCISE review status (V208): the ONLY signal that
+                       -- separates finished work from a draft the member never
+                       -- handed in. Null for every other task type.
+                       (SELECT ses.status
+                          FROM exercise_assignments sea
+                          JOIN exercise_submissions ses ON ses.assignment_id = sea.id
+                         WHERE t.task_type = 'EXERCISE'
+                           AND sea.program_task_id = t.id AND sea.user_id = :userId
+                         ORDER BY ses.updated_at DESC NULLS LAST
+                         LIMIT 1) AS submission_status,
                        %1$s AS done,
                        (CASE t.task_type
                             WHEN 'LESSON' THEN (SELECT max(cps.submitted_at)
@@ -121,7 +151,8 @@ public class NarrativeActivityRepository {
                 (rs, i) -> new TaskRow(rs.getObject("pillar_id", UUID.class),
                         rs.getObject("task_id", UUID.class), rs.getString("name"),
                         rs.getString("task_type"), rs.getString("ai_context"),
-                        date(rs), rs.getBoolean("done"), instant(rs, "completed_at")));
+                        date(rs), rs.getBoolean("done"), instant(rs, "completed_at"),
+                        rs.getString("submission_status")));
         if (tasks.isEmpty()) {
             return Map.of();
         }
@@ -140,6 +171,7 @@ public class NarrativeActivityRepository {
             byPillar.computeIfAbsent(t.pillarId(), k -> new ArrayList<>())
                     .add(new TaskActivity(t.pillarId(), t.taskId(), t.name(), t.taskType(),
                             t.aiContext(), t.dueDate(), t.done(), t.completedAt(),
+                            t.submissionStatus(),
                             content.getOrDefault(t.taskId(), List.of()),
                             notes.getOrDefault(t.taskId(), List.of())));
         }
@@ -412,7 +444,7 @@ public class NarrativeActivityRepository {
 
     private record TaskRow(UUID pillarId, UUID taskId, String name, String taskType,
                            String aiContext, LocalDate dueDate, boolean done,
-                           Instant completedAt) {}
+                           Instant completedAt, String submissionStatus) {}
 
     /** One rendered line of a task's material, and which side of the wall it sits on. */
     private record Line(UUID taskId, String text, boolean facilitator) {

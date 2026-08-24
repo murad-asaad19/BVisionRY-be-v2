@@ -30,6 +30,17 @@ import java.util.UUID;
 public class PublicSurveyController {
 
     private static final String COOKIE_NAME = "svy_rid";
+    /**
+     * Deliberately WIDER than this controller's own mapping. The browser never
+     * calls {@code /api/public/surveys/**} directly — the survey page posts to
+     * the web app's BFF at {@code /api/bff/public/surveys/**}, and a cookie
+     * pathed at {@code /api/public/surveys} is not sent to that path, so the
+     * respondent id came back null on every submit and duplicate detection
+     * ({@code SurveyResponseRepository.findDuplicateCookieIds}) never fired.
+     * {@code /api} covers both hops while still keeping the cookie off the
+     * app's HTML routes.
+     */
+    private static final String COOKIE_PATH = "/api";
     private static final int COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 90; // 90 days
 
     private final SurveyResponseService responseService;
@@ -68,7 +79,7 @@ public class PublicSurveyController {
         Cookie cookie = new Cookie(COOKIE_NAME, fresh);
         cookie.setHttpOnly(true);
         cookie.setSecure(true);
-        cookie.setPath("/api/public/surveys");
+        cookie.setPath(COOKIE_PATH);
         cookie.setMaxAge(COOKIE_MAX_AGE_SECONDS);
         cookie.setAttribute("SameSite", "Lax");
         response.addCookie(cookie);

@@ -118,7 +118,16 @@ final class ProgramRules {
                 yield v instanceof Collection<?> c && total > 0 && c.size() == total;
             }
             case RATING -> v instanceof Number n && n.intValue() > 0;
-            case FILE -> !(v instanceof Map<?, ?> m2 && m2.isEmpty()) && !String.valueOf(v).isBlank();
+            // A FILE answer counts only when it actually references an uploaded
+            // object. The map carries `name` for display and `url` (the
+            // minio:// marker MyProgramService validated on the way in) for the
+            // bytes — a name with no url is a filename nobody can open, which
+            // is what the pre-presign player used to store. Accepting it (or
+            // the even older bare-filename string) let a REQUIRED file field be
+            // satisfied by a submit that uploaded nothing at all.
+            case FILE -> v instanceof Map<?, ?> m2
+                    && m2.get("url") != null
+                    && !String.valueOf(m2.get("url")).isBlank();
             case SHORT, LONG -> !String.valueOf(v).trim().isEmpty();
             case INSTRUCTIONS, VIDEO -> true;
         };

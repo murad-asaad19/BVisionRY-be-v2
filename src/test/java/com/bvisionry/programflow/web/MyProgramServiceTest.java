@@ -60,6 +60,12 @@ class MyProgramServiceTest {
     private CurrentUserAccessor currentUser;
     @Mock
     private org.springframework.context.ApplicationEventPublisher eventPublisher;
+    @Mock
+    private com.bvisionry.common.media.SubmissionUploadPort submissionUploads;
+    @Mock
+    private com.bvisionry.common.media.MediaUrlPort mediaUrls;
+    @Mock
+    private com.bvisionry.common.media.MediaQuotaPort mediaQuota;
 
     private MyProgramService service;
 
@@ -74,7 +80,8 @@ class MyProgramServiceTest {
     @BeforeEach
     void setUp() {
         service = new MyProgramService(cohorts, modules, tasks, submissions, settings,
-                spine, courseVisibility, currentUser, eventPublisher);
+                spine, courseVisibility, currentUser, eventPublisher, submissionUploads, mediaUrls,
+                mediaQuota);
 
         cohort = new Cohort();
         cohort.setId(cohortId);
@@ -169,6 +176,97 @@ class MyProgramServiceTest {
 
         assertThat(response.pointsEarned()).isZero();
         assertThat(existing.getPointsAwarded()).isEqualTo(55);
+    }
+
+    @Test
+    void fileAnswersRejectMarkersOutsideTheMembersOwnPrefix() {
+        ProgramTaskField file = new ProgramTaskField();
+        file.setId(UUID.randomUUID());
+        file.setTask(task);
+        file.setFieldType(FieldType.FILE);
+        task.getFields().add(file);
+
+        // Another org's prefix, and another member's prefix under the own org —
+        // both would presign-resolve someone else's object if accepted.
+        String foreignOrg = "minio://bvisionry-media/org/" + UUID.randomUUID()
+                + "/submissions/" + userId + "/deck.pdf";
+        String foreignUser = "minio://bvisionry-media/org/" + orgId
+                + "/submissions/" + UUID.randomUUID() + "/deck.pdf";
+        for (String marker : List.of(foreignOrg, foreignUser, "minio://bvisionry-media/pdf/other.pdf")) {
+            assertThatThrownBy(() -> service.saveAnswers(task.getId(),
+                    Map.of(file.getId().toString(), Map.of("name", "deck.pdf", "url", marker))))
+                    .isInstanceOf(BadRequestException.class)
+                    .hasMessageContaining("file attachment");
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void fileAnswersKeepOwnMarkerAndStripTransientPreviewUrl() {
+        ProgramTaskField file = new ProgramTaskField();
+        file.setId(UUID.randomUUID());
+        file.setTask(task);
+        file.setFieldType(FieldType.FILE);
+        task.getFields().add(file);
+        when(submissions.findByTaskIdAndUserId(task.getId(), userId)).thenReturn(Optional.empty());
+        when(submissions.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        String own = "minio://bvisionry-media/org/" + orgId + "/submissions/" + userId + "/deck.pdf";
+        service.saveAnswers(task.getId(), Map.of(file.getId().toString(),
+                Map.of("name", "deck.pdf", "url", own, "previewUrl", "https://minio.example/presigned")));
+
+        org.mockito.ArgumentCaptor<ProgramSubmission> captor =
+                org.mockito.ArgumentCaptor.forClass(ProgramSubmission.class);
+        verify(submissions).save(captor.capture());
+        Map<String, Object> saved =
+                (Map<String, Object>) captor.getValue().getAnswers().get(file.getId().toString());
+        assertThat(saved).containsOnlyKeys("name", "url");
+        assertThat(saved.get("url")).isEqualTo(own);
+    }
+
+    /**
+     * The read side is the dangerous half: it turns a stored marker into a
+     * presigned GET for whatever key that marker names. It must therefore
+     * re-check BOTH ids the write side pinned, not just the trailing user id.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    void playerMintsAPreviewUrlOnlyForTheOwnersOwnOrgAndUserPrefix() {
+        ProgramTaskField file = new ProgramTaskField();
+        file.setId(UUID.randomUUID());
+        file.setTask(task);
+        file.setFieldType(FieldType.FILE);
+        task.getFields().add(file);
+        requiredShort.setRequired(false);
+
+        // Right user, WRONG org — the shape a pre-sanitizer row or a moved
+        // member leaves behind. Resolving it would hand out someone else's file.
+        String foreignOrg = "minio://bvisionry-media/org/" + UUID.randomUUID()
+                + "/submissions/" + userId + "/deck.pdf";
+        ProgramSubmission sub = new ProgramSubmission();
+        sub.setTaskId(task.getId());
+        sub.setUserId(userId);
+        sub.setAnswers(new java.util.LinkedHashMap<>(Map.of(
+                file.getId().toString(), new java.util.LinkedHashMap<>(Map.of(
+                        "name", "deck.pdf", "url", foreignOrg)))));
+        when(submissions.findByTaskIdAndUserId(task.getId(), userId)).thenReturn(Optional.of(sub));
+
+        Map<String, Object> answer = (Map<String, Object>) service.player(task.getId())
+                .answers().get(file.getId().toString());
+        assertThat(answer).doesNotContainKey("previewUrl");
+        org.mockito.Mockito.verify(mediaUrls, org.mockito.Mockito.never()).resolveUrl(any());
+    }
+
+    @Test
+    void presignIsRefusedOnATaskWithNoFileField() {
+        // task carries only `requiredShort` — nothing to attach to, so the
+        // presign must never reach the media side (and never bill the quota).
+        assertThatThrownBy(() -> service.presignAttachment(task.getId(),
+                new com.bvisionry.programflow.dto.PresignAttachmentRequest(
+                        "deck.pdf", "application/pdf", 1024L)))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("no file field");
+        org.mockito.Mockito.verifyNoInteractions(submissionUploads);
     }
 
     @Test

@@ -79,6 +79,19 @@ public class MyProgramController {
         return service.open(taskId);
     }
 
+    /**
+     * Presigns a browser-direct MinIO upload for a FILE-field answer: returns a
+     * short-lived PUT URL (size- and type-bound) plus the {@code minio://}
+     * marker to store as the answer's {@code url}. The bytes never pass
+     * through this server or the BFF, so proxy body-size caps don't apply.
+     */
+    @PostMapping("/tasks/{taskId}/attachments/presign")
+    public com.bvisionry.programflow.dto.PresignAttachmentResponse presignAttachment(
+            @PathVariable UUID taskId,
+            @Valid @RequestBody com.bvisionry.programflow.dto.PresignAttachmentRequest req) {
+        return service.presignAttachment(taskId, req);
+    }
+
     @PutMapping("/tasks/{taskId}/answers")
     public SaveAnswersResponse saveAnswers(
             @PathVariable UUID taskId,

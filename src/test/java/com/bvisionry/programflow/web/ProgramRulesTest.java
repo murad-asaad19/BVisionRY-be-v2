@@ -198,6 +198,8 @@ class ProgramRulesTest {
             assertThat(ProgramRules.exerciseState("CHANGES_REQUESTED"))
                     .isEqualTo(JourneyTaskState.CHANGES_REQUESTED);
             assertThat(ProgramRules.exerciseState("REVIEWED")).isEqualTo(JourneyTaskState.REVIEWED);
+            assertThat(ProgramRules.exerciseState("NOT_SUBMITTED"))
+                    .isEqualTo(JourneyTaskState.NOT_SUBMITTED);
             // ASSESSMENT — evaluation-side statuses collapse to SUBMITTED
             assertThat(ProgramRules.assessmentState(null)).isEqualTo(JourneyTaskState.NOT_STARTED);
             assertThat(ProgramRules.assessmentState("IN_PROGRESS")).isEqualTo(JourneyTaskState.IN_PROGRESS);
@@ -215,8 +217,17 @@ class ProgramRulesTest {
             assertThat(ProgramRules.done(JourneyTaskState.EVALUATED)).isTrue();
             assertThat(ProgramRules.done(JourneyTaskState.NOT_STARTED)).isFalse();
             assertThat(ProgramRules.done(JourneyTaskState.IN_PROGRESS)).isFalse();
-            // A returned exercise is back with the member — not done.
+            // A returned exercise is back with the member, and a closed
+            // not-submitted record (V208) is missing work — neither counts,
+            // or completion/participation numbers would inflate…
             assertThat(ProgramRules.done(JourneyTaskState.CHANGES_REQUESTED)).isFalse();
+            assertThat(ProgramRules.done(JourneyTaskState.NOT_SUBMITTED)).isFalse();
+            // …but neither holds the drip chain: the journey flows past both.
+            assertThat(ProgramRules.satisfiesDrip(JourneyTaskState.CHANGES_REQUESTED)).isTrue();
+            assertThat(ProgramRules.satisfiesDrip(JourneyTaskState.NOT_SUBMITTED)).isTrue();
+            assertThat(ProgramRules.satisfiesDrip(JourneyTaskState.SUBMITTED)).isTrue();
+            assertThat(ProgramRules.satisfiesDrip(JourneyTaskState.NOT_STARTED)).isFalse();
+            assertThat(ProgramRules.satisfiesDrip(JourneyTaskState.IN_PROGRESS)).isFalse();
         }
     }
 

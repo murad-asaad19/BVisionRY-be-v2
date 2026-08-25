@@ -18,13 +18,18 @@ import org.springframework.transaction.annotation.Transactional;
 import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
+import com.bvisionry.common.media.MediaQuotaPort;
+import com.bvisionry.common.media.MediaUrlPort;
+import com.bvisionry.common.media.SubmissionUploadPort;
 import com.bvisionry.common.security.CurrentUser;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.programflow.domain.Cohort;
 import com.bvisionry.programflow.domain.CohortStatus;
+import com.bvisionry.programflow.domain.FieldType;
 import com.bvisionry.programflow.domain.ProgramModule;
 import com.bvisionry.programflow.domain.ProgramSubmission;
 import com.bvisionry.programflow.domain.ProgramTask;
+import com.bvisionry.programflow.domain.ProgramTaskField;
 import com.bvisionry.programflow.domain.ProgramTaskStatus;
 import com.bvisionry.programflow.domain.ProgramTaskType;
 import com.bvisionry.programflow.domain.SubmissionStatus;
@@ -39,6 +44,8 @@ import com.bvisionry.programflow.dto.LeaderboardResponse;
 import com.bvisionry.programflow.dto.LearnerCohortDto;
 import com.bvisionry.programflow.dto.OpenTaskResponse;
 import com.bvisionry.programflow.dto.PlayerResponse;
+import com.bvisionry.programflow.dto.PresignAttachmentRequest;
+import com.bvisionry.programflow.dto.PresignAttachmentResponse;
 import com.bvisionry.programflow.dto.ProgramSettingsDto;
 import com.bvisionry.programflow.dto.SaveAnswersResponse;
 import com.bvisionry.programflow.dto.SubmitResponse;
@@ -67,6 +74,9 @@ public class MyProgramService {
     private final com.bvisionry.common.coursevisibility.CourseVisibilityAccess courseVisibility;
     private final CurrentUserAccessor currentUser;
     private final ApplicationEventPublisher eventPublisher;
+    private final SubmissionUploadPort submissionUploads;
+    private final MediaUrlPort mediaUrls;
+    private final MediaQuotaPort mediaQuota;
 
     // --------------------------------------------------------------- cohorts
 
@@ -138,7 +148,7 @@ public class MyProgramService {
         for (int i = 0; i < ctx.visibleModules().size(); i++) {
             ProgramModule m = ctx.visibleModules().get(i);
             LockState lock = ProgramRules.lockState(ctx.visibleModules(), i, s.dripEnabled(),
-                    ctx.doneTaskIds(), blockedCourses, OffsetDateTime.now());
+                    ctx.dripSatisfiedTaskIds(), blockedCourses, OffsetDateTime.now());
             List<JourneyTask> journeyTasks = new ArrayList<>();
             for (ProgramTask t : ProgramRules.liveTasks(m)) {
                 JourneyTask row = journeyTask(t, ctx, previousMilestoneScore, blockedCourses);
@@ -270,7 +280,9 @@ public class MyProgramService {
                 stageNumber(access.ctx().visibleModules(), access.moduleIndex()),
                 s.stageLabel(), s.dueSoonDays(),
                 t.getFields().stream().map(ProgramMapper::toDto).toList(),
-                sub == null ? Map.of() : sub.getAnswers(),
+                sub == null ? Map.of()
+                        : withAttachmentUrls(t, access.ctx().orgId(), access.ctx().userId(),
+                                sub.getAnswers()),
                 sub == null ? null : sub.getStatus(),
                 sub == null ? null : sub.getSavedAt(),
                 sub == null ? null : sub.getSubmittedAt(),
@@ -317,13 +329,21 @@ public class MyProgramService {
             }
         }
         ProgramSubmission sub = submissions.findByTaskIdAndUserId(taskId, memberId).orElse(null);
+        // The member's OWN org, not the viewing staffer's: a cohort spans orgs
+        // (spec §13), and attachment markers are keyed by the uploader's org.
+        UUID memberOrgId = sub == null ? null : cohorts.findRoster(cohort.getId()).stream()
+                .filter(r -> r.getId().equals(memberId))
+                .map(CohortMemberRow::getOrgId)
+                .findFirst()
+                .orElse(null);
         ProgramSettingsDto s = settingsOf(cohort.getId());
         return new PlayerResponse(
                 t.getId(), t.getName(), t.getDueDate(),
                 t.getModule().getId(), t.getModule().getName(), stageNumber(visible, index),
                 s.stageLabel(), s.dueSoonDays(),
                 t.getFields().stream().map(ProgramMapper::toDto).toList(),
-                sub == null ? Map.of() : sub.getAnswers(),
+                sub == null ? Map.of()
+                        : withAttachmentUrls(t, memberOrgId, memberId, sub.getAnswers()),
                 sub == null ? null : sub.getStatus(),
                 sub == null ? null : sub.getSavedAt(),
                 sub == null ? null : sub.getSubmittedAt(),
@@ -342,9 +362,31 @@ public class MyProgramService {
         return t;
     }
 
+    /**
+     * Presigns a browser-direct upload for a FILE-field answer on this task.
+     * Same access rule as the player (cohort + LIVE + audience + drip); the
+     * media side validates type/size, checks the org's storage quota, and
+     * signs the upload into the member's own submissions key prefix.
+     */
+    public PresignAttachmentResponse presignAttachment(UUID taskId, PresignAttachmentRequest req) {
+        Access access = requireAccess(taskId);
+        requireLesson(access.task());
+        boolean hasFileField = access.task().getFields().stream()
+                .anyMatch(f -> f.getFieldType() == FieldType.FILE);
+        if (!hasFileField) {
+            throw new BadRequestException("This task has no file field");
+        }
+        var up = submissionUploads.presignSubmissionUpload(
+                access.ctx().orgId(), access.ctx().userId(),
+                req.filename(), req.contentType(), req.sizeBytes());
+        return new PresignAttachmentResponse(
+                up.uploadUrl(), up.marker(), up.previewUrl(), up.contentType());
+    }
+
     public SaveAnswersResponse saveAnswers(UUID taskId, Map<String, Object> answers) {
         Access access = requireAccess(taskId);
         requireLesson(access.task());
+        Map<String, Object> clean = sanitizeFileAnswers(access.task(), answers, access.ctx());
         ProgramSubmission sub = submissions.findByTaskIdAndUserId(taskId, access.ctx().userId())
                 .orElseGet(() -> {
                     ProgramSubmission created = new ProgramSubmission();
@@ -352,16 +394,19 @@ public class MyProgramService {
                     created.setUserId(access.ctx().userId());
                     return created;
                 });
-        sub.setAnswers(new LinkedHashMap<>(answers));
+        List<String> superseded = supersededAttachments(access.task(), sub.getAnswers(), clean);
+        sub.setAnswers(clean);
         sub.setSavedAt(OffsetDateTime.now());
         sub = submissions.save(sub);
+        releaseAttachments(access.ctx().orgId(), superseded);
         return new SaveAnswersResponse(sub.getSavedAt());
     }
 
-    public SubmitResponse submit(UUID taskId, Map<String, Object> answers) {
+    public SubmitResponse submit(UUID taskId, Map<String, Object> rawAnswers) {
         Access access = requireAccess(taskId);
         requireLesson(access.task());
         ProgramTask t = access.task();
+        Map<String, Object> answers = sanitizeFileAnswers(t, rawAnswers, access.ctx());
 
         List<UUID> missing = ProgramRules.missingRequired(t.getFields(), answers);
         if (!missing.isEmpty()) {
@@ -379,7 +424,9 @@ public class MyProgramService {
                 });
 
         boolean firstSubmit = sub.getSubmittedAt() == null;
-        sub.setAnswers(new LinkedHashMap<>(answers));
+        List<String> superseded = supersededAttachments(t, sub.getAnswers(), answers);
+        // `answers` is already the sanitizer's own fresh map — no second copy.
+        sub.setAnswers(answers);
         sub.setStatus(SubmissionStatus.SUBMITTED);
         sub.setSavedAt(now);
         int earned = 0;
@@ -395,6 +442,7 @@ public class MyProgramService {
                     access.ctx().orgId(), access.ctx().userId(), currentUser.require().name(), t.getName()));
         }
         submissions.save(sub);
+        releaseAttachments(access.ctx().orgId(), superseded);
 
         int answerable = (int) t.getFields().stream().filter(f -> f.getFieldType().answerable()).count();
         int answered = (int) t.getFields().stream()
@@ -488,13 +536,16 @@ public class MyProgramService {
 
     /**
      * The learner's visible modules, submissions and typed-task states within
-     * one cohort, loaded once per request. {@code doneTaskIds} counts every
-     * task type (LESSON submitted, course completed, exercise submitted or
-     * reviewed, …) — the drip lock and next-task cursor run on it.
+     * one cohort, loaded once per request. {@code dripSatisfiedTaskIds} holds
+     * every task the drip lock and next-task cursor may flow past
+     * ({@code ProgramRules.satisfiesDrip}): done work of every type plus
+     * returned CHANGES_REQUESTED copies and operator-closed NOT_SUBMITTED
+     * records (V208) — states that never count toward completion
+     * ({@code ProgramRules.done}) but must not hold the chain.
      */
     private record Context(UUID userId, UUID orgId, Cohort cohort, List<ProgramModule> visibleModules,
             List<ProgramSubmission> mySubmissions, Map<UUID, ProgramSubmission> myByTask,
-            Map<UUID, TypedState> typedStates, Set<UUID> doneTaskIds) {
+            Map<UUID, TypedState> typedStates, Set<UUID> dripSatisfiedTaskIds) {
     }
 
     /** {@code orgId} is the MEMBER's own org (spec §13) — it scopes course visibility and slice writes. */
@@ -519,17 +570,18 @@ public class MyProgramService {
         Map<UUID, TypedState> typedStates = typedStates(List.of(userId), typedTasks)
                 .getOrDefault(userId, Map.of());
 
-        Set<UUID> done = new HashSet<>();
+        Set<UUID> dripSatisfied = new HashSet<>();
         mine.stream()
                 .filter(s -> s.getStatus() == SubmissionStatus.SUBMITTED)
                 .map(ProgramSubmission::getTaskId)
-                .forEach(done::add);
+                .forEach(dripSatisfied::add);
         typedStates.forEach((taskId, ts) -> {
-            if (ProgramRules.done(ts.state())) {
-                done.add(taskId);
+            if (ProgramRules.satisfiesDrip(ts.state())) {
+                dripSatisfied.add(taskId);
             }
         });
-        return new Context(userId, orgId, cohort, visible, mine, byTask, typedStates, done);
+        return new Context(userId, orgId, cohort, visible, mine, byTask, typedStates,
+                dripSatisfied);
     }
 
     /**
@@ -653,6 +705,151 @@ public class MyProgramService {
         byUser.computeIfAbsent(userId, k -> new LinkedHashMap<>()).put(taskId, state);
     }
 
+    /**
+     * The ONLY attachment marker shape a member may store, mirroring
+     * {@code OrganizationBrandingService.OWN_ORG_MARKER} (see its javadoc for
+     * why this is a string check and why the trailing segment is restricted to
+     * the sanitized alphabet — no {@code ..} or nested {@code /} can smuggle
+     * the key out of the prefix). Uploads land under
+     * {@code org/<orgId>/submissions/<userId>/}; a stored marker is later
+     * resolved into a presigned GET for whatever key it names, so accepting an
+     * unconstrained marker would mint readable URLs for arbitrary objects in
+     * the shared bucket.
+     */
+    private static final java.util.regex.Pattern OWN_SUBMISSION_MARKER = java.util.regex.Pattern.compile(
+            "^minio://[A-Za-z0-9][A-Za-z0-9.-]{1,61}[A-Za-z0-9]"
+          + "/org/([0-9a-fA-F-]{36})/submissions/([0-9a-fA-F-]{36})/[A-Za-z0-9._-]{1,200}$");
+
+    /**
+     * Rebuilds FILE answers rather than trusting them: only {@code name} and
+     * {@code url} survive (a client-echoed {@code previewUrl} — see
+     * {@link #withAttachmentUrls} — is stripped so stale presigned GETs never
+     * reach the DB), and a present {@code url} must be a marker under THIS
+     * member's own submissions prefix. Non-map FILE answers (the legacy
+     * filename-string shape) pass through untouched — they carry no
+     * resolvable reference.
+     */
+    private Map<String, Object> sanitizeFileAnswers(
+            ProgramTask t, Map<String, Object> answers, Context ctx) {
+        Map<String, Object> out = new LinkedHashMap<>(answers);
+        for (ProgramTaskField f : t.getFields()) {
+            if (f.getFieldType() != FieldType.FILE) {
+                continue;
+            }
+            Object v = out.get(f.getId().toString());
+            if (!(v instanceof Map<?, ?> m)) {
+                continue;
+            }
+            Object url = m.get("url");
+            if (url != null) {
+                var match = OWN_SUBMISSION_MARKER.matcher(String.valueOf(url));
+                if (!match.matches()
+                        || !match.group(1).equals(String.valueOf(ctx.orgId()))
+                        || !match.group(2).equals(String.valueOf(ctx.userId()))) {
+                    throw new BadRequestException("Invalid file attachment reference");
+                }
+            }
+            Map<String, Object> clean = new LinkedHashMap<>();
+            if (m.get("name") != null) {
+                clean.put("name", String.valueOf(m.get("name")));
+            }
+            if (url != null) {
+                clean.put("url", String.valueOf(url));
+            }
+            out.put(f.getId().toString(), clean);
+        }
+        return out;
+    }
+
+    /**
+     * The FILE-answer markers {@code previous} referenced that {@code next} no
+     * longer does — the objects a remove-and-reupload or a replacement just
+     * orphaned. Nothing else ever references them again, and
+     * {@code OrgStorageQuotaService} bills the org by LISTING its whole
+     * {@code org/<orgId>/} prefix, so leaving them would let a few retries
+     * permanently consume quota with files no record points at.
+     *
+     * <p>Collected BEFORE the answers are overwritten and released only AFTER
+     * the save commits: the reverse order would delete a file the surviving
+     * record still names if the write then failed.
+     */
+    private List<String> supersededAttachments(
+            ProgramTask t, Map<String, Object> previous, Map<String, Object> next) {
+        if (previous == null || previous.isEmpty()) {
+            return List.of();
+        }
+        List<String> dropped = new ArrayList<>();
+        for (ProgramTaskField f : t.getFields()) {
+            if (f.getFieldType() != FieldType.FILE) {
+                continue;
+            }
+            String key = f.getId().toString();
+            String was = attachmentMarker(previous.get(key));
+            if (was != null && !was.equals(attachmentMarker(next.get(key)))) {
+                dropped.add(was);
+            }
+        }
+        return dropped;
+    }
+
+    /** The stored {@code minio://} marker of a FILE answer, or null for any other shape. */
+    private static String attachmentMarker(Object answer) {
+        return answer instanceof Map<?, ?> m && m.get("url") != null
+                ? String.valueOf(m.get("url"))
+                : null;
+    }
+
+    /**
+     * Best-effort release of orphaned attachment objects. {@code releaseReplaced}
+     * never throws and refuses any marker outside the org's own prefix, so a
+     * storage hiccup leaves one orphan rather than failing a saved answer.
+     */
+    private void releaseAttachments(UUID orgId, List<String> markers) {
+        for (String marker : markers) {
+            mediaQuota.releaseReplaced(orgId, marker);
+        }
+    }
+
+    /**
+     * Read-side counterpart of {@link #sanitizeFileAnswers}: adds a fresh
+     * presigned {@code previewUrl} to each FILE answer whose stored marker
+     * names {@code ownerId}'s own submissions prefix, so the player (own and
+     * staff peer-view) can open the file. The marker itself stays in
+     * {@code url} — previewUrl is transient and stripped again on save.
+     *
+     * <p>Checks BOTH captured ids, exactly as {@link #sanitizeFileAnswers}
+     * does on the way in. Resolving on the owner alone would be the weaker
+     * half of the pair: this method mints a readable URL for whatever key the
+     * marker names, so a row carrying a foreign org's prefix — pre-sanitizer
+     * data, a direct DB write, or an owner whose org later changed — must not
+     * resolve just because the trailing user id still matches.
+     */
+    private Map<String, Object> withAttachmentUrls(
+            ProgramTask t, UUID ownerOrgId, UUID ownerId, Map<String, Object> answers) {
+        Map<String, Object> out = new LinkedHashMap<>(answers);
+        for (ProgramTaskField f : t.getFields()) {
+            if (f.getFieldType() != FieldType.FILE) {
+                continue;
+            }
+            Object v = out.get(f.getId().toString());
+            if (!(v instanceof Map<?, ?> m) || m.get("url") == null) {
+                continue;
+            }
+            String marker = String.valueOf(m.get("url"));
+            var match = OWN_SUBMISSION_MARKER.matcher(marker);
+            if (!match.matches()
+                    || !match.group(1).equals(String.valueOf(ownerOrgId))
+                    || !match.group(2).equals(String.valueOf(ownerId))) {
+                continue;
+            }
+            Map<String, Object> enriched = new LinkedHashMap<>();
+            m.forEach((k, val) -> enriched.put(String.valueOf(k), val));
+            enriched.put("previewUrl", mediaUrls.resolveUrl(marker));
+            out.put(f.getId().toString(), enriched);
+        }
+        return out;
+    }
+
     private record Access(Context ctx, ProgramTask task, ProgramModule module, int moduleIndex) {
     }
 
@@ -682,7 +879,7 @@ public class MyProgramService {
         }
         boolean dripEnabled = settingsOf(cohort.getId()).dripEnabled();
         LockState lock = ProgramRules.lockState(ctx.visibleModules(), index, dripEnabled,
-                ctx.doneTaskIds(),
+                ctx.dripSatisfiedTaskIds(),
                 blockedCourseIds(ctx.orgId(), ctx.visibleModules()),
                 OffsetDateTime.now());
         if (lock != LockState.UNLOCKED) {
@@ -786,7 +983,7 @@ public class MyProgramService {
     private ProgramTask nextTask(Access access, UUID justSubmittedTaskId) {
         Context ctx = access.ctx();
         boolean dripEnabled = settingsOf(ctx.cohort().getId()).dripEnabled();
-        Set<UUID> submitted = new HashSet<>(ctx.doneTaskIds());
+        Set<UUID> submitted = new HashSet<>(ctx.dripSatisfiedTaskIds());
         submitted.add(justSubmittedTaskId);
         Set<UUID> blockedCourses = blockedCourseIds(ctx.orgId(), ctx.visibleModules());
         for (int i = 0; i < ctx.visibleModules().size(); i++) {

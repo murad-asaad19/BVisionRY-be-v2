@@ -139,9 +139,10 @@ public class EngagementReadRepository {
      * <p>Done-semantics source of truth: {@code programflow.web.ProgramRules}
      * via the shared {@link TaskCompletion#DONE_FOR_USER} fragment (the same
      * rule the coach console, the ROI report and the due-reminder job count
-     * against). Exercises count when SUBMITTED or REVIEWED — a
-     * CHANGES_REQUESTED copy is back with the member and does NOT count,
-     * matching the journey.
+     * against). Exercises count when SUBMITTED or REVIEWED. A
+     * CHANGES_REQUESTED copy (back with the member) and a NOT_SUBMITTED
+     * record (closed missing work, V208) never count — either would inflate
+     * the participation score.
      */
     public Counts assignmentCounts(UUID cohortId, UUID memberId) {
         Counts program = jdbc.queryForObject("""
@@ -283,6 +284,24 @@ public class EngagementReadRepository {
                 """,
                 params(orgId, memberId),
                 (rs, i) -> new CohortRef(rs.getObject("id", UUID.class), rs.getString("name")));
+    }
+
+    /**
+     * The cohort's taggable distance pillar ids — fully-mapped pairs only,
+     * exactly {@code TaskSpineRepository.mappedDistancePillarIds}'s rule (a
+     * one-sided row is not a pair to tag against, and unmap must kill the tag).
+     * Raw SQL for this class's usual reason: the mapping belongs to the
+     * comparison slice and the ArchUnit ratchet forbids the import.
+     */
+    public List<UUID> mappedDistancePillarIds(UUID cohortId) {
+        return jdbc.query("""
+                SELECT distance_pillar_id FROM comparison_pillar_mappings
+                WHERE cohort_id = :cohortId
+                  AND distance_pillar_id IS NOT NULL
+                  AND baseline_pillar_id IS NOT NULL
+                """,
+                new MapSqlParameterSource("cohortId", cohortId),
+                (rs, i) -> rs.getObject("distance_pillar_id", UUID.class));
     }
 
     /* -------------------------------------------------------- platform config */

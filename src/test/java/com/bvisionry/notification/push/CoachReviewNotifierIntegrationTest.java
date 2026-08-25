@@ -127,13 +127,13 @@ class CoachReviewNotifierIntegrationTest extends AbstractPostgresIntegrationTest
         // An /app/admin/** URL here 404s for every recipient — the whole reason
         // this mapping is not left to callers.
         assertThat(CoachReviewNotifier.coachUrl(NotificationType.EXERCISE_ACTIVITY, founderId))
-                .isEqualTo("/app/coach/queue");
+                .isEqualTo("/app/team/queue");
         // The queue is exercise-only, so these two aim at the founder profile,
         // whose Work tab actually shows the submitted item.
         assertThat(CoachReviewNotifier.coachUrl(NotificationType.MEMBER_SUBMITTED, founderId))
-                .isEqualTo("/app/coach/founders/" + founderId);
+                .isEqualTo("/app/team/founders/" + founderId);
         assertThat(CoachReviewNotifier.coachUrl(NotificationType.PROGRAM_TASK_SUBMITTED, founderId))
-                .isEqualTo("/app/coach/founders/" + founderId);
+                .isEqualTo("/app/team/founders/" + founderId);
     }
 
     // --- fixtures ------------------------------------------------------------

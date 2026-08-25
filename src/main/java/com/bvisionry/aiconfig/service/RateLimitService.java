@@ -521,19 +521,28 @@ public class RateLimitService implements LoginBackoffPort {
         Instant now = Instant.now(clock);
         Instant windowStart = now.minusSeconds(windowSeconds);
 
-        ConcurrentLinkedDeque<Instant> timestamps = windows.computeIfAbsent(key,
-                k -> new ConcurrentLinkedDeque<>());
-
-        // Remove expired entries outside the window
-        while (!timestamps.isEmpty() && timestamps.peekFirst().isBefore(windowStart)) {
-            timestamps.pollFirst();
-        }
-
-        if (timestamps.size() >= maxRequests) {
+        // Evict-check-record atomically under the key's map bin (compute), so two
+        // concurrent requests can't both pass a size() check at the limit and
+        // overshoot it — the check-then-act race the previous computeIfAbsent
+        // formulation had.
+        boolean[] allowed = new boolean[1];
+        windows.compute(key, (k, timestamps) -> {
+            if (timestamps == null) {
+                timestamps = new ConcurrentLinkedDeque<>();
+            }
+            // Remove expired entries outside the window
+            while (!timestamps.isEmpty() && timestamps.peekFirst().isBefore(windowStart)) {
+                timestamps.pollFirst();
+            }
+            if (timestamps.size() < maxRequests) {
+                timestamps.addLast(now);
+                allowed[0] = true;
+            }
+            return timestamps;
+        });
+        if (!allowed[0]) {
             throw rateLimitExceeded(limitType, maxRequests, windowSeconds);
         }
-
-        timestamps.addLast(now);
     }
 
     private static RateLimitExceededException rateLimitExceeded(String limitType, int maxRequests, int windowSeconds) {
@@ -576,14 +585,23 @@ public class RateLimitService implements LoginBackoffPort {
             List<ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>>> allWindows,
             Instant cutoff) {
         for (var windows : allWindows) {
-            windows.forEach((key, deque) -> {
-                while (!deque.isEmpty() && deque.peekFirst().isBefore(cutoff)) {
-                    deque.pollFirst();
-                }
-                if (deque.isEmpty()) {
-                    windows.remove(key, deque);
-                }
-            });
+            // computeIfPresent, NOT forEach + remove: checkLimitInMemory does its
+            // evict-check-record under the key's bin lock (compute), and that
+            // atomicity only holds if EVERY mutator takes the same lock. A
+            // lock-free sweep could drain a deque, be descheduled while a
+            // concurrent compute recorded a fresh timestamp into that same
+            // instance, then drop the whole mapping with a value-matching
+            // remove(key, deque) — losing the just-recorded request and handing
+            // back a free one at the limit. Returning null here evicts the entry
+            // under the lock, so the two can no longer interleave.
+            for (String key : windows.keySet()) {
+                windows.computeIfPresent(key, (k, deque) -> {
+                    while (!deque.isEmpty() && deque.peekFirst().isBefore(cutoff)) {
+                        deque.pollFirst();
+                    }
+                    return deque.isEmpty() ? null : deque;
+                });
+            }
         }
     }
 }

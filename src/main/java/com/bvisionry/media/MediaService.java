@@ -48,7 +48,8 @@ import jakarta.annotation.PostConstruct;
  * upload so uploads succeed once MinIO becomes reachable.</p>
  */
 @Service
-public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
+public class MediaService implements com.bvisionry.common.media.MediaUrlPort,
+        com.bvisionry.common.media.SubmissionUploadPort {
 
     private static final Logger log = LoggerFactory.getLogger(MediaService.class);
     private static final String MINIO_SCHEME = "minio://";
@@ -62,6 +63,18 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
      */
     static final String ORG_KEY_PREFIX = "org/";
     static final String ORG_BRANDING_SEGMENT = "/branding";
+    /**
+     * Key segment for member task-attachment uploads:
+     * {@code org/<orgId>/submissions/<userId>/…}. Like
+     * {@link #ORG_BRANDING_SEGMENT}, the programflow feature validates a
+     * persisted marker against this shape for the member's OWN org and user id
+     * before storing it — shared as a FORMAT only, no code crosses the feature
+     * line. Living under {@code org/<orgId>/} is also what makes these uploads
+     * count against the org's storage quota.
+     */
+    static final String ORG_SUBMISSIONS_SEGMENT = "/submissions";
+    /** The media kind member task attachments validate against (docs, images, pdf — never markup). */
+    private static final String SUBMISSION_KIND = "asset";
     /** Redirect-hop ceiling for external fetches; each hop is re-validated against the SSRF guard. */
     private static final int MAX_EXTERNAL_REDIRECTS = 5;
     /** Shared, thread-safe client for {@link #fetchExternal(String)} — keeps connection reuse across fetches. */
@@ -244,49 +257,87 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
 
         String objectKey    = buildObjectKey(resolvedKind, filename, orgId);
         String marker       = MINIO_SCHEME + props.getBucket() + "/" + objectKey;
+        String uploadUrl    = presignPutUrl(objectKey, normalizedType, bindSize ? sizeBytes : null);
 
-        final String uploadUrl;
+        return new PresignedUpload(uploadUrl, marker, resolveUrl(marker), normalizedType);
+    }
+
+    /**
+     * Signs a PUT URL for {@code objectKey}, optionally with CONTENT-TYPE AND
+     * CONTENT-LENGTH PINNING ({@code boundSize != null} — the size-bound paths:
+     * org-scoped branding, coach profile photo, member task attachments). Both
+     * pins go into extraHeaders, which makes them SIGNED headers, so the PUT is
+     * refused unless it carries exactly these values.
+     *
+     * <p>Content-Type: without it the validated "image/png" is only ever a
+     * claim in the presign REQUEST — the browser could PUT the same object
+     * as text/html and the object store would serve stored markup from the
+     * object-store origin off a presigned GET, the same stored-XSS channel
+     * image/svg+xml is excluded to avoid.
+     *
+     * <p>Content-Length: without it the declared sizeBytes the quota was
+     * budgeted against is likewise only a claim. Signing it makes the
+     * quota decision binding on the bytes actually written, instead of
+     * resting entirely on a reconciliation that only fires if the caller
+     * later chooses to persist the marker.
+     *
+     * <p>Pinning stays scoped to the bound paths rather than applied globally
+     * because the existing lesson-media client PUTs its own raw File.type (and
+     * omits the header entirely when that is blank) and sends no declared
+     * size on that path, so pinning either for every caller would break
+     * uploads that work today. That gap is real but pre-existing and
+     * SUPER_ADMIN/INSTRUCTOR-only; closing it means changing the shared
+     * dropzone, which is outside this ticket.
+     */
+    private String presignPutUrl(String objectKey, String normalizedType, Long boundSize) {
         try {
             GetPresignedObjectUrlArgs.Builder args = GetPresignedObjectUrlArgs.builder()
                     .method(Method.PUT)
                     .bucket(props.getBucket())
                     .object(objectKey)
                     .expiry(props.getPresignedExpiryMinutes() * 60, TimeUnit.SECONDS);
-            if (bindSize) {
-                // CONTENT-TYPE AND CONTENT-LENGTH PINNING, size-bound paths only
-                // (org-scoped branding + coach profile photo). Both go into
-                // extraHeaders, which makes them SIGNED headers, so the PUT is
-                // refused unless it carries exactly these values.
-                //
-                // Content-Type: without it the validated "image/png" is only ever a
-                // claim in the presign REQUEST — the browser could PUT the same object
-                // as text/html and the object store would serve stored markup from the
-                // object-store origin off a presigned GET, the same stored-XSS channel
-                // image/svg+xml is excluded to avoid.
-                //
-                // Content-Length: without it the declared sizeBytes the quota was
-                // budgeted against is likewise only a claim. Signing it makes the
-                // quota decision binding on the bytes actually written, instead of
-                // resting entirely on a reconciliation that only fires if the caller
-                // later chooses to persist the marker.
-                //
-                // Scoped to org-scoped presigns rather than applied globally because
-                // the existing lesson-media client PUTs its own raw File.type (and
-                // omits the header entirely when that is blank) and sends no declared
-                // size on that path, so pinning either for every caller would break
-                // uploads that work today. That gap is real but pre-existing and
-                // SUPER_ADMIN/INSTRUCTOR-only; closing it means changing the shared
-                // dropzone, which is outside this ticket.
+            if (boundSize != null) {
                 args.extraHeaders(com.google.common.collect.ImmutableMultimap.of(
                         "Content-Type", normalizedType,
-                        "Content-Length", String.valueOf(sizeBytes)));
+                        "Content-Length", String.valueOf(boundSize)));
             }
-            uploadUrl = publicClient.getPresignedObjectUrl(args.build());
+            return publicClient.getPresignedObjectUrl(args.build());
         } catch (Exception ex) {
             throw new MediaUploadException("Failed to presign upload URL: " + ex.getMessage(), ex);
         }
+    }
 
-        return new PresignedUpload(uploadUrl, marker, resolveUrl(marker), normalizedType);
+    /**
+     * Member task-attachment presign ({@link com.bvisionry.common.media.SubmissionUploadPort}).
+     *
+     * <p>Callers (programflow) authorize the member's access to the task FIRST;
+     * this method contributes validation ({@code asset} kind — docs, images,
+     * pdf, never markup), the org storage-quota check against the declared
+     * size, and the {@code org/<orgId>/submissions/<userId>/} key prefix that
+     * makes the resulting marker checkable against the uploader. Always
+     * size-bound: members are the lowest-trust upload callers, so the declared
+     * size and type are signed into the PUT (see {@link #presignPutUrl}).
+     */
+    @Override
+    public PresignedSubmissionUpload presignSubmissionUpload(
+            UUID orgId, UUID userId, String filename, String contentType, long sizeBytes) {
+        if (orgId == null || userId == null) {
+            throw new BadRequestException("Task attachments require an organization-scoped member");
+        }
+        if (sizeBytes <= 0) {
+            throw new BadRequestException(
+                    "A positive declared size (sizeBytes) is required to presign this upload");
+        }
+        String normalizedType = MediaUploadPolicy.validate(SUBMISSION_KIND, contentType, filename, sizeBytes);
+        orgStorageQuota.requireCapacity(orgId, sizeBytes);
+        lazyEnsureBucket();
+
+        String objectKey = ORG_KEY_PREFIX + orgId + ORG_SUBMISSIONS_SEGMENT + "/" + userId
+                + "/" + UUID.randomUUID() + "-" + sanitizeFilename(filename);
+        String marker    = MINIO_SCHEME + props.getBucket() + "/" + objectKey;
+        String uploadUrl = presignPutUrl(objectKey, normalizedType, sizeBytes);
+
+        return new PresignedSubmissionUpload(uploadUrl, marker, resolveUrl(marker), normalizedType);
     }
 
     // -------------------------------------------------------------------------
@@ -609,8 +660,26 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
     }
 
     /**
+     * Longest sanitized filename an object key's trailing segment may carry.
+     *
+     * <p>Every key this class builds ends in {@code <uuid>-<sanitizedFilename>},
+     * and consumers validate that segment against a bounded pattern — the
+     * tightest being programflow's {@code OWN_SUBMISSION_MARKER}, which allows
+     * 200 characters. A UUID (36) plus the hyphen (1) leaves 163, so anything
+     * longer would produce a marker THIS class generated and the save path then
+     * rejected, stranding an already-uploaded object. Truncating here rather
+     * than at each call site keeps the bound with the thing that creates the
+     * segment.
+     */
+    private static final int MAX_FILENAME_SEGMENT = 163;
+    /** Longest trailing ".ext" worth preserving across a truncation. */
+    private static final int MAX_PRESERVED_EXTENSION = 12;
+
+    /**
      * Strips path traversal components and replaces whitespace with underscores to produce a
-     * safe filename segment suitable for use in an object key.
+     * safe filename segment suitable for use in an object key. Over-long names are truncated
+     * to {@link #MAX_FILENAME_SEGMENT}, keeping the extension so the stored object still
+     * names its own type.
      */
     private static String sanitizeFilename(String original) {
         if (original == null || original.isBlank()) {
@@ -619,6 +688,14 @@ public class MediaService implements com.bvisionry.common.media.MediaUrlPort {
         // Take only the last path component (handles Windows and POSIX separators)
         String basename = original.replaceAll(".*[/\\\\]", "");
         // Replace whitespace and any non-filename-safe chars with underscores
-        return basename.replaceAll("[^a-zA-Z0-9._-]", "_");
+        String safe = basename.replaceAll("[^a-zA-Z0-9._-]", "_");
+        if (safe.length() <= MAX_FILENAME_SEGMENT) {
+            return safe;
+        }
+        int dot = safe.lastIndexOf('.');
+        String ext = dot > 0 && safe.length() - dot <= MAX_PRESERVED_EXTENSION
+                ? safe.substring(dot)
+                : "";
+        return safe.substring(0, MAX_FILENAME_SEGMENT - ext.length()) + ext;
     }
 }

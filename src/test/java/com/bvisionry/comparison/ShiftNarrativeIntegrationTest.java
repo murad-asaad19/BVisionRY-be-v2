@@ -456,6 +456,110 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
         }
 
         /**
+         * V208: a super admin marked the exercise NOT_SUBMITTED. The absence is
+         * stated plainly and the rows the founder had typed are WITHHELD — an
+         * approved narrative is member-visible, so it must never quote work
+         * they never stood behind.
+         */
+        @Test
+        void notSubmittedWork_isNamedAsAnAbsence_andItsRowsNeverReachTheModel() {
+            seedTaggedExerciseWithStatus(bigGain, "NOT_SUBMITTED", "Half-typed secret");
+
+            narrativeService.generateForPillar(founder.getId(), bigGain, admin.getId());
+
+            String prompt = responses.lastUserMessage();
+            assertThat(prompt)
+                    .contains("NOT SUBMITTED — the member did not submit this.")
+                    // The rows exist in the DB but must not be in the prompt.
+                    .doesNotContain("Half-typed secret")
+                    .contains("work marked NOT SUBMITTED is an ABSENCE, not evidence");
+            // …and nothing was fenced for it at all: the absence is the whole
+            // entry. (The rule text names <draft_submission>, so assert on the
+            // OPENED fences rather than the substring.)
+            assertThat(prompt.substring(prompt.indexOf("TASK: Status probe")))
+                    .doesNotContain("<draft_submission>\n")
+                    .doesNotContain("<submission>\n");
+        }
+
+        /**
+         * V208: started but never handed in. The content still travels — it is
+         * real evidence of what they were working on — but in its OWN fence, so
+         * the model cannot read it as finished work the way it used to.
+         */
+        @Test
+        void draftWork_travelsInItsOwnFence_notAsASubmission() {
+            seedTaggedExerciseWithStatus(bigGain, "IN_PROGRESS", "Rough first pass");
+
+            narrativeService.generateForPillar(founder.getId(), bigGain, admin.getId());
+
+            String prompt = responses.lastUserMessage();
+            assertThat(prompt)
+                    .contains("<draft_submission>")
+                    .contains("Rough first pass")
+                    .contains("it is NOT finished work")
+                    // The draft must NOT be presented as a finished submission.
+                    .doesNotContain("<submission>");
+        }
+
+        /** A plain SUBMITTED exercise keeps the ordinary fence and gains no rule. */
+        @Test
+        void submittedWork_isUnchanged_andDragsInNoUnsubmittedRule() {
+            seedTaggedExerciseWithStatus(bigGain, "SUBMITTED", "Finished answer");
+
+            narrativeService.generateForPillar(founder.getId(), bigGain, admin.getId());
+
+            String prompt = responses.lastUserMessage();
+            assertThat(prompt)
+                    .contains("<submission>")
+                    .contains("Finished answer")
+                    .doesNotContain("<draft_submission>")
+                    .doesNotContain("NOT SUBMITTED")
+                    .doesNotContain("is an ABSENCE, not evidence");
+        }
+
+        /**
+         * V207: tagged cohort sessions reach the prompt as title + type +
+         * attended/missed — no dates (operator decision 2026-08-21), untitled
+         * sessions of a type collapsed to one counted line, a 1:1 naming
+         * someone else excluded, and the exposure-not-achievement rule riding
+         * the call.
+         */
+        @Test
+        void taggedSessions_reachThePrompt_titledByLine_untitledCounted_datesOmitted() {
+            seedTaggedSession(bigGain, "WORKSHOP", "The Art of Listening", true, null);
+            seedTaggedSession(bigGain, "WORKSHOP", "Holding Space", false, null);
+            seedTaggedSession(bigGain, "COACHING_1ON1", null, true, founder.getId());
+            seedTaggedSession(bigGain, "COACHING_1ON1", null, false, founder.getId());
+            // A 1:1 naming someone else was never this founder's to attend.
+            seedTaggedSession(bigGain, "COACHING_1ON1", "Not yours", false, admin.getId());
+
+            narrativeService.generateForPillar(founder.getId(), bigGain, admin.getId());
+
+            String prompt = responses.lastUserMessage();
+            assertThat(prompt).contains("SESSIONS — cohort sessions tagged to this pillar")
+                    .contains("- Workshop \"The Art of Listening\" — attended")
+                    .contains("- Workshop \"Holding Space\" — missed")
+                    .contains("- Coaching · 1:1 (untitled) — attended 1 of 2")
+                    .doesNotContain("Not yours")
+                    // Attendance is exposure, not achievement — the rule rides
+                    // every call, so it binds on customised templates too.
+                    .contains("never evidence of a shift on its own");
+            // No date in the LISTED SESSIONS — the title is the signal. Scoped to
+            // the block: a due-dated task anywhere else in the fixture would
+            // otherwise fail this on a property it says nothing about.
+            assertThat(prompt.substring(prompt.indexOf("SESSIONS —"),
+                    prompt.indexOf("RULE: the SESSIONS list")))
+                    .doesNotContain("2026-");
+        }
+
+        /** A pillar with no tagged sessions gets no SESSIONS block at all. */
+        @Test
+        void noTaggedSessions_noSessionsBlock() {
+            narrativeService.generateForPillar(founder.getId(), bigGain, admin.getId());
+            assertThat(responses.lastUserMessage()).doesNotContain("SESSIONS —");
+        }
+
+        /**
          * A MEMBERS module the founder is not on is not their work. Without the
          * audience predicate the prompt claimed they were overdue on a task
          * never assigned to them — and named it, which is the whole point of
@@ -1535,6 +1639,33 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     /**
+     * A held session tagged to a pillar (V207). {@code expectedMemberId} null =
+     * the whole cohort is expected; an id narrows the session to that member.
+     */
+    private void seedTaggedSession(UUID pillarId, String type, String title,
+                                   boolean attended, UUID expectedMemberId) {
+        UUID sessionId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO sessions (id, cohort_id, type, title, session_date)
+                VALUES (?, ?, ?, ?, now() - interval '7 days')
+                """, sessionId, cohortId, type, title);
+        jdbc.update("INSERT INTO session_pillars (session_id, pillar_id) VALUES (?, ?)",
+                sessionId, pillarId);
+        if (expectedMemberId != null) {
+            jdbc.update("""
+                    INSERT INTO session_expected_attendees (session_id, member_id)
+                    VALUES (?, ?)
+                    """, sessionId, expectedMemberId);
+        }
+        if (attended) {
+            jdbc.update("""
+                    INSERT INTO session_attendance (session_id, member_id, marked_by)
+                    VALUES (?, ?, ?)
+                    """, sessionId, founder.getId(), admin.getId());
+        }
+    }
+
+    /**
      * A LIVE board LESSON tagged to {@code pillarId}, one question, and the
      * founder's submitted answer to it — the ordinary shape of §2's activity
      * input. Needs a module, because the tag is found through
@@ -1565,6 +1696,42 @@ class ShiftNarrativeIntegrationTest extends AbstractPostgresIntegrationTest {
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /**
+     * A tagged EXERCISE carrying one filled cell, at the given review status
+     * (V208). The row content is always written — what the prompt does with it
+     * is exactly what the status is under test for.
+     */
+    private void seedTaggedExerciseWithStatus(UUID pillarId, String status, String cellText) {
+        UUID templateId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO exercise_templates (id, name, created_by)
+                VALUES (?, 'Status probe', ?)
+                """, templateId, admin.getId());
+        UUID columnId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO exercise_columns (id, template_id, name, type, display_order)
+                VALUES (?, ?, 'Note', 'TEXT', 0)
+                """, columnId, templateId);
+
+        UUID taskId = insertTaggedTask(pillarId, "Status probe", "EXERCISE", templateId);
+        UUID assignmentId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO exercise_assignments (id, template_id, organization_id, user_id,
+                                                  assigned_by, program_task_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """, assignmentId, templateId, org.getId(), founder.getId(), admin.getId(), taskId);
+        UUID submissionId = UUID.randomUUID();
+        // submitted_at only where the status means it actually arrived.
+        jdbc.update("""
+                INSERT INTO exercise_submissions (id, assignment_id, user_id, status, submitted_at)
+                VALUES (?, ?, ?, ?, CASE WHEN ? IN ('SUBMITTED', 'REVIEWED') THEN now() END)
+                """, submissionId, assignmentId, founder.getId(), status, status);
+        jdbc.update("""
+                INSERT INTO exercise_rows (submission_id, display_order, cells)
+                VALUES (?, 0, ?::jsonb)
+                """, submissionId, "{\"" + columnId + "\":\"" + cellText + "\"}");
     }
 
     /** A tagged EXERCISE with one filled cell and a facilitator comment on the work. */

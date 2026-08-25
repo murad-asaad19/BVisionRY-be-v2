@@ -238,6 +238,14 @@ public class ExerciseReviewService {
                 if (submission.getSubmittedAt() == null) submission.setSubmittedAt(now);
                 submission.setReviewedAt(now);
             }
+            // Nothing arrived and nobody reviewed it: both stamps are cleared,
+            // or a submission that was later closed as never-submitted would
+            // keep a submittedAt that every "when did they hand it in" read
+            // still believes.
+            case NOT_SUBMITTED -> {
+                submission.setSubmittedAt(null);
+                submission.setReviewedAt(null);
+            }
         }
         submission.setStatus(target);
 

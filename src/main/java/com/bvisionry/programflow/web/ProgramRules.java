@@ -40,7 +40,8 @@ final class ProgramRules {
      * live tasks counts as done (there is nothing to complete in it).
      *
      * @param modules       the learner's visible modules, in board order
-     * @param submittedTaskIds live task ids the learner has submitted
+     * @param submittedTaskIds live task ids that release the drip — every
+     *        state {@link #satisfiesDrip} accepts, not only completed work
      */
     static LockState lockState(List<ProgramModule> modules, int index, boolean dripEnabled,
             Set<UUID> submittedTaskIds, Set<UUID> blockedCourseIds, OffsetDateTime now) {
@@ -117,7 +118,16 @@ final class ProgramRules {
                 yield v instanceof Collection<?> c && total > 0 && c.size() == total;
             }
             case RATING -> v instanceof Number n && n.intValue() > 0;
-            case FILE -> !(v instanceof Map<?, ?> m2 && m2.isEmpty()) && !String.valueOf(v).isBlank();
+            // A FILE answer counts only when it actually references an uploaded
+            // object. The map carries `name` for display and `url` (the
+            // minio:// marker MyProgramService validated on the way in) for the
+            // bytes — a name with no url is a filename nobody can open, which
+            // is what the pre-presign player used to store. Accepting it (or
+            // the even older bare-filename string) let a REQUIRED file field be
+            // satisfied by a submit that uploaded nothing at all.
+            case FILE -> v instanceof Map<?, ?> m2
+                    && m2.get("url") != null
+                    && !String.valueOf(m2.get("url")).isBlank();
             case SHORT, LONG -> !String.valueOf(v).trim().isEmpty();
             case INSTRUCTIONS, VIDEO -> true;
         };
@@ -163,6 +173,7 @@ final class ProgramRules {
             case "SUBMITTED" -> JourneyTaskState.SUBMITTED;
             case "CHANGES_REQUESTED" -> JourneyTaskState.CHANGES_REQUESTED;
             case "REVIEWED" -> JourneyTaskState.REVIEWED;
+            case "NOT_SUBMITTED" -> JourneyTaskState.NOT_SUBMITTED;
             default -> JourneyTaskState.IN_PROGRESS;
         };
     }
@@ -184,15 +195,33 @@ final class ProgramRules {
     }
 
     /**
-     * Does this state count toward completion/progress/drip? The member's
-     * side of the work is done (a returned CHANGES_REQUESTED exercise is
-     * back with the member, so it does NOT count).
+     * Does this state count toward completion/progress (the engagement
+     * record's done fraction, participation, journey x/y)? The member's side
+     * of the work is done and stands: submitted, reviewed or evaluated. A
+     * returned CHANGES_REQUESTED copy is back with the member, and a
+     * NOT_SUBMITTED record (V208) is closed missing work — neither counts,
+     * or the completion and participation numbers would inflate. Both still
+     * release the drip lock — see {@link #satisfiesDrip}.
      */
     static boolean done(JourneyTaskState state) {
         return state == JourneyTaskState.SUBMITTED
                 || state == JourneyTaskState.REVIEWED
                 || state == JourneyTaskState.EVALUATED
                 || state == JourneyTaskState.DONE;
+    }
+
+    /**
+     * Does this state release the sequential drip lock and the continue
+     * cursor (operator decision 2026-08-23)? Everything {@link #done} plus
+     * the two states that must not freeze the journey even though they never
+     * count as completed: CHANGES_REQUESTED (handed in once — the review
+     * loop is open feedback, not a lock) and NOT_SUBMITTED (the operator
+     * closed the record, V208, so the member navigates on past it). Only
+     * NOT_STARTED and IN_PROGRESS hold the chain.
+     */
+    static boolean satisfiesDrip(JourneyTaskState state) {
+        return state != JourneyTaskState.NOT_STARTED
+                && state != JourneyTaskState.IN_PROGRESS;
     }
 
     /**

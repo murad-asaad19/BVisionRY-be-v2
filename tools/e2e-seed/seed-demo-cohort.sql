@@ -30,7 +30,7 @@
 --       PUBLISHED, enough structure for a real evaluated submission
 --     * survey "Mid-programme Reflection (Demo)" — 1 pillar, 2 questions
 --     * exercise template "Map the Competitive Field (Demo)" + 3 columns
---     * 2 COACH users and 5 MEMBER founders (password `Password123!`)
+--     * 2 COACH users and 5 MEMBER founders (password `root`)
 --     * both cohorts, their cohort_orgs assignment to the org below, their
 --       modules, tasks, fields, sessions, announcement
 --
@@ -127,9 +127,9 @@ DECLARE
     -- ...00a was the WORKSHOP task. V172 dropped the type and deleted the row;
     -- the id stays retired rather than reused.
 
-    -- bcrypt(10) of `Password123!` — the documented local password, same hash
+    -- bcrypt(10) of `root` — the documented local password, same hash
     -- backend/tools/e2e-seed/e2e-seed.sql uses.
-    pw text := '$2a$10$WCoWNvqyUxJqcfrfr.rzZue79yaOw5nOQTmufnn1hPdi4XAW3xzGC';
+    pw text := '$2a$10$x6g8Db/WWYHlzZ4xQRFmKe.qOhoMKp0xgUT94UCIEUDI0lGa6Mid.';
 
     r          record;
     v_assign   uuid;
@@ -399,9 +399,9 @@ ON CONFLICT (id) DO NOTHING;
 -- -------------------------------------------------------------- settings ----
 INSERT INTO program_settings (cohort_id, stage_label, drip_enabled, due_soon_days,
                               end_label, end_at, baseline_pipeline_id, distance_pipeline_id)
-VALUES (cohort_a, 'Sprint', false, 3, 'Demo day', now() + interval '21 days', pipe, pipe)
+VALUES (cohort_a, 'Module', false, 3, 'Demo day', now() + interval '21 days', pipe, pipe)
 ON CONFLICT (cohort_id) DO UPDATE SET
-    stage_label = 'Sprint', drip_enabled = false, due_soon_days = 3,
+    stage_label = 'Module', drip_enabled = false, due_soon_days = 3,
     end_label = 'Demo day', end_at = now() + interval '21 days',
     baseline_pipeline_id = pipe, distance_pipeline_id = pipe;
 
@@ -792,13 +792,13 @@ ON CONFLICT DO NOTHING;
 -- ----------------------------------------------------------- announcement ---
 INSERT INTO announcements (id, org_id, cohort_id, author_id, body, created_at, updated_at)
 VALUES ('de300000-000a-4000-8000-000000000001', org, cohort_a, admin_id,
-        'Sprint 3 opens Monday. Bring your one-line vision and the single slot you refused to move last week — we start with those, then rehearse for demo day.',
+        'Module 3 opens Monday. Bring your one-line vision and the single slot you refused to move last week — we start with those, then rehearse for demo day.',
         now() - interval '4 days', now() - interval '4 days')
 ON CONFLICT (id) DO NOTHING;
 
 -- ============================== Delta Alumni (2025) — COMPLETED closing state
 INSERT INTO program_settings (cohort_id, stage_label, drip_enabled, due_soon_days, end_label)
-VALUES (cohort_d, 'Sprint', false, 3, 'Programme complete')
+VALUES (cohort_d, 'Module', false, 3, 'Programme complete')
 ON CONFLICT (cohort_id) DO NOTHING;
 
 INSERT INTO cohort_members (cohort_id, user_id) VALUES (cohort_d, fa), (cohort_d, fe)

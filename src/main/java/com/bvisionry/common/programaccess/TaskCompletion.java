@@ -9,8 +9,12 @@ import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
  * <p><strong>Done-semantics source of truth:</strong>
  * {@code programflow.web.ProgramRules} ({@code done()} + the per-type state
  * mappings). The member's side of the work is done: LESSON = SUBMITTED program
- * submission, COURSE = COMPLETED enrollment, EXERCISE = SUBMITTED or REVIEWED
- * (a CHANGES_REQUESTED copy is back with the member and does NOT count),
+ * submission, COURSE = COMPLETED enrollment, EXERCISE = SUBMITTED or REVIEWED.
+ * A CHANGES_REQUESTED copy (back with the member) and a NOT_SUBMITTED record
+ * (closed missing work, V208) count in NEITHER — the journey's drip flows
+ * past both ({@code ProgramRules.satisfiesDrip}, operator decision
+ * 2026-08-23), but completion and participation numbers must not be inflated
+ * by work that does not stand,
  * ASSESSMENT = tagged submission submitted — or an ADOPTED sitting, below —
  * SURVEY = a tagged response exists.
  *

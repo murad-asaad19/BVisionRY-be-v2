@@ -2,6 +2,7 @@ package com.bvisionry.coaching.web;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,6 +19,7 @@ import com.bvisionry.coaching.dto.CoachRosterResponse;
 import com.bvisionry.coaching.dto.UpdateCoachProfileRequest;
 import com.bvisionry.coaching.repository.CoachProfileRepository;
 import com.bvisionry.coaching.repository.CoachingReadRepository;
+import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.media.MediaUrlPort;
 import com.bvisionry.common.security.CurrentUser;
@@ -86,7 +88,7 @@ public class CoachConsoleService {
         profile.setBookingUrl(blankToNull(request.bookingUrl()));
         profile.setHeadline(blankToNull(request.headline()));
         profile.setBio(blankToNull(request.bio()));
-        profile.setPhotoUrl(blankToNull(request.photoUrl()));
+        profile.setPhotoUrl(validatePhotoUrl(request.photoUrl()));
         // saveAndFlush, not save: the founder-side read is raw SQL through the
         // same connection, so a write left sitting in the persistence context
         // would be invisible to it inside one transaction. Flushing here costs
@@ -102,6 +104,33 @@ public class CoachConsoleService {
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
     }
+
+    /**
+     * A coach's own upload always lands under the orgId-less {@code image/} kind
+     * folder (see {@code MediaService.buildObjectKey}); an external URL is stored
+     * and served verbatim. A stored marker is resolved into a presigned GET for
+     * whatever key it names ({@code MediaService.resolveUrl}), so a
+     * {@code minio://} value naming any other key — a submission, another org's
+     * branding, lesson media — would mint a readable URL for that private object.
+     * Refuse it, mirroring {@code OrganizationBrandingService.validateMarker}.
+     */
+    private static String validatePhotoUrl(String raw) {
+        String value = blankToNull(raw);
+        if (value == null || !value.startsWith("minio://")) {
+            return value;
+        }
+        if (!COACH_PHOTO_MARKER.matcher(value).matches()) {
+            throw new BadRequestException(
+                    "A profile photo must be an image you uploaded (a minio:// marker under image/)");
+        }
+        return value;
+    }
+
+    // Case-sensitive, sanitised-alphabet key segment: no `..` traversal and no
+    // nested `/` can smuggle the key out of the image/ prefix — the same shape
+    // OrganizationBrandingService pins for org branding markers.
+    private static final Pattern COACH_PHOTO_MARKER = Pattern.compile(
+            "^minio://[A-Za-z0-9][A-Za-z0-9.-]{1,61}[A-Za-z0-9]/image/[A-Za-z0-9._-]{1,240}$");
 
     @Transactional(readOnly = true)
     public CoachRosterResponse roster() {

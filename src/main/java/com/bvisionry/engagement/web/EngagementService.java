@@ -87,8 +87,14 @@ public class EngagementService {
 
     /**
      * Every founder in one cohort with their participation score (spec §4:
-     * Pulse is a participation surface). Config is read ONCE for the whole
-     * roster, so a cohort scores against a single consistent formula.
+     * Pulse is a participation surface), cut to one org's own members — the org
+     * console's Pulse (spec §13.7). Config is read ONCE for the whole roster, so
+     * a cohort scores against a single consistent formula. A cohort the org is
+     * not assigned to is a 404, not an empty list.
+     *
+     * <p>{@code orgId} is required (non-null): a null org would skip the tenant
+     * cut and return every org's roster, so there is deliberately no unscoped
+     * overload to reach that by accident.
      *
      * <p>ponytail: two small reads per member (assignment counts + session
      * counts) — one round trip per row, not one HTTP call per row. At a few
@@ -96,18 +102,11 @@ public class EngagementService {
      * enough to feel it, the upgrade is to group both reads BY member and
      * join in Java, not to cache the score.
      */
-    public CohortParticipationResponse cohortParticipation(UUID cohortId) {
-        return cohortParticipation(cohortId, null);
-    }
-
-    /**
-     * {@link #cohortParticipation(UUID)} cut to one org's own members — the
-     * org console's Pulse (spec §13.7). A cohort the org is not assigned to is
-     * a 404, not an empty list.
-     */
     public CohortParticipationResponse cohortParticipation(UUID cohortId, UUID orgId) {
-        if (reads.cohort(cohortId).isEmpty()
-                || (orgId != null && !reads.assignedToOrg(cohortId, orgId))) {
+        // Fail closed on a null org rather than skip the tenant cut and dump
+        // every org's roster (§13.7). Callers always pass their own org.
+        if (orgId == null || reads.cohort(cohortId).isEmpty()
+                || !reads.assignedToOrg(cohortId, orgId)) {
             throw new ResourceNotFoundException("Cohort", cohortId.toString());
         }
         List<ParticipationFormula.Category> categories = currentCategories();

@@ -47,6 +47,7 @@ public class SessionService {
     @Transactional(readOnly = true)
     public CohortSessionsResponse list(UUID cohortId, UUID orgId) {
         requireAssignedCohort(cohortId, orgId);
+        Set<UUID> rosterIds = rosterIds(cohortId, orgId);
         List<RosterMember> roster = reads.roster(cohortId, orgId).stream()
                 .map(r -> new RosterMember(r.id(), r.name(), r.email()))
                 .toList();
@@ -57,7 +58,7 @@ public class SessionService {
         Map<UUID, String> markerNames = markerNames(marks.values().stream()
                 .flatMap(List::stream).toList());
         return new CohortSessionsResponse(roster, all.stream()
-                .map(s -> toDto(s, marks.getOrDefault(s.getId(), List.of()), markerNames))
+                .map(s -> toDto(s, marks.getOrDefault(s.getId(), List.of()), markerNames, rosterIds))
                 .toList());
     }
 
@@ -67,14 +68,14 @@ public class SessionService {
         s.setCohortId(cohortId);
         s.setCreatedBy(actorId);
         apply(s, cohortId, orgId, req);
-        return toDto(sessions.save(s), List.of(), Map.of());
+        return toDto(sessions.save(s), List.of(), Map.of(), rosterIds(cohortId, orgId));
     }
 
     public SessionDto update(UUID cohortId, UUID orgId, UUID sessionId, UpsertSessionRequest req) {
         requireAssignedCohort(cohortId, orgId);
         Session s = requireSession(cohortId, sessionId);
         apply(s, cohortId, orgId, req);
-        return withAttendance(s);
+        return withAttendance(s, rosterIds(cohortId, orgId));
     }
 
     /** Shared upsert body; expected attendees must be the ORG's own cohort members (§13.7). */
@@ -83,16 +84,20 @@ public class SessionService {
         s.setTitle(blankToNull(req.title()));
         s.setSessionDate(req.sessionDate().atOffset(ZoneOffset.UTC));
         List<UUID> expected = req.expectedMemberIds() == null ? List.of() : req.expectedMemberIds();
-        if (!expected.isEmpty()) {
-            Set<UUID> roster = reads.roster(cohortId, orgId).stream()
-                    .map(EngagementReadRepository.RosterRow::id)
-                    .collect(Collectors.toSet());
-            if (!roster.containsAll(expected)) {
-                throw new BadRequestException(
-                        "One or more expected attendees are not members of this cohort");
-            }
+        Set<UUID> roster = rosterIds(cohortId, orgId);
+        if (!expected.isEmpty() && !roster.containsAll(expected)) {
+            throw new BadRequestException(
+                    "One or more expected attendees are not members of this cohort");
         }
-        s.setExpectedMemberIds(new LinkedHashSet<>(expected));
+        // §13.7: on a cohort shared by several orgs the session row is common,
+        // but each org owns only its own founders' expected-attendee slice.
+        // Replace only the caller-org's members; preserve every id that belongs
+        // to another org's roster so an update can never wipe their set.
+        Set<UUID> merged = s.getExpectedMemberIds().stream()
+                .filter(id -> !roster.contains(id))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        merged.addAll(expected);
+        s.setExpectedMemberIds(merged);
         // Only a fully-mapped pair's distance pillar is taggable — the same
         // rule the board task save enforces, for the same reason: an unmapped
         // distance pillar feeds no narrative, so the tag would be dead weight
@@ -110,7 +115,20 @@ public class SessionService {
 
     public void delete(UUID cohortId, UUID orgId, UUID sessionId) {
         requireAssignedCohort(cohortId, orgId);
-        sessions.delete(requireSession(cohortId, sessionId));
+        Session s = requireSession(cohortId, sessionId);
+        // §13.7: a session on a shared cohort may carry another org's expected
+        // attendees or attendance rows. Deleting it cascades their history away,
+        // so refuse when any founder-data belongs outside the caller's roster —
+        // no org unilaterally destroys another's roll call.
+        Set<UUID> roster = rosterIds(cohortId, orgId);
+        boolean hasForeignData = s.getExpectedMemberIds().stream().anyMatch(id -> !roster.contains(id))
+                || attendance.findBySessionIdIn(List.of(sessionId)).stream()
+                        .anyMatch(m -> !roster.contains(m.getMemberId()));
+        if (hasForeignData) {
+            throw new IllegalOperationException(
+                    "This session is shared with another organization and cannot be deleted here");
+        }
+        sessions.delete(s);
     }
 
     /**
@@ -142,7 +160,7 @@ public class SessionService {
             attendance.deleteById(key);
         }
         attendance.flush();
-        return withAttendance(s);
+        return withAttendance(s, rosterIds(cohortId, orgId));
     }
 
     /* ------------------------------------------------------------- plumbing */
@@ -161,9 +179,16 @@ public class SessionService {
                 .orElseThrow(() -> new ResourceNotFoundException("Session", sessionId.toString()));
     }
 
-    private SessionDto withAttendance(Session s) {
+    /** The caller-org's own members in this cohort — the §13.7 visibility slice. */
+    private Set<UUID> rosterIds(UUID cohortId, UUID orgId) {
+        return reads.roster(cohortId, orgId).stream()
+                .map(EngagementReadRepository.RosterRow::id)
+                .collect(Collectors.toSet());
+    }
+
+    private SessionDto withAttendance(Session s, Set<UUID> rosterIds) {
         List<SessionAttendance> marks = attendance.findBySessionIdIn(List.of(s.getId()));
-        return toDto(s, marks, markerNames(marks));
+        return toDto(s, marks, markerNames(marks), rosterIds);
     }
 
     private Map<UUID, String> markerNames(List<SessionAttendance> marks) {
@@ -175,14 +200,19 @@ public class SessionService {
     }
 
     private static SessionDto toDto(Session s, List<SessionAttendance> marks,
-                                    Map<UUID, String> markerNames) {
+                                    Map<UUID, String> markerNames, Set<UUID> rosterIds) {
+        // §13.7: only ever surface the caller-org's own founders — never
+        // another org's ids, attendance, or the name of who marked them.
         List<AttendanceMark> att = marks.stream()
+                .filter(m -> rosterIds.contains(m.getMemberId()))
                 .sorted(Comparator.comparing(SessionAttendance::getMarkedAt))
                 .map(m -> new AttendanceMark(m.getMemberId(),
                         m.getMarkedAt() == null ? null : m.getMarkedAt().toInstant(),
                         m.getMarkedBy() == null ? null : markerNames.get(m.getMarkedBy())))
                 .toList();
-        List<UUID> expected = List.copyOf(s.getExpectedMemberIds());
+        List<UUID> expected = s.getExpectedMemberIds().stream()
+                .filter(rosterIds::contains)
+                .toList();
         return new SessionDto(s.getId(), s.getType(), s.getTitle(),
                 s.getSessionDate() == null ? null : s.getSessionDate().toInstant(),
                 s.getCreatedAt() == null ? null : s.getCreatedAt().toInstant(),

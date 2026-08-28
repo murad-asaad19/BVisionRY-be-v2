@@ -214,6 +214,12 @@ public class QuizService {
             throw new AccessDeniedException("Not your enrollment");
         }
 
+        // Cross-course guard, shared with markComplete: the quiz's content must
+        // live under THIS enrollment's course. Without it a caller could write an
+        // attempt row against — and read the question shape of — a quiz in a
+        // course they are not enrolled in.
+        enrollmentService.requireContentInCourse(contentId, enrollment);
+
         Quiz quiz = quizzes.findByContentIdWithQuestionsAndOptions(contentId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "No quiz found for content: " + contentId));

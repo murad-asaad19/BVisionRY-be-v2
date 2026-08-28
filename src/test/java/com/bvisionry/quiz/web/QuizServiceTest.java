@@ -7,6 +7,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -38,6 +40,7 @@ import com.bvisionry.catalog.domain.Section;
 import com.bvisionry.catalog.repository.ContentRepository;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
+import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.enrollment.domain.Enrollment;
 import com.bvisionry.enrollment.repository.EnrollmentRepository;
 import com.bvisionry.enrollment.web.EnrollmentService;
@@ -426,6 +429,22 @@ class QuizServiceTest {
         verifyNoInteractions(quizzes);
         verify(attempts, never()).save(any());
         verify(enrollmentService, never()).markComplete(any(), any());
+    }
+
+    @Test
+    void submitAttempt_contentInAnotherCourse_throwsBeforeGrading() {
+        when(enrollments.findById(enrollmentId)).thenReturn(Optional.of(ownedEnrollment()));
+        // The shared guard rejects content that lives under a different course.
+        doThrow(new BadRequestException("Content does not belong to this enrollment's course"))
+                .when(enrollmentService)
+                .requireContentInCourse(eq(contentId), any(Enrollment.class));
+
+        assertThatThrownBy(() -> service.submitAttempt(enrollmentId, contentId, request()))
+                .isInstanceOf(BadRequestException.class);
+
+        // Cross-course guard rejects before loading/grading the quiz or writing.
+        verifyNoInteractions(quizzes);
+        verify(attempts, never()).save(any());
     }
 
     @Test

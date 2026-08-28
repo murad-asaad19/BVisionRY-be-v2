@@ -832,6 +832,8 @@ public class TaskSpineRepository {
         // insert would be a no-op and the stale row would keep winning.
         // A submission the member has actually typed into is left alone: their
         // work outranks the rename, and the admin sees the mismatch instead.
+        // "Typed into" means non-starter rows (sheets) OR a non-empty answers
+        // map (worksheets, V209) — both live under the same assignment.
         int repointed = jdbc.update("""
                 UPDATE exercise_assignments ea
                 SET template_id = :templateId
@@ -845,6 +847,10 @@ public class TaskSpineRepository {
                                   JOIN exercise_rows er ON er.submission_id = es.id
                                   WHERE es.assignment_id = ea.id
                                     AND er.is_starter = false)
+                  AND NOT EXISTS (SELECT 1 FROM exercise_submissions es
+                                  WHERE es.assignment_id = ea.id
+                                    AND es.answers IS NOT NULL
+                                    AND es.answers <> '{}'::jsonb)
                 """, params);
         if (repointed > 0) {
             // The old template's starter rows are scaffolding for columns that

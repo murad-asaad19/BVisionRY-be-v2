@@ -1,18 +1,21 @@
 package com.bvisionry.exercise.dto;
 
 import com.bvisionry.exercise.entity.ExerciseTemplate;
+import com.bvisionry.exercise.entity.ExerciseTemplateKind;
 import com.bvisionry.exercise.entity.ExerciseTemplateStatus;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-/** List-item view of a template (no columns). */
+/** List-item view of a template (no columns/blocks). */
 public record ExerciseTemplateResponse(
         UUID id,
         String name,
+        ExerciseTemplateKind kind,
         String description,
         ExerciseTemplateStatus status,
+        /** SHEET: number of columns. WORKSHEET: number of blocks. */
         int columnCount,
         List<AssignedOrg> assignedOrganizations,
         Instant createdAt,
@@ -26,6 +29,7 @@ public record ExerciseTemplateResponse(
         return new ExerciseTemplateResponse(
                 template.getId(),
                 template.getName(),
+                template.getKind(),
                 template.getDescription(),
                 template.getStatus(),
                 columnCount,

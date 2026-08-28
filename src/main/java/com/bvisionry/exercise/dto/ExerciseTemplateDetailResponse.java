@@ -1,7 +1,9 @@
 package com.bvisionry.exercise.dto;
 
 import com.bvisionry.exercise.entity.ExerciseTemplate;
+import com.bvisionry.exercise.entity.ExerciseTemplateKind;
 import com.bvisionry.exercise.entity.ExerciseTemplateStatus;
+import com.bvisionry.exercise.entity.WorksheetBlock;
 
 import java.time.Instant;
 import java.util.List;
@@ -11,6 +13,9 @@ import java.util.UUID;
 public record ExerciseTemplateDetailResponse(
         UUID id,
         String name,
+        ExerciseTemplateKind kind,
+        /** WORKSHEET only: the ordered block list. Null for sheets. */
+        List<WorksheetBlock> blocks,
         /** Serialised tiptap document (see {@link ExerciseTemplate#getDescription()}). */
         String description,
         /**
@@ -49,6 +54,8 @@ public record ExerciseTemplateDetailResponse(
         return new ExerciseTemplateDetailResponse(
                 template.getId(),
                 template.getName(),
+                template.getKind(),
+                template.getBlocks(),
                 template.getDescription(),
                 template.getCoverImageUrl(),
                 coverImageDisplayUrl,

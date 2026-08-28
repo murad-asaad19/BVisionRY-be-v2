@@ -9,6 +9,7 @@ import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.exercise.dto.CreateExerciseCommentRequest;
 import com.bvisionry.exercise.dto.ExerciseCommentResponse;
 import com.bvisionry.exercise.dto.ExerciseSubmissionDetailResponse;
+import com.bvisionry.exercise.dto.SaveExerciseAnswersRequest;
 import com.bvisionry.exercise.dto.SaveExerciseRowsRequest;
 import com.bvisionry.exercise.entity.ExerciseAssignment;
 import com.bvisionry.exercise.entity.ExerciseColumn;
@@ -17,6 +18,7 @@ import com.bvisionry.exercise.entity.ExerciseCommentStatus;
 import com.bvisionry.exercise.entity.ExerciseRow;
 import com.bvisionry.exercise.entity.ExerciseSubmission;
 import com.bvisionry.exercise.entity.ExerciseSubmissionStatus;
+import com.bvisionry.exercise.entity.WorksheetBlock;
 import com.bvisionry.exercise.repository.ExerciseColumnRepository;
 import com.bvisionry.exercise.repository.ExerciseCommentRepository;
 import com.bvisionry.exercise.repository.ExerciseRowRepository;
@@ -120,7 +122,7 @@ public class ExerciseReviewService {
         // would let a reply drift to a different cell than its thread.
         if (request.parentId() != null) {
             if (request.rowId() != null || request.columnId() != null
-                    || request.entryId() != null) {
+                    || request.blockId() != null || request.entryId() != null) {
                 throw new BadRequestException("A reply cannot set its own anchor.");
             }
             ExerciseComment root = commentRepository.findById(request.parentId())
@@ -135,7 +137,29 @@ public class ExerciseReviewService {
             comment.setParent(root);
             comment.setRow(root.getRow());
             comment.setColumn(root.getColumn());
+            comment.setBlockId(root.getBlockId());
             comment.setEntryId(root.getEntryId());
+        }
+
+        // WORKSHEET anchor: one block of the template. Snapshots the block's
+        // current answer (labels resolved) for the same reason a cell anchor
+        // snapshots its value.
+        if (request.blockId() != null) {
+            if (request.rowId() != null || request.columnId() != null
+                    || request.entryId() != null) {
+                throw new BadRequestException(
+                        "A block comment cannot also anchor to a row or column.");
+            }
+            WorksheetBlock block = WorksheetBlocks.byId(
+                            submission.getAssignment().getTemplate().getBlocks(),
+                            request.blockId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Block",
+                            request.blockId().toString()));
+            comment.setBlockId(block.id());
+            Object answer = submission.getAnswers() != null
+                    ? submission.getAnswers().get(block.id().toString()) : null;
+            String snapshot = WorksheetBlocks.answerText(block, answer);
+            comment.setCellValueSnapshot(snapshot.isBlank() ? null : snapshot);
         }
 
         if (request.rowId() != null) {
@@ -206,6 +230,18 @@ public class ExerciseReviewService {
                                                          SaveExerciseRowsRequest request) {
         ExerciseSubmission submission = requireMemberSubmission(orgId, assignmentId);
         ExerciseSubmissionDetailResponse detail = submissionService.overrideRows(submission, request);
+        notifyStatus(submission, OrgAuditActions.EXERCISE_ANSWERS_OVERRIDDEN,
+                null, null, Map.of());
+        return detail;
+    }
+
+    /** WORKSHEET counterpart of {@link #overrideRows} — same audit, same silence. */
+    @Transactional
+    public ExerciseSubmissionDetailResponse overrideAnswers(UUID orgId, UUID assignmentId,
+                                                            SaveExerciseAnswersRequest request) {
+        ExerciseSubmission submission = requireMemberSubmission(orgId, assignmentId);
+        ExerciseSubmissionDetailResponse detail =
+                submissionService.overrideAnswers(submission, request);
         notifyStatus(submission, OrgAuditActions.EXERCISE_ANSWERS_OVERRIDDEN,
                 null, null, Map.of());
         return detail;

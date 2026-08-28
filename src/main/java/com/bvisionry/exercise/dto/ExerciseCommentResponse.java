@@ -14,6 +14,8 @@ public record ExerciseCommentResponse(
         UUID id,
         UUID rowId,
         UUID columnId,
+        /** WORKSHEET anchor: the commented block, or null. */
+        UUID blockId,
         String entryId,
         UUID parentId,
         UUID authorId,
@@ -30,6 +32,7 @@ public record ExerciseCommentResponse(
                 comment.getId(),
                 comment.getRow() != null ? comment.getRow().getId() : null,
                 comment.getColumn() != null ? comment.getColumn().getId() : null,
+                comment.getBlockId(),
                 comment.getEntryId(),
                 comment.getParent() != null ? comment.getParent().getId() : null,
                 comment.getAuthor().getId(),

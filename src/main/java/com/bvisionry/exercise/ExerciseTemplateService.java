@@ -12,6 +12,7 @@ import com.bvisionry.exercise.dto.UpsertExerciseColumnRequest;
 import com.bvisionry.exercise.dto.UpsertExerciseTemplateRequest;
 import com.bvisionry.exercise.entity.ExerciseColumn;
 import com.bvisionry.exercise.entity.ExerciseTemplate;
+import com.bvisionry.exercise.entity.ExerciseTemplateKind;
 import com.bvisionry.exercise.entity.ExerciseTemplateStatus;
 import com.bvisionry.exercise.repository.ExerciseAssignmentRepository;
 import com.bvisionry.exercise.repository.ExerciseColumnRepository;
@@ -64,7 +65,9 @@ public class ExerciseTemplateService {
         }
         return templates.stream()
                 .map(t -> ExerciseTemplateResponse.from(t,
-                        columnCounts.getOrDefault(t.getId(), 0),
+                        t.getKind() == ExerciseTemplateKind.WORKSHEET
+                                ? (t.getBlocks() == null ? 0 : t.getBlocks().size())
+                                : columnCounts.getOrDefault(t.getId(), 0),
                         orgsByTemplate.getOrDefault(t.getId(), List.of())))
                 .toList();
     }
@@ -78,6 +81,11 @@ public class ExerciseTemplateService {
     public ExerciseTemplateDetailResponse create(UpsertExerciseTemplateRequest request) {
         ExerciseTemplate template = new ExerciseTemplate();
         template.setName(request.name());
+        template.setKind(request.kind());
+        if (request.kind() == ExerciseTemplateKind.WORKSHEET) {
+            WorksheetBlocks.validate(request.blocks());
+            template.setBlocks(request.blocks());
+        }
         template.setDescription(request.description());
         template.setCoverImageUrl(request.coverImageUrl());
         template.setAiContext(request.aiContext());
@@ -90,6 +98,17 @@ public class ExerciseTemplateService {
         ExerciseTemplate template = requireTemplateWithColumns(id);
         requireNotArchived(template);
         template.setName(request.name());
+        // Kind is immutable (the request's kind field is create-only). Blocks
+        // are a replace-all write, frozen to the same ids+types once assigned;
+        // a null means "untouched" (an empty list is the explicit clear), so a
+        // details-only save can never wipe the block list.
+        if (template.getKind() == ExerciseTemplateKind.WORKSHEET && request.blocks() != null) {
+            WorksheetBlocks.validate(request.blocks());
+            if (isStructureLocked(id)) {
+                WorksheetBlocks.requireStructureCompatible(template.getBlocks(), request.blocks());
+            }
+            template.setBlocks(request.blocks());
+        }
         template.setDescription(request.description());
         template.setCoverImageUrl(request.coverImageUrl());
         template.setAiContext(request.aiContext());
@@ -134,8 +153,14 @@ public class ExerciseTemplateService {
             throw new BadRequestException(
                     "Cannot move an exercise from " + current + " to " + target + ".");
         }
-        if (target == ExerciseTemplateStatus.PUBLISHED && template.getColumns().isEmpty()) {
-            throw new BadRequestException("Add at least one column before publishing.");
+        if (target == ExerciseTemplateStatus.PUBLISHED) {
+            if (template.getKind() == ExerciseTemplateKind.WORKSHEET) {
+                if (template.getBlocks() == null || template.getBlocks().isEmpty()) {
+                    throw new BadRequestException("Add at least one block before publishing.");
+                }
+            } else if (template.getColumns().isEmpty()) {
+                throw new BadRequestException("Add at least one column before publishing.");
+            }
         }
         template.setStatus(target);
         return detail(template, isStructureLocked(id));
@@ -144,6 +169,7 @@ public class ExerciseTemplateService {
     @Transactional
     public ExerciseColumnResponse addColumn(UUID templateId, UpsertExerciseColumnRequest request) {
         ExerciseTemplate template = requireTemplate(templateId);
+        requireSheet(template);
         requireNotArchived(template);
         requireStructureEditable(templateId);
 
@@ -231,6 +257,13 @@ public class ExerciseTemplateService {
      */
     private boolean isStructureLocked(UUID templateId) {
         return assignmentRepository.countByTemplateId(templateId) > 0;
+    }
+
+    /** Column mutations only make sense on a SHEET — a worksheet's structure is its blocks. */
+    private void requireSheet(ExerciseTemplate template) {
+        if (template.getKind() != ExerciseTemplateKind.SHEET) {
+            throw new BadRequestException("This exercise is a worksheet — it has blocks, not columns.");
+        }
     }
 
     private void requireNotArchived(ExerciseTemplate template) {

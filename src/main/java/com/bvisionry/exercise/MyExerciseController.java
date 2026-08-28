@@ -5,6 +5,7 @@ import com.bvisionry.exercise.dto.ExerciseCommentResponse;
 import com.bvisionry.exercise.dto.ExerciseSubmissionDetailResponse;
 import com.bvisionry.exercise.dto.MyExerciseSummaryResponse;
 import com.bvisionry.exercise.dto.ReplyExerciseCommentRequest;
+import com.bvisionry.exercise.dto.SaveExerciseAnswersRequest;
 import com.bvisionry.exercise.dto.SaveExerciseRowsRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -53,6 +54,15 @@ public class MyExerciseController {
             @Valid @RequestBody SaveExerciseRowsRequest request) {
         return ResponseEntity.ok(
                 submissionService.saveRows(submissionId, currentUser.require().userId(), request));
+    }
+
+    /** WORKSHEET autosave target — replace-all answers, allowed in every status. */
+    @PutMapping("/{submissionId}/answers")
+    public ResponseEntity<ExerciseSubmissionDetailResponse> saveAnswers(
+            @PathVariable UUID submissionId,
+            @Valid @RequestBody SaveExerciseAnswersRequest request) {
+        return ResponseEntity.ok(
+                submissionService.saveAnswers(submissionId, currentUser.require().userId(), request));
     }
 
     @PostMapping("/{submissionId}/submit")

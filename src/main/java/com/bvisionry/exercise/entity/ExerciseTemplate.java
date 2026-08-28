@@ -36,6 +36,19 @@ public class ExerciseTemplate extends BaseEntity {
     @Column(nullable = false)
     private String name;
 
+    /** Sheet or worksheet — set at creation, never changed (see the enum's doc). */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private ExerciseTemplateKind kind = ExerciseTemplateKind.SHEET;
+
+    /**
+     * WORKSHEET only: the ordered block list, as one jsonb document. Null for
+     * SHEET templates (whose structure lives in {@link #columns}).
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
+    private List<WorksheetBlock> blocks;
+
     /**
      * The brief the member reads above their sheet, as a serialised tiptap
      * document (same shape and column style as {@code content.body}). Rows

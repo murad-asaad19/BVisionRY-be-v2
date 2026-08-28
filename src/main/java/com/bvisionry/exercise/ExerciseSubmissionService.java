@@ -14,6 +14,7 @@ import com.bvisionry.exercise.dto.ExerciseRowPayload;
 import com.bvisionry.exercise.dto.ExerciseRowResponse;
 import com.bvisionry.exercise.dto.ExerciseSubmissionDetailResponse;
 import com.bvisionry.exercise.dto.MyExerciseSummaryResponse;
+import com.bvisionry.exercise.dto.SaveExerciseAnswersRequest;
 import com.bvisionry.exercise.dto.SaveExerciseRowsRequest;
 import com.bvisionry.exercise.entity.ExerciseColumn;
 import com.bvisionry.exercise.entity.ExerciseComment;
@@ -22,6 +23,9 @@ import com.bvisionry.exercise.entity.ExerciseRow;
 import com.bvisionry.exercise.entity.ExerciseSubmission;
 import com.bvisionry.exercise.entity.ExerciseSubmissionStatus;
 import com.bvisionry.exercise.entity.ExerciseTemplate;
+import com.bvisionry.exercise.entity.ExerciseTemplateKind;
+import com.bvisionry.exercise.entity.WorksheetBlock;
+import com.bvisionry.exercise.entity.WorksheetBlockType;
 import com.bvisionry.exercise.repository.ExerciseCommentRepository;
 import com.bvisionry.exercise.repository.ExerciseColumnRepository;
 import com.bvisionry.exercise.repository.ExerciseRowRepository;
@@ -133,10 +137,57 @@ public class ExerciseSubmissionService {
     }
 
     /**
+     * WORKSHEET counterpart of {@link #saveRows}: replace-all write of the
+     * answers map, allowed in every status; a real change to a REVIEWED copy
+     * puts it back in the admin's queue.
+     */
+    @Transactional
+    public ExerciseSubmissionDetailResponse saveAnswers(UUID submissionId, UUID userId,
+                                                        SaveExerciseAnswersRequest request) {
+        ExerciseSubmission submission = requireOwned(submissionId, userId);
+        boolean changed = applyAnswers(submission, request);
+
+        if (changed && submission.getStatus() == ExerciseSubmissionStatus.REVIEWED) {
+            submission.setStatus(ExerciseSubmissionStatus.SUBMITTED);
+            submission.setReviewedAt(null);
+        }
+
+        submission.setLastSavedAt(Instant.now());
+        return buildDetail(submission, false);
+    }
+
+    /** WORKSHEET counterpart of {@link #overrideRows} — status untouched. */
+    @Transactional
+    public ExerciseSubmissionDetailResponse overrideAnswers(ExerciseSubmission submission,
+                                                            SaveExerciseAnswersRequest request) {
+        applyAnswers(submission, request);
+        submission.setLastSavedAt(Instant.now());
+        return buildDetail(submission, true);
+    }
+
+    /** Shared worksheet answer write. Returns whether anything actually changed. */
+    private boolean applyAnswers(ExerciseSubmission submission, SaveExerciseAnswersRequest request) {
+        ExerciseTemplate template = submission.getAssignment().getTemplate();
+        if (template.getKind() != ExerciseTemplateKind.WORKSHEET) {
+            throw new BadRequestException("This exercise is a sheet — save rows, not answers.");
+        }
+        Map<String, Object> clean = WorksheetBlocks.sanitizeAnswers(
+                request.answers(), template.getBlocks());
+        Map<String, Object> current = submission.getAnswers() != null
+                ? submission.getAnswers() : Map.of();
+        boolean changed = !clean.equals(current);
+        submission.setAnswers(clean);
+        return changed;
+    }
+
+    /**
      * Replace-all row write shared by the member save and the admin override.
      * Returns whether anything actually changed.
      */
     private boolean applyRows(ExerciseSubmission submission, SaveExerciseRowsRequest request) {
+        if (submission.getAssignment().getTemplate().getKind() != ExerciseTemplateKind.SHEET) {
+            throw new BadRequestException("This exercise is a worksheet — save answers, not rows.");
+        }
         UUID submissionId = submission.getId();
         Set<String> columnIds = new HashSet<>();
         Set<String> lockedColumnIds = new HashSet<>();
@@ -222,6 +273,29 @@ public class ExerciseSubmissionService {
                     "This exercise is already submitted (status was " + submission.getStatus() + ").");
         }
 
+        ExerciseTemplate template = submission.getAssignment().getTemplate();
+        if (template.getKind() == ExerciseTemplateKind.WORKSHEET) {
+            requireWorksheetComplete(submission, template);
+        } else {
+            requireSheetComplete(submissionId, submission);
+        }
+
+        submission.setStatus(ExerciseSubmissionStatus.SUBMITTED);
+        submission.setSubmittedAt(Instant.now());
+
+        UUID orgId = submission.getAssignment().getOrganization().getId();
+        auditService.log(userId, orgId, OrgAuditActions.EXERCISE_SUBMITTED,
+                OrgAuditActions.ENTITY_EXERCISE_SUBMISSION, submission.getId(),
+                Map.of("exerciseName", template.getName(),
+                       "memberName", submission.getUser().getName()));
+        eventPublisher.publishEvent(new ProgramFlowEvents.ExerciseSubmitted(
+                orgId, userId, submission.getUser().getName(), template.getName()));
+
+        return buildDetail(submission, false);
+    }
+
+    /** SHEET completeness: at least one live row, required columns filled in every row. */
+    private void requireSheetComplete(UUID submissionId, ExerciseSubmission submission) {
         List<ExerciseRow> liveRows =
                 rowRepository.findBySubmissionIdAndDeletedAtIsNullOrderByDisplayOrder(submissionId);
         if (liveRows.isEmpty()) {
@@ -248,20 +322,34 @@ public class ExerciseSubmissionService {
                 }
             }
         }
+    }
 
-        submission.setStatus(ExerciseSubmissionStatus.SUBMITTED);
-        submission.setSubmittedAt(Instant.now());
-
-        ExerciseTemplate template = submission.getAssignment().getTemplate();
-        UUID orgId = submission.getAssignment().getOrganization().getId();
-        auditService.log(userId, orgId, OrgAuditActions.EXERCISE_SUBMITTED,
-                OrgAuditActions.ENTITY_EXERCISE_SUBMISSION, submission.getId(),
-                Map.of("exerciseName", template.getName(),
-                       "memberName", submission.getUser().getName()));
-        eventPublisher.publishEvent(new ProgramFlowEvents.ExerciseSubmitted(
-                orgId, userId, submission.getUser().getName(), template.getName()));
-
-        return buildDetail(submission, false);
+    /**
+     * A worksheet is submittable when it has any answer at all and every
+     * required block carries one — the worksheet's version of the sheet's
+     * "required column filled in every row" check.
+     */
+    private void requireWorksheetComplete(ExerciseSubmission submission, ExerciseTemplate template) {
+        Map<String, Object> answers = submission.getAnswers() != null
+                ? submission.getAnswers() : Map.of();
+        List<WorksheetBlock> blocks = template.getBlocks() == null
+                ? List.of() : template.getBlocks();
+        // A worksheet of only CONTENT blocks collects nothing — reading it IS
+        // completing it, so an empty answers map must not block the submit.
+        boolean collectsAnswers = blocks.stream()
+                .anyMatch(b -> b.type() != WorksheetBlockType.CONTENT);
+        if (collectsAnswers && answers.isEmpty()) {
+            throw new BadRequestException("Fill in the worksheet before submitting.");
+        }
+        for (WorksheetBlock block : blocks) {
+            if (!block.required() || block.type() == WorksheetBlockType.CONTENT) {
+                continue;
+            }
+            if (WorksheetBlocks.isBlank(answers.get(block.id().toString()))) {
+                throw new BadRequestException(
+                        "\"" + block.label() + "\" is required — fill it in before submitting.");
+            }
+        }
     }
 
     /** Member reply on an admin's root comment — "addressed, see the updated value". */
@@ -283,6 +371,7 @@ public class ExerciseSubmissionService {
         replyComment.setParent(root);
         replyComment.setRow(root.getRow());
         replyComment.setColumn(root.getColumn());
+        replyComment.setBlockId(root.getBlockId());
         replyComment.setEntryId(root.getEntryId());
         replyComment.setBody(body);
         ExerciseComment saved = commentRepository.save(replyComment);
@@ -311,16 +400,22 @@ public class ExerciseSubmissionService {
     public ExerciseSubmissionDetailResponse buildDetail(ExerciseSubmission submission, boolean forAdmin) {
         ExerciseTemplate template = submission.getAssignment().getTemplate();
 
-        List<ExerciseColumnResponse> columns = templateColumns(submission).stream()
-                .map(ExerciseColumnResponse::from)
-                .toList();
+        // Worksheets have no columns or rows by construction — skip both
+        // queries rather than round-tripping for guaranteed-empty results on
+        // every autosave.
+        boolean worksheet = template.getKind() == ExerciseTemplateKind.WORKSHEET;
+        List<ExerciseColumnResponse> columns = worksheet ? List.of()
+                : templateColumns(submission).stream()
+                        .map(ExerciseColumnResponse::from)
+                        .toList();
 
         // Deleted rows ride along (flagged) so comment threads anchored to a
         // removed row can still show their context.
-        List<ExerciseRowResponse> rows = rowRepository.findBySubmissionId(submission.getId()).stream()
-                .sorted(Comparator.comparingInt(ExerciseRow::getDisplayOrder))
-                .map(ExerciseRowResponse::from)
-                .toList();
+        List<ExerciseRowResponse> rows = worksheet ? List.of()
+                : rowRepository.findBySubmissionId(submission.getId()).stream()
+                        .sorted(Comparator.comparingInt(ExerciseRow::getDisplayOrder))
+                        .map(ExerciseRowResponse::from)
+                        .toList();
 
         List<ExerciseCommentResponse> comments = commentRepository
                 .findBySubmissionIdOrderByCreatedAt(submission.getId()).stream()
@@ -333,6 +428,9 @@ public class ExerciseSubmissionService {
                 submission.getAssignment().getId(),
                 template.getId(),
                 template.getName(),
+                template.getKind(),
+                template.getBlocks(),
+                submission.getAnswers(),
                 template.getDescription(),
                 mediaUrlPort.resolveUrl(template.getCoverImageUrl()),
                 submission.getStatus(),

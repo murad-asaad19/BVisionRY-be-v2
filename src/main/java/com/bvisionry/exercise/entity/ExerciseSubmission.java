@@ -79,6 +79,15 @@ public class ExerciseSubmission extends BaseEntity {
     @Column(name = "quality_tagged_by")
     private java.util.UUID qualityTaggedBy;
 
+    /**
+     * WORKSHEET only: the member's answers, block id → value (value shape per
+     * {@link WorksheetBlockType}). Null/empty for SHEET submissions, whose
+     * answers live in {@link ExerciseRow}s.
+     */
+    @org.hibernate.annotations.JdbcTypeCode(org.hibernate.type.SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
+    private java.util.Map<String, Object> answers;
+
     @Version
     private Long version;
 }

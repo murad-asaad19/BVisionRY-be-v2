@@ -235,8 +235,8 @@ public class PersonalDataRepository {
         // ANOTHER member's answer verbatim. Art. 15(4) — a copy must not hand out
         // third parties' data. Same reasoning as the account_activity strip below.
         EXPORT_SECTIONS.put("exercise_comments", """
-                SELECT id, submission_id, author_id, row_id, column_id, parent_id, body,
-                       status, resolved_at, created_at, updated_at
+                SELECT id, submission_id, author_id, row_id, column_id, block_id, parent_id,
+                       body, status, resolved_at, created_at, updated_at
                   FROM exercise_comments WHERE author_id = :userId
                 """);
 

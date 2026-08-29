@@ -40,9 +40,4 @@ public interface ExerciseAssignmentRepository extends JpaRepository<ExerciseAssi
     // Deliberately NOT filtered on programTaskId: the template delete /
     // structure-lock guard must keep counting cohort-task usage too.
     long countByTemplateId(UUID templateId);
-
-    /** (templateId, orgId, orgName) for every org-level provision, list-view chips. */
-    @Query("select a.template.id, a.organization.id, a.organization.name from ExerciseAssignment a "
-            + "where a.user is null order by a.organization.name")
-    List<Object[]> findProvisionOrgsGroupByTemplate();
 }

@@ -4,6 +4,7 @@ import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.exercise.dto.ExerciseColumnResponse;
+import com.bvisionry.exercise.dto.ExercisePlacementsResponse;
 import com.bvisionry.common.media.MediaUrlPort;
 import com.bvisionry.exercise.dto.ExerciseTemplateDetailResponse;
 import com.bvisionry.exercise.dto.ExerciseTemplateResponse;
@@ -17,6 +18,7 @@ import com.bvisionry.exercise.entity.ExerciseTemplateKind;
 import com.bvisionry.exercise.entity.ExerciseTemplateStatus;
 import com.bvisionry.exercise.repository.ExerciseAssignmentRepository;
 import com.bvisionry.exercise.repository.ExerciseColumnRepository;
+import com.bvisionry.exercise.repository.ExercisePlacementRepository;
 import com.bvisionry.exercise.repository.ExerciseTemplateRepository;
 import com.bvisionry.common.surveylink.PublicSurveyLinkPort;
 import com.bvisionry.exercise.repository.PublicExerciseResponseRepository;
@@ -25,7 +27,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -49,6 +50,7 @@ public class ExerciseTemplateService {
     private final ExerciseTemplateRepository templateRepository;
     private final ExerciseColumnRepository columnRepository;
     private final ExerciseAssignmentRepository assignmentRepository;
+    private final ExercisePlacementRepository placementRepository;
     private final PublicExerciseResponseRepository publicResponseRepository;
     /**
      * Only to prove a paired survey exists before storing its id. V211 makes
@@ -71,18 +73,26 @@ public class ExerciseTemplateService {
         for (Object[] row : columnRepository.countAllGroupByTemplate()) {
             columnCounts.put((UUID) row[0], ((Long) row[1]).intValue());
         }
-        Map<UUID, List<ExerciseTemplateResponse.AssignedOrg>> orgsByTemplate = new HashMap<>();
-        for (Object[] row : assignmentRepository.findProvisionOrgsGroupByTemplate()) {
-            orgsByTemplate.computeIfAbsent((UUID) row[0], k -> new ArrayList<>())
-                    .add(new ExerciseTemplateResponse.AssignedOrg((UUID) row[1], (String) row[2]));
-        }
+        Map<UUID, Integer> placements = placementRepository.countByTemplate();
+        Set<UUID> undeletable = placementRepository.undeletableTemplateIds();
         return templates.stream()
                 .map(t -> ExerciseTemplateResponse.from(t,
                         t.getKind() == ExerciseTemplateKind.WORKSHEET
                                 ? (t.getBlocks() == null ? 0 : t.getBlocks().size())
                                 : columnCounts.getOrDefault(t.getId(), 0),
-                        orgsByTemplate.getOrDefault(t.getId(), List.of())))
+                        placements.getOrDefault(t.getId(), 0) + (t.isPublic() ? 1 : 0),
+                        !undeletable.contains(t.getId())))
                 .toList();
+    }
+
+    /** Every place this template is handed out — the list's "assigned to" button. */
+    @Transactional(readOnly = true)
+    public ExercisePlacementsResponse placements(UUID id) {
+        ExerciseTemplate template = requireTemplate(id);
+        return new ExercisePlacementsResponse(
+                placementRepository.organizations(id),
+                placementRepository.cohorts(id),
+                template.isPublic());
     }
 
     @Transactional(readOnly = true)

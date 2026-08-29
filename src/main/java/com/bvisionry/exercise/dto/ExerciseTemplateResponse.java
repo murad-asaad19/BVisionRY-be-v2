@@ -5,7 +5,6 @@ import com.bvisionry.exercise.entity.ExerciseTemplateKind;
 import com.bvisionry.exercise.entity.ExerciseTemplateStatus;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.UUID;
 
 /** List-item view of a template (no columns/blocks). */
@@ -17,7 +16,17 @@ public record ExerciseTemplateResponse(
         ExerciseTemplateStatus status,
         /** SHEET: number of columns. WORKSHEET: number of blocks. */
         int columnCount,
-        List<AssignedOrg> assignedOrganizations,
+        /**
+         * How many places hand this exercise out — orgs, cohort tasks and the
+         * public link. Drives the list's "assigned to" button; 0 disables it.
+         */
+        int placementCount,
+        /**
+         * False once anything is attached that a delete would take with it —
+         * an assignment of any grain, or a public response. The list disables
+         * its delete control on this instead of letting the click fail.
+         */
+        boolean deletable,
         /** Public link open? Drives the list's "Public" chip and QR action. */
         boolean isPublic,
         /** The token behind that chip's link, or null if never made public. */
@@ -25,11 +34,8 @@ public record ExerciseTemplateResponse(
         Instant createdAt,
         Instant updatedAt
 ) {
-    /** Org holding a provision of this template — the list-view "Assigned to" chips. */
-    public record AssignedOrg(UUID id, String name) {}
-
     public static ExerciseTemplateResponse from(ExerciseTemplate template, int columnCount,
-                                                List<AssignedOrg> assignedOrganizations) {
+                                                int placementCount, boolean deletable) {
         return new ExerciseTemplateResponse(
                 template.getId(),
                 template.getName(),
@@ -37,7 +43,8 @@ public record ExerciseTemplateResponse(
                 template.getDescription(),
                 template.getStatus(),
                 columnCount,
-                assignedOrganizations,
+                placementCount,
+                deletable,
                 template.isPublic(),
                 template.getPublicToken(),
                 template.getCreatedAt(),

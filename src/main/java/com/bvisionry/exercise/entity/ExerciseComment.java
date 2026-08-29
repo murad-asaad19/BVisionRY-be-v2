@@ -56,6 +56,15 @@ public class ExerciseComment extends BaseEntity {
     private String body;
 
     /**
+     * WORKSHEET anchor: which block of the template this thread is about, or
+     * null. Bare id (blocks live inside the template's jsonb, not a table);
+     * safe because block ids are frozen once the template is assigned.
+     * Mutually exclusive with the sheet anchors ({@link #row}/{@link #column}).
+     */
+    @Column(name = "block_id")
+    private UUID blockId;
+
+    /**
      * Which entry of a LIST cell this thread is about, by the entry's stable
      * id; null = the whole cell. Only meaningful when both {@link #row} and
      * {@link #column} are set. Survives the member editing that entry's text

@@ -5,6 +5,7 @@ import com.bvisionry.exercise.dto.CreateExerciseCommentRequest;
 import com.bvisionry.exercise.dto.ExerciseAssignmentResponse;
 import com.bvisionry.exercise.dto.ExerciseCommentResponse;
 import com.bvisionry.exercise.dto.ExerciseSubmissionDetailResponse;
+import com.bvisionry.exercise.dto.SaveExerciseAnswersRequest;
 import com.bvisionry.exercise.dto.SaveExerciseRowsRequest;
 import com.bvisionry.exercise.dto.SetExerciseStatusRequest;
 import com.bvisionry.exercise.dto.SetQualityTagRequest;
@@ -94,6 +95,16 @@ public class ExerciseAssignmentController {
             @PathVariable UUID id,
             @Valid @RequestBody SaveExerciseRowsRequest request) {
         return ResponseEntity.ok(reviewService.overrideRows(orgId, id, request));
+    }
+
+    /** The worksheet counterpart of the row override. */
+    @PutMapping("/{id}/answers")
+    @PreAuthorize("hasAuthority('SUPER_ADMIN')")
+    public ResponseEntity<ExerciseSubmissionDetailResponse> overrideAnswers(
+            @PathVariable UUID orgId,
+            @PathVariable UUID id,
+            @Valid @RequestBody SaveExerciseAnswersRequest request) {
+        return ResponseEntity.ok(reviewService.overrideAnswers(orgId, id, request));
     }
 
     /**

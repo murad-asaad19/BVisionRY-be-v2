@@ -6,14 +6,17 @@ import java.util.UUID;
 
 /**
  * Admin comment. Anchors are optional: rowId + columnId = a cell, columnId
- * only = the whole column, rowId only = the whole row, neither = the
- * submission overall. {@code entryId} narrows a cell anchor to one entry of a
- * LIST cell. When {@code parentId} is set the comment is a reply under that
- * root thread instead (anchors are inherited and must be omitted).
+ * only = the whole column, rowId only = the whole row, blockId = one
+ * worksheet block, neither = the submission overall. {@code entryId} narrows
+ * a cell anchor to one entry of a LIST cell. When {@code parentId} is set the
+ * comment is a reply under that root thread instead (anchors are inherited
+ * and must be omitted).
  */
 public record CreateExerciseCommentRequest(
         UUID rowId,
         UUID columnId,
+        /** WORKSHEET anchor — mutually exclusive with rowId/columnId/entryId. */
+        UUID blockId,
         String entryId,
         UUID parentId,
 

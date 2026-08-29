@@ -262,6 +262,62 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
                             .content("{\"present\":true}"))
                     .andExpect(status().isForbidden());
         }
+
+        /**
+         * §13.7 on a platform cohort SHARED by two orgs: the session row is
+         * common, but each org sees, edits and deletes only its own founders'
+         * slice — one org can never read, overwrite or destroy another's roll
+         * call through the shared session.
+         */
+        @Test
+        void sharedCohort_eachOrgTouchesOnlyItsOwnFounderSlice() throws Exception {
+            UUID shared = insertCohort(orgA.getId(), "Shared Cohort", founder.getId());
+            User founderB = saveUser("founder.b@test.invalid", UserRole.MEMBER, orgB);
+            jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)",
+                    shared, orgB.getId());
+            jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
+                    shared, founderB.getId());
+
+            // Org B names its founder expected on the session and marks them present.
+            UUID sessionId = insertSession(shared, "WORKSHOP", "-1 day");
+            jdbc.update("INSERT INTO session_expected_attendees (session_id, member_id) VALUES (?, ?)",
+                    sessionId, founderB.getId());
+            jdbc.update("INSERT INTO session_attendance (session_id, member_id, marked_by) VALUES (?, ?, ?)",
+                    sessionId, founderB.getId(), adminB.getId());
+
+            // Org A reads the same session and sees NONE of org B's founder data.
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(sessionsUrl(shared)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.sessions", hasSize(1)))
+                    .andExpect(jsonPath("$.sessions[0].expectedMemberIds", hasSize(0)))
+                    .andExpect(jsonPath("$.sessions[0].attendance", hasSize(0)));
+
+            // Org A adds its OWN founder as expected — must not wipe org B's slice.
+            mockMvc.perform(put(sessionsUrl(shared) + "/" + sessionId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"type":"WORKSHOP","sessionDate":"2026-08-02T10:00:00Z",
+                                     "expectedMemberIds":["%s"]}
+                                    """.formatted(founder.getId())))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.expectedMemberIds", hasSize(1)))
+                    .andExpect(jsonPath("$.expectedMemberIds[0]", is(founder.getId().toString())));
+
+            // Org B still sees its founder expected AND present — untouched.
+            TestAuthentication.authenticate(adminB);
+            mockMvc.perform(get(sessionsUrl(orgB.getId(), shared)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.sessions[0].expectedMemberIds", hasSize(1)))
+                    .andExpect(jsonPath("$.sessions[0].expectedMemberIds[0]",
+                            is(founderB.getId().toString())))
+                    .andExpect(jsonPath("$.sessions[0].attendance", hasSize(1)));
+
+            // Neither org may delete a session the other participates in (409).
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(delete(sessionsUrl(shared) + "/" + sessionId))
+                    .andExpect(status().isConflict());
+        }
     }
 
     /**

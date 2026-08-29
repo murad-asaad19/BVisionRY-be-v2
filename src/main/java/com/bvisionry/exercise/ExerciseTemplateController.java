@@ -1,15 +1,19 @@
 package com.bvisionry.exercise;
 
 import com.bvisionry.exercise.dto.ExerciseColumnResponse;
+import com.bvisionry.exercise.dto.ExercisePlacementsResponse;
 import com.bvisionry.exercise.dto.ExerciseTemplateDetailResponse;
 import com.bvisionry.exercise.dto.ExerciseTemplateResponse;
+import com.bvisionry.exercise.dto.PublicExerciseResponseDto;
 import com.bvisionry.exercise.dto.ReorderColumnsRequest;
+import com.bvisionry.exercise.dto.UpdatePublicExerciseRequest;
 import com.bvisionry.exercise.dto.UpdateTemplateStatusRequest;
 import com.bvisionry.exercise.dto.UpsertExerciseColumnRequest;
 import com.bvisionry.exercise.dto.UpsertExerciseTemplateRequest;
 import com.bvisionry.exercise.entity.ExerciseTemplateStatus;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -35,11 +39,18 @@ import java.util.UUID;
 public class ExerciseTemplateController {
 
     private final ExerciseTemplateService templateService;
+    private final PublicExerciseService publicExerciseService;
 
     @GetMapping
     public ResponseEntity<List<ExerciseTemplateResponse>> list(
             @RequestParam(required = false) ExerciseTemplateStatus status) {
         return ResponseEntity.ok(templateService.list(status));
+    }
+
+    /** Every org, cohort task and public link this template is handed out through. */
+    @GetMapping("/{id}/placements")
+    public ResponseEntity<ExercisePlacementsResponse> placements(@PathVariable UUID id) {
+        return ResponseEntity.ok(templateService.placements(id));
     }
 
     @GetMapping("/{id}")
@@ -71,6 +82,30 @@ public class ExerciseTemplateController {
             @PathVariable UUID id,
             @Valid @RequestBody UpdateTemplateStatusRequest request) {
         return ResponseEntity.ok(templateService.updateStatus(id, request.status()));
+    }
+
+    /** Open or close this exercise's public link (and what it asks respondents). */
+    @PatchMapping("/{id}/public")
+    public ResponseEntity<ExerciseTemplateDetailResponse> updatePublic(
+            @PathVariable UUID id,
+            @Valid @RequestBody UpdatePublicExerciseRequest request) {
+        return ResponseEntity.ok(templateService.updatePublicSettings(id, request));
+    }
+
+    /** Anonymous fills collected through the public link, newest first. */
+    @GetMapping("/{id}/public-responses")
+    public ResponseEntity<Page<PublicExerciseResponseDto>> listPublicResponses(
+            @PathVariable UUID id,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        return ResponseEntity.ok(publicExerciseService.listResponses(id, page, size));
+    }
+
+    @GetMapping("/{id}/public-responses/{responseId}")
+    public ResponseEntity<PublicExerciseResponseDto> getPublicResponse(
+            @PathVariable UUID id,
+            @PathVariable UUID responseId) {
+        return ResponseEntity.ok(publicExerciseService.getResponse(id, responseId));
     }
 
     @PostMapping("/{id}/columns")

@@ -162,6 +162,7 @@ public class NarrativeActivityRepository {
         Map<UUID, List<String>> notes = new LinkedHashMap<>();
         lessonAnswers(taskIds, userId).forEach(l -> add(content, l));
         exerciseCells(taskIds, userId).forEach(l -> add(content, l));
+        worksheetAnswers(taskIds, userId).forEach(l -> add(content, l));
         surveyAnswers(taskIds, userId).forEach(l -> add(content, l));
         courseProgress(taskIds, userId).forEach(l -> add(content, l));
         exerciseComments(taskIds, userId).forEach(l -> add(l.facilitator() ? notes : content, l));
@@ -327,6 +328,103 @@ public class NarrativeActivityRepository {
             values.add(flattenCell(cell.value()));
         }
         return lines;
+    }
+
+    /**
+     * WORKSHEET exercises (V209): block-structured templates whose answers live
+     * as one jsonb map on the submission, not as rows. One "Label: answer" line
+     * per answered block, option ids resolved to their labels, TABLE answers as
+     * one pipe-separated line per row — the worksheet's version of the sheet
+     * rendering above. CONTENT blocks are the template's own prose, not the
+     * founder's words, and are never emitted.
+     */
+    private List<Line> worksheetAnswers(Collection<UUID> taskIds, UUID userId) {
+        record Sheet(UUID taskId, String blocks, String answers) {}
+        List<Sheet> sheets = jdbc.query("""
+                SELECT ea.program_task_id AS task_id,
+                       tmpl.blocks::text AS blocks, es.answers::text AS answers
+                FROM exercise_assignments ea
+                JOIN exercise_submissions es ON es.assignment_id = ea.id
+                JOIN exercise_templates tmpl ON tmpl.id = ea.template_id
+                WHERE ea.program_task_id IN (:taskIds) AND ea.user_id = :userId
+                  AND tmpl.kind = 'WORKSHEET'
+                  AND tmpl.blocks IS NOT NULL AND es.answers IS NOT NULL
+                """, params(taskIds, userId),
+                (rs, i) -> new Sheet(rs.getObject("task_id", UUID.class),
+                        rs.getString("blocks"), rs.getString("answers")));
+
+        List<Line> lines = new ArrayList<>();
+        for (Sheet sheet : sheets) {
+            com.fasterxml.jackson.databind.JsonNode blocks;
+            com.fasterxml.jackson.databind.JsonNode answers;
+            try {
+                blocks = CELL_JSON.readTree(sheet.blocks());
+                answers = CELL_JSON.readTree(sheet.answers());
+            } catch (com.fasterxml.jackson.core.JacksonException e) {
+                continue; // unreadable document — nothing honest to emit
+            }
+            for (com.fasterxml.jackson.databind.JsonNode block : blocks) {
+                String type = block.path("type").asText();
+                if ("CONTENT".equals(type)) {
+                    continue;
+                }
+                String label = block.path("label").asText("Answer");
+                com.fasterxml.jackson.databind.JsonNode answer =
+                        answers.get(block.path("id").asText());
+                if (answer == null || answer.isNull()) {
+                    continue;
+                }
+                switch (type) {
+                    case "CHECKBOXES" -> {
+                        Map<String, String> options = configLabels(block, "options", "label");
+                        List<String> picked = new ArrayList<>();
+                        answer.forEach(id -> picked.add(
+                                options.getOrDefault(id.asText(), id.asText())));
+                        if (!picked.isEmpty()) {
+                            lines.add(new Line(sheet.taskId(),
+                                    label + ": " + String.join(", ", picked), false));
+                        }
+                    }
+                    case "TABLE" -> {
+                        Map<String, String> columns = configLabels(block, "columns", "name");
+                        int rowNumber = 0;
+                        for (com.fasterxml.jackson.databind.JsonNode row : answer) {
+                            List<String> cells = new ArrayList<>();
+                            columns.forEach((id, name) -> {
+                                String value = row.path(id).asText("");
+                                if (!value.isBlank()) {
+                                    cells.add(name + ": " + flattenCell(value));
+                                }
+                            });
+                            if (!cells.isEmpty()) {
+                                lines.add(new Line(sheet.taskId(), label + " · Row " + (++rowNumber)
+                                        + ": " + String.join(" | ", cells), false));
+                            }
+                        }
+                    }
+                    default -> {
+                        String value = flattenCell(answer.asText(""));
+                        if (!"—".equals(value)) {
+                            lines.add(new Line(sheet.taskId(), label + ": " + value, false));
+                        }
+                    }
+                }
+            }
+        }
+        return lines;
+    }
+
+    /** A block's config.&lt;key&gt; entries as id → &lt;labelKey&gt;, in configured order. */
+    private static Map<String, String> configLabels(
+            com.fasterxml.jackson.databind.JsonNode block, String key, String labelKey) {
+        Map<String, String> labels = new LinkedHashMap<>();
+        for (com.fasterxml.jackson.databind.JsonNode entry : block.path("config").path(key)) {
+            String id = entry.path("id").asText("");
+            if (!id.isBlank()) {
+                labels.put(id, entry.path(labelKey).asText(id));
+            }
+        }
+        return labels;
     }
 
     /** Local mapper for flattening structured cell values — read-only, thread-safe. */

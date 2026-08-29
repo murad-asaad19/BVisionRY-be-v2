@@ -36,6 +36,19 @@ public class ExerciseTemplate extends BaseEntity {
     @Column(nullable = false)
     private String name;
 
+    /** Sheet or worksheet — set at creation, never changed (see the enum's doc). */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private ExerciseTemplateKind kind = ExerciseTemplateKind.SHEET;
+
+    /**
+     * WORKSHEET only: the ordered block list, as one jsonb document. Null for
+     * SHEET templates (whose structure lives in {@link #columns}).
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
+    private List<WorksheetBlock> blocks;
+
     /**
      * The brief the member reads above their sheet, as a serialised tiptap
      * document (same shape and column style as {@code content.body}). Rows
@@ -89,6 +102,42 @@ public class ExerciseTemplate extends BaseEntity {
     /** When false the sheet is fixed to its starter rows — no member-added rows. */
     @Column(name = "allow_add_rows", nullable = false)
     private boolean allowAddRows = true;
+
+    /**
+     * Public link gate. When true AND the template is
+     * {@link ExerciseTemplateStatus#PUBLISHED}, anyone holding
+     * {@link #publicToken} can fill this exercise anonymously.
+     */
+    @Column(name = "is_public", nullable = false)
+    private boolean isPublic = false;
+
+    /**
+     * The token in the public URL ({@code /exercise/{token}}) and in the QR code.
+     * Minted the first time the exercise goes public and never cleared, so a
+     * printed QR survives an unpublish/republish.
+     */
+    @Column(name = "public_token", unique = true)
+    private UUID publicToken;
+
+    /**
+     * Optional survey the PUBLIC taker is offered after submitting (V211) — the
+     * same "what next" pairing as {@code pipelines.post_completion_survey_id}.
+     * A bare id, not a relation: no JPA edges across features (the convention
+     * {@code Survey#giftPublicAssessmentLinkId} already follows).
+     *
+     * <p>Public link only. A member has a review loop to come back to, not a
+     * thank-you screen, so their flow is deliberately untouched.
+     */
+    @Column(name = "post_completion_survey_id")
+    private UUID postCompletionSurveyId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "respondent_name_mode", nullable = false)
+    private RespondentFieldMode respondentNameMode = RespondentFieldMode.OPTIONAL;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "respondent_email_mode", nullable = false)
+    private RespondentFieldMode respondentEmailMode = RespondentFieldMode.OPTIONAL;
 
     @OneToMany(mappedBy = "template", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("displayOrder")

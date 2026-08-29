@@ -74,10 +74,7 @@ public class EmbeddedAssessmentService {
         // and triggers the evaluation/email machinery. Gate it on course enrollment so
         // an authenticated-but-unenrolled user cannot provision assignments (mirrors the
         // enrollment guard in ReviewService#upsert).
-        UUID courseId = content.getSection().getCourse().getId();
-        if (!enrollmentRepository.existsByUserIdAndCourseId(userId, courseId)) {
-            throw new AccessDeniedException("You must be enrolled in this course to start the assessment");
-        }
+        requireEnrolled(content, userId);
 
         List<Submission> existing =
                 submissionRepository.findByUserIdAndPipelineIdOrderByCreatedAtDesc(userId, pipeline.getId());
@@ -129,9 +126,14 @@ public class EmbeddedAssessmentService {
     @Transactional
     public AssessmentLinkDto resolveAssessment(String slug, UUID contentId) {
         Content content = resolveContent(slug, contentId);
-        Pipeline pipeline = resolvePipeline(content);
 
         UUID userId = currentUser.require().userId();
+        // Same enrollment gate as startAssessment: without it any authenticated
+        // user could enumerate ASSIGNMENT lessons and learn each embedded
+        // pipeline's id and name without ever enrolling.
+        requireEnrolled(content, userId);
+
+        Pipeline pipeline = resolvePipeline(content);
         List<Submission> existing =
                 submissionRepository.findByUserIdAndPipelineIdOrderByCreatedAtDesc(userId, pipeline.getId());
 
@@ -180,6 +182,15 @@ public class EmbeddedAssessmentService {
         }
 
         return content;
+    }
+
+    /** The caller must be enrolled in the content's course to touch its assessment. */
+    private void requireEnrolled(Content content, UUID userId) {
+        UUID courseId = content.getSection().getCourse().getId();
+        if (!enrollmentRepository.existsByUserIdAndCourseId(userId, courseId)) {
+            throw new AccessDeniedException(
+                    "You must be enrolled in this course to open the assessment");
+        }
     }
 
     private Pipeline resolvePipeline(Content content) {

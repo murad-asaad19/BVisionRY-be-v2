@@ -14,6 +14,7 @@ import com.bvisionry.exercise.dto.ExerciseRowPayload;
 import com.bvisionry.exercise.dto.ExerciseRowResponse;
 import com.bvisionry.exercise.dto.ExerciseSubmissionDetailResponse;
 import com.bvisionry.exercise.dto.MyExerciseSummaryResponse;
+import com.bvisionry.exercise.dto.SaveExerciseAnswersRequest;
 import com.bvisionry.exercise.dto.SaveExerciseRowsRequest;
 import com.bvisionry.exercise.entity.ExerciseColumn;
 import com.bvisionry.exercise.entity.ExerciseComment;
@@ -22,6 +23,7 @@ import com.bvisionry.exercise.entity.ExerciseRow;
 import com.bvisionry.exercise.entity.ExerciseSubmission;
 import com.bvisionry.exercise.entity.ExerciseSubmissionStatus;
 import com.bvisionry.exercise.entity.ExerciseTemplate;
+import com.bvisionry.exercise.entity.ExerciseTemplateKind;
 import com.bvisionry.exercise.repository.ExerciseCommentRepository;
 import com.bvisionry.exercise.repository.ExerciseColumnRepository;
 import com.bvisionry.exercise.repository.ExerciseRowRepository;
@@ -34,7 +36,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -133,10 +134,57 @@ public class ExerciseSubmissionService {
     }
 
     /**
+     * WORKSHEET counterpart of {@link #saveRows}: replace-all write of the
+     * answers map, allowed in every status; a real change to a REVIEWED copy
+     * puts it back in the admin's queue.
+     */
+    @Transactional
+    public ExerciseSubmissionDetailResponse saveAnswers(UUID submissionId, UUID userId,
+                                                        SaveExerciseAnswersRequest request) {
+        ExerciseSubmission submission = requireOwned(submissionId, userId);
+        boolean changed = applyAnswers(submission, request);
+
+        if (changed && submission.getStatus() == ExerciseSubmissionStatus.REVIEWED) {
+            submission.setStatus(ExerciseSubmissionStatus.SUBMITTED);
+            submission.setReviewedAt(null);
+        }
+
+        submission.setLastSavedAt(Instant.now());
+        return buildDetail(submission, false);
+    }
+
+    /** WORKSHEET counterpart of {@link #overrideRows} — status untouched. */
+    @Transactional
+    public ExerciseSubmissionDetailResponse overrideAnswers(ExerciseSubmission submission,
+                                                            SaveExerciseAnswersRequest request) {
+        applyAnswers(submission, request);
+        submission.setLastSavedAt(Instant.now());
+        return buildDetail(submission, true);
+    }
+
+    /** Shared worksheet answer write. Returns whether anything actually changed. */
+    private boolean applyAnswers(ExerciseSubmission submission, SaveExerciseAnswersRequest request) {
+        ExerciseTemplate template = submission.getAssignment().getTemplate();
+        if (template.getKind() != ExerciseTemplateKind.WORKSHEET) {
+            throw new BadRequestException("This exercise is a sheet — save rows, not answers.");
+        }
+        Map<String, Object> clean = WorksheetBlocks.sanitizeAnswers(
+                request.answers(), template.getBlocks());
+        Map<String, Object> current = submission.getAnswers() != null
+                ? submission.getAnswers() : Map.of();
+        boolean changed = !clean.equals(current);
+        submission.setAnswers(clean);
+        return changed;
+    }
+
+    /**
      * Replace-all row write shared by the member save and the admin override.
      * Returns whether anything actually changed.
      */
     private boolean applyRows(ExerciseSubmission submission, SaveExerciseRowsRequest request) {
+        if (submission.getAssignment().getTemplate().getKind() != ExerciseTemplateKind.SHEET) {
+            throw new BadRequestException("This exercise is a worksheet — save answers, not rows.");
+        }
         UUID submissionId = submission.getId();
         Set<String> columnIds = new HashSet<>();
         Set<String> lockedColumnIds = new HashSet<>();
@@ -174,7 +222,7 @@ public class ExerciseSubmissionService {
                 row.setSubmission(submission);
                 changed = true;
             }
-            Map<String, Object> cells = sanitizeCells(payload.cells(), columnIds);
+            Map<String, Object> cells = SheetCells.sanitize(payload.cells(), columnIds);
             // Locked columns are admin-prefilled: keep the stored value, drop
             // whatever the client sent.
             for (String lockedId : lockedColumnIds) {
@@ -222,37 +270,16 @@ public class ExerciseSubmissionService {
                     "This exercise is already submitted (status was " + submission.getStatus() + ").");
         }
 
-        List<ExerciseRow> liveRows =
-                rowRepository.findBySubmissionIdAndDeletedAtIsNullOrderByDisplayOrder(submissionId);
-        if (liveRows.isEmpty()) {
-            throw new BadRequestException("Add at least one row before submitting.");
-        }
-        for (ExerciseColumn column : templateColumns(submission)) {
-            // Locked columns are admin-prefilled — members can't fix a blank
-            // one, so they are exempt from the required check.
-            if (!column.isRequired() || column.isLocked()) {
-                continue;
-            }
-            String key = column.getId().toString();
-            for (ExerciseRow row : liveRows) {
-                Object value = row.getCells() != null ? row.getCells().get(key) : null;
-                // A LIST cell is a JSON array of entries — blank when none of
-                // them carries text.
-                boolean blank = value == null
-                        || (value instanceof Collection<?>
-                                ? ExerciseListEntries.isBlank(value)
-                                : String.valueOf(value).isBlank());
-                if (blank) {
-                    throw new BadRequestException(
-                            "\"" + column.getName() + "\" is required — fill it in every row before submitting.");
-                }
-            }
+        ExerciseTemplate template = submission.getAssignment().getTemplate();
+        if (template.getKind() == ExerciseTemplateKind.WORKSHEET) {
+            requireWorksheetComplete(submission, template);
+        } else {
+            requireSheetComplete(submissionId, submission);
         }
 
         submission.setStatus(ExerciseSubmissionStatus.SUBMITTED);
         submission.setSubmittedAt(Instant.now());
 
-        ExerciseTemplate template = submission.getAssignment().getTemplate();
         UUID orgId = submission.getAssignment().getOrganization().getId();
         auditService.log(userId, orgId, OrgAuditActions.EXERCISE_SUBMITTED,
                 OrgAuditActions.ENTITY_EXERCISE_SUBMISSION, submission.getId(),
@@ -262,6 +289,19 @@ public class ExerciseSubmissionService {
                 orgId, userId, submission.getUser().getName(), template.getName()));
 
         return buildDetail(submission, false);
+    }
+
+    /** SHEET completeness — the shared rule, over this submission's live rows. */
+    private void requireSheetComplete(UUID submissionId, ExerciseSubmission submission) {
+        SheetCells.requireComplete(
+                rowRepository.findBySubmissionIdAndDeletedAtIsNullOrderByDisplayOrder(submissionId)
+                        .stream().map(ExerciseRow::getCells).toList(),
+                templateColumns(submission));
+    }
+
+    /** WORKSHEET completeness — the shared rule, over this submission's answers. */
+    private void requireWorksheetComplete(ExerciseSubmission submission, ExerciseTemplate template) {
+        WorksheetBlocks.requireComplete(submission.getAnswers(), template.getBlocks());
     }
 
     /** Member reply on an admin's root comment — "addressed, see the updated value". */
@@ -283,6 +323,7 @@ public class ExerciseSubmissionService {
         replyComment.setParent(root);
         replyComment.setRow(root.getRow());
         replyComment.setColumn(root.getColumn());
+        replyComment.setBlockId(root.getBlockId());
         replyComment.setEntryId(root.getEntryId());
         replyComment.setBody(body);
         ExerciseComment saved = commentRepository.save(replyComment);
@@ -311,16 +352,22 @@ public class ExerciseSubmissionService {
     public ExerciseSubmissionDetailResponse buildDetail(ExerciseSubmission submission, boolean forAdmin) {
         ExerciseTemplate template = submission.getAssignment().getTemplate();
 
-        List<ExerciseColumnResponse> columns = templateColumns(submission).stream()
-                .map(ExerciseColumnResponse::from)
-                .toList();
+        // Worksheets have no columns or rows by construction — skip both
+        // queries rather than round-tripping for guaranteed-empty results on
+        // every autosave.
+        boolean worksheet = template.getKind() == ExerciseTemplateKind.WORKSHEET;
+        List<ExerciseColumnResponse> columns = worksheet ? List.of()
+                : templateColumns(submission).stream()
+                        .map(ExerciseColumnResponse::from)
+                        .toList();
 
         // Deleted rows ride along (flagged) so comment threads anchored to a
         // removed row can still show their context.
-        List<ExerciseRowResponse> rows = rowRepository.findBySubmissionId(submission.getId()).stream()
-                .sorted(Comparator.comparingInt(ExerciseRow::getDisplayOrder))
-                .map(ExerciseRowResponse::from)
-                .toList();
+        List<ExerciseRowResponse> rows = worksheet ? List.of()
+                : rowRepository.findBySubmissionId(submission.getId()).stream()
+                        .sorted(Comparator.comparingInt(ExerciseRow::getDisplayOrder))
+                        .map(ExerciseRowResponse::from)
+                        .toList();
 
         List<ExerciseCommentResponse> comments = commentRepository
                 .findBySubmissionIdOrderByCreatedAt(submission.getId()).stream()
@@ -333,6 +380,9 @@ public class ExerciseSubmissionService {
                 submission.getAssignment().getId(),
                 template.getId(),
                 template.getName(),
+                template.getKind(),
+                template.getBlocks(),
+                submission.getAnswers(),
                 template.getDescription(),
                 mediaUrlPort.resolveUrl(template.getCoverImageUrl()),
                 submission.getStatus(),
@@ -376,30 +426,6 @@ public class ExerciseSubmissionService {
     private List<ExerciseColumn> templateColumns(ExerciseSubmission submission) {
         return columnRepository.findByTemplateIdOrderByDisplayOrder(
                 submission.getAssignment().getTemplate().getId());
-    }
-
-    /**
-     * Values are kept as sent; keys that don't match a real column are dropped,
-     * and so is an empty value. A LIST cell nobody typed into arrives as an
-     * empty array — storing it would make the row differ from {@code {}}, so a
-     * no-op autosave would count as a change and drag a REVIEWED sheet back
-     * into the admin's queue. Absent and blank must persist identically.
-     */
-    private Map<String, Object> sanitizeCells(Map<String, Object> cells, Set<String> columnIds) {
-        Map<String, Object> clean = new LinkedHashMap<>();
-        if (cells == null) {
-            return clean;
-        }
-        cells.forEach((key, value) -> {
-            if (!columnIds.contains(key) || value == null) {
-                return;
-            }
-            if (value instanceof Collection<?> && ExerciseListEntries.isBlank(value)) {
-                return;
-            }
-            clean.put(key, value);
-        });
-        return clean;
     }
 
     /**

@@ -234,6 +234,29 @@ public class EnrollmentService {
     // -------------------------------------------------------------------------
 
     /**
+     * Binds {@code contentId} to the enrollment's course (content → section →
+     * course). Shared by every player write that takes a content id alongside an
+     * enrollment id — completion here, quiz attempts, playback positions — so the
+     * rule lives once, where all three route through, instead of in each caller.
+     *
+     * <p>Without it a caller who owns enrollment A can write rows against content
+     * belonging to course B: forging 100% (and a certificate) on the completion
+     * path, and polluting attempt/progress data on the others.
+     *
+     * <p>Public because the other two callers live outside this class;
+     * {@code EnrollmentService} is where it belongs regardless, since it already
+     * owns both the enrollment and the catalog lookup.
+     */
+    public void requireContentInCourse(UUID contentId, Enrollment enrollment) {
+        Content content = contents.findByIdWithSectionAndCourse(contentId)
+                .orElseThrow(() -> new IllegalArgumentException("Content not found: " + contentId));
+        if (!content.getSection().getCourse().getId().equals(enrollment.getCourseId())) {
+            throw new com.bvisionry.common.exception.BadRequestException(
+                    "Content does not belong to this enrollment's course");
+        }
+    }
+
+    /**
      * Marks a content item as complete and recomputes {@code progress_pct} on the
      * enrollment.
      *
@@ -260,17 +283,7 @@ public class EnrollmentService {
             throw new NotEnrolledException(enrollment.getCourseId().toString());
         }
 
-        // Cross-course guard: completing a content item recomputes progress_pct and can
-        // auto-issue a certificate. Without binding the content to THIS enrollment's
-        // course, a caller could forge 100% (and a certificate) by marking lessons that
-        // belong to another course complete. Verify the content lives under the
-        // enrollment's course (content → section → course) before persisting progress.
-        Content content = contents.findByIdWithSectionAndCourse(contentId)
-                .orElseThrow(() -> new IllegalArgumentException("Content not found: " + contentId));
-        if (!content.getSection().getCourse().getId().equals(enrollment.getCourseId())) {
-            throw new com.bvisionry.common.exception.BadRequestException(
-                    "Content does not belong to this enrollment's course");
-        }
+        requireContentInCourse(contentId, enrollment);
 
         ContentProgress cp = progresses.findByEnrollmentIdAndContentId(enrollmentId, contentId)
                 .orElseGet(() -> {

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -30,6 +31,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import com.bvisionry.auth.entity.User;
+import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.enums.UserRole;
 import com.bvisionry.common.enums.UserStatus;
 import com.bvisionry.enrollment.domain.ContentProgress;
@@ -64,6 +66,7 @@ class PlaybackServiceTest {
     private User currentUser;
     private UUID enrollmentId;
     private final UUID contentId = UUID.randomUUID();
+    private final UUID courseId = UUID.randomUUID();
 
     @BeforeEach
     void setUp() {
@@ -91,9 +94,10 @@ class PlaybackServiceTest {
         Enrollment e = new Enrollment();
         e.setId(enrollmentId);
         e.setUserId(currentUserId);
-        e.setCourseId(UUID.randomUUID());
+        e.setCourseId(courseId);
         return e;
     }
+
 
     // =========================================================================
     // requireOwnership (exercised through getPosition / updatePosition)
@@ -166,6 +170,22 @@ class PlaybackServiceTest {
         verifyNoInteractions(enrollmentService);
     }
 
+    @Test
+    void updatePosition_contentInAnotherCourse_throwsBeforePersist() {
+        when(enrollments.findById(enrollmentId)).thenReturn(Optional.of(ownedEnrollment()));
+        // The shared guard rejects content that lives under a different course.
+        doThrow(new BadRequestException("Content does not belong to this enrollment's course"))
+                .when(enrollmentService)
+                .requireContentInCourse(eq(contentId), any(Enrollment.class));
+
+        assertThatThrownBy(() -> service.updatePosition(enrollmentId, contentId, 30, 100))
+                .isInstanceOf(BadRequestException.class);
+
+        // Cross-course guard rejects before writing any progress row.
+        verify(progresses, never()).save(any());
+        verify(enrollmentService, never()).markComplete(any(), any());
+    }
+
     // =========================================================================
     // updatePosition — persistence, watched-% math, auto-complete threshold
     // =========================================================================
@@ -188,8 +208,9 @@ class PlaybackServiceTest {
         assertThat(captor.getValue().getContentId()).isEqualTo(contentId);
         assertThat(captor.getValue().getLastPositionSeconds()).isEqualTo(30);
         assertThat(captor.getValue().getWatchedPct()).isEqualTo(30);
-        // Below 95% never delegates to markComplete.
-        verifyNoInteractions(enrollmentService);
+        // Below 95% never delegates to markComplete (the cross-course guard is
+        // the only other call this service makes on the collaborator).
+        verify(enrollmentService, never()).markComplete(any(), any());
     }
 
     @Test

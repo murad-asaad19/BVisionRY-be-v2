@@ -130,6 +130,8 @@ public class RateLimitService implements LoginBackoffPort {
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> surveySubmitWindows =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> exerciseSubmitWindows =
+            new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> publicAssessmentWindows =
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> publicAssessmentSaveWindows =
@@ -211,6 +213,16 @@ public class RateLimitService implements LoginBackoffPort {
      */
     public void checkSurveySubmitLimit(String key) {
         checkLimit(surveySubmitWindows, key, surveySubmitRequestsPerMinute, 60, "survey-submit");
+    }
+
+    /**
+     * Checks the public EXERCISE submit rate limit. The same shape of anonymous
+     * form post as a survey submit, so it is sized by the same property — but on
+     * its own bucket, so a flood against one public form never throttles the
+     * other. Give it its own property the day the two need different ceilings.
+     */
+    public void checkExerciseSubmitLimit(String key) {
+        checkLimit(exerciseSubmitWindows, key, surveySubmitRequestsPerMinute, 60, "exercise-submit");
     }
 
     /**

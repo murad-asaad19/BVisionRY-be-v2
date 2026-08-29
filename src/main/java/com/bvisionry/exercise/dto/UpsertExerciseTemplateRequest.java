@@ -1,5 +1,7 @@
 package com.bvisionry.exercise.dto;
 
+import com.bvisionry.exercise.entity.ExerciseTemplateKind;
+import com.bvisionry.exercise.entity.WorksheetBlock;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
@@ -10,6 +12,12 @@ public record UpsertExerciseTemplateRequest(
         @NotBlank(message = "Name is required")
         @Size(max = 255, message = "Name must be 255 characters or less")
         String name,
+
+        /** Sheet or worksheet. Read on create only (defaults SHEET); immutable after. */
+        ExerciseTemplateKind kind,
+
+        /** WORKSHEET only: the full ordered block list (replace-all on update). */
+        List<WorksheetBlock> blocks,
 
         /** Serialised tiptap document — the brief shown above the member's sheet. */
         String description,
@@ -32,5 +40,6 @@ public record UpsertExerciseTemplateRequest(
 ) {
     public UpsertExerciseTemplateRequest {
         allowAddRows = allowAddRows == null || allowAddRows;
+        kind = kind == null ? ExerciseTemplateKind.SHEET : kind;
     }
 }

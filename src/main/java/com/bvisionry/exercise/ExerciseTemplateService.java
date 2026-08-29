@@ -4,24 +4,29 @@ import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.exercise.dto.ExerciseColumnResponse;
+import com.bvisionry.exercise.dto.ExercisePlacementsResponse;
 import com.bvisionry.common.media.MediaUrlPort;
 import com.bvisionry.exercise.dto.ExerciseTemplateDetailResponse;
 import com.bvisionry.exercise.dto.ExerciseTemplateResponse;
 import com.bvisionry.exercise.dto.ReorderColumnsRequest;
 import com.bvisionry.exercise.dto.UpsertExerciseColumnRequest;
+import com.bvisionry.exercise.dto.UpdatePublicExerciseRequest;
 import com.bvisionry.exercise.dto.UpsertExerciseTemplateRequest;
 import com.bvisionry.exercise.entity.ExerciseColumn;
 import com.bvisionry.exercise.entity.ExerciseTemplate;
+import com.bvisionry.exercise.entity.ExerciseTemplateKind;
 import com.bvisionry.exercise.entity.ExerciseTemplateStatus;
 import com.bvisionry.exercise.repository.ExerciseAssignmentRepository;
 import com.bvisionry.exercise.repository.ExerciseColumnRepository;
+import com.bvisionry.exercise.repository.ExercisePlacementRepository;
 import com.bvisionry.exercise.repository.ExerciseTemplateRepository;
+import com.bvisionry.common.surveylink.PublicSurveyLinkPort;
+import com.bvisionry.exercise.repository.PublicExerciseResponseRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -45,6 +50,17 @@ public class ExerciseTemplateService {
     private final ExerciseTemplateRepository templateRepository;
     private final ExerciseColumnRepository columnRepository;
     private final ExerciseAssignmentRepository assignmentRepository;
+    private final ExercisePlacementRepository placementRepository;
+    private final PublicExerciseResponseRepository publicResponseRepository;
+    /**
+     * Only to prove a paired survey exists before storing its id. V211 makes
+     * that column a real FK, so an id that no longer resolves is a constraint
+     * violation at flush (a 500) instead of an answerable 404 — the same check
+     * {@code PipelineService.setPostCompletion} runs on the column V211 copied.
+     * Through the shared kernel, like the twin reach in
+     * {@link PublicExerciseService}.
+     */
+    private final PublicSurveyLinkPort publicSurveyLinkPort;
     private final MediaUrlPort mediaUrlPort;
 
     @Transactional(readOnly = true)
@@ -57,16 +73,26 @@ public class ExerciseTemplateService {
         for (Object[] row : columnRepository.countAllGroupByTemplate()) {
             columnCounts.put((UUID) row[0], ((Long) row[1]).intValue());
         }
-        Map<UUID, List<ExerciseTemplateResponse.AssignedOrg>> orgsByTemplate = new HashMap<>();
-        for (Object[] row : assignmentRepository.findProvisionOrgsGroupByTemplate()) {
-            orgsByTemplate.computeIfAbsent((UUID) row[0], k -> new ArrayList<>())
-                    .add(new ExerciseTemplateResponse.AssignedOrg((UUID) row[1], (String) row[2]));
-        }
+        Map<UUID, Integer> placements = placementRepository.countByTemplate();
+        Set<UUID> undeletable = placementRepository.undeletableTemplateIds();
         return templates.stream()
                 .map(t -> ExerciseTemplateResponse.from(t,
-                        columnCounts.getOrDefault(t.getId(), 0),
-                        orgsByTemplate.getOrDefault(t.getId(), List.of())))
+                        t.getKind() == ExerciseTemplateKind.WORKSHEET
+                                ? (t.getBlocks() == null ? 0 : t.getBlocks().size())
+                                : columnCounts.getOrDefault(t.getId(), 0),
+                        placements.getOrDefault(t.getId(), 0) + (t.isPublic() ? 1 : 0),
+                        !undeletable.contains(t.getId())))
                 .toList();
+    }
+
+    /** Every place this template is handed out — the list's "assigned to" button. */
+    @Transactional(readOnly = true)
+    public ExercisePlacementsResponse placements(UUID id) {
+        ExerciseTemplate template = requireTemplate(id);
+        return new ExercisePlacementsResponse(
+                placementRepository.organizations(id),
+                placementRepository.cohorts(id),
+                template.isPublic());
     }
 
     @Transactional(readOnly = true)
@@ -78,6 +104,11 @@ public class ExerciseTemplateService {
     public ExerciseTemplateDetailResponse create(UpsertExerciseTemplateRequest request) {
         ExerciseTemplate template = new ExerciseTemplate();
         template.setName(request.name());
+        template.setKind(request.kind());
+        if (request.kind() == ExerciseTemplateKind.WORKSHEET) {
+            WorksheetBlocks.validate(request.blocks());
+            template.setBlocks(request.blocks());
+        }
         template.setDescription(request.description());
         template.setCoverImageUrl(request.coverImageUrl());
         template.setAiContext(request.aiContext());
@@ -90,6 +121,17 @@ public class ExerciseTemplateService {
         ExerciseTemplate template = requireTemplateWithColumns(id);
         requireNotArchived(template);
         template.setName(request.name());
+        // Kind is immutable (the request's kind field is create-only). Blocks
+        // are a replace-all write, frozen to the same ids+types once assigned;
+        // a null means "untouched" (an empty list is the explicit clear), so a
+        // details-only save can never wipe the block list.
+        if (template.getKind() == ExerciseTemplateKind.WORKSHEET && request.blocks() != null) {
+            WorksheetBlocks.validate(request.blocks());
+            if (isStructureLocked(id)) {
+                WorksheetBlocks.requireStructureCompatible(template.getBlocks(), request.blocks());
+            }
+            template.setBlocks(request.blocks());
+        }
         template.setDescription(request.description());
         template.setCoverImageUrl(request.coverImageUrl());
         template.setAiContext(request.aiContext());
@@ -106,7 +148,49 @@ public class ExerciseTemplateService {
      */
     private ExerciseTemplateDetailResponse detail(ExerciseTemplate template, boolean structureLocked) {
         return ExerciseTemplateDetailResponse.from(template, structureLocked,
-                mediaUrlPort.resolveUrl(template.getCoverImageUrl()));
+                mediaUrlPort.resolveUrl(template.getCoverImageUrl()),
+                publicResponseRepository.countByTemplateId(template.getId()));
+    }
+
+    /**
+     * Opens or closes the exercise's public link, and sets what it asks
+     * respondents for.
+     *
+     * <p>Opening requires a PUBLISHED exercise — a draft has nothing worth
+     * scanning a QR for. The token is minted on the first open and then left
+     * alone: closing the link, archiving the exercise, or republishing it must
+     * not invalidate a QR that is already printed on something.
+     */
+    @Transactional
+    public ExerciseTemplateDetailResponse updatePublicSettings(UUID id,
+                                                               UpdatePublicExerciseRequest request) {
+        ExerciseTemplate template = requireTemplateWithColumns(id);
+        boolean open = Boolean.TRUE.equals(request.isPublic());
+        if (open) {
+            if (template.getStatus() != ExerciseTemplateStatus.PUBLISHED) {
+                throw new BadRequestException("Publish the exercise before opening a public link.");
+            }
+            if (template.getPublicToken() == null) {
+                template.setPublicToken(UUID.randomUUID());
+            }
+        }
+        template.setPublic(open);
+        template.setRespondentNameMode(request.respondentNameMode());
+        template.setRespondentEmailMode(request.respondentEmailMode());
+        // Null unpairs. Whether the paired survey is actually REACHABLE by an
+        // anonymous respondent is decided at read time in PublicExerciseService,
+        // not here: a survey can be unpublished or made private long after it
+        // was paired, and the pairing must survive that rather than vanish.
+        // EXISTENCE is different, and is settled here: the column is an FK, so
+        // a deleted survey's id would fail at flush as a 500. The console echoes
+        // the whole settings block on every control, so one deleted survey would
+        // otherwise brick the card until the admin reloaded the page.
+        UUID surveyId = request.postCompletionSurveyId();
+        if (surveyId != null && !publicSurveyLinkPort.exists(surveyId)) {
+            throw new ResourceNotFoundException("Survey", surveyId.toString());
+        }
+        template.setPostCompletionSurveyId(surveyId);
+        return detail(template, isStructureLocked(id));
     }
 
     @Transactional
@@ -115,6 +199,14 @@ public class ExerciseTemplateService {
         if (assignmentRepository.countByTemplateId(id) > 0) {
             throw new BadRequestException(
                     "This exercise has been assigned and cannot be deleted. Archive it instead.");
+        }
+        // Public responses cascade with the template (V210). They are collected
+        // answers from real people with no other copy anywhere, so a delete that
+        // would take them is refused rather than silently destroying them.
+        if (publicResponseRepository.countByTemplateId(id) > 0) {
+            throw new BadRequestException(
+                    "This exercise has collected public responses and cannot be deleted. "
+                            + "Archive it instead.");
         }
         templateRepository.delete(template);
         log.info("Deleted exercise template {}", id);
@@ -134,8 +226,14 @@ public class ExerciseTemplateService {
             throw new BadRequestException(
                     "Cannot move an exercise from " + current + " to " + target + ".");
         }
-        if (target == ExerciseTemplateStatus.PUBLISHED && template.getColumns().isEmpty()) {
-            throw new BadRequestException("Add at least one column before publishing.");
+        if (target == ExerciseTemplateStatus.PUBLISHED) {
+            if (template.getKind() == ExerciseTemplateKind.WORKSHEET) {
+                if (template.getBlocks() == null || template.getBlocks().isEmpty()) {
+                    throw new BadRequestException("Add at least one block before publishing.");
+                }
+            } else if (template.getColumns().isEmpty()) {
+                throw new BadRequestException("Add at least one column before publishing.");
+            }
         }
         template.setStatus(target);
         return detail(template, isStructureLocked(id));
@@ -144,6 +242,7 @@ public class ExerciseTemplateService {
     @Transactional
     public ExerciseColumnResponse addColumn(UUID templateId, UpsertExerciseColumnRequest request) {
         ExerciseTemplate template = requireTemplate(templateId);
+        requireSheet(template);
         requireNotArchived(template);
         requireStructureEditable(templateId);
 
@@ -231,6 +330,13 @@ public class ExerciseTemplateService {
      */
     private boolean isStructureLocked(UUID templateId) {
         return assignmentRepository.countByTemplateId(templateId) > 0;
+    }
+
+    /** Column mutations only make sense on a SHEET — a worksheet's structure is its blocks. */
+    private void requireSheet(ExerciseTemplate template) {
+        if (template.getKind() != ExerciseTemplateKind.SHEET) {
+            throw new BadRequestException("This exercise is a worksheet — it has blocks, not columns.");
+        }
     }
 
     private void requireNotArchived(ExerciseTemplate template) {

@@ -1,6 +1,8 @@
 package com.bvisionry.exercise.dto;
 
 import com.bvisionry.exercise.entity.ExerciseSubmissionStatus;
+import com.bvisionry.exercise.entity.ExerciseTemplateKind;
+import com.bvisionry.exercise.entity.WorksheetBlock;
 
 import java.time.Instant;
 import java.util.List;
@@ -17,6 +19,11 @@ public record ExerciseSubmissionDetailResponse(
         UUID assignmentId,
         UUID templateId,
         String templateName,
+        ExerciseTemplateKind kind,
+        /** WORKSHEET only: the template's ordered block list. Null for sheets. */
+        List<WorksheetBlock> blocks,
+        /** WORKSHEET only: the member's answers (block id → value). Null for sheets. */
+        Map<String, Object> answers,
         /** Serialised tiptap document — the brief above the member's sheet. */
         String templateDescription,
         /** Cover art, already resolved to a loadable URL, or null. */

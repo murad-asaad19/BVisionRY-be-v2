@@ -502,6 +502,38 @@ class CoachConsoleIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(status().isOk());
         }
 
+        /**
+         * A photoUrl is stored raw and later resolved into a presigned GET for
+         * whatever key it names, so a coach must not be able to point it at
+         * another tenant's object. An uploaded photo lives under {@code image/};
+         * a marker naming a submission (or any other prefix) is refused and
+         * nothing is persisted, while an external URL still passes.
+         */
+        @Test
+        void aForgedPhotoMarkerIsRefused_ownUploadAndExternalUrlPass() throws Exception {
+            TestAuthentication.authenticate(coach);
+            User victim = saveUser("victim.photo@test.invalid", UserRole.MEMBER, orgA);
+
+            String forged = "minio://media/org/" + orgA.getId() + "/submissions/"
+                    + victim.getId() + "/deadbeef-secret.pdf";
+            mockMvc.perform(patchProfileJson(
+                    "{\"photoUrl\":\"%s\"}".formatted(forged)))
+                    .andExpect(status().isBadRequest());
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM coach_profiles WHERE coach_id = ?",
+                    Integer.class, coach.getId())).isZero();
+
+            // The coach's own uploaded photo (image/ prefix) is accepted…
+            mockMvc.perform(patchProfileJson("{\"photoUrl\":\"minio://media/image/abc-me.png\"}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.photoUrl", is("minio://media/image/abc-me.png")));
+            // …and so is an external URL (served verbatim, never presigned).
+            mockMvc.perform(patchProfileJson(
+                    "{\"photoUrl\":\"https://cdn.example.com/me.png\"}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.photoUrl", is("https://cdn.example.com/me.png")));
+        }
+
         @Test
         void nonCoachRolesCannotPublishABookingLink() throws Exception {
             TestAuthentication.authenticate(founderInCohort);

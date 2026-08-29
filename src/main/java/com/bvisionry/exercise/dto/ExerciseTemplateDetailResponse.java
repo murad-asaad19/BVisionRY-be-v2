@@ -1,7 +1,10 @@
 package com.bvisionry.exercise.dto;
 
 import com.bvisionry.exercise.entity.ExerciseTemplate;
+import com.bvisionry.exercise.entity.ExerciseTemplateKind;
 import com.bvisionry.exercise.entity.ExerciseTemplateStatus;
+import com.bvisionry.exercise.entity.RespondentFieldMode;
+import com.bvisionry.exercise.entity.WorksheetBlock;
 
 import java.time.Instant;
 import java.util.List;
@@ -11,6 +14,9 @@ import java.util.UUID;
 public record ExerciseTemplateDetailResponse(
         UUID id,
         String name,
+        ExerciseTemplateKind kind,
+        /** WORKSHEET only: the ordered block list. Null for sheets. */
+        List<WorksheetBlock> blocks,
         /** Serialised tiptap document (see {@link ExerciseTemplate#getDescription()}). */
         String description,
         /**
@@ -34,6 +40,16 @@ public record ExerciseTemplateDetailResponse(
         boolean allowAddRows,
         /** True once the template has any assignment — column add/delete is frozen. */
         boolean structureLocked,
+        /** Public link open? Only meaningful together with a PUBLISHED status. */
+        boolean isPublic,
+        /** Null until the exercise has been made public once; stable thereafter. */
+        UUID publicToken,
+        RespondentFieldMode respondentNameMode,
+        RespondentFieldMode respondentEmailMode,
+        /** How many anonymous fills the public link has collected. */
+        long publicResponseCount,
+        /** Survey paired to the public thank-you screen, or null. */
+        UUID postCompletionSurveyId,
         Instant createdAt,
         Instant updatedAt
 ) {
@@ -45,10 +61,12 @@ public record ExerciseTemplateDetailResponse(
      *                             store, so both travel.
      */
     public static ExerciseTemplateDetailResponse from(ExerciseTemplate template,
-            boolean structureLocked, String coverImageDisplayUrl) {
+            boolean structureLocked, String coverImageDisplayUrl, long publicResponseCount) {
         return new ExerciseTemplateDetailResponse(
                 template.getId(),
                 template.getName(),
+                template.getKind(),
+                template.getBlocks(),
                 template.getDescription(),
                 template.getCoverImageUrl(),
                 coverImageDisplayUrl,
@@ -59,6 +77,12 @@ public record ExerciseTemplateDetailResponse(
                 template.getStarterRows(),
                 template.isAllowAddRows(),
                 structureLocked,
+                template.isPublic(),
+                template.getPublicToken(),
+                template.getRespondentNameMode(),
+                template.getRespondentEmailMode(),
+                publicResponseCount,
+                template.getPostCompletionSurveyId(),
                 template.getCreatedAt(),
                 template.getUpdatedAt());
     }

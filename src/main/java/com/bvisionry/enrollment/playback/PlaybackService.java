@@ -51,6 +51,9 @@ public class PlaybackService {
     public PositionDto updatePosition(UUID enrollmentId, UUID contentId,
                                       int positionSeconds, int durationSeconds) {
         Enrollment enrollment = requireOwnership(enrollmentId);
+        // Cross-course guard, shared with markComplete: without it a caller could
+        // write a playback row against content belonging to another course.
+        enrollmentService.requireContentInCourse(contentId, enrollment);
 
         ContentProgress cp = progresses
                 .findByEnrollmentIdAndContentId(enrollmentId, contentId)

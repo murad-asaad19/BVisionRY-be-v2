@@ -18,4 +18,12 @@ public interface ExerciseTemplateRepository extends JpaRepository<ExerciseTempla
 
     @Query("select t from ExerciseTemplate t left join fetch t.columns where t.id = :id")
     Optional<ExerciseTemplate> findByIdWithColumns(@Param("id") UUID id);
+
+    /**
+     * The public taker's only lookup. Columns are fetched eagerly because the
+     * public payload always renders the whole exercise in one shot — there is
+     * no second authenticated round trip to lazy-load them from.
+     */
+    @Query("select t from ExerciseTemplate t left join fetch t.columns where t.publicToken = :token")
+    Optional<ExerciseTemplate> findByPublicTokenWithColumns(@Param("token") UUID token);
 }

@@ -40,6 +40,7 @@ public class SecurityConfig {
     private final PublicAssessmentRateLimitFilter publicAssessmentRateLimitFilter;
     private final BusinessCardRateLimitFilter businessCardRateLimitFilter;
     private final ErrorEventRateLimitFilter errorEventRateLimitFilter;
+    private final PublicExerciseSubmitRateLimitFilter publicExerciseSubmitRateLimitFilter;
 
     @Value("${bvisionry.cors.allowed-origins:http://localhost:5173,http://localhost:4173,http://localhost:3000,http://localhost:5174}")
     private String allowedOrigins;
@@ -81,6 +82,7 @@ public class SecurityConfig {
                                 "/api/join/**",
                                 "/api/public/surveys/**",
                                 "/api/public/assessments/**",
+                                "/api/public/exercises/**",
                                 // Server-side BFF POST — no CSRF cookie in flight
                                 "/api/v1/leads",
                                 // Public marketing POST — Contact Us form, no CSRF cookie in flight
@@ -126,6 +128,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/join/**").permitAll()
                         .requestMatchers("/api/public/surveys/**").permitAll()
                         .requestMatchers("/api/public/assessments/**").permitAll()
+                        .requestMatchers("/api/public/exercises/**").permitAll()
                         // Public digital business cards — single published card by slug (read-only).
                         .requestMatchers(HttpMethod.GET, "/api/public/business-cards/**").permitAll()
                         // Lead capture — public POST from the Book-a-Demo BFF
@@ -230,7 +233,8 @@ public class SecurityConfig {
                 .addFilterBefore(surveySubmitRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(publicAssessmentRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterBefore(businessCardRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterBefore(errorEventRateLimitFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(errorEventRateLimitFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(publicExerciseSubmitRateLimitFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
     }
 

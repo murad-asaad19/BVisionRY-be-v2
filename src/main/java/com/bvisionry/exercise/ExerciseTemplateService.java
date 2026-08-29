@@ -9,6 +9,7 @@ import com.bvisionry.exercise.dto.ExerciseTemplateDetailResponse;
 import com.bvisionry.exercise.dto.ExerciseTemplateResponse;
 import com.bvisionry.exercise.dto.ReorderColumnsRequest;
 import com.bvisionry.exercise.dto.UpsertExerciseColumnRequest;
+import com.bvisionry.exercise.dto.UpdatePublicExerciseRequest;
 import com.bvisionry.exercise.dto.UpsertExerciseTemplateRequest;
 import com.bvisionry.exercise.entity.ExerciseColumn;
 import com.bvisionry.exercise.entity.ExerciseTemplate;
@@ -17,6 +18,8 @@ import com.bvisionry.exercise.entity.ExerciseTemplateStatus;
 import com.bvisionry.exercise.repository.ExerciseAssignmentRepository;
 import com.bvisionry.exercise.repository.ExerciseColumnRepository;
 import com.bvisionry.exercise.repository.ExerciseTemplateRepository;
+import com.bvisionry.exercise.repository.PublicExerciseResponseRepository;
+import com.bvisionry.survey.repository.SurveyRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -46,6 +49,16 @@ public class ExerciseTemplateService {
     private final ExerciseTemplateRepository templateRepository;
     private final ExerciseColumnRepository columnRepository;
     private final ExerciseAssignmentRepository assignmentRepository;
+    private final PublicExerciseResponseRepository publicResponseRepository;
+    /**
+     * Only to prove a paired survey exists before storing its id. V211 makes
+     * that column a real FK, so an id that no longer resolves is a constraint
+     * violation at flush (a 500) instead of an answerable 400 — the same check
+     * {@code PipelineService.setPostCompletion} runs on the column V211 copied.
+     * Pinned in the ArchUnit frozen store, like the twin reach in
+     * {@link PublicExerciseService}.
+     */
+    private final SurveyRepository surveyRepository;
     private final MediaUrlPort mediaUrlPort;
 
     @Transactional(readOnly = true)
@@ -125,7 +138,49 @@ public class ExerciseTemplateService {
      */
     private ExerciseTemplateDetailResponse detail(ExerciseTemplate template, boolean structureLocked) {
         return ExerciseTemplateDetailResponse.from(template, structureLocked,
-                mediaUrlPort.resolveUrl(template.getCoverImageUrl()));
+                mediaUrlPort.resolveUrl(template.getCoverImageUrl()),
+                publicResponseRepository.countByTemplateId(template.getId()));
+    }
+
+    /**
+     * Opens or closes the exercise's public link, and sets what it asks
+     * respondents for.
+     *
+     * <p>Opening requires a PUBLISHED exercise — a draft has nothing worth
+     * scanning a QR for. The token is minted on the first open and then left
+     * alone: closing the link, archiving the exercise, or republishing it must
+     * not invalidate a QR that is already printed on something.
+     */
+    @Transactional
+    public ExerciseTemplateDetailResponse updatePublicSettings(UUID id,
+                                                               UpdatePublicExerciseRequest request) {
+        ExerciseTemplate template = requireTemplateWithColumns(id);
+        boolean open = Boolean.TRUE.equals(request.isPublic());
+        if (open) {
+            if (template.getStatus() != ExerciseTemplateStatus.PUBLISHED) {
+                throw new BadRequestException("Publish the exercise before opening a public link.");
+            }
+            if (template.getPublicToken() == null) {
+                template.setPublicToken(UUID.randomUUID());
+            }
+        }
+        template.setPublic(open);
+        template.setRespondentNameMode(request.respondentNameMode());
+        template.setRespondentEmailMode(request.respondentEmailMode());
+        // Null unpairs. Whether the paired survey is actually REACHABLE by an
+        // anonymous respondent is decided at read time in PublicExerciseService,
+        // not here: a survey can be unpublished or made private long after it
+        // was paired, and the pairing must survive that rather than vanish.
+        // EXISTENCE is different, and is settled here: the column is an FK, so
+        // a deleted survey's id would fail at flush as a 500. The console echoes
+        // the whole settings block on every control, so one deleted survey would
+        // otherwise brick the card until the admin reloaded the page.
+        UUID surveyId = request.postCompletionSurveyId();
+        if (surveyId != null && !surveyRepository.existsById(surveyId)) {
+            throw new ResourceNotFoundException("Survey", surveyId.toString());
+        }
+        template.setPostCompletionSurveyId(surveyId);
+        return detail(template, isStructureLocked(id));
     }
 
     @Transactional
@@ -134,6 +189,14 @@ public class ExerciseTemplateService {
         if (assignmentRepository.countByTemplateId(id) > 0) {
             throw new BadRequestException(
                     "This exercise has been assigned and cannot be deleted. Archive it instead.");
+        }
+        // Public responses cascade with the template (V210). They are collected
+        // answers from real people with no other copy anywhere, so a delete that
+        // would take them is refused rather than silently destroying them.
+        if (publicResponseRepository.countByTemplateId(id) > 0) {
+            throw new BadRequestException(
+                    "This exercise has collected public responses and cannot be deleted. "
+                            + "Archive it instead.");
         }
         templateRepository.delete(template);
         log.info("Deleted exercise template {}", id);

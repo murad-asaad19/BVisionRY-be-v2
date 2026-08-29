@@ -39,7 +39,8 @@ import java.util.UUID;
  * statement here keys on {@code users.id}. That is not an oversight about the
  * personal data sitting in email-keyed rows — public-flow submissions
  * ({@code submissions.user_id IS NULL} with a {@code respondent_email}), the
- * matching {@code survey_responses}, and pending {@code invitations} — it is
+ * matching {@code survey_responses}, the anonymous
+ * {@code public_exercise_responses}, and pending {@code invitations} — it is
  * the only defensible position while {@code users.email} is unverified.
  * {@code POST /api/auth/register} is {@code permitAll} and mints an ACTIVE
  * account for any address with no existing row, with no mailbox proof anywhere
@@ -104,8 +105,11 @@ import java.util.UUID;
  *   <li>{@code testimonials}, {@code business_cards} — platform marketing content
  *       with no user column at all.</li>
  *   <li>{@code invitations.email}, and {@code submissions} /
- *       {@code survey_responses} rows carrying only a {@code respondent_email} —
- *       unreachable without mailbox proof, see the identity note above.</li>
+ *       {@code survey_responses} / {@code public_exercise_responses} rows
+ *       carrying only a {@code respondent_email} — unreachable without mailbox
+ *       proof, see the identity note above. A public exercise fill has no
+ *       account behind it at all: the respondent scanned a QR code, so there is
+ *       nothing but the address they typed to key an erasure on.</li>
  * </ul>
  *
  * <p><strong>Known residuals</strong>, all accepted rather than fixed, because

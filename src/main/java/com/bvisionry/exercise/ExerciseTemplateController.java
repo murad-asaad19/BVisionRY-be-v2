@@ -1,6 +1,7 @@
 package com.bvisionry.exercise;
 
 import com.bvisionry.exercise.dto.ExerciseColumnResponse;
+import com.bvisionry.exercise.dto.ExercisePlacementsResponse;
 import com.bvisionry.exercise.dto.ExerciseTemplateDetailResponse;
 import com.bvisionry.exercise.dto.ExerciseTemplateResponse;
 import com.bvisionry.exercise.dto.PublicExerciseResponseDto;
@@ -44,6 +45,12 @@ public class ExerciseTemplateController {
     public ResponseEntity<List<ExerciseTemplateResponse>> list(
             @RequestParam(required = false) ExerciseTemplateStatus status) {
         return ResponseEntity.ok(templateService.list(status));
+    }
+
+    /** Every org, cohort task and public link this template is handed out through. */
+    @GetMapping("/{id}/placements")
+    public ResponseEntity<ExercisePlacementsResponse> placements(@PathVariable UUID id) {
+        return ResponseEntity.ok(templateService.placements(id));
     }
 
     @GetMapping("/{id}")

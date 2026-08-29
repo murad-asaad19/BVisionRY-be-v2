@@ -3,6 +3,8 @@ package com.bvisionry.exercise;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.media.MediaUrlPort;
+import com.bvisionry.common.surveylink.PublicSurveyLink;
+import com.bvisionry.common.surveylink.PublicSurveyLinkPort;
 import com.bvisionry.exercise.dto.PublicExerciseSubmitRequest;
 import com.bvisionry.exercise.entity.ExerciseColumn;
 import com.bvisionry.exercise.entity.ExerciseColumnType;
@@ -15,10 +17,6 @@ import com.bvisionry.exercise.entity.WorksheetBlock;
 import com.bvisionry.exercise.entity.WorksheetBlockType;
 import com.bvisionry.exercise.repository.ExerciseTemplateRepository;
 import com.bvisionry.exercise.repository.PublicExerciseResponseRepository;
-import com.bvisionry.survey.entity.Survey;
-import com.bvisionry.survey.entity.SurveyStatus;
-import com.bvisionry.survey.entity.SurveyVisibility;
-import com.bvisionry.survey.repository.SurveyRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,7 +43,7 @@ class PublicExerciseServiceTest {
 
     @Mock private ExerciseTemplateRepository templateRepository;
     @Mock private PublicExerciseResponseRepository responseRepository;
-    @Mock private SurveyRepository surveyRepository;
+    @Mock private PublicSurveyLinkPort publicSurveyLinkPort;
     @Mock private MediaUrlPort mediaUrlPort;
 
     @InjectMocks private PublicExerciseService service;
@@ -320,17 +318,23 @@ class PublicExerciseServiceTest {
 
     // ---- the post-completion survey CTA ---------------------------------
 
-    private Survey pairedSurvey(SurveyStatus status, SurveyVisibility visibility, UUID publicToken) {
+    /**
+     * Pairs a survey the port judges OFFERABLE. Which survey states qualify —
+     * published, public, token minted — is the port's rule and is pinned in
+     * PublicSurveyLinkServiceTest, not restated here.
+     */
+    private void pairOfferableSurvey(UUID publicToken) {
         UUID surveyId = UUID.randomUUID();
         template.setPostCompletionSurveyId(surveyId);
-        Survey survey = new Survey();
-        survey.setId(surveyId);
-        survey.setName("Founder Mindset Pulse");
-        survey.setStatus(status);
-        survey.setVisibility(visibility);
-        survey.setPublicToken(publicToken);
-        lenient().when(surveyRepository.findById(surveyId)).thenReturn(Optional.of(survey));
-        return survey;
+        lenient().when(publicSurveyLinkPort.publicLink(surveyId))
+                .thenReturn(Optional.of(new PublicSurveyLink(publicToken, "Founder Mindset Pulse")));
+    }
+
+    /** Pairs a survey the port judges unreachable (deleted, draft, private...). */
+    private void pairUnofferableSurvey() {
+        UUID surveyId = UUID.randomUUID();
+        template.setPostCompletionSurveyId(surveyId);
+        lenient().when(publicSurveyLinkPort.publicLink(surveyId)).thenReturn(Optional.empty());
     }
 
     @Test
@@ -339,9 +343,9 @@ class PublicExerciseServiceTest {
     }
 
     @Test
-    void getByToken_publishedPublicSurvey_isOfferedByItsPublicToken() {
+    void getByToken_offerableSurvey_isOfferedByItsPublicToken() {
         UUID surveyToken = UUID.randomUUID();
-        pairedSurvey(SurveyStatus.PUBLISHED, SurveyVisibility.PUBLIC, surveyToken);
+        pairOfferableSurvey(surveyToken);
 
         var cta = service.getByToken(token).postCompletionSurvey();
 
@@ -351,33 +355,10 @@ class PublicExerciseServiceTest {
     }
 
     @Test
-    void getByToken_privateSurvey_offersNoCta() {
-        // A PRIVATE survey has no link an anonymous respondent can open, so the
-        // CTA must disappear rather than point at a 404.
-        pairedSurvey(SurveyStatus.PUBLISHED, SurveyVisibility.PRIVATE, UUID.randomUUID());
-
-        assertThat(service.getByToken(token).postCompletionSurvey()).isNull();
-    }
-
-    @Test
-    void getByToken_unpublishedSurvey_offersNoCta() {
-        pairedSurvey(SurveyStatus.DRAFT, SurveyVisibility.PUBLIC, UUID.randomUUID());
-
-        assertThat(service.getByToken(token).postCompletionSurvey()).isNull();
-    }
-
-    @Test
-    void getByToken_surveyWithNoMintedToken_offersNoCta() {
-        pairedSurvey(SurveyStatus.PUBLISHED, SurveyVisibility.PUBLIC, null);
-
-        assertThat(service.getByToken(token).postCompletionSurvey()).isNull();
-    }
-
-    @Test
-    void getByToken_pairedSurveyDeleted_offersNoCta() {
-        UUID surveyId = UUID.randomUUID();
-        template.setPostCompletionSurveyId(surveyId);
-        when(surveyRepository.findById(surveyId)).thenReturn(Optional.empty());
+    void getByToken_unreachableSurvey_offersNoCta() {
+        // Deleted, unpublished, made private — the port collapses all of them to
+        // "not offerable", and the CTA must disappear rather than point at a 404.
+        pairUnofferableSurvey();
 
         assertThat(service.getByToken(token).postCompletionSurvey()).isNull();
     }

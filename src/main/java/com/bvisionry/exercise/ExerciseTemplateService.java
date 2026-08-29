@@ -18,8 +18,8 @@ import com.bvisionry.exercise.entity.ExerciseTemplateStatus;
 import com.bvisionry.exercise.repository.ExerciseAssignmentRepository;
 import com.bvisionry.exercise.repository.ExerciseColumnRepository;
 import com.bvisionry.exercise.repository.ExerciseTemplateRepository;
+import com.bvisionry.common.surveylink.PublicSurveyLinkPort;
 import com.bvisionry.exercise.repository.PublicExerciseResponseRepository;
-import com.bvisionry.survey.repository.SurveyRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -53,12 +53,12 @@ public class ExerciseTemplateService {
     /**
      * Only to prove a paired survey exists before storing its id. V211 makes
      * that column a real FK, so an id that no longer resolves is a constraint
-     * violation at flush (a 500) instead of an answerable 400 — the same check
+     * violation at flush (a 500) instead of an answerable 404 — the same check
      * {@code PipelineService.setPostCompletion} runs on the column V211 copied.
-     * Pinned in the ArchUnit frozen store, like the twin reach in
+     * Through the shared kernel, like the twin reach in
      * {@link PublicExerciseService}.
      */
-    private final SurveyRepository surveyRepository;
+    private final PublicSurveyLinkPort publicSurveyLinkPort;
     private final MediaUrlPort mediaUrlPort;
 
     @Transactional(readOnly = true)
@@ -176,7 +176,7 @@ public class ExerciseTemplateService {
         // the whole settings block on every control, so one deleted survey would
         // otherwise brick the card until the admin reloaded the page.
         UUID surveyId = request.postCompletionSurveyId();
-        if (surveyId != null && !surveyRepository.existsById(surveyId)) {
+        if (surveyId != null && !publicSurveyLinkPort.exists(surveyId)) {
             throw new ResourceNotFoundException("Survey", surveyId.toString());
         }
         template.setPostCompletionSurveyId(surveyId);

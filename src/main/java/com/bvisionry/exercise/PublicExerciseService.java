@@ -3,6 +3,7 @@ package com.bvisionry.exercise;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.media.MediaUrlPort;
+import com.bvisionry.common.surveylink.PublicSurveyLinkPort;
 import com.bvisionry.exercise.dto.PublicExerciseDto;
 import com.bvisionry.exercise.dto.PublicExerciseResponseDto;
 import com.bvisionry.exercise.dto.PublicExerciseSubmitRequest;
@@ -14,9 +15,6 @@ import com.bvisionry.exercise.entity.PublicExerciseResponse;
 import com.bvisionry.exercise.entity.RespondentFieldMode;
 import com.bvisionry.exercise.repository.ExerciseTemplateRepository;
 import com.bvisionry.exercise.repository.PublicExerciseResponseRepository;
-import com.bvisionry.survey.entity.SurveyStatus;
-import com.bvisionry.survey.entity.SurveyVisibility;
-import com.bvisionry.survey.repository.SurveyRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -73,13 +71,11 @@ public class PublicExerciseService {
     private final ExerciseTemplateRepository templateRepository;
     private final PublicExerciseResponseRepository responseRepository;
     /**
-     * The only cross-feature reach in this class, and a deliberate one (pinned
-     * in the ArchUnit frozen store): resolving the paired survey needs its
-     * public token and name, and there is no read-by-id endpoint an anonymous
-     * page could call instead. Mirrors the survey slice's own reach into
-     * publicassessment for its gift link.
+     * Resolving the paired survey through the shared kernel, not by reaching
+     * into the survey package: features may depend on {@code common}, never on
+     * each other. Whether the survey is offerable at all is the port's call.
      */
-    private final SurveyRepository surveyRepository;
+    private final PublicSurveyLinkPort publicSurveyLinkPort;
     private final MediaUrlPort mediaUrlPort;
 
     /** What the anonymous taker page renders. */
@@ -93,22 +89,15 @@ public class PublicExerciseService {
 
     /**
      * The paired survey, but only when an anonymous respondent could actually
-     * open it: PUBLISHED, PUBLIC, and holding a minted token. Anything else
-     * resolves to no CTA rather than a dead link — the pairing itself is left
-     * alone so republishing the survey brings the CTA back.
+     * open it — the port answers that. Anything else resolves to no CTA rather
+     * than a dead link, while the pairing itself is left alone, so republishing
+     * the survey brings the CTA back.
      */
     private PublicExerciseDto.PostCompletionSurvey resolvePostCompletionSurvey(
             ExerciseTemplate template) {
-        UUID surveyId = template.getPostCompletionSurveyId();
-        if (surveyId == null) {
-            return null;
-        }
-        return surveyRepository.findById(surveyId)
-                .filter(s -> s.getStatus() == SurveyStatus.PUBLISHED)
-                .filter(s -> s.getVisibility() == SurveyVisibility.PUBLIC)
-                .filter(s -> s.getPublicToken() != null)
-                .map(s -> new PublicExerciseDto.PostCompletionSurvey(
-                        s.getPublicToken(), s.getName()))
+        return publicSurveyLinkPort.publicLink(template.getPostCompletionSurveyId())
+                .map(link -> new PublicExerciseDto.PostCompletionSurvey(
+                        link.token(), link.name()))
                 .orElse(null);
     }
 

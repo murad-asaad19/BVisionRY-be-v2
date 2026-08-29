@@ -14,7 +14,7 @@ import com.bvisionry.exercise.repository.ExerciseAssignmentRepository;
 import com.bvisionry.exercise.repository.ExerciseColumnRepository;
 import com.bvisionry.exercise.repository.ExerciseTemplateRepository;
 import com.bvisionry.exercise.repository.PublicExerciseResponseRepository;
-import com.bvisionry.survey.repository.SurveyRepository;
+import com.bvisionry.common.surveylink.PublicSurveyLinkPort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -37,7 +37,7 @@ class ExerciseTemplateServiceTest {
     @Mock private ExerciseColumnRepository columnRepository;
     @Mock private ExerciseAssignmentRepository assignmentRepository;
     @Mock private PublicExerciseResponseRepository publicResponseRepository;
-    @Mock private SurveyRepository surveyRepository;
+    @Mock private PublicSurveyLinkPort publicSurveyLinkPort;
     @Mock private MediaUrlPort mediaUrlPort;
 
     @InjectMocks private ExerciseTemplateService service;
@@ -213,7 +213,7 @@ class ExerciseTemplateServiceTest {
         // survey deleted since the page loaded arrives on the NEXT unrelated
         // toggle. The FK would make that a 500 and brick the card.
         UUID deleted = UUID.randomUUID();
-        when(surveyRepository.existsById(deleted)).thenReturn(false);
+        when(publicSurveyLinkPort.exists(deleted)).thenReturn(false);
 
         assertThatThrownBy(() -> service.updatePublicSettings(templateId,
                 new UpdatePublicExerciseRequest(true, RespondentFieldMode.OPTIONAL,
@@ -225,7 +225,7 @@ class ExerciseTemplateServiceTest {
     @Test
     void updatePublicSettings_pairingALiveSurvey_isStored() {
         UUID surveyId = UUID.randomUUID();
-        when(surveyRepository.existsById(surveyId)).thenReturn(true);
+        when(publicSurveyLinkPort.exists(surveyId)).thenReturn(true);
 
         service.updatePublicSettings(templateId, new UpdatePublicExerciseRequest(
                 true, RespondentFieldMode.OPTIONAL, RespondentFieldMode.OPTIONAL, surveyId));

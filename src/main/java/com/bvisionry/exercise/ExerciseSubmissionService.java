@@ -24,8 +24,6 @@ import com.bvisionry.exercise.entity.ExerciseSubmission;
 import com.bvisionry.exercise.entity.ExerciseSubmissionStatus;
 import com.bvisionry.exercise.entity.ExerciseTemplate;
 import com.bvisionry.exercise.entity.ExerciseTemplateKind;
-import com.bvisionry.exercise.entity.WorksheetBlock;
-import com.bvisionry.exercise.entity.WorksheetBlockType;
 import com.bvisionry.exercise.repository.ExerciseCommentRepository;
 import com.bvisionry.exercise.repository.ExerciseColumnRepository;
 import com.bvisionry.exercise.repository.ExerciseRowRepository;
@@ -38,7 +36,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -225,7 +222,7 @@ public class ExerciseSubmissionService {
                 row.setSubmission(submission);
                 changed = true;
             }
-            Map<String, Object> cells = sanitizeCells(payload.cells(), columnIds);
+            Map<String, Object> cells = SheetCells.sanitize(payload.cells(), columnIds);
             // Locked columns are admin-prefilled: keep the stored value, drop
             // whatever the client sent.
             for (String lockedId : lockedColumnIds) {
@@ -294,62 +291,17 @@ public class ExerciseSubmissionService {
         return buildDetail(submission, false);
     }
 
-    /** SHEET completeness: at least one live row, required columns filled in every row. */
+    /** SHEET completeness — the shared rule, over this submission's live rows. */
     private void requireSheetComplete(UUID submissionId, ExerciseSubmission submission) {
-        List<ExerciseRow> liveRows =
-                rowRepository.findBySubmissionIdAndDeletedAtIsNullOrderByDisplayOrder(submissionId);
-        if (liveRows.isEmpty()) {
-            throw new BadRequestException("Add at least one row before submitting.");
-        }
-        for (ExerciseColumn column : templateColumns(submission)) {
-            // Locked columns are admin-prefilled — members can't fix a blank
-            // one, so they are exempt from the required check.
-            if (!column.isRequired() || column.isLocked()) {
-                continue;
-            }
-            String key = column.getId().toString();
-            for (ExerciseRow row : liveRows) {
-                Object value = row.getCells() != null ? row.getCells().get(key) : null;
-                // A LIST cell is a JSON array of entries — blank when none of
-                // them carries text.
-                boolean blank = value == null
-                        || (value instanceof Collection<?>
-                                ? ExerciseListEntries.isBlank(value)
-                                : String.valueOf(value).isBlank());
-                if (blank) {
-                    throw new BadRequestException(
-                            "\"" + column.getName() + "\" is required — fill it in every row before submitting.");
-                }
-            }
-        }
+        SheetCells.requireComplete(
+                rowRepository.findBySubmissionIdAndDeletedAtIsNullOrderByDisplayOrder(submissionId)
+                        .stream().map(ExerciseRow::getCells).toList(),
+                templateColumns(submission));
     }
 
-    /**
-     * A worksheet is submittable when it has any answer at all and every
-     * required block carries one — the worksheet's version of the sheet's
-     * "required column filled in every row" check.
-     */
+    /** WORKSHEET completeness — the shared rule, over this submission's answers. */
     private void requireWorksheetComplete(ExerciseSubmission submission, ExerciseTemplate template) {
-        Map<String, Object> answers = submission.getAnswers() != null
-                ? submission.getAnswers() : Map.of();
-        List<WorksheetBlock> blocks = template.getBlocks() == null
-                ? List.of() : template.getBlocks();
-        // A worksheet of only CONTENT blocks collects nothing — reading it IS
-        // completing it, so an empty answers map must not block the submit.
-        boolean collectsAnswers = blocks.stream()
-                .anyMatch(b -> b.type() != WorksheetBlockType.CONTENT);
-        if (collectsAnswers && answers.isEmpty()) {
-            throw new BadRequestException("Fill in the worksheet before submitting.");
-        }
-        for (WorksheetBlock block : blocks) {
-            if (!block.required() || block.type() == WorksheetBlockType.CONTENT) {
-                continue;
-            }
-            if (WorksheetBlocks.isBlank(answers.get(block.id().toString()))) {
-                throw new BadRequestException(
-                        "\"" + block.label() + "\" is required — fill it in before submitting.");
-            }
-        }
+        WorksheetBlocks.requireComplete(submission.getAnswers(), template.getBlocks());
     }
 
     /** Member reply on an admin's root comment — "addressed, see the updated value". */
@@ -474,30 +426,6 @@ public class ExerciseSubmissionService {
     private List<ExerciseColumn> templateColumns(ExerciseSubmission submission) {
         return columnRepository.findByTemplateIdOrderByDisplayOrder(
                 submission.getAssignment().getTemplate().getId());
-    }
-
-    /**
-     * Values are kept as sent; keys that don't match a real column are dropped,
-     * and so is an empty value. A LIST cell nobody typed into arrives as an
-     * empty array — storing it would make the row differ from {@code {}}, so a
-     * no-op autosave would count as a change and drag a REVIEWED sheet back
-     * into the admin's queue. Absent and blank must persist identically.
-     */
-    private Map<String, Object> sanitizeCells(Map<String, Object> cells, Set<String> columnIds) {
-        Map<String, Object> clean = new LinkedHashMap<>();
-        if (cells == null) {
-            return clean;
-        }
-        cells.forEach((key, value) -> {
-            if (!columnIds.contains(key) || value == null) {
-                return;
-            }
-            if (value instanceof Collection<?> && ExerciseListEntries.isBlank(value)) {
-                return;
-            }
-            clean.put(key, value);
-        });
-        return clean;
     }
 
     /**

@@ -110,6 +110,33 @@ final class WorksheetBlocks {
         }
     }
 
+    /**
+     * A worksheet is submittable when it has any answer at all and every
+     * required block carries one — the worksheet's version of the sheet's
+     * "required column filled in every row" check. Shared by the member submit
+     * and the public link.
+     */
+    static void requireComplete(Map<String, Object> rawAnswers, List<WorksheetBlock> rawBlocks) {
+        Map<String, Object> answers = rawAnswers != null ? rawAnswers : Map.of();
+        List<WorksheetBlock> blocks = rawBlocks != null ? rawBlocks : List.of();
+        // A worksheet of only CONTENT blocks collects nothing — reading it IS
+        // completing it, so an empty answers map must not block the submit.
+        boolean collectsAnswers = blocks.stream()
+                .anyMatch(b -> b.type() != WorksheetBlockType.CONTENT);
+        if (collectsAnswers && answers.isEmpty()) {
+            throw new BadRequestException("Fill in the worksheet before submitting.");
+        }
+        for (WorksheetBlock block : blocks) {
+            if (!block.required() || block.type() == WorksheetBlockType.CONTENT) {
+                continue;
+            }
+            if (isBlank(answers.get(block.id().toString()))) {
+                throw new BadRequestException(
+                        "\"" + block.label() + "\" is required — fill it in before submitting.");
+            }
+        }
+    }
+
     static Optional<WorksheetBlock> byId(List<WorksheetBlock> blocks, UUID blockId) {
         if (blocks == null || blockId == null) {
             return Optional.empty();

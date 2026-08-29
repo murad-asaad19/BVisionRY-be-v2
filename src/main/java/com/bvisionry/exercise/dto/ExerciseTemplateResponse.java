@@ -18,6 +18,10 @@ public record ExerciseTemplateResponse(
         /** SHEET: number of columns. WORKSHEET: number of blocks. */
         int columnCount,
         List<AssignedOrg> assignedOrganizations,
+        /** Public link open? Drives the list's "Public" chip and QR action. */
+        boolean isPublic,
+        /** The token behind that chip's link, or null if never made public. */
+        UUID publicToken,
         Instant createdAt,
         Instant updatedAt
 ) {
@@ -34,6 +38,8 @@ public record ExerciseTemplateResponse(
                 template.getStatus(),
                 columnCount,
                 assignedOrganizations,
+                template.isPublic(),
+                template.getPublicToken(),
                 template.getCreatedAt(),
                 template.getUpdatedAt());
     }

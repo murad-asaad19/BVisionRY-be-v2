@@ -13,7 +13,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -25,8 +27,12 @@ public class MemberTypeService {
 
     @Transactional(readOnly = true)
     public List<MemberTypeResponse> list() {
+        Map<String, Long> inUse = new HashMap<>();
+        for (Object[] row : userRepository.countGroupByUserType()) {
+            inUse.put((String) row[0], (Long) row[1]);
+        }
         return memberTypeRepository.findAllByOrderByDisplayOrderAscLabelAsc().stream()
-                .map(MemberTypeResponse::from)
+                .map(t -> MemberTypeResponse.from(t, inUse.getOrDefault(t.getCode(), 0L)))
                 .toList();
     }
 
@@ -57,7 +63,10 @@ public class MemberTypeService {
         if (request.displayOrder() != null) {
             type.setDisplayOrder(request.displayOrder());
         }
-        return MemberTypeResponse.from(memberTypeRepository.save(type));
+        // Real count, not the 0 default: the UI keys the delete control off
+        // inUseCount, and an update response refreshes the row it renders from.
+        return MemberTypeResponse.from(memberTypeRepository.save(type),
+                userRepository.countByUserType(type.getCode()));
     }
 
     @Transactional

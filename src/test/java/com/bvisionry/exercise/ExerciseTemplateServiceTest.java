@@ -1,6 +1,7 @@
 package com.bvisionry.exercise;
 
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.media.MediaUrlPort;
 import com.bvisionry.exercise.dto.UpdatePublicExerciseRequest;
@@ -241,7 +242,7 @@ class ExerciseTemplateServiceTest {
         lenient().when(publicResponseRepository.countByTemplateId(templateId)).thenReturn(3L);
 
         assertThatThrownBy(() -> service.delete(templateId))
-                .isInstanceOf(BadRequestException.class)
+                .isInstanceOf(IllegalOperationException.class)
                 .hasMessageContaining("collected public responses");
     }
 }

@@ -17,6 +17,7 @@ import com.bvisionry.auth.entity.User;
 import com.bvisionry.catalog.domain.Content;
 import com.bvisionry.common.coursevisibility.CourseVisibilityAccess;
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.catalog.domain.Course;
 import com.bvisionry.catalog.domain.CourseState;
 import com.bvisionry.catalog.domain.Section;
@@ -249,7 +250,7 @@ public class EnrollmentService {
      */
     public void requireContentInCourse(UUID contentId, Enrollment enrollment) {
         Content content = contents.findByIdWithSectionAndCourse(contentId)
-                .orElseThrow(() -> new IllegalArgumentException("Content not found: " + contentId));
+                .orElseThrow(() -> new ResourceNotFoundException("Content", contentId.toString()));
         if (!content.getSection().getCourse().getId().equals(enrollment.getCourseId())) {
             throw new com.bvisionry.common.exception.BadRequestException(
                     "Content does not belong to this enrollment's course");
@@ -265,7 +266,7 @@ public class EnrollmentService {
     @Transactional
     public ContentProgressDto markComplete(UUID enrollmentId, UUID contentId) {
         Enrollment enrollment = enrollments.findById(enrollmentId)
-                .orElseThrow(() -> new IllegalArgumentException("Enrollment not found: " + enrollmentId));
+                .orElseThrow(() -> new ResourceNotFoundException("Enrollment", enrollmentId.toString()));
 
         // Ownership check
         UUID userId = currentUser.require().userId();
@@ -323,11 +324,11 @@ public class EnrollmentService {
                 .orElseThrow(() -> new CourseNotFoundException(slug));
 
         var content = contents.findByIdWithSectionAndCourse(contentId)
-                .orElseThrow(() -> new IllegalArgumentException("Content not found: " + contentId));
+                .orElseThrow(() -> new ResourceNotFoundException("Content", contentId.toString()));
 
         // Content must belong to this course (via section → course)
         if (!content.getSection().getCourse().getId().equals(course.getId())) {
-            throw new IllegalArgumentException("Content does not belong to course: " + slug);
+            throw new BadRequestException("Content does not belong to course: " + slug);
         }
 
         // Access control: this endpoint returns the full lesson body and freshly

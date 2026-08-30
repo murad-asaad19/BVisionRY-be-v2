@@ -1,7 +1,6 @@
 package com.bvisionry.pipeline.service;
 
 import com.bvisionry.common.security.CurrentUserAccessor;
-import com.bvisionry.assessment.AnswerRepository;
 import com.bvisionry.assessment.AssignmentRepository;
 import com.bvisionry.assessment.PipelineAutoAssignmentRepository;
 import com.bvisionry.assessment.PipelineAutoAssignmentService;
@@ -52,7 +51,6 @@ public class PipelineService {
     private final AuditService auditService;
     private final AssignmentRepository assignmentRepository;
     private final SubmissionRepository submissionRepository;
-    private final AnswerRepository answerRepository;
     private final PipelineAutoAssignmentService pipelineAutoAssignmentService;
     private final PipelineAutoAssignmentRepository pipelineAutoAssignmentRepository;
     private final SurveyRepository surveyRepository;
@@ -213,15 +211,27 @@ public class PipelineService {
             validatePublishReadiness(pipeline);
         }
 
-        // When archiving or reverting to draft, clean up assignments and submissions.
-        // Only ARCHIVED also drops the auto-assign rules — a revert-to-draft is
-        // a routine "fix and republish" cycle, and silently wiping every rule
-        // on each edit pass would surprise admins (rules would vanish without
-        // an audit trail and have to be re-created after every republish).
+        // ARCHIVED retires the pipeline but keeps every assignment and
+        // submission intact — members carry on exactly as before; requireDraft
+        // already freezes edits, and provisioning refuses non-PUBLISHED
+        // pipelines, so nothing new can be handed out. Only the auto-assign
+        // rules are dropped, so future joiners stop receiving it.
         if (target == PipelineStatus.ARCHIVED) {
-            cleanupPipelineAssignments(id, /* dropAutoAssignRules */ true);
-        } else if (current == PipelineStatus.PUBLISHED && target == PipelineStatus.DRAFT) {
-            cleanupPipelineAssignments(id, /* dropAutoAssignRules */ false);
+            pipelineAutoAssignmentService.deleteRulesForPipeline(id);
+        } else if (target == PipelineStatus.DRAFT) {
+            // DRAFT unlocks structural edits, which member work forbids
+            // (answers.question_id is a RESTRICT FK) — refuse instead of
+            // wiping the submissions like this used to.
+            // Public-link submissions carry assignment_id NULL, so the exists
+            // check below cannot see them — a live link alone blocks the revert,
+            // same stance as deletePipeline.
+            if (submissionRepository.existsByAssignmentPipelineId(id)
+                    || pipelineRepository.hasPublicLinks(id)) {
+                throw new IllegalOperationException(
+                        "This pipeline has member submissions or a public link and cannot be "
+                                + "reverted to draft. Create a new version instead.");
+            }
+            cleanupEmptyAssignments(id);
         }
 
         pipeline.setStatus(target);
@@ -238,8 +248,16 @@ public class PipelineService {
         Pipeline pipeline = pipelineRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Pipeline", id.toString()));
 
-        // Pipeline is going away entirely — drop everything that points at it.
-        cleanupPipelineAssignments(id, /* dropAutoAssignRules */ true);
+        // Same stance as exercise templates: once a pipeline has been assigned
+        // or opened publicly it carries (or may carry) member work — retire it
+        // with ARCHIVED instead of destroying that work.
+        if (assignmentRepository.existsByPipelineId(id) || pipelineRepository.hasPublicLinks(id)
+                || pipelineRepository.hasInsightReports(id)) {
+            throw new IllegalOperationException(
+                    "This pipeline has been assigned or has generated data and cannot be deleted. "
+                            + "Archive it instead.");
+        }
+        pipelineAutoAssignmentService.deleteRulesForPipeline(id);
 
         // Delete the pipeline (cascades to pillars and questions)
         pipelineRepository.delete(pipeline);
@@ -249,25 +267,14 @@ public class PipelineService {
     }
 
     /**
-     * Discards in-flight work for a pipeline. {@code dropAutoAssignRules} is
-     * only true when the pipeline is being permanently retired (ARCHIVED or
-     * deleted) — a republish cycle preserves rules so future joiners continue
-     * to receive the pipeline once it is back in PUBLISHED state.
+     * Drops the pipeline's assignments ahead of a revert to DRAFT. Only legal
+     * once the caller has verified no submissions exist — member work is never
+     * deleted here; refusal (with "create a new version") is the answer when
+     * work exists. Rules survive: a revert is a routine fix-and-republish
+     * cycle and future joiners should keep receiving the pipeline.
      */
-    private void cleanupPipelineAssignments(UUID pipelineId, boolean dropAutoAssignRules) {
-        var assignments = assignmentRepository.findByPipelineId(pipelineId);
-        for (var assignment : assignments) {
-            var submissions = submissionRepository.findByAssignmentId(assignment.getId());
-            for (var submission : submissions) {
-                answerRepository.deleteAll(answerRepository.findBySubmissionId(submission.getId()));
-            }
-            submissionRepository.deleteAll(submissions);
-        }
-        assignmentRepository.deleteAll(assignments);
-
-        if (dropAutoAssignRules) {
-            pipelineAutoAssignmentService.deleteRulesForPipeline(pipelineId);
-        }
+    private void cleanupEmptyAssignments(UUID pipelineId) {
+        assignmentRepository.deleteAll(assignmentRepository.findByPipelineId(pipelineId));
     }
 
     @Transactional
@@ -535,7 +542,10 @@ public class PipelineService {
         boolean valid = switch (current) {
             case DRAFT -> target == PipelineStatus.PUBLISHED;
             case PUBLISHED -> target == PipelineStatus.ARCHIVED || target == PipelineStatus.DRAFT;
-            case ARCHIVED -> target == PipelineStatus.DRAFT;
+            // Un-archive is a plain resume: assignments and submissions survived
+            // archiving, so everything picks up where it left off. Auto-assign
+            // rules were dropped on archive and must be re-created.
+            case ARCHIVED -> target == PipelineStatus.PUBLISHED || target == PipelineStatus.DRAFT;
         };
         if (!valid) {
             throw new IllegalOperationException(
@@ -654,6 +664,9 @@ public class PipelineService {
                     .computeIfAbsent(pipelineId, k -> new java.util.LinkedHashMap<>())
                     .put(orgId, new AssignedOrgSummary(orgId, orgName, false));
         }
+        // Snapshot BEFORE the rule loop below adds rule-only orgs: at this point
+        // byPipeline's keys are exactly the pipelines with assignments.
+        java.util.Set<UUID> withAssignments = java.util.Set.copyOf(byPipeline.keySet());
         for (Object[] row : pipelineAutoAssignmentRepository.findDistinctOrgsByPipelineIds(ids)) {
             UUID pipelineId = (UUID) row[0];
             UUID orgId = (UUID) row[1];
@@ -667,25 +680,34 @@ public class PipelineService {
                             : new AssignedOrgSummary(existing.id(), existing.name(), true));
         }
 
+        // Batch twin of the deletePipeline guard: undeletable = ever assigned
+        // (snapshotted above — rule-only orgs don't count, dropping a rule
+        // loses no work), ever opened publicly, or holding insight reports.
+        java.util.Set<UUID> withBlockingRefs =
+                new java.util.HashSet<>(pipelineRepository.idsWithPublicLinksOrInsightReports(ids));
+
         return pipelines.stream()
                 .map(p -> {
                     Map<UUID, AssignedOrgSummary> orgs = byPipeline.get(p.getId());
                     List<AssignedOrgSummary> orgList = orgs == null
                             ? List.of()
                             : List.copyOf(orgs.values());
-                    return toSummaryResponse(p, orgList);
+                    boolean deletable = !withAssignments.contains(p.getId())
+                            && !withBlockingRefs.contains(p.getId());
+                    return toSummaryResponse(p, orgList, deletable);
                 })
                 .toList();
     }
 
-    private PipelineSummaryResponse toSummaryResponse(Pipeline p, List<AssignedOrgSummary> assignedOrganizations) {
+    private PipelineSummaryResponse toSummaryResponse(Pipeline p, List<AssignedOrgSummary> assignedOrganizations,
+                                                      boolean deletable) {
         int pillarCount = p.getPillars() != null
                 ? (int) p.getPillars().stream().filter(pillar -> pillar.getType() != PillarType.PERSONAL).count()
                 : 0;
         return new PipelineSummaryResponse(
                 p.getId(), p.getName(), p.getDescription(), p.getAbbreviation(), p.getVersion(),
                 p.getStatus(), p.getCreatedBy(),
-                pillarCount, assignedOrganizations, p.getCreatedAt(), p.getUpdatedAt()
+                pillarCount, assignedOrganizations, deletable, p.getCreatedAt(), p.getUpdatedAt()
         );
     }
 }

@@ -95,7 +95,7 @@ public class CourseMapper {
      * {@code state} and the supplied section/lesson counts (passed in because
      * the bags are lazy and the caller counts them with cheap COUNT queries).
      */
-    public CourseAdminDto toAdminDto(Course c, int sectionsCount, int lessonsCount) {
+    public CourseAdminDto toAdminDto(Course c, int sectionsCount, int lessonsCount, long enrolledCount) {
         return new CourseAdminDto(
                 c.getId().toString(),
                 c.getSlug(),
@@ -112,6 +112,7 @@ public class CourseMapper {
                 c.getDurationHours(),
                 lessonsCount,
                 c.getLearnersCount(),
+                enrolledCount,
                 sectionsCount,
                 nullToEmpty(c.getInstructorName()),
                 c.getCoverGradient(),

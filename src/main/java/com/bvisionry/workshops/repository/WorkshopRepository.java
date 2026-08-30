@@ -79,6 +79,10 @@ public interface WorkshopRepository extends JpaRepository<Workshop, UUID> {
                                    @Param("workshopId") UUID workshopId,
                                    @Param("userId") UUID userId);
 
+    /** Members' pre/post-survey responses — member work that blocks workshop delete. */
+    @Query(value = "SELECT count(*) FROM survey_responses WHERE workshop_id = :workshopId", nativeQuery = true)
+    long countIntroResponsesByWorkshopId(@Param("workshopId") UUID workshopId);
+
     /** Drop every intro-survey response of a workshop (admin "reset results"). */
     @Modifying
     @Query(value = "DELETE FROM survey_responses WHERE workshop_id = :workshopId", nativeQuery = true)

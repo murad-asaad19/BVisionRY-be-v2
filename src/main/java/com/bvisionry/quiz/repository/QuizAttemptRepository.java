@@ -15,6 +15,13 @@ public interface QuizAttemptRepository extends JpaRepository<QuizAttempt, UUID> 
     int countByEnrollmentIdAndContentId(UUID enrollmentId, UUID contentId);
 
     /**
+     * All attempts ever made on this quiz, any learner. Drives the authoring
+     * warning: editing questions clears these attempts' per-question answer
+     * review (grades survive on the attempt row).
+     */
+    int countByContentId(UUID contentId);
+
+    /**
      * List all attempts by a user for a content item, ordered newest first.
      */
     List<QuizAttempt> findByEnrollmentIdAndContentIdOrderBySubmittedAtDesc(

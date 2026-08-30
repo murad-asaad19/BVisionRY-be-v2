@@ -25,6 +25,9 @@ public interface SubmissionRepository extends JpaRepository<Submission, UUID> {
 
     List<Submission> findByAssignmentId(UUID assignmentId);
 
+    // Revert-to-draft guard: any member work (drafts included) on this pipeline?
+    boolean existsByAssignmentPipelineId(UUID pipelineId);
+
     Optional<Submission> findByAssignmentIdAndUserId(UUID assignmentId, UUID userId);
 
     /**

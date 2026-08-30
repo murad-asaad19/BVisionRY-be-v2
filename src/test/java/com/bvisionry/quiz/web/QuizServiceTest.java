@@ -801,7 +801,7 @@ class QuizServiceTest {
                         new UpsertQuizOptionRequest("b", false, 1)))));
 
         assertThatThrownBy(() -> service.upsert(contentId, req))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("must have at least one correct option");
 
         verify(quizzes, never()).save(any());

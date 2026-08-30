@@ -34,15 +34,28 @@ public record CohortDto(
          * `roster-dialog.tsx`), so a stale count here can't reach the UI.
          */
         int moduleCount,
-        String stageLabel) {
+        String stageLabel,
+        /**
+         * Distinct members with any work in this cohort. Looked up for real
+         * only by {@code CohortService#listAll} — the switcher list the board
+         * (and its danger zone) renders from; > 0 means delete is refused.
+         * Other paths return the neutral 0, same caching stance as
+         * {@code moduleCount} above.
+         */
+        long memberWorkCount) {
 
     public static CohortDto of(Cohort c) {
         return of(c, List.of());
     }
 
     public static CohortDto of(Cohort c, List<String> orgNames) {
+        return of(c, orgNames, 0);
+    }
+
+    public static CohortDto of(Cohort c, List<String> orgNames, long memberWorkCount) {
         return new CohortDto(c.getId(), c.getName(), c.getPosition(), c.getStatus(),
                 c.getLaunchedAt(),
-                List.copyOf(c.getMemberIds()), List.copyOf(orgNames), 0, "Week");
+                List.copyOf(c.getMemberIds()), List.copyOf(orgNames), 0, "Week",
+                memberWorkCount);
     }
 }

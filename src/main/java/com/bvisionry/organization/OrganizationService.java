@@ -250,6 +250,13 @@ public class OrganizationService {
             hardDelete(child.getId());
         }
 
+        // V212: the member-work FKs are RESTRICT now. This wipe is the one
+        // deliberate full cascade, so clear those rows explicitly before the
+        // org row delete cascades courses, sessions and workshops.
+        organizationRepository.deleteEnrollmentsUnderOrg(id);
+        organizationRepository.deleteWorkshopSubmissionsUnderOrg(id);
+        organizationRepository.deleteWorkshopSurveyResponsesUnderOrg(id);
+
         insightReportRepository.deleteByOrganizationId(id);
         assignmentRepository.deleteByOrganizationId(id);
         invitationRepository.deleteByOrganizationId(id);

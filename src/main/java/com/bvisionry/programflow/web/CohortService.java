@@ -16,6 +16,7 @@ import com.bvisionry.common.audit.AuditLogger;
 import com.bvisionry.common.event.ProgramFlowEvents;
 import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.IllegalOperationException;
+import com.bvisionry.programflow.repository.BoardRestoreRepository;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.programflow.domain.Cohort;
@@ -83,6 +84,7 @@ public class CohortService {
             "One or more of the selected people are not active learners in this organization";
 
     private final CohortRepository cohorts;
+    private final BoardRestoreRepository boardRestore;
     private final CohortOrgAssignmentRepository assignments;
     private final ApplicationEventPublisher events;
     private final LaunchQuotaService launchQuota;
@@ -100,8 +102,10 @@ public class CohortService {
         Map<UUID, List<String>> orgNames = cohorts.findAllOrgNames().stream()
                 .collect(Collectors.groupingBy(CohortOrgNameRow::getCohortId,
                         Collectors.mapping(CohortOrgNameRow::getOrgName, Collectors.toList())));
+        Map<UUID, Long> workCounts = boardRestore.memberWorkCountByCohort();
         return cohorts.findAllByOrderByPositionAsc().stream()
-                .map(c -> CohortDto.of(c, orgNames.getOrDefault(c.getId(), List.of())))
+                .map(c -> CohortDto.of(c, orgNames.getOrDefault(c.getId(), List.of()),
+                        workCounts.getOrDefault(c.getId(), 0L)))
                 .toList();
     }
 
@@ -241,9 +245,21 @@ public class CohortService {
         return CohortDto.of(c);
     }
 
-    /** Deleting is allowed in any state; the launch ledger stands (no refund, spec §8). */
+    /**
+     * Deleting is only possible while no member has worked in the cohort —
+     * the cascade would otherwise take every submission, attendance record
+     * and growth summary with it. The launch ledger stands regardless (no
+     * refund, spec §8).
+     */
     public void delete(UUID cohortId) {
-        cohorts.delete(require(cohortId));
+        Cohort c = require(cohortId);
+        long members = boardRestore.memberWorkCount(cohortId);
+        if (members > 0) {
+            throw new IllegalOperationException(
+                    "This cohort has work from " + members + " member" + (members == 1 ? "" : "s")
+                            + " and cannot be deleted.");
+        }
+        cohorts.delete(c);
     }
 
     /* ------------------------------------------------------ org assignment */
@@ -427,7 +443,7 @@ public class CohortService {
         return new CohortDto(c.getId(), c.getName(), c.getPosition(), c.getStatus(),
                 c.getLaunchedAt(),
                 c.getMemberIds().stream().filter(orgMemberIds::contains).toList(),
-                List.of(), moduleCount, stageLabel);
+                List.of(), moduleCount, stageLabel, 0);
     }
 
     private void auditLifecycle(UUID orgId, Cohort c, String action) {

@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -15,6 +16,40 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface OrganizationRepository extends JpaRepository<Organization, UUID> {
+
+    /*
+     * V212 flipped the member-work FKs (enrollments, roll call, workshop
+     * submissions and pre-survey responses) to ON DELETE RESTRICT, so the org
+     * hard-delete — the one sanctioned full wipe — clears them explicitly
+     * before the org row cascade takes courses and workshops. (Sessions are
+     * NOT cascaded here: V171 moved them to platform cohorts, so an org
+     * delete never touches them — only the members' own attendance rows go,
+     * via the users cascade.) Raw
+     * SQL on those schemas (cross-slice write seam scoped to this wipe):
+     * user-owned rows already cascade off the users delete, but foreign rows
+     * survive it (cross-org attendance on shared cohorts, public-course
+     * enrollments, SET-NULL survey respondents) and would block the cascade.
+     */
+
+    @Modifying
+    @Query(value = "DELETE FROM enrollment WHERE course_id IN (SELECT id FROM course WHERE org_id = :orgId)",
+            nativeQuery = true)
+    void deleteEnrollmentsUnderOrg(@Param("orgId") UUID orgId);
+
+    @Modifying
+    @Query(value = """
+            DELETE FROM workshop_task_submissions WHERE task_id IN (
+                SELECT t.id FROM workshop_exercise_tasks t
+                JOIN workshop_exercises e ON e.id = t.exercise_id
+                JOIN workshops w ON w.id = e.workshop_id
+                WHERE w.org_id = :orgId)
+            """, nativeQuery = true)
+    void deleteWorkshopSubmissionsUnderOrg(@Param("orgId") UUID orgId);
+
+    @Modifying
+    @Query(value = "DELETE FROM survey_responses WHERE workshop_id IN (SELECT id FROM workshops WHERE org_id = :orgId)",
+            nativeQuery = true)
+    void deleteWorkshopSurveyResponsesUnderOrg(@Param("orgId") UUID orgId);
     List<Organization> findByIsActiveTrue();
     boolean existsByNameIgnoreCase(String name);
     long countBySubscriptionTier(SubscriptionTier tier);

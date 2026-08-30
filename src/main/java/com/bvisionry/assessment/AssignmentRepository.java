@@ -110,6 +110,9 @@ public interface AssignmentRepository extends JpaRepository<Assignment, UUID> {
 
     List<Assignment> findByPipelineId(UUID pipelineId);
 
+    // Delete/revert guards: has this pipeline ever been handed out?
+    boolean existsByPipelineId(UUID pipelineId);
+
     /**
      * Returns one row per distinct (pipeline, organization) pair the pipeline
      * is manually assigned to, as {@code [pipelineId, orgId, orgName]}. Used

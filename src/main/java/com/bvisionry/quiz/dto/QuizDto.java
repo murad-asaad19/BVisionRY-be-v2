@@ -12,5 +12,6 @@ public record QuizDto(
         int passingScorePct,
         int maxAttempts,
         boolean shuffle,
+        int attemptCount,
         List<QuizQuestionDto> questions
 ) {}

@@ -142,7 +142,9 @@ public class PillarService {
         if (UserRole.SUPER_ADMIN.name().equals(caller.role())) {
             return;
         }
-        if (pipeline.getStatus() != PipelineStatus.PUBLISHED
+        // ARCHIVED reads stay open: archiving keeps existing assignments
+        // working, and members on them still need their band data.
+        if (pipeline.getStatus() == PipelineStatus.DRAFT
                 || caller.orgId() == null
                 || !pipelineService.isAssignedToOrg(pipelineId, caller.orgId())) {
             throw new ResourceNotFoundException("Pipeline", pipelineId.toString());

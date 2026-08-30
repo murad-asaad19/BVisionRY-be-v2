@@ -28,6 +28,12 @@ public record CourseAdminDto(
         BigDecimal durationHours,
         int lessonsCount,
         int learnersCount,
+        /**
+         * Real enrollment count (unlike {@code learnersCount}, a hand-set
+         * marketing number). 0 means the course is deletable; otherwise the
+         * delete endpoint refuses and Archive is the retirement path.
+         */
+        long enrolledCount,
         int sectionsCount,
         String instructorName,
         String coverGradient,

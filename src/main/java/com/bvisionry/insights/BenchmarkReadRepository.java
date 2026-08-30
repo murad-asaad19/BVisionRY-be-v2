@@ -174,13 +174,15 @@ public class BenchmarkReadRepository {
     }
 
     /**
-     * True when the pipeline exists and is PUBLISHED. The axis query below
+     * True when the pipeline exists and is not DRAFT. The axis query below
      * would otherwise act as an existence oracle handing any org admin a DRAFT
-     * pipeline's pillar names; the service 404s instead.
+     * pipeline's pillar names; the service 404s instead. ARCHIVED stays
+     * readable: archiving preserves assignments and submissions (same stance
+     * as PillarService), so its benchmark data is real and must not vanish.
      */
     public boolean pipelinePublished(UUID pipelineId) {
         return !jdbc.query(
-                "SELECT 1 FROM pipelines WHERE id = :pipelineId AND status = 'PUBLISHED'",
+                "SELECT 1 FROM pipelines WHERE id = :pipelineId AND status <> 'DRAFT'",
                 new MapSqlParameterSource("pipelineId", pipelineId),
                 (rs, i) -> 1).isEmpty();
     }

@@ -39,6 +39,20 @@ import com.bvisionry.catalog.domain.Section;
 @Repository
 public interface CourseRepository extends JpaRepository<Course, UUID> {
 
+    /**
+     * Enrollments for this course, read straight off the enrollment schema
+     * (cross-slice read seam — keeps the enrollment types out of catalog).
+     * Progress and quiz attempts hang off enrollments, so > 0 means deleting
+     * the course would destroy member work.
+     */
+    @Query(value = "SELECT count(*) FROM enrollment WHERE course_id = :courseId", nativeQuery = true)
+    long countEnrollments(@Param("courseId") UUID courseId);
+
+    /** Batch twin of {@link #countEnrollments} for the authoring list. */
+    @Query(value = "SELECT course_id, count(*) FROM enrollment WHERE course_id IN (:ids) GROUP BY course_id",
+            nativeQuery = true)
+    List<Object[]> countEnrollmentsByCourseIds(@Param("ids") List<UUID> ids);
+
     // -------------------------------------------------------------------------
     // Public catalog listing — no org scoping, all PUBLISHED courses.
     // -------------------------------------------------------------------------

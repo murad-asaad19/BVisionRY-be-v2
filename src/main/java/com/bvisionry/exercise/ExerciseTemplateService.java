@@ -2,6 +2,7 @@ package com.bvisionry.exercise;
 
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.exercise.dto.ExerciseColumnResponse;
 import com.bvisionry.exercise.dto.ExercisePlacementsResponse;
@@ -197,14 +198,14 @@ public class ExerciseTemplateService {
     public void delete(UUID id) {
         ExerciseTemplate template = requireTemplate(id);
         if (assignmentRepository.countByTemplateId(id) > 0) {
-            throw new BadRequestException(
+            throw new IllegalOperationException(
                     "This exercise has been assigned and cannot be deleted. Archive it instead.");
         }
         // Public responses cascade with the template (V210). They are collected
         // answers from real people with no other copy anywhere, so a delete that
         // would take them is refused rather than silently destroying them.
         if (publicResponseRepository.countByTemplateId(id) > 0) {
-            throw new BadRequestException(
+            throw new IllegalOperationException(
                     "This exercise has collected public responses and cannot be deleted. "
                             + "Archive it instead.");
         }

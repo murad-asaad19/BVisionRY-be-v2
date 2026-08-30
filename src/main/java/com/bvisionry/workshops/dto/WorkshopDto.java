@@ -14,11 +14,14 @@ public record WorkshopDto(
         UUID preWorkshopSurveyId,
         String boardStyle,
         long exerciseCount,
-        long memberCount) {
+        long memberCount,
+        /** Submitted task work across the workshop; > 0 means delete is refused (reset first). */
+        long submissionCount) {
 
-    public static WorkshopDto from(Workshop w, long exerciseCount, long memberCount) {
+    public static WorkshopDto from(Workshop w, long exerciseCount, long memberCount,
+                                   long submissionCount) {
         return new WorkshopDto(w.getId(), w.getName(), w.getPosition(), w.getStatus(),
                 w.getPostCompletionSurveyId(), w.getPreWorkshopSurveyId(),
-                w.getBoardStyle(), exerciseCount, memberCount);
+                w.getBoardStyle(), exerciseCount, memberCount, submissionCount);
     }
 }

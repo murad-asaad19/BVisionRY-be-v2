@@ -154,10 +154,10 @@ public class RoiReportReadRepository {
 
     /**
      * The report's names, or empty when the cohort is absent/foreign or the
-     * pipeline is absent/unpublished. One lookup for both so an unpublished
-     * pipeline reads exactly like a nonexistent one (the pillar axis must not
-     * become an existence oracle for DRAFT pillar names) and the service has a
-     * single 404 branch.
+     * pipeline is absent/DRAFT. One lookup for both so a draft pipeline reads
+     * exactly like a nonexistent one (the pillar axis must not become an
+     * existence oracle for DRAFT pillar names) and the service has a single
+     * 404 branch. ARCHIVED stays readable — archiving preserves member data.
      */
     public Optional<ReportHeader> header(UUID orgId, UUID cohortId, UUID pipelineId) {
         return jdbc.query("""
@@ -165,7 +165,7 @@ public class RoiReportReadRepository {
                 FROM cohorts c
                 JOIN cohort_orgs cox ON cox.cohort_id = c.id AND cox.org_id = :orgId
                 JOIN organizations o ON o.id = cox.org_id
-                JOIN pipelines p ON p.id = :pipelineId AND p.status = 'PUBLISHED'
+                JOIN pipelines p ON p.id = :pipelineId AND p.status <> 'DRAFT'
                 WHERE c.id = :cohortId
                 """,
                 params(orgId, cohortId, pipelineId),

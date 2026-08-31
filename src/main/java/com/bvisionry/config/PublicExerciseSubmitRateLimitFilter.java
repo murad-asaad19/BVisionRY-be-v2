@@ -16,12 +16,13 @@ import org.springframework.util.AntPathMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.function.Consumer;
 
 /**
  * Enforces the public-exercise submit rate limit BEFORE request body
  * deserialization and bean validation, so malformed payloads also consume
- * tokens. Matches exactly
- * {@code POST /api/public/exercises/by-token/{token}/responses}.
+ * tokens. Matches {@code POST /api/public/exercises/by-token/{token}/responses}
+ * and its {@code /pdf} sibling — on separate budgets (see {@link #PDF_PATTERN}).
  *
  * <p>The survey twin of this lives in {@code survey.ratelimit}; this one sits
  * in {@code config} with the other cross-cutting rate-limit filters because
@@ -32,7 +33,16 @@ import java.io.IOException;
 @RequiredArgsConstructor
 public class PublicExerciseSubmitRateLimitFilter extends OncePerRequestFilter {
 
-    private static final String PATTERN = "/api/public/exercises/by-token/*/responses";
+    private static final String SUBMIT_PATTERN = "/api/public/exercises/by-token/*/responses";
+    /**
+     * The PDF render persists nothing, but it is the most expensive thing an
+     * anonymous caller can ask this app to do (Flying Saucer lays out a whole
+     * document per request), so it is limited too — on its OWN budget. A
+     * workshop room is one NAT IP: sharing the submit budget would let a few
+     * people downloading their copy 429 the next person's submit, losing an
+     * answer to save a printout.
+     */
+    private static final String PDF_PATTERN = "/api/public/exercises/by-token/*/pdf";
     private static final AntPathMatcher MATCHER = new AntPathMatcher();
 
     private final RateLimitService rateLimitService;
@@ -42,17 +52,23 @@ public class PublicExerciseSubmitRateLimitFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         String path = RequestPaths.decoded(request);
-        if (!"POST".equalsIgnoreCase(request.getMethod()) || !MATCHER.match(PATTERN, path)) {
+        boolean post = "POST".equalsIgnoreCase(request.getMethod());
+        boolean submit = post && MATCHER.match(SUBMIT_PATTERN, path);
+        boolean pdf = post && MATCHER.match(PDF_PATTERN, path);
+        if (!submit && !pdf) {
             filterChain.doFilter(request, response);
             return;
         }
 
         String ip = clientIpResolver.resolve(request);
         String token = extractToken(path);
+        Consumer<String> limit = submit
+                ? rateLimitService::checkExerciseSubmitLimit
+                : rateLimitService::checkExercisePdfLimit;
 
         try {
-            rateLimitService.checkExerciseSubmitLimit("ip:" + ip);
-            rateLimitService.checkExerciseSubmitLimit("token:" + token + ":" + ip);
+            limit.accept("ip:" + ip);
+            limit.accept("token:" + token + ":" + ip);
         } catch (RateLimitExceededException ex) {
             ProblemDetailResponseWriter.write(response, HttpStatus.TOO_MANY_REQUESTS, ex.getMessage());
             return;

@@ -7,6 +7,8 @@ import com.bvisionry.exercise.dto.PublicExerciseSubmitRequest;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,6 +33,7 @@ import java.util.UUID;
 public class PublicExerciseController {
 
     private final PublicExerciseService publicExerciseService;
+    private final PublicExercisePdfService publicExercisePdfService;
     private final ClientIpResolver clientIpResolver;
 
     @GetMapping("/by-token/{token}")
@@ -50,5 +53,27 @@ public class PublicExerciseController {
                 token + ":" + clientIpResolver.resolve(request));
         publicExerciseService.submit(token, body, ipHash, request.getHeader("User-Agent"));
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * The respondent's own copy of what they filled in, as a branded PDF.
+     *
+     * <p>A POST because the fill is the input, not because anything is
+     * created: this endpoint renders and returns bytes, and writes nothing.
+     * That is what lets it work for a link whose responses are not saved —
+     * the answers only exist in the caller's browser, so they have to travel
+     * with the request. Rate-limited alongside submit
+     * ({@link com.bvisionry.config.PublicExerciseSubmitRateLimitFilter}):
+     * rendering is the expensive half of this controller.
+     */
+    @PostMapping("/by-token/{token}/pdf")
+    public ResponseEntity<byte[]> pdf(@PathVariable UUID token,
+                                      @Valid @RequestBody PublicExerciseSubmitRequest body) {
+        PublicExercisePdfService.RenderedPdf pdf = publicExercisePdfService.render(token, body);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"" + pdf.filename() + "\"")
+                .contentType(MediaType.APPLICATION_PDF)
+                .body(pdf.bytes());
     }
 }

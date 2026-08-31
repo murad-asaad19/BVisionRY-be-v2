@@ -25,6 +25,11 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     // loginable admin be removed, stranding the org.
     long countByOrganizationIdAndRoleAndStatus(UUID organizationId, UserRole role, UserStatus status);
     long countByUserType(String userType);
+
+    /** Batch twin of {@link #countByUserType} for the member-type list: [userType, count]. */
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT u.userType, COUNT(u) FROM User u WHERE u.userType IS NOT NULL GROUP BY u.userType")
+    List<Object[]> countGroupByUserType();
     Optional<User> findFirstByOrganizationIdAndRole(UUID organizationId, UserRole role);
     List<User> findByRole(UserRole role);
     // Push-notification recipient resolution: only ACTIVE admins can act on a

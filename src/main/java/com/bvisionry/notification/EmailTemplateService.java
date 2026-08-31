@@ -1,5 +1,6 @@
 package com.bvisionry.notification;
 
+import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.config.FrontendUrls;
 import com.bvisionry.notification.dto.EmailTemplateDto;
 import com.bvisionry.notification.dto.EmailTemplatePreviewResponse;
@@ -207,7 +208,7 @@ public class EmailTemplateService {
             }
         }
         if (!errors.isEmpty()) {
-            throw new IllegalArgumentException(String.join("; ", errors));
+            throw new BadRequestException(String.join("; ", errors));
         }
     }
 

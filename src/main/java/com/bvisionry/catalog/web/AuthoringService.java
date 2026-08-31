@@ -1,8 +1,10 @@
 package com.bvisionry.catalog.web;
 
 import com.bvisionry.common.security.CurrentUserAccessor;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -32,6 +34,7 @@ import com.bvisionry.catalog.repository.ContentRepository;
 import com.bvisionry.catalog.repository.CourseRepository;
 import com.bvisionry.catalog.repository.SectionRepository;
 import com.bvisionry.catalog.repository.TagRepository;
+import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.BadRequestException;
 
 /**
@@ -250,17 +253,26 @@ public class AuthoringService {
         List<Course> found = currentUser.require().isSuperAdmin()
                 ? courses.findAllByOrderByUpdatedAtDesc()
                 : courses.findByOrgIdOrderByUpdatedAtDesc(orgIdOf(currentUser.require()));
-        return found.stream().map(this::toAdminDto).toList();
+        Map<UUID, Long> enrolled = new HashMap<>();
+        if (!found.isEmpty()) {
+            for (Object[] row : courses.countEnrollmentsByCourseIds(
+                    found.stream().map(Course::getId).toList())) {
+                enrolled.put((UUID) row[0], ((Number) row[1]).longValue());
+            }
+        }
+        return found.stream()
+                .map(c -> toAdminDto(c, enrolled.getOrDefault(c.getId(), 0L)))
+                .toList();
     }
 
     @Transactional
     public CourseAdminDto createCourse(UpsertCourseRequest req) {
         String slug = req.slug() == null ? null : req.slug().trim();
         if (slug == null || slug.isBlank()) {
-            throw new IllegalArgumentException("slug is required");
+            throw new BadRequestException("slug is required");
         }
         if (courses.existsBySlug(slug)) {
-            throw new IllegalArgumentException("A course with slug '" + slug + "' already exists");
+            throw new BadRequestException("A course with slug '" + slug + "' already exists");
         }
         Course c = new Course();
         c.setOrgId(orgIdOf(currentUser.require()));
@@ -278,18 +290,32 @@ public class AuthoringService {
         orgScope.require(c.getOrgId());
         String newSlug = req.slug() == null ? null : req.slug().trim();
         if (newSlug != null && !newSlug.equals(c.getSlug()) && courses.existsBySlug(newSlug)) {
-            throw new IllegalArgumentException("A course with slug '" + newSlug + "' already exists");
+            throw new BadRequestException("A course with slug '" + newSlug + "' already exists");
         }
         applyCourseRequest(c, req, false);
         applyTags(c, req.tags());
         return toAdminDto(courses.save(c));
     }
 
+    /**
+     * Hard delete — only for a course nobody ever enrolled in. Once learners
+     * exist, the cascade would take their enrollments, progress and quiz
+     * attempts with it; ARCHIVED is the retirement path (it hides the course
+     * from the catalog while enrolled learners keep the player). Section and
+     * lesson deletes stay ungated on purpose: restructuring a course is
+     * routine authoring and sits behind a UI confirmation.
+     */
     @Transactional
     public void deleteCourse(String slug) {
         Course c = courses.findBySlug(slug)
                 .orElseThrow(() -> new CourseNotFoundException(slug));
         orgScope.require(c.getOrgId());
+        long enrolled = courses.countEnrollments(c.getId());
+        if (enrolled > 0) {
+            throw new IllegalOperationException(
+                    "This course has " + enrolled + " enrolled learner" + (enrolled == 1 ? "" : "s")
+                            + " and cannot be deleted. Archive it instead.");
+        }
         courses.delete(c);
     }
 
@@ -302,11 +328,11 @@ public class AuthoringService {
         try {
             state = CourseState.valueOf(stateRaw == null ? "" : stateRaw.trim().toUpperCase());
         } catch (IllegalArgumentException ex) {
-            throw new IllegalArgumentException("Invalid course state: " + stateRaw);
+            throw new BadRequestException("Invalid course state: " + stateRaw);
         }
         // Don't let an empty shell go live — a PUBLISHED course must have lessons.
         if (state == CourseState.PUBLISHED && contents.countByCourseId(c.getId()) == 0) {
-            throw new IllegalArgumentException("Cannot publish a course with no lessons");
+            throw new BadRequestException("Cannot publish a course with no lessons");
         }
         c.setState(state);
         return toAdminDto(courses.save(c));
@@ -317,9 +343,13 @@ public class AuthoringService {
     // -------------------------------------------------------------------------
 
     private CourseAdminDto toAdminDto(Course c) {
+        return toAdminDto(c, courses.countEnrollments(c.getId()));
+    }
+
+    private CourseAdminDto toAdminDto(Course c, long enrolledCount) {
         int sectionCount = (int) sections.countByCourseId(c.getId());
         int lessonCount = (int) contents.countByCourseId(c.getId());
-        return mapper.toAdminDto(c, sectionCount, lessonCount);
+        return mapper.toAdminDto(c, sectionCount, lessonCount, enrolledCount);
     }
 
     private static UUID orgIdOf(com.bvisionry.common.security.CurrentUser user) {

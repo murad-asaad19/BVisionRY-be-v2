@@ -213,6 +213,19 @@ class SurveyServiceTest {
                 .isInstanceOf(IllegalOperationException.class);
     }
 
+    /** A CLOSED survey is exactly where the responses live — delete must refuse. */
+    @Test
+    void delete_blockedWhenResponsesExist() {
+        Survey survey = buildPublishedSurvey();
+        survey.setStatus(SurveyStatus.CLOSED);
+        when(surveyRepository.findById(survey.getId())).thenReturn(Optional.of(survey));
+        when(responseRepository.countBySurveyId(survey.getId())).thenReturn(5L);
+
+        assertThatThrownBy(() -> service.delete(survey.getId()))
+                .isInstanceOf(IllegalOperationException.class)
+                .hasMessageContaining("5 responses");
+    }
+
     @Test
     void getById_notFound_throws() {
         UUID missing = UUID.randomUUID();

@@ -28,6 +28,36 @@ public interface PipelineRepository extends JpaRepository<Pipeline, UUID> {
     List<Pipeline> findByStatusAndIdIn(PipelineStatus status, List<UUID> ids);
 
     /**
+     * Public-assessment links pointing at this pipeline. Raw SQL on the
+     * publicassessment schema rather than that feature's types — the sanctioned
+     * cross-slice read seam (same stance as the exercise placement queries).
+     * A link means anonymous responses may exist (or arrive), so the pipeline
+     * is not deletable.
+     */
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM public_assessment_links WHERE pipeline_id = :pipelineId)",
+            nativeQuery = true)
+    boolean hasPublicLinks(@Param("pipelineId") UUID pipelineId);
+
+    /**
+     * Insight reports keyed to this pipeline (V5). {@code insight_reports.pipeline_id}
+     * is a plain (non-cascading) FK, so a delete with reports present would die on
+     * the constraint — refuse up front instead. Reports can outlive assignments:
+     * the pre-guard archive path used to wipe assignments while leaving reports.
+     */
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM insight_reports WHERE pipeline_id = :pipelineId)",
+            nativeQuery = true)
+    boolean hasInsightReports(@Param("pipelineId") UUID pipelineId);
+
+    /** Batch twin of {@link #hasPublicLinks} + {@link #hasInsightReports} for the list view. */
+    @Query(value = """
+            SELECT DISTINCT pipeline_id FROM (
+                SELECT pipeline_id FROM public_assessment_links WHERE pipeline_id IN (:ids)
+                UNION ALL
+                SELECT pipeline_id FROM insight_reports WHERE pipeline_id IN (:ids)) refs
+            """, nativeQuery = true)
+    List<UUID> idsWithPublicLinksOrInsightReports(@Param("ids") List<UUID> ids);
+
+    /**
      * How many assignments reach {@code orgId} for this pipeline — provisions and
      * per-member rows alike, in the org itself or in one of its sub-orgs (admins
      * live on the root org while assignments live in a sub-org, V136).

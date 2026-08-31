@@ -35,6 +35,8 @@ public record PublicExerciseDto(
         boolean allowAddRows,
         RespondentFieldMode respondentNameMode,
         RespondentFieldMode respondentEmailMode,
+        /** False = nothing is stored; the taker keeps work in the browser only. */
+        boolean saveResponses,
         /** Survey offered on the thank-you screen, or null when none applies. */
         PostCompletionSurvey postCompletionSurvey
 ) {
@@ -59,6 +61,7 @@ public record PublicExerciseDto(
                 template.isAllowAddRows(),
                 template.getRespondentNameMode(),
                 template.getRespondentEmailMode(),
+                template.isSavePublicResponses(),
                 postCompletionSurvey);
     }
 }

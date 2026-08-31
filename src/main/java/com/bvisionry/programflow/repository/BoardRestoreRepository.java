@@ -106,6 +106,69 @@ public class BoardRestoreRepository {
     }
 
     /**
+     * The four task-work tables of {@link #memberWorkAtRisk} as one
+     * {@code (task_id, user_id)} relation — the single place to add the next
+     * work-bearing table so the delete guard and the switcher badge cannot
+     * disagree. UNION ALL: the consumers wrap it in {@code count(DISTINCT …)},
+     * so a dedup pass here would be pure waste.
+     */
+    private static final String TASK_WORK = """
+            SELECT ps.task_id, ps.user_id FROM program_submissions ps
+            UNION ALL
+            SELECT s.program_task_id, s.user_id FROM submissions s
+             WHERE s.program_task_id IS NOT NULL
+            UNION ALL
+            SELECT ea.program_task_id, ea.user_id FROM exercise_assignments ea
+             WHERE ea.program_task_id IS NOT NULL AND ea.user_id IS NOT NULL
+            UNION ALL
+            SELECT sr.program_task_id, sr.respondent_user_id FROM survey_responses sr
+             WHERE sr.program_task_id IS NOT NULL""";
+
+    /**
+     * Distinct members with ANY work in this cohort — the {@link #TASK_WORK}
+     * tables plus session attendance (V163, cohort-cascaded like the rest).
+     * Drives the cohort delete guard: > 0 means the cohort cannot be deleted.
+     */
+    public long memberWorkCount(UUID cohortId) {
+        Long n = jdbc.queryForObject("""
+                SELECT count(DISTINCT y.user_id) FROM (
+                    SELECT x.user_id FROM (""" + TASK_WORK + """
+                    ) x(task_id, user_id)
+                    JOIN program_tasks t ON t.id = x.task_id
+                    JOIN program_modules m ON m.id = t.module_id
+                    WHERE m.cohort_id = :cohortId
+                    UNION ALL
+                    SELECT sa.member_id FROM session_attendance sa
+                    JOIN sessions se ON se.id = sa.session_id
+                    WHERE se.cohort_id = :cohortId
+                ) y(user_id)
+                """,
+                new MapSqlParameterSource("cohortId", cohortId), Long.class);
+        return n == null ? 0 : n;
+    }
+
+    /** Batch twin of {@link #memberWorkCount} for the cohort switcher list. */
+    public Map<UUID, Long> memberWorkCountByCohort() {
+        Map<UUID, Long> out = new HashMap<>();
+        jdbc.query("""
+                SELECT y.cohort_id, count(DISTINCT y.user_id) AS member_count FROM (
+                    SELECT m.cohort_id, x.user_id FROM (""" + TASK_WORK + """
+                    ) x(task_id, user_id)
+                    JOIN program_tasks t ON t.id = x.task_id
+                    JOIN program_modules m ON m.id = t.module_id
+                    UNION ALL
+                    SELECT se.cohort_id, sa.member_id FROM session_attendance sa
+                    JOIN sessions se ON se.id = sa.session_id
+                ) y(cohort_id, user_id)
+                GROUP BY y.cohort_id
+                """,
+                rs -> {
+                    out.put(rs.getObject("cohort_id", UUID.class), rs.getLong("member_count"));
+                });
+        return out;
+    }
+
+    /**
      * The snapshot tasks whose stored {@code task_type} differs from the
      * incoming one. A snapshot id with no stored row is a create, not a
      * retype, and simply doesn't come back from the query.
@@ -275,16 +338,27 @@ public class BoardRestoreRepository {
                 """, batch);
     }
 
-    /** Tasks the payload dropped — cascades their fields and submissions. */
+    /**
+     * Tasks the payload dropped — fields still cascade, but submissions are
+     * RESTRICT since V212, so this force-confirmed destruction (the caller
+     * already 409ed via {@link #memberWorkAtRisk} unless {@code force}) clears
+     * them explicitly first.
+     */
     private void deleteTasksNotIn(UUID cohortId, Collection<UUID> keptTaskIds) {
+        SqlParameterSource params = new MapSqlParameterSource("cohortId", cohortId)
+                .addValue("keptTaskIds", withSentinel(keptTaskIds));
+        jdbc.update("""
+                DELETE FROM program_submissions ps
+                USING program_tasks t, program_modules m
+                WHERE ps.task_id = t.id AND m.id = t.module_id AND m.cohort_id = :cohortId
+                  AND t.id NOT IN (:keptTaskIds)
+                """, params);
         jdbc.update("""
                 DELETE FROM program_tasks t
                 USING program_modules m
                 WHERE m.id = t.module_id AND m.cohort_id = :cohortId
                   AND t.id NOT IN (:keptTaskIds)
-                """,
-                new MapSqlParameterSource("cohortId", cohortId)
-                        .addValue("keptTaskIds", withSentinel(keptTaskIds)));
+                """, params);
     }
 
     /** Modules the payload dropped — empty by now, every kept task moved home first. */

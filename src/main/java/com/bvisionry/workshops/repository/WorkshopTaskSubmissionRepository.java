@@ -23,6 +23,11 @@ public interface WorkshopTaskSubmissionRepository extends JpaRepository<Workshop
             """, nativeQuery = true)
     void deleteByExerciseId(@Param("exerciseId") UUID exerciseId);
 
+    /** V212 flipped the task FK to RESTRICT — deliberate task deletes clear their work first. */
+    @Modifying
+    @Query(value = "DELETE FROM workshop_task_submissions WHERE task_id = :taskId", nativeQuery = true)
+    void deleteByTaskId(@Param("taskId") UUID taskId);
+
     @Modifying
     @Query(value = """
             DELETE FROM workshop_task_submissions
@@ -32,6 +37,30 @@ public interface WorkshopTaskSubmissionRepository extends JpaRepository<Workshop
                 WHERE e.workshop_id = :workshopId)
             """, nativeQuery = true)
     void deleteByWorkshopId(@Param("workshopId") UUID workshopId);
+
+    /**
+     * Submitted member work across the whole workshop — the same predicate as
+     * {@link #deleteByWorkshopId}, counting instead of deleting. > 0 blocks
+     * workshop delete.
+     */
+    @Query(value = """
+            SELECT count(*) FROM workshop_task_submissions
+            WHERE task_id IN (
+                SELECT t.id FROM workshop_exercise_tasks t
+                JOIN workshop_exercises e ON e.id = t.exercise_id
+                WHERE e.workshop_id = :workshopId)
+            """, nativeQuery = true)
+    long countByWorkshopId(@Param("workshopId") UUID workshopId);
+
+    /** Batch twin of {@link #countByWorkshopId} for the admin workshop list: [workshop_id, count]. */
+    @Query(value = """
+            SELECT e.workshop_id, count(*) FROM workshop_task_submissions s
+            JOIN workshop_exercise_tasks t ON t.id = s.task_id
+            JOIN workshop_exercises e ON e.id = t.exercise_id
+            WHERE e.workshop_id IN (:ids)
+            GROUP BY e.workshop_id
+            """, nativeQuery = true)
+    List<Object[]> countByWorkshopIds(@Param("ids") List<UUID> ids);
 
     /** Admin "reset member answers": drop one user's submissions across the workshop. */
     @Modifying

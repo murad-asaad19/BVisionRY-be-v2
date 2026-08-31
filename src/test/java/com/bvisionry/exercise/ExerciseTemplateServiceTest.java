@@ -1,6 +1,7 @@
 package com.bvisionry.exercise;
 
 import com.bvisionry.common.exception.BadRequestException;
+import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.media.MediaUrlPort;
 import com.bvisionry.exercise.dto.UpdatePublicExerciseRequest;
@@ -178,7 +179,7 @@ class ExerciseTemplateServiceTest {
 
     private static UpdatePublicExerciseRequest publicRequest(boolean isPublic) {
         return new UpdatePublicExerciseRequest(isPublic,
-                RespondentFieldMode.OPTIONAL, RespondentFieldMode.OPTIONAL, null);
+                RespondentFieldMode.OPTIONAL, RespondentFieldMode.OPTIONAL, true, null);
     }
 
     @Test
@@ -217,7 +218,7 @@ class ExerciseTemplateServiceTest {
 
         assertThatThrownBy(() -> service.updatePublicSettings(templateId,
                 new UpdatePublicExerciseRequest(true, RespondentFieldMode.OPTIONAL,
-                        RespondentFieldMode.OPTIONAL, deleted)))
+                        RespondentFieldMode.OPTIONAL, true, deleted)))
                 .isInstanceOf(ResourceNotFoundException.class);
         assertThat(template.getPostCompletionSurveyId()).isNull();
     }
@@ -228,7 +229,7 @@ class ExerciseTemplateServiceTest {
         when(publicSurveyLinkPort.exists(surveyId)).thenReturn(true);
 
         service.updatePublicSettings(templateId, new UpdatePublicExerciseRequest(
-                true, RespondentFieldMode.OPTIONAL, RespondentFieldMode.OPTIONAL, surveyId));
+                true, RespondentFieldMode.OPTIONAL, RespondentFieldMode.OPTIONAL, true, surveyId));
 
         assertThat(template.getPostCompletionSurveyId()).isEqualTo(surveyId);
     }
@@ -241,7 +242,7 @@ class ExerciseTemplateServiceTest {
         lenient().when(publicResponseRepository.countByTemplateId(templateId)).thenReturn(3L);
 
         assertThatThrownBy(() -> service.delete(templateId))
-                .isInstanceOf(BadRequestException.class)
+                .isInstanceOf(IllegalOperationException.class)
                 .hasMessageContaining("collected public responses");
     }
 }

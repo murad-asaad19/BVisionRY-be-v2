@@ -142,7 +142,7 @@ class ExercisePlacementsIntegrationTest extends AbstractPostgresIntegrationTest 
                         .value(true));
 
         mockMvc.perform(delete("/api/admin/exercise-templates/" + usedTemplateId))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isConflict());
         mockMvc.perform(delete("/api/admin/exercise-templates/" + unusedTemplateId))
                 .andExpect(status().isNoContent());
     }

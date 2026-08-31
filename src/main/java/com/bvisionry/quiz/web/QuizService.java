@@ -1,5 +1,6 @@
 package com.bvisionry.quiz.web;
 
+import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import java.util.ArrayList;
 import java.util.List;
@@ -325,7 +326,7 @@ public class QuizService {
             boolean hasCorrect = qReq.options().stream()
                     .anyMatch(UpsertQuizOptionRequest::isCorrect);
             if (!hasCorrect) {
-                throw new IllegalArgumentException(
+                throw new BadRequestException(
                         "Question " + (i + 1) + " must have at least one correct option.");
             }
         }
@@ -355,6 +356,7 @@ public class QuizService {
                 quiz.getPassingScorePct(),
                 quiz.getMaxAttempts(),
                 quiz.isShuffle(),
+                attempts.countByContentId(quiz.getContentId()),
                 questionDtos);
     }
 

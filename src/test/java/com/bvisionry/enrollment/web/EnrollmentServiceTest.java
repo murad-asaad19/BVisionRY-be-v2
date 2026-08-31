@@ -1,5 +1,6 @@
 package com.bvisionry.enrollment.web;
 
+import com.bvisionry.common.exception.ResourceNotFoundException;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -611,16 +612,16 @@ class EnrollmentServiceTest {
     }
 
     @Test
-    void markComplete_enrollmentNotFound_throwsIllegalArgument() {
+    void markComplete_enrollmentNotFound_throwsNotFound() {
         UUID enrollmentId = UUID.randomUUID();
         when(enrollments.findById(enrollmentId)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.markComplete(enrollmentId, UUID.randomUUID()))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(ResourceNotFoundException.class);
     }
 
     @Test
-    void markComplete_contentNotFound_throwsIllegalArgument() {
+    void markComplete_contentNotFound_throwsNotFound() {
         UUID enrollmentId = UUID.randomUUID();
         UUID contentId = UUID.randomUUID();
         Enrollment enr = enrollment(enrollmentId, currentUserId, courseId);
@@ -628,7 +629,7 @@ class EnrollmentServiceTest {
         when(contents.findByIdWithSectionAndCourse(contentId)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.markComplete(enrollmentId, contentId))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(ResourceNotFoundException.class);
 
         verify(progresses, never()).save(any());
     }
@@ -739,7 +740,7 @@ class EnrollmentServiceTest {
     }
 
     @Test
-    void lessonContent_contentFromDifferentCourse_throwsIllegalArgument() {
+    void lessonContent_contentFromDifferentCourse_throwsBadRequest() {
         UUID contentId = UUID.randomUUID();
         Course course = course(courseId, SLUG, "Java 101");
         Content foreign = contentUnderCourse(contentId, UUID.randomUUID());
@@ -748,7 +749,7 @@ class EnrollmentServiceTest {
         when(contents.findByIdWithSectionAndCourse(contentId)).thenReturn(Optional.of(foreign));
 
         assertThatThrownBy(() -> service.lessonContent(SLUG, contentId))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(BadRequestException.class);
 
         verify(enrollments, never()).existsByUserIdAndCourseId(any(), any());
     }

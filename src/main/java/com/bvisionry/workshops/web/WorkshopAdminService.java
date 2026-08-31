@@ -71,10 +71,19 @@ public class WorkshopAdminService {
 
     @Transactional(readOnly = true)
     public List<WorkshopDto> list(UUID orgId) {
-        return workshops.findByOrgIdOrderByPositionAscCreatedAtAsc(orgId).stream()
+        List<Workshop> found = workshops.findByOrgIdOrderByPositionAscCreatedAtAsc(orgId);
+        Map<UUID, Long> submitted = new LinkedHashMap<>();
+        if (!found.isEmpty()) {
+            for (Object[] row : submissions.countByWorkshopIds(
+                    found.stream().map(Workshop::getId).toList())) {
+                submitted.put((UUID) row[0], ((Number) row[1]).longValue());
+            }
+        }
+        return found.stream()
                 .map(w -> WorkshopDto.from(w,
                         exercises.countByWorkshopId(w.getId()),
-                        teams.countWorkshopMembers(w.getId())))
+                        teams.countWorkshopMembers(w.getId()),
+                        submitted.getOrDefault(w.getId(), 0L)))
                 .toList();
     }
 
@@ -87,7 +96,7 @@ public class WorkshopAdminService {
         w.setName(req.name().trim());
         w.setPosition(workshops.nextPosition(orgId));
         Workshop saved = workshops.saveAndFlush(w);
-        return WorkshopDto.from(saved, 0, 0);
+        return WorkshopDto.from(saved, 0, 0, 0);
     }
 
     public WorkshopDto update(UUID orgId, UUID workshopId, UpdateWorkshopRequest req) {
@@ -100,11 +109,29 @@ public class WorkshopAdminService {
         Workshop saved = workshops.save(w);
         return WorkshopDto.from(saved,
                 exercises.countByWorkshopId(workshopId),
-                teams.countWorkshopMembers(workshopId));
+                teams.countWorkshopMembers(workshopId),
+                submissions.countByWorkshopId(workshopId));
     }
 
+    /**
+     * Deleting is only possible while no member has submitted work — the
+     * cascade would take teams, runs and submissions silently. {@link #reset}
+     * is the one deliberate, separately-confirmed way to discard that work;
+     * after a reset the workshop deletes cleanly.
+     */
     public void delete(UUID orgId, UUID workshopId) {
-        workshops.delete(requireWorkshop(orgId, workshopId));
+        Workshop w = requireWorkshop(orgId, workshopId);
+        // Pre/post-survey responses count as member work too — they survive
+        // even member deletion (respondent is SET NULL), so the workshop
+        // cascade was the one path that could destroy them.
+        long submitted = submissions.countByWorkshopId(workshopId)
+                + workshops.countIntroResponsesByWorkshopId(workshopId);
+        if (submitted > 0) {
+            throw new IllegalOperationException(
+                    "This workshop has submitted member work and cannot be deleted. "
+                            + "Reset it first if you mean to discard that work.");
+        }
+        workshops.delete(w);
     }
 
     /** Persist the admin's live-board road style pick. */
@@ -157,7 +184,11 @@ public class WorkshopAdminService {
     }
 
     public void deleteExercise(UUID orgId, UUID workshopId, UUID exerciseId) {
-        exercises.delete(requireExercise(orgId, workshopId, exerciseId));
+        WorkshopExercise e = requireExercise(orgId, workshopId, exerciseId);
+        // V212: the submission FK is RESTRICT now — this deliberate builder
+        // delete clears the exercise's work explicitly instead of cascading.
+        resetExerciseRuns(exerciseId);
+        exercises.delete(e);
     }
 
     public void reorderExercises(UUID orgId, UUID workshopId, ReorderRequest req) {
@@ -200,7 +231,10 @@ public class WorkshopAdminService {
 
     public void deleteTask(UUID orgId, UUID workshopId, UUID exerciseId, UUID taskId) {
         requireExercise(orgId, workshopId, exerciseId);
-        tasks.delete(requireTask(exerciseId, taskId));
+        WorkshopExerciseTask t = requireTask(exerciseId, taskId);
+        // V212: clear the task's work before the (now RESTRICT-guarded) delete.
+        submissions.deleteByTaskId(taskId);
+        tasks.delete(t);
         resetExerciseRuns(exerciseId);
     }
 
@@ -242,7 +276,10 @@ public class WorkshopAdminService {
         }
         exercisesById.forEach((id, e) -> {
             if (!keepExercises.contains(id)) {
-                exercises.delete(e); // cascades tasks, runs, submissions (DB FKs)
+                // V212: submissions no longer cascade — clear them explicitly,
+                // then let the exercise cascade its tasks and runs.
+                resetExerciseRuns(id);
+                exercises.delete(e);
             }
         });
         return new BuilderResponse(out);
@@ -286,6 +323,8 @@ public class WorkshopAdminService {
         }
         byId.forEach((id, t) -> {
             if (!keep.contains(id)) {
+                // V212: clear the dropped task's work before the RESTRICT-guarded delete.
+                submissions.deleteByTaskId(id);
                 tasks.delete(t);
             }
         });

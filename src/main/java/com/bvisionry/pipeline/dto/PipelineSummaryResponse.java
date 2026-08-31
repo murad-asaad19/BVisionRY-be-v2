@@ -16,6 +16,7 @@ public record PipelineSummaryResponse(
         UUID createdBy,
         int pillarCount,
         List<AssignedOrgSummary> assignedOrganizations,
+        boolean deletable,
         Instant createdAt,
         Instant updatedAt
 ) {}

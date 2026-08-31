@@ -309,6 +309,14 @@ public class SurveyService {
             throw new IllegalOperationException(
                     "Cannot delete a PUBLISHED survey. Unpublish it first.");
         }
+        // A CLOSED survey is exactly where the responses live — deleting it
+        // would cascade them away. Keep it closed instead.
+        long responses = responseRepository.countBySurveyId(id);
+        if (responses > 0) {
+            throw new IllegalOperationException(
+                    "This survey has " + responses + " response" + (responses == 1 ? "" : "s")
+                            + " and cannot be deleted. Keep it closed instead.");
+        }
         surveyRepository.delete(survey);
     }
 

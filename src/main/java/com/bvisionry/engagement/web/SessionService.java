@@ -128,6 +128,9 @@ public class SessionService {
             throw new IllegalOperationException(
                     "This session is shared with another organization and cannot be deleted here");
         }
+        // V212: attendance is RESTRICT now — this deliberate own-org delete
+        // clears its roll call explicitly instead of cascading it.
+        attendance.deleteBySessionId(sessionId);
         sessions.delete(s);
     }
 

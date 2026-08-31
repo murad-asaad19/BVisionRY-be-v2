@@ -139,6 +139,15 @@ public class ExerciseTemplate extends BaseEntity {
     @Column(name = "respondent_email_mode", nullable = false)
     private RespondentFieldMode respondentEmailMode = RespondentFieldMode.OPTIONAL;
 
+    /**
+     * Whether the public link STORES respondents' fills (V213). When false the
+     * taker keeps work in the browser only and offers no submit, and
+     * {@link com.bvisionry.exercise.PublicExerciseService#submit} refuses a
+     * write — nothing an anonymous visitor types reaches the server.
+     */
+    @Column(name = "save_public_responses", nullable = false)
+    private boolean savePublicResponses = true;
+
     @OneToMany(mappedBy = "template", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("displayOrder")
     private List<ExerciseColumn> columns = new ArrayList<>();

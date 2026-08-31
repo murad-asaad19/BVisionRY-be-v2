@@ -46,6 +46,8 @@ public record ExerciseTemplateDetailResponse(
         UUID publicToken,
         RespondentFieldMode respondentNameMode,
         RespondentFieldMode respondentEmailMode,
+        /** False = the public link stores nothing; the taker has no submit. */
+        boolean saveResponses,
         /** How many anonymous fills the public link has collected. */
         long publicResponseCount,
         /** Survey paired to the public thank-you screen, or null. */
@@ -81,6 +83,7 @@ public record ExerciseTemplateDetailResponse(
                 template.getPublicToken(),
                 template.getRespondentNameMode(),
                 template.getRespondentEmailMode(),
+                template.isSavePublicResponses(),
                 publicResponseCount,
                 template.getPostCompletionSurveyId(),
                 template.getCreatedAt(),

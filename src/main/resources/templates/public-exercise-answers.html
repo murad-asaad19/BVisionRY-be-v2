@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<!--
+  A public-exercise respondent's own copy: the questions and their answers.
+
+  Deliberately NOT built like the insight reports — no cover page, no
+  watermark. This is a one-to-three page handout somebody downloads seconds
+  after filling a worksheet at a workshop, so it opens straight on the first
+  question with a compact branded masthead instead of burning a page on a
+  cover. Everything else (palette, typography, cards) is the shared PDF design
+  system, so it still reads as the same family of documents.
+-->
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <th:block th:replace="~{fragments/pdf-base :: pdfStyles}"></th:block>
+    <style>
+        /* ===== Public-exercise-answers specific ===== */
+        .masthead { border-bottom: 2px solid #d9ad62; padding-bottom: 14px; }
+        .masthead-logo { height: 30px; }
+        .masthead-title { font-size: 21pt; font-weight: 700; color: #051647; margin-top: 18px; }
+        .masthead-meta { font-size: 9.5pt; color: #55647d; margin-top: 6px; }
+
+        .qa { margin-top: 16px; page-break-inside: avoid; }
+        .qa-label {
+            font-size: 9pt; font-weight: 700; color: #cf9b43;
+            letter-spacing: 0.08em; text-transform: uppercase;
+        }
+        .qa-prompt { font-size: 11pt; font-weight: 700; color: #051647; margin-top: 3px; }
+
+        .answer {
+            margin-top: 7px; padding: 9px 13px; background: #f8f9fc;
+            border-left: 4px solid #d9ad62; border-radius: 0 10px 10px 0;
+            font-size: 10pt; color: #18233f; line-height: 1.5;
+            white-space: pre-wrap; page-break-inside: avoid;
+        }
+        .answer-empty {
+            margin-top: 7px; font-size: 9.5pt; color: #55647d; font-style: italic;
+        }
+        /* Checklist: every option, ticked or not. An unticked option is part
+           of the question, so it stays fully legible — only the box is muted. */
+        .tick { margin-top: 4px; font-size: 10pt; color: #18233f; }
+        .tick-box {
+            display: inline-block; width: 13px; font-weight: 700;
+            color: #b6c1d4;
+        }
+        .tick-box-on { color: #2c7a52; }
+        .tick-on { font-weight: 600; color: #051647; }
+
+        /* A real grid: every cell ruled on all four sides, so an empty cell
+           still reads as a cell rather than as blank page. */
+        .answer-table {
+            width: 100%; border-collapse: collapse; margin-top: 8px;
+            font-size: 9.5pt; border: 1px solid #b9c6db;
+        }
+        .answer-table th {
+            background: #051647; color: #ffffff; padding: 7px 10px;
+            text-align: left; font-weight: 600; border: 1px solid #051647;
+        }
+        .answer-table td {
+            padding: 7px 10px; border: 1px solid #b9c6db;
+            vertical-align: top; color: #18233f; background: #ffffff;
+        }
+
+        .foot {
+            margin-top: 26px; padding-top: 10px; border-top: 1px solid #dce3ee;
+            font-size: 8.5pt; color: #55647d;
+        }
+    </style>
+</head>
+<body>
+
+<div class="masthead">
+    <img class="masthead-logo" th:src="${brandLogo}" alt="Bvisionry"/>
+    <p class="masthead-title" th:text="${exerciseName}">Exercise</p>
+    <!-- One pre-joined line: SpEL's `and`/`or` coerce their operands to
+         boolean, so combining the two optional STRINGS here would blow up on
+         the first respondent who typed a name. The service joins them. -->
+    <p class="masthead-meta" th:text="${respondentLine}">Name &middot; Date</p>
+</div>
+
+<div class="qa" th:each="item : ${items}">
+    <p class="qa-label" th:if="${item.label() != null and !item.label().isBlank()}"
+       th:text="${item.label()}">Question</p>
+    <p class="qa-prompt" th:if="${item.prompt() != null and !item.prompt().isBlank()}"
+       th:text="${item.prompt()}">Prompt</p>
+
+    <!-- A checklist always prints its full set of boxes (the unticked ones are
+         the question), so it never needs the note. Anything else that is empty
+         says so: a blank on paper reads as a rendering fault, not as "left
+         empty". -->
+    <th:block th:if="${item.kind() == 'LIST'}">
+        <p class="tick" th:each="choice : ${item.choices()}"
+           th:classappend="${choice.checked()} ? 'tick-on' : ''">
+            <span class="tick-box" th:classappend="${choice.checked()} ? 'tick-box-on' : ''"
+                  th:utext="${choice.checked()} ? '&#10003;' : '&#9633;'">&#9633;</span>
+            <span th:text="${choice.label()}">Choice</span>
+        </p>
+    </th:block>
+
+    <th:block th:unless="${item.kind() == 'LIST'}">
+        <p class="answer-empty" th:unless="${item.answered()}">Not answered.</p>
+
+        <p class="answer" th:if="${item.kind() == 'TEXT' and item.answered()}"
+           th:text="${item.text()}">Answer</p>
+
+        <table class="answer-table" th:if="${item.kind() == 'TABLE' and item.answered()}">
+            <thead>
+            <tr>
+                <th th:each="column : ${item.columns()}" th:text="${column}">Column</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="row : ${item.rows()}">
+                <td th:each="cell : ${row}" th:text="${cell}">Cell</td>
+            </tr>
+            </tbody>
+        </table>
+    </th:block>
+</div>
+
+<p class="foot">
+    <span th:text="${exerciseName}">Exercise</span> &middot; www.bvisionry.com
+</p>
+
+</body>
+</html>

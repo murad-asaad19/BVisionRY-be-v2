@@ -132,6 +132,8 @@ public class RateLimitService implements LoginBackoffPort {
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> exerciseSubmitWindows =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> exercisePdfWindows =
+            new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> publicAssessmentWindows =
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentLinkedDeque<Instant>> publicAssessmentSaveWindows =
@@ -223,6 +225,16 @@ public class RateLimitService implements LoginBackoffPort {
      */
     public void checkExerciseSubmitLimit(String key) {
         checkLimit(exerciseSubmitWindows, key, surveySubmitRequestsPerMinute, 60, "exercise-submit");
+    }
+
+    /**
+     * Checks the public EXERCISE PDF render limit. Its own bucket, deliberately
+     * NOT the submit one: a workshop room shares a single NAT IP, so a few
+     * people downloading their copy would otherwise burn the budget and 429
+     * the next person's SUBMIT — losing an answer to save a printout.
+     */
+    public void checkExercisePdfLimit(String key) {
+        checkLimit(exercisePdfWindows, key, surveySubmitRequestsPerMinute, 60, "exercise-pdf");
     }
 
     /**

@@ -171,7 +171,7 @@ public class PublicExerciseService {
      * Both gates in one place. A 404 (not a 403) for every failure: whether a
      * token exists at all is not something an anonymous caller may probe.
      */
-    private ExerciseTemplate requirePublicTemplate(UUID token) {
+    ExerciseTemplate requirePublicTemplate(UUID token) {
         return templateRepository.findByPublicTokenWithColumns(token)
                 .filter(ExerciseTemplate::isPublic)
                 .filter(t -> t.getStatus() == ExerciseTemplateStatus.PUBLISHED)
@@ -183,7 +183,7 @@ public class PublicExerciseService {
      * Measured over the SANITIZED document, so it bounds exactly what reaches
      * the column rather than what was posted.
      */
-    private static void requireWithinContentLimit(Object document) {
+    static void requireWithinContentLimit(Object document) {
         if (contentChars(document) > MAX_CONTENT_CHARS) {
             throw new BadRequestException("This response is too long to submit.");
         }
@@ -227,8 +227,8 @@ public class PublicExerciseService {
      * rows — locked columns are the admin's prefill, so a respondent's value for
      * one is discarded exactly as it is on the member path.
      */
-    private List<Map<String, Object>> sanitizeRows(List<Map<String, Object>> rows,
-                                                   ExerciseTemplate template) {
+    List<Map<String, Object>> sanitizeRows(List<Map<String, Object>> rows,
+                                           ExerciseTemplate template) {
         List<Map<String, Object>> sent = rows == null ? List.of() : rows;
         if (sent.size() > MAX_ROWS) {
             throw new BadRequestException("A public exercise accepts at most " + MAX_ROWS + " rows.");

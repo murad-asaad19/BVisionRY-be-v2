@@ -179,7 +179,7 @@ class ExerciseTemplateServiceTest {
 
     private static UpdatePublicExerciseRequest publicRequest(boolean isPublic) {
         return new UpdatePublicExerciseRequest(isPublic,
-                RespondentFieldMode.OPTIONAL, RespondentFieldMode.OPTIONAL, null);
+                RespondentFieldMode.OPTIONAL, RespondentFieldMode.OPTIONAL, true, null);
     }
 
     @Test
@@ -218,7 +218,7 @@ class ExerciseTemplateServiceTest {
 
         assertThatThrownBy(() -> service.updatePublicSettings(templateId,
                 new UpdatePublicExerciseRequest(true, RespondentFieldMode.OPTIONAL,
-                        RespondentFieldMode.OPTIONAL, deleted)))
+                        RespondentFieldMode.OPTIONAL, true, deleted)))
                 .isInstanceOf(ResourceNotFoundException.class);
         assertThat(template.getPostCompletionSurveyId()).isNull();
     }
@@ -229,7 +229,7 @@ class ExerciseTemplateServiceTest {
         when(publicSurveyLinkPort.exists(surveyId)).thenReturn(true);
 
         service.updatePublicSettings(templateId, new UpdatePublicExerciseRequest(
-                true, RespondentFieldMode.OPTIONAL, RespondentFieldMode.OPTIONAL, surveyId));
+                true, RespondentFieldMode.OPTIONAL, RespondentFieldMode.OPTIONAL, true, surveyId));
 
         assertThat(template.getPostCompletionSurveyId()).isEqualTo(surveyId);
     }

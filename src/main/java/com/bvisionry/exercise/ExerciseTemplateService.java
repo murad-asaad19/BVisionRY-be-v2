@@ -178,6 +178,7 @@ public class ExerciseTemplateService {
         template.setPublic(open);
         template.setRespondentNameMode(request.respondentNameMode());
         template.setRespondentEmailMode(request.respondentEmailMode());
+        template.setSavePublicResponses(Boolean.TRUE.equals(request.saveResponses()));
         // Null unpairs. Whether the paired survey is actually REACHABLE by an
         // anonymous respondent is decided at read time in PublicExerciseService,
         // not here: a survey can be unpublished or made private long after it

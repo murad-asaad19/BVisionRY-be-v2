@@ -16,6 +16,10 @@ public record UpdatePublicExerciseRequest(
         @NotNull(message = "respondentEmailMode is required")
         RespondentFieldMode respondentEmailMode,
 
+        /** False = answers stay in the respondent's browser; nothing is stored. */
+        @NotNull(message = "saveResponses is required")
+        Boolean saveResponses,
+
         /**
          * Survey offered on the thank-you screen, or null to unpair. Nullable
          * on purpose — unlike the two modes above, absent IS the meaningful

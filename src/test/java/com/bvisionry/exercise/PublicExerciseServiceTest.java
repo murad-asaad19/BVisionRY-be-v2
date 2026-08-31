@@ -143,6 +143,17 @@ class PublicExerciseServiceTest {
         verify(responseRepository, never()).save(any());
     }
 
+    @Test
+    void submit_whenSavingIsOff_isRejected() {
+        column("Idea", false, false);
+        template.setSavePublicResponses(false);
+
+        assertThatThrownBy(() -> service.submit(token,
+                sheetSubmit(List.of(Map.of())), "hash", "agent"))
+                .isInstanceOf(BadRequestException.class);
+        verify(responseRepository, never()).save(any());
+    }
+
     // ---- respondent fields ----------------------------------------------
 
     @Test

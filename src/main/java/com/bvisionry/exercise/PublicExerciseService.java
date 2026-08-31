@@ -110,6 +110,11 @@ public class PublicExerciseService {
     public UUID submit(UUID token, PublicExerciseSubmitRequest request,
                        String ipHash, String userAgent) {
         ExerciseTemplate template = requirePublicTemplate(token);
+        // Re-checked server-side for the same reason the token is: a stale tab
+        // rendered before the admin turned saving off must not be able to write.
+        if (!template.isSavePublicResponses()) {
+            throw new BadRequestException("This exercise does not collect responses.");
+        }
 
         PublicExerciseResponse response = new PublicExerciseResponse();
         response.setTemplate(template);

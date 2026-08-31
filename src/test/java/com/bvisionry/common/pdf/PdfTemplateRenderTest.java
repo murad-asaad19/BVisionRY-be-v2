@@ -1,5 +1,6 @@
 package com.bvisionry.common.pdf;
 
+import com.bvisionry.exercise.PublicExercisePdfService;
 import com.bvisionry.reporting.dto.PersonalInfoEntry;
 import com.bvisionry.reporting.dto.PillarDetailResponse;
 import com.bvisionry.workshops.dto.PlayResponse;
@@ -251,5 +252,37 @@ class PdfTemplateRenderTest {
                 new WorkshopAnswersExportService.TeamExport("Team Green", List.of(), List.of())));
 
         assertBrandedPdf(new PdfRenderer(engine()).renderTemplate("workshop-answers-report", ctx));
+    }
+    /**
+     * The respondent's own copy. Exercises every item shape in one document —
+     * an answered and an unanswered question, a ticked list and a grid — plus
+     * the optional respondent byline, which is where a SpEL boolean-coercion
+     * bug lived: `${name and email}` on two STRINGS threw at render time for
+     * every respondent who typed a name.
+     */
+    @Test
+    void publicExerciseAnswersTemplateRenders() throws IOException {
+        Context ctx = new Context();
+        ctx.setVariable("exerciseName", "The Power Leak Worksheet");
+        ctx.setVariable("reportDate", "August 31, 2026");
+        ctx.setVariable("respondentLine", "Sam Tester · sam@example.com · August 31, 2026");
+        ctx.setVariable("items", List.of(
+                new PublicExercisePdfService.AnswerItem("Start here", "Your situation?",
+                        "TEXT", "Shipping is always late and I blame the team.",
+                        List.of(), List.of(), List.of()),
+                new PublicExercisePdfService.AnswerItem("Rewrite it", "Rewrite the sentence",
+                        "TEXT", "", List.of(), List.of(), List.of()),
+                new PublicExercisePdfService.AnswerItem("Check your words", "Which show up?",
+                        "LIST", null,
+                        List.of(new PublicExercisePdfService.Choice("The Invisible They", true),
+                                new PublicExercisePdfService.Choice("Nobody's Fault", false),
+                                new PublicExercisePdfService.Choice("The Dead End", true)),
+                        List.of(), List.of()),
+                new PublicExercisePdfService.AnswerItem("Sort it", "Two piles",
+                        "TABLE", null, List.of(),
+                        List.of("Hard facts", "Choices & responses"),
+                        List.of(List.of("The deadline moved", "Re-plan the sprint")))));
+
+        assertBrandedPdf(new PdfRenderer(engine()).renderTemplate("public-exercise-answers", ctx));
     }
 }

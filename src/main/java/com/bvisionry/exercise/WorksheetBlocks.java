@@ -270,7 +270,7 @@ final class WorksheetBlocks {
     }
 
     /** config.&lt;key&gt; entries as id → &lt;labelKey&gt;, in configured order. */
-    private static Map<String, String> entryLabels(WorksheetBlock block, String key,
+    static Map<String, String> entryLabels(WorksheetBlock block, String key,
                                                    String labelKey) {
         Map<String, String> labels = new LinkedHashMap<>();
         Object raw = block.config() != null ? block.config().get(key) : null;

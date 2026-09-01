@@ -19,6 +19,10 @@
         .masthead-logo { height: 30px; }
         .masthead-title { font-size: 21pt; font-weight: 700; color: #051647; margin-top: 18px; }
         .masthead-meta { font-size: 9.5pt; color: #55647d; margin-top: 6px; }
+        .masthead-note {
+            font-size: 10pt; color: #18233f; margin-top: 10px;
+            line-height: 1.5; white-space: pre-wrap;
+        }
 
         .qa { margin-top: 16px; page-break-inside: avoid; }
         .qa-label {
@@ -71,11 +75,15 @@
 
 <div class="masthead">
     <img class="masthead-logo" th:src="${brandLogo}" alt="Bvisionry"/>
-    <p class="masthead-title" th:text="${exerciseName}">Exercise</p>
+    <!-- Admin-editable copy arrives pre-substituted in the `fields` map (see
+         PdfTemplateRenderer); th:text escapes it, so it can never carry markup. -->
+    <p class="masthead-title" th:text="${fields.documentTitle}">Exercise</p>
     <!-- One pre-joined line: SpEL's `and`/`or` coerce their operands to
          boolean, so combining the two optional STRINGS here would blow up on
          the first respondent who typed a name. The service joins them. -->
     <p class="masthead-meta" th:text="${respondentLine}">Name &middot; Date</p>
+    <p class="masthead-note" th:if="${!#strings.isEmpty(fields.introNote)}"
+       th:text="${fields.introNote}">Note</p>
 </div>
 
 <div class="qa" th:each="item : ${items}">
@@ -98,7 +106,8 @@
     </th:block>
 
     <th:block th:unless="${item.kind() == 'LIST'}">
-        <p class="answer-empty" th:unless="${item.answered()}">Not answered.</p>
+        <p class="answer-empty" th:unless="${item.answered()}"
+           th:text="${fields.notAnsweredLabel}">Not answered.</p>
 
         <p class="answer" th:if="${item.kind() == 'TEXT' and item.answered()}"
            th:text="${item.text()}">Answer</p>
@@ -118,9 +127,7 @@
     </th:block>
 </div>
 
-<p class="foot">
-    <span th:text="${exerciseName}">Exercise</span> &middot; www.bvisionry.com
-</p>
+<p class="foot" th:text="${fields.footerText}">Exercise &middot; www.bvisionry.com</p>
 
 </body>
 </html>

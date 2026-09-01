@@ -2,6 +2,8 @@ package com.bvisionry.exercise;
 
 import com.bvisionry.common.excel.XlsxResponse;
 import com.bvisionry.common.pdf.PdfRenderer;
+import com.bvisionry.common.pdf.template.PdfTemplateKey;
+import com.bvisionry.common.pdf.template.PdfTemplateRenderer;
 import com.bvisionry.exercise.dto.PublicExerciseSubmitRequest;
 import com.bvisionry.exercise.entity.ExerciseColumn;
 import com.bvisionry.exercise.entity.ExerciseTemplate;
@@ -50,6 +52,7 @@ public class PublicExercisePdfService {
 
     private final PublicExerciseService publicExerciseService;
     private final PdfRenderer pdfRenderer;
+    private final PdfTemplateRenderer pdfTemplateRenderer;
 
     /** The rendered document plus the filename the browser should save it as. */
     public record RenderedPdf(String filename, byte[] bytes) {}
@@ -112,6 +115,11 @@ public class PublicExercisePdfService {
         ctx.setVariable("items", template.getKind() == ExerciseTemplateKind.WORKSHEET
                 ? worksheetItems(template, fill)
                 : sheetItems(template, fill));
+        // Admin-editable copy (title, intro note, footer, "not answered" marker) —
+        // customized through the PDF-templates admin console, defaults otherwise.
+        ctx.setVariable("fields", pdfTemplateRenderer.renderedFields(
+                PdfTemplateKey.PUBLIC_EXERCISE_ANSWERS,
+                Map.of("exerciseName", template.getName())));
 
         byte[] pdf = pdfRenderer.renderTemplate("public-exercise-answers", ctx);
         log.info("Rendered public exercise PDF for template {} ({} bytes)",

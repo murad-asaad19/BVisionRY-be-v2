@@ -2,6 +2,7 @@ package com.bvisionry.exercise;
 
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.pdf.PdfRenderer;
+import com.bvisionry.common.pdf.template.PdfTemplateRenderer;
 import com.bvisionry.exercise.dto.PublicExerciseSubmitRequest;
 import com.bvisionry.exercise.entity.ExerciseColumn;
 import com.bvisionry.exercise.entity.ExerciseColumnType;
@@ -46,6 +47,7 @@ class PublicExercisePdfServiceTest {
     @Mock private ExerciseTemplateRepository templateRepository;
     @Mock private PublicExerciseResponseRepository responseRepository;
     @Mock private PdfRenderer pdfRenderer;
+    @Mock private PdfTemplateRenderer pdfTemplateRenderer;
 
     private PublicExercisePdfService service;
     private UUID token;
@@ -64,12 +66,14 @@ class PublicExercisePdfServiceTest {
         // The gate and the sanitizers are the submit path's, reused as-is.
         PublicExerciseService publicExerciseService = new PublicExerciseService(
                 templateRepository, responseRepository, null, null);
-        service = new PublicExercisePdfService(publicExerciseService, pdfRenderer);
+        service = new PublicExercisePdfService(publicExerciseService, pdfRenderer, pdfTemplateRenderer);
 
         lenient().when(templateRepository.findByPublicTokenWithColumns(token))
                 .thenReturn(Optional.of(template));
         lenient().when(pdfRenderer.renderTemplate(any(), any()))
                 .thenReturn(new byte[] {1, 2, 3});
+        lenient().when(pdfTemplateRenderer.renderedFields(any(), any()))
+                .thenReturn(Map.of());
     }
 
     @SuppressWarnings("unchecked")

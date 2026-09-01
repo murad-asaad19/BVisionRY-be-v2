@@ -266,6 +266,13 @@ class PdfTemplateRenderTest {
         ctx.setVariable("exerciseName", "The Power Leak Worksheet");
         ctx.setVariable("reportDate", "August 31, 2026");
         ctx.setVariable("respondentLine", "Sam Tester · sam@example.com · August 31, 2026");
+        // Admin-editable copy, as PdfTemplateRenderer supplies it in production
+        // (defaults with {{exerciseName}} already substituted).
+        ctx.setVariable("fields", Map.of(
+                "documentTitle", "The Power Leak Worksheet",
+                "introNote", "Bring this copy to your next session.",
+                "notAnsweredLabel", "Not answered.",
+                "footerText", "The Power Leak Worksheet · www.bvisionry.com"));
         ctx.setVariable("items", List.of(
                 new PublicExercisePdfService.AnswerItem("Start here", "Your situation?",
                         "TEXT", "Shipping is always late and I blame the team.",

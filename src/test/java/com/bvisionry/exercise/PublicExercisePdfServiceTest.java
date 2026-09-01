@@ -2,6 +2,7 @@ package com.bvisionry.exercise;
 
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.pdf.PdfRenderer;
+import com.bvisionry.common.pdf.template.PdfTemplateKey;
 import com.bvisionry.common.pdf.template.PdfTemplateRenderer;
 import com.bvisionry.exercise.dto.PublicExerciseSubmitRequest;
 import com.bvisionry.exercise.entity.ExerciseColumn;
@@ -72,7 +73,9 @@ class PublicExercisePdfServiceTest {
                 .thenReturn(Optional.of(template));
         lenient().when(pdfRenderer.renderTemplate(any(), any()))
                 .thenReturn(new byte[] {1, 2, 3});
-        lenient().when(pdfTemplateRenderer.renderedFields(any(), any()))
+        lenient().when(pdfTemplateRenderer.resolveFieldValues(any()))
+                .thenReturn(Map.of());
+        lenient().when(pdfTemplateRenderer.renderedFieldsWith(any(), any(), any()))
                 .thenReturn(Map.of());
     }
 
@@ -226,6 +229,24 @@ class PublicExercisePdfServiceTest {
 
         assertThat(renderedItems()).singleElement()
                 .satisfies(item -> assertThat(item.answered()).isFalse());
+    }
+
+    /**
+     * Pins the variable-name seam between this service and the PDF-template
+     * schema: the fields are substituted with {@code exerciseName}, the one
+     * variable the schema's defaults reference. Mustache renders a missing
+     * variable as empty, so a renamed key here would ship blank titles and
+     * footers with every other test still green.
+     */
+    @Test
+    void render_passesTheExerciseNameVariableToTheTemplateFields() {
+        worksheet(WorksheetBlockType.TEXT, "Start here", Map.of("prompt", "Your situation?"));
+
+        service.render(token, new PublicExerciseSubmitRequest(null, null, Map.of(), null));
+
+        verify(pdfTemplateRenderer).renderedFieldsWith(
+                eq(PdfTemplateKey.PUBLIC_EXERCISE_ANSWERS), any(),
+                eq(Map.of("exerciseName", "The Power Leak Worksheet")));
     }
 
     @Test

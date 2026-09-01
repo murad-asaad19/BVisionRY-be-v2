@@ -108,6 +108,43 @@ class PdfTemplateServiceTest {
                 .hasMessageContaining("not allowed");
     }
 
+    /**
+     * The public download compiles these values on every request, so a save
+     * must reject anything render could not execute — an unclosed section (or
+     * a lone '{{') slips past the plain-token variable regex but would 500
+     * every respondent's download once persisted.
+     */
+    @Test
+    void update_rejectsMalformedMustache() {
+        assertThatThrownBy(() -> service.update(PUBLIC_EXERCISE_ANSWERS,
+                new PdfTemplateUpdateRequest(Map.of("footerText", "{{#exerciseName}} unclosed")), actor))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("template syntax");
+        verify(repository, never()).save(any());
+        verify(repository, never()).deleteById(any());
+    }
+
+    @Test
+    void update_rejectsABlankRequiredField() {
+        assertThatThrownBy(() -> service.update(PUBLIC_EXERCISE_ANSWERS,
+                new PdfTemplateUpdateRequest(Map.of("notAnsweredLabel", "   ")), actor))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("cannot be empty");
+    }
+
+    /** introNote is the deliberately optional field — clearing it is legal. */
+    @Test
+    void update_allowsClearingTheOptionalIntroNote() {
+        when(repository.findById(PUBLIC_EXERCISE_ANSWERS)).thenReturn(Optional.empty());
+
+        service.update(PUBLIC_EXERCISE_ANSWERS,
+                new PdfTemplateUpdateRequest(Map.of("introNote", "")), actor);
+
+        // Empty equals the shipped default, so nothing persists.
+        verify(repository).deleteById(PUBLIC_EXERCISE_ANSWERS);
+        verify(repository, never()).save(any());
+    }
+
     @Test
     void reset_deletesTheRow() {
         when(repository.findById(PUBLIC_EXERCISE_ANSWERS)).thenReturn(Optional.empty());
@@ -152,11 +189,45 @@ class PdfTemplateServiceTest {
         when(repository.findById(PUBLIC_EXERCISE_ANSWERS)).thenReturn(Optional.of(row));
 
         PdfTemplateRenderer renderer = new PdfTemplateRenderer(repository, new PdfTemplateSchemaRegistry());
-        Map<String, String> fields = renderer.renderedFields(PUBLIC_EXERCISE_ANSWERS,
+        Map<String, String> fields = renderer.renderedFieldsWith(PUBLIC_EXERCISE_ANSWERS,
+                renderer.resolveFieldValues(PUBLIC_EXERCISE_ANSWERS),
                 Map.of("exerciseName", "Power Leak"));
 
         assertThat(fields).containsEntry("footerText", "Confidential — Power Leak");
         assertThat(fields).containsEntry("documentTitle", "Power Leak");
         assertThat(fields).containsEntry("notAnsweredLabel", "Not answered.");
+    }
+
+    /**
+     * A persisted row can carry a field id the schema no longer knows (a
+     * renamed field, or a hand-edited row). The editor round-trips the full
+     * map it is given, so surfacing the stale id would make every subsequent
+     * save fail the unknown-field validation until a full reset.
+     */
+    @Test
+    void get_dropsStaleFieldIdsFromPersistedRows() {
+        PdfTemplate row = new PdfTemplate();
+        row.setKey(PUBLIC_EXERCISE_ANSWERS);
+        row.setFieldValues(Map.of("legacyField", "orphaned", "footerText", "Custom footer"));
+        when(repository.findById(PUBLIC_EXERCISE_ANSWERS)).thenReturn(Optional.of(row));
+
+        PdfTemplateDto dto = service.get(PUBLIC_EXERCISE_ANSWERS);
+
+        assertThat(dto.customized()).isTrue();
+        assertThat(dto.values()).doesNotContainKey("legacyField");
+        assertThat(dto.values()).containsEntry("footerText", "Custom footer");
+    }
+
+    @Test
+    void listAll_marksCustomizedRowsFromASingleQuery() {
+        PdfTemplate row = new PdfTemplate();
+        row.setKey(PUBLIC_EXERCISE_ANSWERS);
+        when(repository.findAll()).thenReturn(java.util.List.of(row));
+
+        var summaries = service.listAll();
+
+        assertThat(summaries).singleElement()
+                .satisfies(summary -> assertThat(summary.customized()).isTrue());
+        verify(repository, never()).findById(any());
     }
 }

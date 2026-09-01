@@ -7,6 +7,7 @@ import com.bvisionry.common.pdf.template.dto.PdfTemplateSummaryDto;
 import com.bvisionry.common.pdf.template.dto.PdfTemplateUpdateRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.thymeleaf.context.Context;
@@ -14,6 +15,7 @@ import org.thymeleaf.context.Context;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,17 +45,20 @@ public class PdfTemplateService {
 
     @Transactional(readOnly = true)
     public List<PdfTemplateSummaryDto> listAll() {
+        Map<PdfTemplateKey, PdfTemplate> rows = new EnumMap<>(PdfTemplateKey.class);
+        for (PdfTemplate row : repository.findAll()) {
+            rows.put(row.getKey(), row);
+        }
         return Arrays.stream(PdfTemplateKey.values())
-                .map(this::summarize)
+                .map(key -> summarize(key, rows.get(key)))
                 .toList();
     }
 
     @Transactional(readOnly = true)
     public PdfTemplateDto get(PdfTemplateKey key) {
-        PdfTemplateRenderer.Resolved resolved = renderer.resolve(key);
-        Instant updatedAt = repository.findById(key)
-                .map(PdfTemplate::getUpdatedAt)
-                .orElse(null);
+        PdfTemplate row = repository.findById(key).orElse(null);
+        Map<String, String> values = renderer.effectiveValues(
+                key, row == null ? null : row.getFieldValues());
 
         List<PdfTemplateDto.PdfFieldSchema> fieldSchemas = schemaRegistry.schemaFor(key).stream()
                 .map(PdfTemplateService::toDto)
@@ -63,16 +68,17 @@ public class PdfTemplateService {
                 key,
                 PdfTemplateMetadata.displayName(key),
                 PdfTemplateMetadata.description(key),
-                resolved.customized(),
-                updatedAt,
+                row != null,
+                row == null ? null : row.getUpdatedAt(),
                 fieldSchemas,
-                resolved.values(),
+                values,
                 schemaRegistry.defaultValues(key),
                 PdfTemplateMetadata.variables(key)
         );
     }
 
     @Transactional
+    @CacheEvict(value = PdfTemplateRenderer.FIELD_VALUES_CACHE, key = "#key.name()")
     public PdfTemplateDto update(PdfTemplateKey key, PdfTemplateUpdateRequest request, UUID actorId) {
         Map<String, String> incoming = request.values() == null ? Map.of() : request.values();
         Map<String, String> normalized = validateOverrides(key, incoming);
@@ -109,6 +115,7 @@ public class PdfTemplateService {
     }
 
     @Transactional
+    @CacheEvict(value = PdfTemplateRenderer.FIELD_VALUES_CACHE, key = "#key.name()")
     public PdfTemplateDto reset(PdfTemplateKey key) {
         repository.deleteById(key);
         log.info("PDF template {} reset to default", key);
@@ -118,8 +125,9 @@ public class PdfTemplateService {
     /**
      * Renders the template with the supplied (in-flight) field values over
      * sample data, returning the PDF bytes. Nothing is persisted. Enforces the
-     * same validation as {@link #update} so a preview can never render values a
-     * save would have rejected.
+     * same validation as {@link #update} — including the render check — so a
+     * preview can never render values a save would have rejected, and any
+     * admin-caused failure surfaces here as a 400, not a raw render error.
      */
     @Transactional(readOnly = true)
     public byte[] preview(PdfTemplateKey key, Map<String, String> values) {
@@ -136,8 +144,11 @@ public class PdfTemplateService {
 
     /**
      * The single validation gate shared by {@link #update} and {@link #preview}:
-     * every supplied field must exist in the schema, respect its max length, and
-     * reference only its allowed {@code {{variables}}}.
+     * every supplied field must exist in the schema, be non-blank where the
+     * schema requires it, respect its max length, reference only its allowed
+     * {@code {{variables}}}, and actually render as a Mustache template — the
+     * public download compiles these values on every request, so a save must
+     * reject anything render could not execute.
      */
     private Map<String, String> validateOverrides(PdfTemplateKey key, Map<String, String> values) {
         if (values == null || values.isEmpty()) return Map.of();
@@ -156,10 +167,17 @@ public class PdfTemplateService {
                 continue;
             }
             String value = entry.getValue() == null ? "" : entry.getValue();
+            if (field.required() && value.isBlank()) {
+                errors.add(field.label() + ": cannot be empty");
+            }
             if (value.length() > field.maxLength()) {
                 errors.add(field.label() + ": exceeds maximum length of " + field.maxLength());
             }
             checkVariables(field, value, errors);
+            String syntaxError = renderer.syntaxError(value);
+            if (syntaxError != null) {
+                errors.add(field.label() + ": invalid template syntax — " + syntaxError);
+            }
             normalized.put(field.id(), value);
         }
         if (!errors.isEmpty()) {
@@ -178,16 +196,13 @@ public class PdfTemplateService {
         }
     }
 
-    private PdfTemplateSummaryDto summarize(PdfTemplateKey key) {
-        Instant updatedAt = repository.findById(key)
-                .map(PdfTemplate::getUpdatedAt)
-                .orElse(null);
+    private static PdfTemplateSummaryDto summarize(PdfTemplateKey key, PdfTemplate row) {
         return new PdfTemplateSummaryDto(
                 key,
                 PdfTemplateMetadata.displayName(key),
                 PdfTemplateMetadata.description(key),
-                updatedAt != null,
-                updatedAt
+                row != null,
+                row == null ? null : row.getUpdatedAt()
         );
     }
 
@@ -195,7 +210,7 @@ public class PdfTemplateService {
         return new PdfTemplateDto.PdfFieldSchema(
                 field.id(), field.label(), field.helpText(),
                 field.maxLength(), field.allowedVariables(),
-                field.defaultValue(), field.section()
+                field.defaultValue(), field.section(), field.required()
         );
     }
 }

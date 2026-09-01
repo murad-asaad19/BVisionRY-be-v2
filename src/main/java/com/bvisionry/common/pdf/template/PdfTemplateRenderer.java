@@ -2,6 +2,7 @@ package com.bvisionry.common.pdf.template;
 
 import com.samskivert.mustache.Mustache;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
@@ -22,6 +23,14 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class PdfTemplateRenderer {
 
+    /**
+     * Cache region for resolved field values (see {@code CacheConfig}); the
+     * hot public download path resolves once per render, and the values only
+     * change when an admin saves. {@link PdfTemplateService} evicts on
+     * update/reset; the region TTL is the safety net.
+     */
+    public static final String FIELD_VALUES_CACHE = "pdfTemplateFieldValues";
+
     private final PdfTemplateRepository repository;
     private final PdfTemplateSchemaRegistry schemaRegistry;
 
@@ -32,31 +41,37 @@ public class PdfTemplateRenderer {
             // escaping here would double-encode.
             .escapeHTML(false);
 
-    /** Effective persisted state (or defaults) for the admin editor. */
-    public Resolved resolve(PdfTemplateKey key) {
-        boolean customized = repository.findById(key).isPresent();
-        return new Resolved(resolveFieldValues(key), customized);
-    }
-
-    /** Defaults merged with whatever the admin customized. */
+    /** Defaults merged with whatever the admin customized, cached per key. */
+    @Cacheable(value = FIELD_VALUES_CACHE, key = "#key.name()")
     public Map<String, String> resolveFieldValues(PdfTemplateKey key) {
-        Map<String, String> merged = new LinkedHashMap<>(schemaRegistry.defaultValues(key));
-        repository.findById(key)
+        return effectiveValues(key, repository.findById(key)
                 .map(PdfTemplate::getFieldValues)
-                .ifPresent(saved -> saved.forEach((id, value) ->
-                        merged.put(id, value == null ? "" : value.toString())));
-        return merged;
-    }
-
-    /** The persisted (or default) field values with system variables substituted. */
-    public Map<String, String> renderedFields(PdfTemplateKey key,
-                                              Map<String, Object> systemVariables) {
-        return renderedFieldsWith(key, resolveFieldValues(key), systemVariables);
+                .orElse(null));
     }
 
     /**
-     * Used by the admin preview. Substitutes system variables into the supplied
-     * (in-flight) field values, without persisting anything.
+     * Defaults overlaid with the supplied persisted overrides. Keys no longer
+     * in the schema are dropped rather than surfaced: the admin editor
+     * round-trips the full map it is given, so a stale id left behind by a
+     * renamed field (or a hand-edited row) must not make every subsequent
+     * save fail the unknown-field validation.
+     */
+    public Map<String, String> effectiveValues(PdfTemplateKey key, Map<String, Object> saved) {
+        Map<String, String> merged = new LinkedHashMap<>(schemaRegistry.defaultValues(key));
+        if (saved != null) {
+            saved.forEach((id, value) -> {
+                if (merged.containsKey(id)) {
+                    merged.put(id, value == null ? "" : value.toString());
+                }
+            });
+        }
+        return merged;
+    }
+
+    /**
+     * Substitutes system variables into the supplied field values — the
+     * persisted ones on the real render path, or in-flight ones from the
+     * admin preview. Persists nothing.
      */
     public Map<String, String> renderedFieldsWith(PdfTemplateKey key,
                                                   Map<String, String> fieldValues,
@@ -71,6 +86,21 @@ public class PdfTemplateRenderer {
         return rendered;
     }
 
-    /** Effective field values plus whether they came from an admin override. */
-    public record Resolved(Map<String, String> values, boolean customized) {}
+    /**
+     * The template error for a field source, or {@code null} when it renders
+     * cleanly. Compiles AND executes (against an empty scope, where missing
+     * variables default to empty) because jmustache reports some constructs —
+     * a {@code {{>partial}}} with no loader, for one — only at execution.
+     * Save/preview validation rejects what render could not execute, so a
+     * malformed value can never persist and then 500 the public download.
+     */
+    public String syntaxError(String source) {
+        try {
+            compiler.compile(source == null ? "" : source).execute(Map.of());
+            return null;
+        } catch (RuntimeException e) {
+            String message = e.getMessage();
+            return message == null || message.isBlank() ? "invalid template syntax" : message;
+        }
+    }
 }

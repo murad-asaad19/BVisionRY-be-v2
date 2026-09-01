@@ -15,6 +15,9 @@ import java.util.List;
  * @param allowedVariables {@code {{variable}}} tokens permitted in this field
  * @param defaultValue     the shipped default
  * @param section          editor grouping label (e.g. "Masthead", "Footer")
+ * @param required         a blank value is rejected on save; the skeleton
+ *                         prints these unconditionally, so an empty one would
+ *                         read as a rendering fault on paper
  */
 public record PdfTemplateField(
         String id,
@@ -23,5 +26,6 @@ public record PdfTemplateField(
         int maxLength,
         List<String> allowedVariables,
         String defaultValue,
-        String section
+        String section,
+        boolean required
 ) {}

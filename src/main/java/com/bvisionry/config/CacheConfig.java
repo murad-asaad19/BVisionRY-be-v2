@@ -1,5 +1,6 @@
 package com.bvisionry.config;
 
+import com.bvisionry.common.pdf.template.PdfTemplateRenderer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.CachingConfigurer;
 import org.springframework.cache.annotation.EnableCaching;
@@ -69,6 +70,9 @@ public class CacheConfig implements CachingConfigurer {
         cacheConfigurations.put(PLATFORM_ANALYTICS, defaultConfig.entryTtl(Duration.ofMinutes(15)));
         cacheConfigurations.put(DASHBOARD, defaultConfig.entryTtl(Duration.ofMinutes(5)));
         cacheConfigurations.put(PLATFORM_SETTINGS, defaultConfig.entryTtl(Duration.ofMinutes(1)));
+        // Evicted on every admin save/reset; the TTL only bounds staleness if
+        // an eviction is lost (e.g. Redis hiccup on another instance).
+        cacheConfigurations.put(PdfTemplateRenderer.FIELD_VALUES_CACHE, defaultConfig.entryTtl(Duration.ofMinutes(5)));
 
         return RedisCacheManager.builder(connectionFactory)
                 .cacheDefaults(defaultConfig)

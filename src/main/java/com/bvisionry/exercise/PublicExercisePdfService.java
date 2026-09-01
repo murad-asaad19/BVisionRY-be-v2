@@ -3,6 +3,7 @@ package com.bvisionry.exercise;
 import com.bvisionry.common.excel.XlsxResponse;
 import com.bvisionry.common.pdf.PdfRenderer;
 import com.bvisionry.common.pdf.template.PdfTemplateKey;
+import com.bvisionry.common.pdf.template.PdfTemplateMetadata;
 import com.bvisionry.common.pdf.template.PdfTemplateRenderer;
 import com.bvisionry.exercise.dto.PublicExerciseSubmitRequest;
 import com.bvisionry.exercise.entity.ExerciseColumn;
@@ -107,6 +108,7 @@ public class PublicExercisePdfService {
     @Transactional(readOnly = true)
     public RenderedPdf render(UUID token, PublicExerciseSubmitRequest fill) {
         ExerciseTemplate template = publicExerciseService.requirePublicTemplate(token);
+        PdfTemplateKey templateKey = PdfTemplateKey.PUBLIC_EXERCISE_ANSWERS;
 
         Context ctx = new Context();
         ctx.setVariable("exerciseName", template.getName());
@@ -117,11 +119,12 @@ public class PublicExercisePdfService {
                 : sheetItems(template, fill));
         // Admin-editable copy (title, intro note, footer, "not answered" marker) —
         // customized through the PDF-templates admin console, defaults otherwise.
-        ctx.setVariable("fields", pdfTemplateRenderer.renderedFields(
-                PdfTemplateKey.PUBLIC_EXERCISE_ANSWERS,
+        ctx.setVariable("fields", pdfTemplateRenderer.renderedFieldsWith(
+                templateKey,
+                pdfTemplateRenderer.resolveFieldValues(templateKey),
                 Map.of("exerciseName", template.getName())));
 
-        byte[] pdf = pdfRenderer.renderTemplate("public-exercise-answers", ctx);
+        byte[] pdf = pdfRenderer.renderTemplate(PdfTemplateMetadata.templateName(templateKey), ctx);
         log.info("Rendered public exercise PDF for template {} ({} bytes)",
                 template.getId(), pdf.length);
         return new RenderedPdf(filename(template.getName()), pdf);

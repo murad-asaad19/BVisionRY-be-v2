@@ -40,7 +40,8 @@ public class PdfTemplateSchemaRegistry {
                         120,
                         List.of("exerciseName"),
                         "{{exerciseName}}",
-                        "Masthead"),
+                        "Masthead",
+                        true),
                 new PdfTemplateField(
                         "introNote",
                         "Intro note",
@@ -48,7 +49,8 @@ public class PdfTemplateSchemaRegistry {
                         400,
                         List.of("exerciseName"),
                         "",
-                        "Masthead"),
+                        "Masthead",
+                        false),
                 new PdfTemplateField(
                         "notAnsweredLabel",
                         "Unanswered marker",
@@ -56,7 +58,8 @@ public class PdfTemplateSchemaRegistry {
                         80,
                         List.of(),
                         "Not answered.",
-                        "Answers"),
+                        "Answers",
+                        true),
                 new PdfTemplateField(
                         "footerText",
                         "Footer line",
@@ -64,7 +67,8 @@ public class PdfTemplateSchemaRegistry {
                         160,
                         List.of("exerciseName"),
                         "{{exerciseName}} · www.bvisionry.com",
-                        "Footer")
+                        "Footer",
+                        true)
         );
     }
 }

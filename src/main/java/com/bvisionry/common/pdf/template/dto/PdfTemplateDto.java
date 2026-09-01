@@ -33,7 +33,8 @@ public record PdfTemplateDto(
             int maxLength,
             List<String> allowedVariables,
             String defaultValue,
-            String section
+            String section,
+            boolean required
     ) {}
 
     public record PdfTemplateVariable(String name, String description) {}

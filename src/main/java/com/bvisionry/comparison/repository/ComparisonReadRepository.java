@@ -3,6 +3,13 @@ package com.bvisionry.comparison.repository;
 import com.bvisionry.comparison.dto.MyComparisonResponse;
 import com.bvisionry.common.programaccess.CohortInstruments;
 import com.bvisionry.common.programaccess.CohortVisibility;
+import com.bvisionry.common.programaccess.Learner;
+import com.bvisionry.common.programaccess.ProgramAudience;
+import com.bvisionry.common.programaccess.TaskCompletion;
+import com.bvisionry.common.scoringconfig.MaturityBands;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -10,6 +17,7 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -453,5 +461,90 @@ public class ComparisonReadRepository {
                 new MapSqlParameterSource("key", key),
                 (rs, i) -> rs.getString("value_text"))
                 .stream().findFirst().filter(s -> s != null && !s.isBlank());
+    }
+
+    /* --------------------------------------------------- growth aggregate */
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final TypeReference<Map<String, List<Integer>>> THRESHOLDS = new TypeReference<>() {
+    };
+
+    /**
+     * Each pillar's maturity bands in ORDINAL order — the labels of its
+     * {@code maturity_thresholds_json} sorted by minimum score, through
+     * {@link MaturityBands}, the one definition of band position the pipeline
+     * slice's course mapping and auto-enrolment also read: a band resolved at
+     * position 1 there and position 2 here would draw the same founder in two
+     * different bars. Malformed or legacy entries ({@code [null, 59]}) are
+     * skipped; a pillar without usable thresholds maps to an empty list, and
+     * the caller treats its labels as off-axis.
+     */
+    public Map<UUID, List<String>> bandOrder(Collection<UUID> pillarIds) {
+        if (pillarIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, List<String>> out = new HashMap<>();
+        jdbc.query("""
+                SELECT id, maturity_thresholds_json::text AS thresholds
+                FROM pillars WHERE id IN (:ids)
+                """, new MapSqlParameterSource("ids", pillarIds),
+                rs -> {
+                    out.put(rs.getObject("id", UUID.class), orderedLabels(rs.getString("thresholds")));
+                });
+        return out;
+    }
+
+    private static List<String> orderedLabels(String json) {
+        if (json == null) {
+            return List.of();
+        }
+        Map<String, List<Integer>> thresholds;
+        try {
+            thresholds = MAPPER.readValue(json, THRESHOLDS);
+        } catch (JsonProcessingException e) {
+            return List.of();
+        }
+        return MaturityBands.ordered(thresholds).stream().map(Map.Entry::getKey).toList();
+    }
+
+    public record PillarContentRow(UUID pillarId, UUID taskId, String name, String taskType,
+                                   int doneCount, int memberCount) {}
+
+    /**
+     * Every LIVE task of the cohort tagged to a pillar ({@code program_task_pillars},
+     * V187 — the tag IS the distance pillar id), with the org slice's done /
+     * reached on it. Same shape and the same three predicates as the cohort
+     * view's outline ({@code CohortViewReadRepository.outlineTasks}): the org
+     * slice on the users join, the module's audience, and the shared completion
+     * rule — so the Growth tab's "94% done" and the Program tab's agree. DRAFT
+     * tasks never appear: the member has never seen them.
+     */
+    public List<PillarContentRow> pillarContent(UUID orgId, UUID cohortId) {
+        return jdbc.query(("""
+                SELECT ptp.pillar_id, t.id AS task_id, t.name, t.task_type,
+                       count(u.id) AS member_count,
+                       count(u.id) FILTER (WHERE %1$s) AS done_count
+                FROM program_modules m
+                JOIN program_tasks t ON t.module_id = m.id AND t.status = 'LIVE'
+                JOIN program_task_pillars ptp ON ptp.task_id = t.id
+                LEFT JOIN cohort_members cm ON cm.cohort_id = m.cohort_id
+                LEFT JOIN users u ON u.id = cm.user_id
+                                 AND u.organization_id = :orgId
+                                 AND u.status = 'ACTIVE'
+                                 AND u.""" + Learner.ROLE_IN + """
+
+                                 AND %2$s
+                                 AND %3$s
+                WHERE m.cohort_id = :cohortId
+                GROUP BY ptp.pillar_id, t.id, t.name, t.task_type, m.position, t.position
+                ORDER BY m.position, t.position
+                """).formatted(TaskCompletion.DONE_FOR_USER.formatted("u.id"),
+                        ProgramAudience.INCLUDES_USER.formatted("u.id"),
+                        TaskCompletion.COUNTS_FOR_USER.formatted("u.id")),
+                new MapSqlParameterSource("orgId", orgId).addValue("cohortId", cohortId),
+                (rs, i) -> new PillarContentRow(rs.getObject("pillar_id", UUID.class),
+                        rs.getObject("task_id", UUID.class), rs.getString("name"),
+                        rs.getString("task_type"), rs.getInt("done_count"),
+                        rs.getInt("member_count")));
     }
 }

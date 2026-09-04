@@ -60,4 +60,12 @@ public class FounderComparisonPillar extends BaseEntity {
 
     @Column(name = "maturity_after")
     private String maturityAfter;
+
+    /**
+     * Measured on BOTH sides and attached to a distance pillar — the only rows
+     * that average, band, or carry a narrative. One predicate for every read.
+     */
+    public boolean isMapped() {
+        return state == PillarComparisonState.MAPPED && distancePillarId != null;
+    }
 }

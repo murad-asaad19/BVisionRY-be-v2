@@ -13,7 +13,6 @@ import com.bvisionry.comparison.domain.FounderComparison;
 import com.bvisionry.comparison.domain.FounderComparisonPillar;
 import com.bvisionry.comparison.domain.NarrativeKind;
 import com.bvisionry.comparison.domain.NarrativeStatus;
-import com.bvisionry.comparison.domain.PillarComparisonState;
 import com.bvisionry.comparison.domain.ShiftNarrative;
 import com.bvisionry.comparison.dto.GenerateAllNarrativesResponse;
 import com.bvisionry.comparison.dto.NarrativeReviewResponse;
@@ -1181,9 +1180,8 @@ public class ShiftNarrativeService {
                 // Only MAPPED rows can carry a narrative: a newly-measured pillar
                 // has no "before" and a not-re-measured one has no "after", so
                 // there is no shift to describe (§5).
-                .filter(p -> p.getState() == PillarComparisonState.MAPPED
-                        && p.getDelta() != null
-                        && p.getBaselinePillarId() != null && p.getDistancePillarId() != null)
+                .filter(p -> p.isMapped()
+                        && p.getDelta() != null && p.getBaselinePillarId() != null)
                 .map(p -> new Candidate(p,
                         lines(before.get(p.getBaselinePillarId()), true),
                         lines(before.get(p.getBaselinePillarId()), false),

@@ -3,6 +3,7 @@ package com.bvisionry.comparison.dto;
 import com.bvisionry.comparison.domain.NarrativeKind;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -40,7 +41,58 @@ public record CohortGrowthAggregateDto(
             BigDecimal avgDelta,
             int membersWithApprovedNarrative,
             Map<NarrativeKind, Integer> kindCounts,
-            List<BandMoveDto> bandMoves) {
+            List<BandMoveDto> bandMoves,
+            /**
+             * Members who ended this pillar in a HIGHER band than they started —
+             * the sum of the non-held, non-down {@link BandMoveDto} buckets,
+             * pre-summed because it is the table's ranking column. Its
+             * denominator is the banded population (the sum over
+             * {@code bandMoves}), never {@code measuredCount}.
+             */
+            int movedUpCount,
+            /**
+             * The banded population split by band, before and after — the
+             * Growth tab's paired stacked bars. In the pillar's ORDINAL band
+             * order (its thresholds sorted by minimum score), so the bar reads
+             * left-to-right from the lowest band; a label the current thresholds
+             * no longer name (a rename since the reading, or "Unknown") is
+             * appended after them so every banded member is still drawn. Each
+             * side sums to the same population as {@code bandMoves}.
+             */
+            List<BandCountDto> bands,
+            /**
+             * The programme content tagged to this pillar: every LIVE task of
+             * the cohort carrying the tag, with the org slice's done / reached.
+             * Empty means "not yet built" — nothing in this cohort's curriculum
+             * grows the pillar, so whatever moved here came from the assessment
+             * alone. That is the category the Growth tab sorts it into, and
+             * computing it here is what stops it depending on anyone's memory.
+             */
+            List<PillarContentDto> content,
+            /** The coach's note for this org's slice (V214); null when none. */
+            String coachNote,
+            Instant coachNoteUpdatedAt) {
+    }
+
+    /**
+     * One band's head-count on each side; {@code label} is the pillar's own
+     * vocabulary. {@code onAxis} is false for a label the pillar's CURRENT
+     * thresholds no longer name ("Unknown" from a failed evaluation, or a
+     * rename since the reading): it is appended after the ordered bands so
+     * every banded member is still drawn, but it is never the top band and a
+     * reader must not tone it as one.
+     */
+    public record BandCountDto(String label, int before, int after, boolean onAxis) {
+    }
+
+    /**
+     * One tagged task's reach in the org slice. {@code memberCount} is the
+     * members the task's module actually reaches ({@code ProgramAudience}), and
+     * {@code doneCount} how many of them have done it by the one completion rule
+     * every surface shares ({@code TaskCompletion}).
+     */
+    public record PillarContentDto(UUID taskId, String name, String taskType,
+                                   int doneCount, int memberCount) {
     }
 
     /**
@@ -73,6 +125,14 @@ public record CohortGrowthAggregateDto(
      * {@code maturity_thresholds_json}, or a comparison computed before V161)
      * counts toward {@code measuredCount} and toward no band move at all.
      */
-    public record BandMoveDto(String from, String to, int members, boolean held) {
+    public record BandMoveDto(String from, String to, int members, boolean held,
+                              /**
+                               * A move to a LOWER band. Decided by the pillar's
+                               * band order when both labels are on it; a label
+                               * the current thresholds no longer name falls back
+                               * to the sign of the members' own shift, which
+                               * bands are monotonic in. False on held buckets.
+                               */
+                              boolean down) {
     }
 }

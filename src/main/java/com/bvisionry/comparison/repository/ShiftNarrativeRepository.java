@@ -22,6 +22,30 @@ public interface ShiftNarrativeRepository extends JpaRepository<ShiftNarrative, 
     /** The whole cohort's approved narratives in one read — the §4 summary's input. */
     List<ShiftNarrative> findByOrgIdAndCohortIdAndStatus(UUID orgId, UUID cohortId, NarrativeStatus status);
 
+    /** Who, which pillar, what state — a narrative without its prose. */
+    interface NarrativeRef {
+        UUID getUserId();
+
+        UUID getDistancePillarId();
+
+        NarrativeStatus getStatus();
+    }
+
+    /**
+     * The cohort's narratives as (user, pillar, status) only — what a LIST row
+     * counts. No body, items or config snapshot ride along: the "Growth by
+     * member" table never shows prose (§6), and a cohort is tens of members
+     * with a kilobyte or three of generated text on each of eleven pillars.
+     */
+    @Query("""
+            SELECT n.userId AS userId, n.distancePillarId AS distancePillarId, n.status AS status
+              FROM ShiftNarrative n
+             WHERE n.orgId = :orgId AND n.cohortId = :cohortId AND n.status IN (:statuses)
+            """)
+    List<NarrativeRef> findRefsByOrgIdAndCohortIdAndStatusIn(@Param("orgId") UUID orgId,
+                                                             @Param("cohortId") UUID cohortId,
+                                                             @Param("statuses") Collection<NarrativeStatus> statuses);
+
     Optional<ShiftNarrative> findByCohortIdAndUserIdAndDistancePillarId(
             UUID cohortId, UUID userId, UUID distancePillarId);
 

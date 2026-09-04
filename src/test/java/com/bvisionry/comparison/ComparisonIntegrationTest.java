@@ -904,7 +904,18 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
             mockMvc.perform(get("/api/organizations/" + orgA.getId()
                             + "/cohorts/" + cohortId + "/comparisons"))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$[0].userId", is(founder1.getId().toString())));
+                    .andExpect(jsonPath("$[0].userId", is(founder1.getId().toString())))
+                    // The "Growth by member" row carries its review state and
+                    // its biggest move, so the table never opens a founder to
+                    // draw them. Two pillars are MAPPED (Focus +18, Vision
+                    // +12); nothing fell, so the drop side is null, not 0.
+                    .andExpect(jsonPath("$[0].mappedPillarCount", is(2)))
+                    .andExpect(jsonPath("$[0].approvedNarrativeCount", is(0)))
+                    .andExpect(jsonPath("$[0].draftNarrativeCount", is(0)))
+                    .andExpect(jsonPath("$[0].topGainPillarName", is("Focus & Flow")))
+                    .andExpect(jsonPath("$[0].topGainDelta", is(18.0)))
+                    .andExpect(jsonPath("$[0].topDropPillarName").doesNotExist())
+                    .andExpect(jsonPath("$[0].topDropDelta").doesNotExist());
             mockMvc.perform(get("/api/organizations/" + orgA.getId()
                             + "/cohorts/" + cohortId + "/comparisons/" + founder1.getId()))
                     .andExpect(status().isOk())
@@ -1403,7 +1414,135 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                     .andExpect(jsonPath("$.pillars[0].measuredCount", is(1)))
                     .andExpect(jsonPath("$.pillars[1].avgDelta", is(12.0)))
                     .andExpect(jsonPath("$.pillars[1].distancePillarId",
-                            is(distanceVision.toString())));
+                            is(distanceVision.toString())))
+                    // The band bars follow the pillar's thresholds — the column
+                    // default here (Emerging / Strong / Elite), so the empty top
+                    // band is still a slot and each side sums to the 1 banded row.
+                    .andExpect(jsonPath("$.pillars[1].bands.length()", is(3)))
+                    .andExpect(jsonPath("$.pillars[1].bands[0].label", is("Emerging")))
+                    .andExpect(jsonPath("$.pillars[1].bands[0].before", is(1)))
+                    .andExpect(jsonPath("$.pillars[1].bands[0].after", is(0)))
+                    .andExpect(jsonPath("$.pillars[1].bands[1].label", is("Strong")))
+                    .andExpect(jsonPath("$.pillars[1].bands[1].after", is(1)))
+                    .andExpect(jsonPath("$.pillars[1].bands[2].label", is("Elite")))
+                    .andExpect(jsonPath("$.pillars[1].bands[2].before", is(0)))
+                    .andExpect(jsonPath("$.pillars[1].bands[2].after", is(0)))
+                    // Nothing in the curriculum is tagged to it: "not yet built".
+                    .andExpect(jsonPath("$.pillars[1].content.length()", is(0)))
+                    .andExpect(jsonPath("$.pillars[1].coachNote").doesNotExist());
+        }
+
+        /**
+         * The pillar's own threshold order decides which way a band move went
+         * and where each band sits in the bar — not the label text, and not
+         * the order the rows happened to arrive in.
+         */
+        @Test
+        void bands_followThePillarsThresholdOrder() {
+            jdbc.update("""
+                    UPDATE pillars SET maturity_thresholds_json =
+                      '{"Strong": [66, 100], "Emerging": [0, 40], "Formative": [41, 65]}'::jsonb
+                    WHERE id = ?
+                    """, distanceVision);
+            computeFounder1();
+
+            var vision = aggregates.aggregate(orgA.getId(), cohortId).pillars().stream()
+                    .filter(p -> p.distancePillarId().equals(distanceVision))
+                    .findFirst().orElseThrow();
+
+            // Every configured band is a slot, lowest first, even the empty one.
+            assertThat(vision.bands()).extracting(b -> b.label())
+                    .containsExactly("Emerging", "Formative", "Strong");
+            assertThat(vision.bands()).extracting(b -> b.before()).containsExactly(1, 0, 0);
+            assertThat(vision.bands()).extracting(b -> b.after()).containsExactly(0, 0, 1);
+            // All three name a current threshold: nothing here is a stale or
+            // "Unknown" label appended after the axis.
+            assertThat(vision.bands()).allMatch(b -> b.onAxis());
+            // Emerging → Strong is UP on this axis, so it counts toward the ranking.
+            assertThat(vision.bandMoves()).singleElement()
+                    .satisfies(m -> assertThat(m.down()).isFalse());
+            assertThat(vision.movedUpCount()).isEqualTo(1);
+        }
+
+        /**
+         * "Not yet built" is a query, not a memory: a LIVE task tagged to the
+         * pillar is its content, counted with the org slice's reach and the
+         * shared completion rule.
+         */
+        @Test
+        void content_listsTaggedLiveTasks_withTheOrgSlicesProgress() {
+            UUID moduleId = jdbc.queryForObject(
+                    "SELECT id FROM program_modules WHERE cohort_id = ?", UUID.class, cohortId);
+            UUID lessonId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO program_tasks (id, module_id, name, status, task_type)
+                    VALUES (?, ?, 'Vision Clarity', 'LIVE', 'LESSON')
+                    """, lessonId, moduleId);
+            jdbc.update("INSERT INTO program_task_pillars (task_id, pillar_id) VALUES (?, ?)",
+                    lessonId, distanceVision);
+            // A DRAFT tag never counts: the member has never seen the task.
+            UUID draftId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO program_tasks (id, module_id, name, status, task_type)
+                    VALUES (?, ?, 'Unpublished', 'DRAFT', 'LESSON')
+                    """, draftId, moduleId);
+            jdbc.update("INSERT INTO program_task_pillars (task_id, pillar_id) VALUES (?, ?)",
+                    draftId, distanceVision);
+            computeFounder1();
+
+            var vision = aggregates.aggregate(orgA.getId(), cohortId).pillars().stream()
+                    .filter(p -> p.distancePillarId().equals(distanceVision))
+                    .findFirst().orElseThrow();
+
+            assertThat(vision.content()).singleElement().satisfies(c -> {
+                assertThat(c.name()).isEqualTo("Vision Clarity");
+                assertThat(c.taskType()).isEqualTo("LESSON");
+                // Both org-A founders are on the cohort and the module reaches ALL.
+                assertThat(c.memberCount()).isEqualTo(2);
+                assertThat(c.doneCount()).isZero();
+            });
+        }
+
+        /** The coach note: set, read back on the aggregate, cleared by a blank body. */
+        @Test
+        void coachNote_isPerOrgSlice_setAndClearedThroughOneEndpoint() throws Exception {
+            computeFounder1();
+            TestAuthentication.authenticate(
+                    saveUser("orgadmin.note@test.invalid", UserRole.ORG_ADMIN, orgA));
+            String noteUrl = aggregateUrl() + "/pillars/" + distanceVision + "/note";
+
+            mockMvc.perform(put(noteUrl).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"note\": \"  The vision exercise reached everyone.  \"}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.pillarId", is(distanceVision.toString())))
+                    .andExpect(jsonPath("$.note", is("The vision exercise reached everyone.")));
+            mockMvc.perform(get(aggregateUrl()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.pillars[1].coachNote",
+                            is("The vision exercise reached everyone.")));
+
+            // Replace, not append.
+            mockMvc.perform(put(noteUrl).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"note\": \"Second read.\"}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.note", is("Second read.")));
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM cohort_pillar_notes WHERE cohort_id = ?",
+                    Integer.class, cohortId)).isEqualTo(1);
+
+            // Blank clears.
+            mockMvc.perform(put(noteUrl).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"note\": \"\"}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.note").doesNotExist());
+            mockMvc.perform(get(aggregateUrl()))
+                    .andExpect(jsonPath("$.pillars[1].coachNote").doesNotExist());
+
+            // A pillar nobody in the org was measured on is nothing to annotate.
+            mockMvc.perform(put(aggregateUrl() + "/pillars/" + distanceResilience + "/note")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"note\": \"x\"}"))
+                    .andExpect(status().isNotFound());
         }
 
         /**
@@ -1430,7 +1569,14 @@ class ComparisonIntegrationTest extends AbstractPostgresIntegrationTest {
                         assertThat(m.from()).isNotBlank();
                         assertThat(m.to()).isNotBlank();
                         assertThat(m.held()).isEqualTo(m.from().equals(m.to()));
+                        // Vision rose +12, so no bucket on it can read as a move DOWN.
+                        assertThat(m.down()).isFalse();
                     });
+            // The ranking column pre-sums the up-moves: every non-held bucket
+            // here went up, so it equals their members — and never counts the
+            // stayers.
+            assertThat(vision.movedUpCount()).isEqualTo(vision.bandMoves().stream()
+                    .filter(m -> !m.held()).mapToInt(m -> m.members()).sum());
             // Held never outranks a real move.
             assertThat(vision.bandMoves().stream().map(m -> m.held()).toList())
                     .isSortedAccordingTo(java.util.Comparator.naturalOrder());

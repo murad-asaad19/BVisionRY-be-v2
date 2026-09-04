@@ -1,10 +1,9 @@
 package com.bvisionry.pipeline.service;
 
+import com.bvisionry.common.scoringconfig.MaturityBands;
 import com.bvisionry.pipeline.entity.Pillar;
 
-import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 
 /**
  * A pillar's maturity bands in ORDINAL ORDER — the single definition of
@@ -12,10 +11,12 @@ import java.util.Map;
  * writes a position ({@link PillarCourseMappingService}) and the engine that
  * reads one back ({@link AutoEnrolmentService}).
  *
- * <p>It lives in one place on purpose. Both sides key on the same 0-based index
- * into the same ordering, and two copies of "sort by minimum score, tolerate
- * legacy nulls" is how a rule stored at position 1 starts being resolved as
- * position 2 — a silent mis-enrolment nothing on screen would show.
+ * <p>The ordering rule itself is {@link MaturityBands} in {@code common}, so the
+ * comparison slice's band bars read the same axis without a cross-feature
+ * import. Both sides key on the same 0-based index into the same ordering, and
+ * two copies of "sort by minimum score, tolerate legacy nulls" is how a rule
+ * stored at position 1 starts being resolved as position 2 — a silent
+ * mis-enrolment nothing on screen would show.
  */
 final class PillarBands {
 
@@ -26,27 +27,9 @@ final class PillarBands {
     record Band(String label, int min, int max) {
     }
 
-    /**
-     * The pillar's bands in ordinal order — sorted by minimum score, which is the
-     * only ordering {@code MaturityThresholdValidator} guarantees is total (it
-     * enforces a contiguous 1..N partition of 0-100) and the same order the
-     * threshold editor renders. {@code jsonb} does not preserve key order, so map
-     * iteration order is never trusted.
-     *
-     * <p>The filter checks the ELEMENTS, not just the size: the column predates the
-     * validator, so legacy jsonb can hold {@code [null, 59]}, which the comparator
-     * would unbox into an NPE.
-     */
+    /** The pillar's bands in ordinal order — {@link MaturityBands#ordered} over its thresholds. */
     static List<Band> ordered(Pillar pillar) {
-        Map<String, List<Integer>> thresholds = pillar.getMaturityThresholds();
-        if (thresholds == null) {
-            return List.of();
-        }
-        return thresholds.entrySet().stream()
-                .filter(e -> e.getValue() != null && e.getValue().size() == 2
-                        && e.getValue().get(0) != null && e.getValue().get(1) != null)
-                .sorted(Comparator.comparingInt(
-                        (Map.Entry<String, List<Integer>> e) -> e.getValue().get(0)))
+        return MaturityBands.ordered(pillar.getMaturityThresholds()).stream()
                 .map(e -> new Band(e.getKey(), e.getValue().get(0), e.getValue().get(1)))
                 .toList();
     }

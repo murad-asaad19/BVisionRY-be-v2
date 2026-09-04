@@ -3,7 +3,8 @@ package com.bvisionry.comparison.web;
 import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.orgmember.OrgMemberAccess;
 import com.bvisionry.comparison.domain.FounderComparison;
-import com.bvisionry.comparison.domain.PillarComparisonState;
+import com.bvisionry.comparison.domain.FounderComparisonPillar;
+import com.bvisionry.comparison.domain.NarrativeStatus;
 import com.bvisionry.comparison.dto.CohortComparisonStatus;
 import com.bvisionry.comparison.dto.ComparisonSummaryDto;
 import com.bvisionry.comparison.dto.FounderComparisonDto;
@@ -14,6 +15,8 @@ import com.bvisionry.comparison.repository.ComparisonReadRepository;
 import com.bvisionry.comparison.repository.ComparisonReadRepository.PairCohortRow;
 import com.bvisionry.comparison.repository.FounderComparisonPillarRepository;
 import com.bvisionry.comparison.repository.FounderComparisonRepository;
+import com.bvisionry.comparison.repository.ShiftNarrativeRepository;
+import com.bvisionry.comparison.repository.ShiftNarrativeRepository.NarrativeRef;
 import com.bvisionry.common.programaccess.OrgCohortAccess;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -43,6 +46,7 @@ public class ComparisonQueryService {
     private final OrgMemberAccess members;
     private final OrgCohortAccess orgCohorts;
     private final ShiftNarrativeService narratives;
+    private final ShiftNarrativeRepository narrativeRows;
     private final MemberGrowthSummaryService growthSummaries;
     private final ComparisonComputeService compute;
 
@@ -109,13 +113,64 @@ public class ComparisonQueryService {
         List<FounderComparison> rows = comparisons.findByOrgIdAndCohortId(orgId, cohortId);
         Map<UUID, String> names = reads.userNames(rows.stream()
                 .map(FounderComparison::getUserId).collect(java.util.stream.Collectors.toSet()));
+        // Three cohort-wide reads instead of three per founder: the list is
+        // the first thing the Growth tab draws, and a cohort is tens of rows.
+        Map<UUID, List<FounderComparisonPillar>> pillarsByComparison = rows.isEmpty()
+                ? Map.of()
+                : pillars.findByComparisonIdIn(rows.stream().map(FounderComparison::getId).toList())
+                        .stream()
+                        .collect(java.util.stream.Collectors.groupingBy(
+                                FounderComparisonPillar::getComparisonId));
+        Map<UUID, List<NarrativeRef>> narrativesByUser = narrativeRows
+                .findRefsByOrgIdAndCohortIdAndStatusIn(orgId, cohortId,
+                        List.of(NarrativeStatus.APPROVED, NarrativeStatus.DRAFT))
+                .stream()
+                .collect(java.util.stream.Collectors.groupingBy(NarrativeRef::getUserId));
         return rows.stream()
-                .map(c -> new ComparisonSummaryDto(c.getUserId(), names.get(c.getUserId()),
-                        c.getOverallBefore(), c.getOverallAfter(), c.getOverallDelta(),
-                        c.getOverallBandKey(), c.getOverallBandLabel(), c.getComputedAt()))
+                .map(c -> summaryOf(c, names.get(c.getUserId()),
+                        pillarsByComparison.getOrDefault(c.getId(), List.of()),
+                        narrativesByUser.getOrDefault(c.getUserId(), List.of())))
                 .sorted(Comparator.comparing(ComparisonSummaryDto::userName,
                         Comparator.nullsLast(String::compareToIgnoreCase)))
                 .toList();
+    }
+
+    /**
+     * One list row. The still-attached rule is the same one {@link #toDto}
+     * applies to the detail: a narrative counts only while its distance pillar
+     * is still MAPPED, so the list's "3 drafts to review" and the member
+     * screen's review queue cannot disagree.
+     */
+    private static ComparisonSummaryDto summaryOf(FounderComparison c, String userName,
+                                                  List<FounderComparisonPillar> pillarRows,
+                                                  List<NarrativeRef> narratives) {
+        List<FounderComparisonPillar> mapped = pillarRows.stream()
+                .filter(FounderComparisonPillar::isMapped)
+                .toList();
+        Set<UUID> mappedIds = mapped.stream()
+                .map(FounderComparisonPillar::getDistancePillarId)
+                .collect(java.util.stream.Collectors.toSet());
+        List<NarrativeRef> attached = narratives.stream()
+                .filter(n -> mappedIds.contains(n.getDistancePillarId()))
+                .toList();
+        Comparator<FounderComparisonPillar> byDelta =
+                Comparator.comparing(FounderComparisonPillar::getDelta);
+        Optional<FounderComparisonPillar> topGain = mapped.stream()
+                .filter(p -> p.getDelta() != null && p.getDelta().signum() > 0)
+                .max(byDelta);
+        Optional<FounderComparisonPillar> topDrop = mapped.stream()
+                .filter(p -> p.getDelta() != null && p.getDelta().signum() < 0)
+                .min(byDelta);
+        return new ComparisonSummaryDto(c.getUserId(), userName,
+                c.getOverallBefore(), c.getOverallAfter(), c.getOverallDelta(),
+                c.getOverallBandKey(), c.getOverallBandLabel(), c.getComputedAt(),
+                mapped.size(),
+                (int) attached.stream().filter(n -> n.getStatus() == NarrativeStatus.APPROVED).count(),
+                (int) attached.stream().filter(n -> n.getStatus() == NarrativeStatus.DRAFT).count(),
+                topGain.map(FounderComparisonPillar::getPillarNameSnapshot).orElse(null),
+                topGain.map(FounderComparisonPillar::getDelta).orElse(null),
+                topDrop.map(FounderComparisonPillar::getPillarNameSnapshot).orElse(null),
+                topDrop.map(FounderComparisonPillar::getDelta).orElse(null));
     }
 
     /**
@@ -208,9 +263,8 @@ public class ComparisonQueryService {
         // only: a remap can demote a pillar to newly-measured, and a narrative
         // about a shift is meaningless once there is no "before" to shift from.
         Set<UUID> mappedDistancePillarIds = pillarRows.stream()
-                .filter(p -> p.getState() == PillarComparisonState.MAPPED)
-                .map(com.bvisionry.comparison.domain.FounderComparisonPillar::getDistancePillarId)
-                .filter(java.util.Objects::nonNull)
+                .filter(FounderComparisonPillar::isMapped)
+                .map(FounderComparisonPillar::getDistancePillarId)
                 .collect(java.util.stream.Collectors.toSet());
         List<ComparisonPillarDto> pillarDtos = pillarRows.stream()
                 .map(p -> new ComparisonPillarDto(p.getBaselinePillarId(), p.getDistancePillarId(),

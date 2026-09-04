@@ -4,12 +4,14 @@ import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.security.CurrentUserAccessor;
 import com.bvisionry.comparison.dto.CohortComparisonStatus;
 import com.bvisionry.comparison.dto.CohortGrowthAggregateDto;
+import com.bvisionry.comparison.dto.CohortPillarNoteDto;
 import com.bvisionry.comparison.dto.ComparisonSummaryDto;
 import com.bvisionry.comparison.dto.FounderComparisonDto;
 import com.bvisionry.comparison.dto.PillarMappingResponse;
 import com.bvisionry.comparison.dto.RecomputeResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import com.bvisionry.common.programaccess.OrgCohortAccess;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +19,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -74,6 +78,20 @@ public class ComparisonAdminController {
     public CohortGrowthAggregateDto growthAggregate(@PathVariable UUID orgId,
                                                     @PathVariable UUID cohortId) {
         return aggregates.aggregate(orgId, cohortId);
+    }
+
+    /**
+     * The coach's note under one pillar of the Growth tab's category cards
+     * (V214): set, replace, or clear with a blank body. Org-scoped like the
+     * aggregate it rides on — a platform cohort's notes are per org slice.
+     */
+    @PutMapping(path = "/growth-aggregate/pillars/{pillarId}/note",
+            consumes = MediaType.APPLICATION_JSON_VALUE)
+    public CohortPillarNoteDto pillarNote(@PathVariable UUID orgId, @PathVariable UUID cohortId,
+                                          @PathVariable UUID pillarId,
+                                          @Valid @RequestBody CohortPillarNoteDto.Request request) {
+        return aggregates.saveNote(orgId, cohortId, pillarId, request.note(),
+                currentUser.require().userId());
     }
 
     /**

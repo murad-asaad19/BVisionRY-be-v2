@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.bvisionry.common.security.CurrentUserAccessor;
-import com.bvisionry.engagement.domain.SessionType;
+import com.bvisionry.common.enums.SessionType;
 import com.bvisionry.engagement.repository.EngagementReadRepository;
 
 import io.swagger.v3.oas.annotations.tags.Tag;

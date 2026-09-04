@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 import com.bvisionry.common.scoringconfig.ParticipationFormula;
 import com.bvisionry.common.scoringconfig.ParticipationFormula.Category;
 import com.bvisionry.common.scoringconfig.ScoringBands;
-import com.bvisionry.engagement.domain.SessionType;
+import com.bvisionry.common.enums.SessionType;
 import com.bvisionry.engagement.dto.EngagementRecordResponse.CategoryScore;
 import com.bvisionry.engagement.dto.EngagementRecordResponse.ParticipationDto;
 import com.bvisionry.engagement.web.ParticipationScoring.CategoryInput;

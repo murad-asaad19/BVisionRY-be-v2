@@ -72,7 +72,21 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
             // user row — the booking link is about that coach and nobody else,
             // so it dies with them. Exported as coach_profile: it is content
             // they authored about themselves.
-            "coach_profiles.coach_id", "cohort_members.user_id",
+            "coach_profiles.coach_id",
+            // coach_availability_rules / _blocks (V215) and
+            // coach_calendar_connections (V216): coach_id / user_id CASCADE with
+            // the user row — a coach's own calendar dies with them. Exported as
+            // coach_availability_rules / _blocks / coach_calendar_connection
+            // (the connection without its refresh token: a credential is not
+            // Art. 15 data about the subject).
+            "coach_availability_rules.coach_id", "coach_availability_blocks.coach_id",
+            "coach_calendar_connections.user_id",
+            // sessions (V215/V216): member_id CASCADEs — a 1:1 session row is
+            // about that founder and dies with them (exported as
+            // coaching_sessions); coach_id is SET NULL, a staff attribution on
+            // the cohort's record, like sessions.created_by below.
+            "sessions.member_id", "sessions.coach_id",
+            "cohort_members.user_id",
             // cohort_launch_ledger / cohort_launch_grants (V167): launched_by /
             // granted_by SET NULL — the launch and the grant are the
             // ORGANIZATION's billing/audit record (spec §8: the ledger is
@@ -197,6 +211,10 @@ class PersonalDataCoverageTest extends AbstractPostgresIntegrationTest {
      * </ul>
      */
     private static final Set<String> KNOWN_EMAIL_COLUMNS = Set.of(
+            // coach_calendar_connections.account_email (V216): the Google
+            // account the coach connected. Reached by erasure through the
+            // user_id CASCADE, so no explicit statement is needed.
+            "coach_calendar_connections.account_email",
             "exercise_templates.respondent_email_mode", "invitations.email",
             "lead_magnet_requests.email", "leads.email",
             "public_assessment_links.respondent_email_mode",

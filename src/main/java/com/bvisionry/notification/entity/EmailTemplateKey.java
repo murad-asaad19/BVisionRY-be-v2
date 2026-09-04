@@ -13,5 +13,16 @@ public enum EmailTemplateKey {
     CONTACT_US,
     DEMO_REQUEST,
     SURVEY_GIFT_ASSESSMENT,
-    LEAD_MAGNET
+    LEAD_MAGNET,
+    // Coaching calendar (coaching-sessions spec §7).
+    COACHING_SESSION_BOOKED_MEMBER,
+    COACHING_SESSION_BOOKED_COACH,
+    COACHING_SESSION_CANCELLED,
+    COACHING_SESSION_FEEDBACK,
+    // Cohort-wide sessions and moves (coaching-sessions spec v2 §10). The
+    // COACHING_SESSION_BOOKED_* pair stays 1:1-only: a group session is not
+    // "your booking", and one template cannot say both.
+    GROUP_SESSION_SCHEDULED_MEMBER,
+    GROUP_SESSION_SCHEDULED_COACH,
+    SESSION_RESCHEDULED
 }

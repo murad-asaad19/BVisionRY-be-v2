@@ -416,6 +416,79 @@ public class CoachingReadRepository {
                 CoachingReadRepository::coachOfMemberRow);
     }
 
+    /**
+     * Sessions spec v2 §5: the coaches who may date a COHORT-WIDE session of
+     * {@code cohortId} — an assignment that names the cohort, or an ORG-WIDE
+     * grant (V176: both {@code cohort_id} and {@code member_id} null) held for
+     * an org the cohort is assigned to.
+     *
+     * <p>Deliberately NOT {@link CoachAccess#GRANTED_COHORT_PREDICATE}: that one
+     * answers "may this coach address this cohort" inside ONE tenant and takes
+     * {@code :orgId} from the caller. A cohort is platform-owned and may be
+     * assigned to several orgs (V171), and the caller here can be a super admin
+     * with no org at all, so the tenant comes from {@code cohort_orgs} rather
+     * than from the session.
+     *
+     * <p>{@code %1$s} is the cohort-id expression, {@code %2$s} the coach-id
+     * expression, so the same relation serves the LIST below and the yes/no
+     * check the scheduling service asks — they cannot fork.
+     */
+    public static final String COACH_OF_COHORT_PREDICATE = """
+            EXISTS (
+                SELECT 1
+                FROM coach_assignments oca
+                WHERE oca.coach_id = %2$s
+                  AND (oca.cohort_id = %1$s
+                       OR (oca.cohort_id IS NULL AND oca.member_id IS NULL
+                           AND EXISTS (SELECT 1 FROM cohort_orgs occ
+                                       WHERE occ.cohort_id = %1$s
+                                         AND occ.org_id = oca.org_id)))
+            )""";
+
+    /**
+     * The coaches offered as the scheduler of a cohort-wide session: §5's
+     * relation, narrowed the same way the 1:1 picker is — an ACTIVE COACH who
+     * has published at least one availability window. A coach with no window
+     * has no slots to offer, so listing them would only produce an empty picker.
+     */
+    public List<CoachOfCohortRow> coachesOfCohort(UUID cohortId) {
+        return jdbc.query("""
+                        SELECT cu.id, cu.name, cp.headline, cp.photo_url, cp.time_zone
+                        FROM users cu
+                        LEFT JOIN coach_profiles cp ON cp.coach_id = cu.id
+                        WHERE cu.role = 'COACH'
+                          AND cu.status = 'ACTIVE'
+                          AND EXISTS (SELECT 1 FROM coach_availability_rules r
+                                      WHERE r.coach_id = cu.id)
+                          AND %s
+                        ORDER BY cu.name, cu.id
+                        """.formatted(COACH_OF_COHORT_PREDICATE.formatted(":cohortId", "cu.id")),
+                new MapSqlParameterSource("cohortId", cohortId),
+                (rs, i) -> new CoachOfCohortRow(rs.getObject("id", UUID.class), rs.getString("name"),
+                        rs.getString("headline"), rs.getString("photo_url"), rs.getString("time_zone")));
+    }
+
+    /**
+     * The same relation as a yes/no — the authorization behind
+     * {@code POST /sessions/{id}/schedule}. Availability is NOT part of it: a
+     * coach without windows is refused by the slot check with a 400 that says
+     * so, and folding that into the 403 would report "not your cohort" for a
+     * calendar the coach simply has not filled in.
+     */
+    public boolean isCoachOfCohort(UUID cohortId, UUID coachId) {
+        if (cohortId == null || coachId == null) {
+            return false;
+        }
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT " + COACH_OF_COHORT_PREDICATE.formatted(":cohortId", ":coachId"),
+                new MapSqlParameterSource("cohortId", cohortId).addValue("coachId", coachId),
+                Boolean.class));
+    }
+
+    /** A coach card for the cohort-wide scheduling picker (spec v2 §6.2). {@code photoUrl} is RAW. */
+    public record CoachOfCohortRow(UUID id, String name, String headline, String photoUrl,
+                                   String timeZone) {}
+
     private static CoachOfMemberRow coachOfMemberRow(java.sql.ResultSet rs, int i)
             throws java.sql.SQLException {
         return new CoachOfMemberRow(rs.getObject("id", UUID.class), rs.getString("name"),

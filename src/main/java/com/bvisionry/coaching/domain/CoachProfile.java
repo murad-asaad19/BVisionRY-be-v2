@@ -59,6 +59,15 @@ public class CoachProfile {
     @Column(name = "photo_url", length = 500)
     private String photoUrl;
 
+    /**
+     * V215 (spec §2.1): the IANA zone the coach's weekly availability windows
+     * are expressed in. Null until they save availability for the first time —
+     * the windows are wall-clock, so without this the slot engine cannot turn
+     * them into instants and the coach is simply not bookable yet.
+     */
+    @Column(name = "time_zone", length = 64)
+    private String timeZone;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 

@@ -158,6 +158,14 @@ public class SecurityConfig {
                         .requestMatchers("/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/actuator/health").permitAll()
                         .requestMatchers("/actuator/**").hasAuthority("SUPER_ADMIN")
+                        // Google Calendar connect callback (sessions spec v2 §7). Google
+                        // redirects the coach's BARE BROWSER here, so it carries no
+                        // Authorization header and would be refused by the COACH rule
+                        // below. It is not unauthenticated in substance: the identity
+                        // comes from an HMAC-signed, 10-minute state token minted for
+                        // that coach, and the handler re-declares permitAll() so the
+                        // controller's class-level COACH gate does not swallow it.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/coach/calendar/google/callback").permitAll()
                         // Coach console — HTTP layer of the three-layer defense.
                         // The controller re-asserts COACH via @PreAuthorize and
                         // every query carries the assignment-union predicate.

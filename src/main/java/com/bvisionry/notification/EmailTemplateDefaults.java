@@ -32,6 +32,13 @@ public class EmailTemplateDefaults {
             case DEMO_REQUEST                   -> "New demo request: {{organization}}";
             case SURVEY_GIFT_ASSESSMENT         -> "A gift for you: {{assessmentTitle}}";
             case LEAD_MAGNET                    -> "The science behind the 11 pillars of founder readiness";
+            case COACHING_SESSION_BOOKED_MEMBER -> "Your session with {{coachName}} is booked";
+            case COACHING_SESSION_BOOKED_COACH  -> "New booking: {{memberName}} on {{sessionDate}}";
+            case COACHING_SESSION_CANCELLED     -> "Cancelled: your session on {{sessionDate}}";
+            case COACHING_SESSION_FEEDBACK      -> "How was your session with {{coachName}}?";
+            case GROUP_SESSION_SCHEDULED_MEMBER -> "{{taskName}} is scheduled for {{cohortName}}";
+            case GROUP_SESSION_SCHEDULED_COACH  -> "You're running {{taskName}} for {{cohortName}}";
+            case SESSION_RESCHEDULED            -> "Moved: {{taskName}} is now {{sessionDate}}";
         };
     }
 
@@ -50,6 +57,15 @@ public class EmailTemplateDefaults {
             case DEMO_REQUEST                   -> "demo-request.mustache";
             case SURVEY_GIFT_ASSESSMENT         -> "survey-gift-assessment.mustache";
             case LEAD_MAGNET                    -> "lead-magnet.mustache";
+            case COACHING_SESSION_BOOKED_MEMBER -> "coaching-session-booked-member.mustache";
+            case COACHING_SESSION_BOOKED_COACH  -> "coaching-session-booked-coach.mustache";
+            case COACHING_SESSION_CANCELLED     -> "coaching-session-cancelled.mustache";
+            case COACHING_SESSION_FEEDBACK      -> "coaching-session-feedback.mustache";
+            // Same body as the 1:1 confirmation — only the SUBJECT differs, and
+            // an admin override is stored per key, so one file serves both.
+            case GROUP_SESSION_SCHEDULED_MEMBER -> "coaching-session-booked-member.mustache";
+            case GROUP_SESSION_SCHEDULED_COACH  -> "group-session-scheduled-coach.mustache";
+            case SESSION_RESCHEDULED            -> "session-rescheduled.mustache";
         };
         try {
             ClassPathResource resource = new ClassPathResource("templates/email/" + filename);

@@ -9,6 +9,7 @@ import org.springframework.stereotype.Repository;
 
 import com.bvisionry.common.programaccess.CohortVisibility;
 import com.bvisionry.common.programaccess.ProgramAudience;
+import com.bvisionry.common.programaccess.TaskCompletion;
 
 import lombok.RequiredArgsConstructor;
 
@@ -41,16 +42,25 @@ public class ProgramTaskSurveyRepository {
      * leaks. A NULL refId still returns a row ("no survey configured").
      */
     public Optional<ProgramTaskSurveyRow> findEnrolledTaskSurvey(UUID taskId, UUID userId) {
+        // A SESSION task serves its post-session survey through this same route
+        // (sessions spec v2 §3) — gated on the DONE predicate: the row that
+        // applies to this member (their 1:1 row, or the cohort-wide one) was
+        // held AND they have a presence row, so nobody rates a session they did
+        // not attend. Same 404 shape as a missing SURVEY task.
         String sql = """
-                SELECT t.ref_id AS survey_id, c.status AS cohort_status
+                SELECT CASE t.task_type WHEN 'SURVEY' THEN t.ref_id
+                                        ELSE t.post_session_survey_id END AS survey_id,
+                       c.status AS cohort_status
                 FROM program_tasks t
                 JOIN program_modules m ON m.id = t.module_id
                 JOIN cohorts c ON c.id = m.cohort_id
                 JOIN cohort_members cm ON cm.cohort_id = c.id AND cm.user_id = :userId
-                WHERE t.id = :taskId AND t.task_type = 'SURVEY' AND t.status = 'LIVE'
+                WHERE t.id = :taskId AND t.status = 'LIVE'
+                  AND (t.task_type = 'SURVEY' OR (t.task_type = 'SESSION' AND %s))
                   AND %s
                   AND %s
-                """.formatted(CohortVisibility.MEMBER_VISIBLE.formatted("c"),
+                """.formatted(TaskCompletion.DONE_FOR_USER.formatted(":userId"),
+                CohortVisibility.MEMBER_VISIBLE.formatted("c"),
                 ProgramAudience.INCLUDES_USER.formatted(":userId"));
         return jdbc.query(sql,
                         new MapSqlParameterSource("taskId", taskId).addValue("userId", userId),

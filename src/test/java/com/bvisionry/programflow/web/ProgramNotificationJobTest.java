@@ -22,6 +22,7 @@ import com.bvisionry.programflow.domain.CohortStatus;
 import com.bvisionry.programflow.domain.ModuleLockMode;
 import com.bvisionry.programflow.domain.ProgramModule;
 import com.bvisionry.programflow.domain.ProgramTask;
+import com.bvisionry.programflow.domain.ProgramTaskType;
 import com.bvisionry.programflow.repository.CohortMemberRow;
 import com.bvisionry.programflow.repository.CohortRepository;
 import com.bvisionry.programflow.repository.ProgramModuleRepository;
@@ -138,6 +139,22 @@ class ProgramNotificationJobTest {
 
         verify(events, never()).publishEvent(any());
         assertThat(module.getUnlockNotifiedAt()).isNotNull();
+        assertThat(task.getDueReminderSentAt()).isNotNull();
+    }
+
+    /**
+     * A SESSION is completed by attendance, not by the member, so a due-soon
+     * reminder would nag about work they cannot do. Stamped rather than
+     * deferred: nothing will ever make it actionable.
+     */
+    @Test
+    void aSessionTasksDueReminderIsSkipped_butStillStamped() {
+        cohort.setStatus(CohortStatus.LAUNCHED);
+        task.setTaskType(ProgramTaskType.SESSION);
+
+        job.notifyDueSoonTasks();
+
+        verify(events, never()).publishEvent(any());
         assertThat(task.getDueReminderSentAt()).isNotNull();
     }
 }

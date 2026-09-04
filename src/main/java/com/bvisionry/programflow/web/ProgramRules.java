@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import com.bvisionry.common.enums.SessionType;
 import com.bvisionry.programflow.domain.FieldType;
 import com.bvisionry.programflow.domain.MilestoneRole;
 import com.bvisionry.programflow.domain.ModuleLockMode;
@@ -72,7 +73,7 @@ final class ProgramRules {
      * <p>THE one source of truth for that question, so a member can never be
      * stuck behind work they are not able to do:
      * <ul>
-     *   <li>a type they cannot complete in-app (none today) never gated;</li>
+     *   <li>a type they cannot complete in-app (SESSION) is never gated;</li>
      *   <li>a COURSE whose course the member's org can no longer SEE cannot be
      *       opened at all (spec §3 downgrade policy blocks new content), so it
      *       must not gate either — otherwise narrowing a course's visibility
@@ -225,17 +226,63 @@ final class ProgramRules {
     }
 
     /**
+     * SESSION: the member's session row → unified vocabulary (sessions spec v2
+     * §3). No row or UNSCHEDULED = not started (nobody has dated it yet);
+     * SCHEDULED is mid-way; a COMPLETED session is DONE for the members who
+     * were there and NOT_SUBMITTED ("Missed") for the ones who were not — the
+     * record is closed and the journey flows past it, but it never counts as
+     * done.
+     *
+     * @param attended a {@code session_attendance} row exists for (row, member)
+     */
+    static JourneyTaskState sessionState(String status, boolean attended) {
+        if (status == null || "UNSCHEDULED".equals(status)) {
+            return JourneyTaskState.NOT_STARTED;
+        }
+        if (!"COMPLETED".equals(status)) {
+            return JourneyTaskState.IN_PROGRESS;
+        }
+        return attended ? JourneyTaskState.DONE : JourneyTaskState.NOT_SUBMITTED;
+    }
+
+    /** {@link #taskTypeFieldErrors} for a task without session config. */
+    static Map<String, String> taskTypeFieldErrors(ProgramTaskType type, UUID refId,
+            MilestoneRole milestoneRole, ProgramTaskStatus status, int fieldCount) {
+        return taskTypeFieldErrors(type, refId, milestoneRole, status, fieldCount, null, null, null);
+    }
+
+    /**
      * Structural rules of the typed spine a single task must satisfy,
      * expressed as per-field errors (empty map = valid). Cohort-level rules
      * (milestone uniqueness, designated-pipeline sync) need data and live in
      * {@code ProgramAdminService}.
      */
     static Map<String, String> taskTypeFieldErrors(ProgramTaskType type, UUID refId,
-            MilestoneRole milestoneRole, ProgramTaskStatus status, int fieldCount) {
+            MilestoneRole milestoneRole, ProgramTaskStatus status, int fieldCount,
+            SessionType sessionType, Integer durationMinutes, UUID postSessionSurveyId) {
         Map<String, String> errors = new java.util.LinkedHashMap<>();
         if (type == ProgramTaskType.LESSON) {
             if (refId != null) {
                 errors.put("refId", "Lesson tasks do not reference another object.");
+            }
+        } else if (type == ProgramTaskType.SESSION) {
+            // Spec §3.1: config on the row, no ref, no fields. The subtype
+            // decides who schedules the row and is mirrored onto it, so it is
+            // required even in DRAFT; the duration is what the slot engine
+            // chunks by, so it has to be there to go LIVE.
+            if (sessionType == null) {
+                errors.put("sessionType", "Pick the kind of session this task holds.");
+            }
+            if (refId != null) {
+                errors.put("refId", "Session tasks do not reference another object.");
+            }
+            if (fieldCount > 0) {
+                errors.put("fields", "Only lesson tasks have form fields.");
+            }
+            if (durationMinutes != null && (durationMinutes < 15 || durationMinutes > 240)) {
+                errors.put("durationMinutes", "Session length must be between 15 and 240 minutes.");
+            } else if (status == ProgramTaskStatus.LIVE && durationMinutes == null) {
+                errors.put("durationMinutes", "Set the session length before publishing it.");
             }
         } else {
             if (fieldCount > 0) {
@@ -243,6 +290,15 @@ final class ProgramRules {
             }
             if (status == ProgramTaskStatus.LIVE && refId == null) {
                 errors.put("refId", "Pick what this task references before publishing it.");
+            }
+        }
+        if (type != ProgramTaskType.SESSION) {
+            if (sessionType != null) {
+                errors.put("sessionType", "Only session tasks carry a session kind.");
+            }
+            if (durationMinutes != null || postSessionSurveyId != null) {
+                errors.put("durationMinutes",
+                        "Only session tasks carry a length and a follow-up survey.");
             }
         }
         if (type == ProgramTaskType.ASSESSMENT) {

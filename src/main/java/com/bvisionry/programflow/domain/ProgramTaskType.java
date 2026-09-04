@@ -16,18 +16,28 @@ public enum ProgramTaskType {
     /** References a pipeline; member state = the submission tagged to this task. */
     ASSESSMENT,
     /** References a survey; done = a survey response by the member. */
-    SURVEY;
+    SURVEY,
+    /**
+     * A coaching session or workshop the cohort holds (sessions spec v2 §2–§3).
+     * No ref: the session subtype ({@link ProgramTask#getSessionType()}),
+     * duration and the optional post-session survey live on the task row. A
+     * 1:1 task is one BOOKING per member, booked by the member; a group or
+     * workshop task is ONE cohort-wide session the coach schedules. Member
+     * state = the {@code sessions} row tagged with this task; done = it was
+     * held and the member has an attendance row.
+     */
+    SESSION;
 
     /**
      * Can a member currently bring this task to a done-state inside the app?
-     * True for every type since D2 shipped the member survey-response route
-     * ({@code /api/my/program/tasks/{id}/survey}) — every task now blocks
-     * sequential drip and counts in every completion denominator (journey
-     * progress, pulse, engagement, continue-cursor). The predicate stays so a
-     * future not-yet-completable type flips ONE switch instead of re-auditing
-     * five call sites.
+     * True for every type but SESSION: a session is completed by attendance —
+     * the auto-complete job's or the coach's mark, not anything the member can
+     * do — so it must never hold the sequential drip or count in a completion
+     * denominator (journey progress, pulse, engagement, continue-cursor) —
+     * spec §1.6. The SQL twin is {@code TaskCompletion.COUNTS_FOR_USER};
+     * change one, change the other.
      */
     public boolean completableInApp() {
-        return true;
+        return this != SESSION;
     }
 }

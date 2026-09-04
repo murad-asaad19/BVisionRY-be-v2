@@ -39,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -122,6 +123,208 @@ class TaskSpineIntegrationTest extends AbstractPostgresIntegrationTest {
     @AfterEach
     void clearAuth() {
         TestAuthentication.clear();
+    }
+
+    /* ------------------------------------------- session task (spec v2 §3) */
+
+    /**
+     * A SESSION task is completed by ATTENDANCE, not by the member, so it
+     * renders on the journey but gates nothing (Java {@code ProgramRules.gates}
+     * and SQL {@code TaskCompletion.COUNTS_FOR_USER} agree). Its state is the
+     * {@code sessions} row that applies to the member — their own 1:1 row, or
+     * the cohort-wide row a group/workshop task carries — and the follow-up
+     * survey is offered only once they were actually there.
+     */
+    @Nested
+    class SessionTask {
+
+        private UUID sessionTaskId;
+        private User coach;
+
+        @Autowired private com.bvisionry.survey.service.ProgramTaskSurveyService taskSurveys;
+
+        @BeforeEach
+        void addSessionTask() {
+            coach = saveUser("spine.coach@test.invalid", UserRole.COACH, org);
+            sessionTaskId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO program_tasks (id, module_id, name, status, position, task_type,
+                                               session_type, duration_minutes, post_session_survey_id)
+                    VALUES (?, ?, 'Coaching 1:1', 'LIVE', 6, 'SESSION', 'COACHING_1ON1', 45, ?)
+                    """, sessionTaskId, moduleId, surveyId);
+        }
+
+        private JourneyResponse.JourneyTask sessionRow() {
+            return myProgramService.journey(cohortId).modules().get(0).tasks().stream()
+                    .filter(t -> t.id().equals(sessionTaskId)).findFirst().orElseThrow();
+        }
+
+        /** The materialised, not-yet-dated row (v2 §2): one per (task, member). */
+        private UUID materialize(UUID memberId) {
+            UUID id = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO sessions (id, cohort_id, type, title, program_task_id, member_id,
+                                          booking_status)
+                    VALUES (?, ?, 'COACHING_1ON1', 'Coaching 1:1', ?, ?, 'UNSCHEDULED')
+                    """, id, cohortId, sessionTaskId, memberId);
+            if (memberId != null) {
+                jdbc.update("INSERT INTO session_expected_attendees (session_id, member_id) "
+                        + "VALUES (?, ?)", id, memberId);
+            }
+            return id;
+        }
+
+        /** Dates the row (SCHEDULED) and optionally holds it (COMPLETED). */
+        private void schedule(UUID sessionId, String status, OffsetDateTime start) {
+            jdbc.update("""
+                    UPDATE sessions SET booking_status = ?, session_date = ?, ends_at = ?,
+                                        coach_id = ?, completed_at = ?
+                    WHERE id = ?
+                    """, status, start, start.plusMinutes(45), coach.getId(),
+                    "COMPLETED".equals(status) ? OffsetDateTime.now() : null, sessionId);
+        }
+
+        private void markPresent(UUID sessionId, UUID memberId) {
+            jdbc.update("INSERT INTO session_attendance (session_id, member_id, marked_at) "
+                    + "VALUES (?, ?, now())", sessionId, memberId);
+        }
+
+        @Test
+        void rendersButGatesNothing_javaAndSqlAgree() {
+            materialize(member.getId());
+
+            JourneyResponse journey = myProgramService.journey(cohortId);
+            assertThat(journey.modules().get(0).tasks()).hasSize(7);
+            // The six gating tasks, not seven: the session row is in neither denominator.
+            assertThat(journey.progress().total()).isEqualTo(6);
+            assertThat(engagementReads.assignmentCounts(cohortId, member.getId()).total())
+                    .isEqualTo(6);
+
+            JourneyResponse.JourneyTask row = sessionRow();
+            assertThat(row.taskType()).isEqualTo(ProgramTaskType.SESSION);
+            // An UNSCHEDULED row is "nobody has dated this yet" — not started.
+            assertThat(row.state()).isEqualTo(JourneyTaskState.NOT_STARTED);
+            assertThat(row.feedbackPending()).isFalse();
+            assertThat(spineRepo.usersDoneWithTask(sessionTaskId)).isEmpty();
+        }
+
+        @Test
+        void noRowAtAllIsAlsoNotStarted() {
+            assertThat(sessionRow().state()).isEqualTo(JourneyTaskState.NOT_STARTED);
+        }
+
+        @Test
+        void scheduledRowReadsInProgressWithItsStart() {
+            OffsetDateTime start = OffsetDateTime.now().plusDays(3).withNano(0);
+            schedule(materialize(member.getId()), "SCHEDULED", start);
+
+            JourneyResponse.JourneyTask row = sessionRow();
+            assertThat(row.state()).isEqualTo(JourneyTaskState.IN_PROGRESS);
+            assertThat(row.scheduledAt()).isEqualTo(start.toInstant());
+            assertThat(spineRepo.usersDoneWithTask(sessionTaskId)).isEmpty();
+        }
+
+        @Test
+        void heldAndPresentIsDone_andOffersTheSurveyUntilAnswered() {
+            UUID sessionId = materialize(member.getId());
+            schedule(sessionId, "COMPLETED", OffsetDateTime.now().minusDays(1));
+            markPresent(sessionId, member.getId());
+
+            JourneyResponse.JourneyTask row = sessionRow();
+            assertThat(row.state()).isEqualTo(JourneyTaskState.DONE);
+            assertThat(row.feedbackPending()).isTrue();
+            // SQL twin (engagement / roster / reminders) sees the same done-state…
+            assertThat(spineRepo.usersDoneWithTask(sessionTaskId)).containsExactly(member.getId());
+            // …while the progress numerator stays untouched — it never gated.
+            assertThat(myProgramService.journey(cohortId).progress().done()).isZero();
+
+            jdbc.update("""
+                    INSERT INTO survey_responses (survey_id, submitted_at, source,
+                                                  respondent_user_id, program_task_id)
+                    VALUES (?, now(), 'PROGRAM_TASK', ?, ?)
+                    """, surveyId, member.getId(), sessionTaskId);
+            assertThat(sessionRow().feedbackPending()).isFalse();
+        }
+
+        /** NO_SHOW is gone (v2 §1.4): held with no presence row reads "Missed". */
+        @Test
+        void heldWithoutAttendanceReadsAsMissed_notDone() {
+            schedule(materialize(member.getId()), "COMPLETED", OffsetDateTime.now().minusDays(1));
+
+            assertThat(sessionRow().state()).isEqualTo(JourneyTaskState.NOT_SUBMITTED);
+            assertThat(sessionRow().feedbackPending()).isFalse();
+            assertThat(spineRepo.usersDoneWithTask(sessionTaskId)).isEmpty();
+        }
+
+        /**
+         * A group / workshop task carries ONE cohort-wide row (member_id NULL)
+         * that applies to every enrolled member — each reading their own state
+         * off their own attendance, Java and SQL alike.
+         */
+        @Test
+        void cohortWideRowAppliesToEveryEnrolledMember() {
+            User other = saveUser("spine.other@test.invalid", UserRole.MEMBER, org);
+            jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
+                    cohortId, other.getId());
+            jdbc.update("UPDATE program_tasks SET session_type = 'COACHING_GROUP' WHERE id = ?",
+                    sessionTaskId);
+            UUID sessionId = materialize(null);
+
+            // UNSCHEDULED: nobody has started, both members alike.
+            assertThat(sessionRow().state()).isEqualTo(JourneyTaskState.NOT_STARTED);
+            assertThat(states(other)).isEqualTo(JourneyTaskState.NOT_STARTED);
+
+            schedule(sessionId, "SCHEDULED", OffsetDateTime.now().plusDays(2).withNano(0));
+            assertThat(sessionRow().state()).isEqualTo(JourneyTaskState.IN_PROGRESS);
+            assertThat(states(other)).isEqualTo(JourneyTaskState.IN_PROGRESS);
+
+            // Held with only one of them present: DONE for them, Missed for the other.
+            schedule(sessionId, "COMPLETED", OffsetDateTime.now().minusHours(2));
+            markPresent(sessionId, member.getId());
+            assertThat(sessionRow().state()).isEqualTo(JourneyTaskState.DONE);
+            assertThat(states(other)).isEqualTo(JourneyTaskState.NOT_SUBMITTED);
+            // SQL twin agrees on exactly who is done.
+            assertThat(spineRepo.usersDoneWithTask(sessionTaskId)).containsExactly(member.getId());
+        }
+
+        /** The same journey row, read as the other member — the real path. */
+        private JourneyTaskState states(User user) {
+            TestAuthentication.authenticate(user);
+            try {
+                return myProgramService.journey(cohortId).modules().get(0).tasks().stream()
+                        .filter(t -> t.id().equals(sessionTaskId)).findFirst().orElseThrow().state();
+            } finally {
+                TestAuthentication.authenticate(member);
+            }
+        }
+
+        /**
+         * Spec v2 §3: the post-session survey route is gated on the same DONE
+         * predicate — held AND present. Rating a session you did not attend is
+         * a 404, exactly like a survey task you are not enrolled in.
+         */
+        @Test
+        void theSurveyRouteOpensOnlyOnceTheMemberAttended() {
+            UUID sessionId = materialize(member.getId());
+            assertThatThrownBy(() -> taskSurveys.getForProgramTask(sessionTaskId, member.getId()))
+                    .isInstanceOf(com.bvisionry.common.exception.ResourceNotFoundException.class);
+
+            schedule(sessionId, "COMPLETED", OffsetDateTime.now().minusDays(1));
+            // Held, but this member was not there — still closed.
+            assertThatThrownBy(() -> taskSurveys.getForProgramTask(sessionTaskId, member.getId()))
+                    .isInstanceOf(com.bvisionry.common.exception.ResourceNotFoundException.class);
+
+            markPresent(sessionId, member.getId());
+            assertThat(taskSurveys.getForProgramTask(sessionTaskId, member.getId()).id())
+                    .isEqualTo(surveyId);
+        }
+
+        @Test
+        void openNeedsNothingAndTargetsTheTask() {
+            var opened = myProgramService.open(sessionTaskId);
+            assertThat(opened.taskType()).isEqualTo(ProgramTaskType.SESSION);
+            assertThat(opened.targetId()).isEqualTo(sessionTaskId);
+        }
     }
 
     /* ------------------------------------------------- gates: Java = SQL */

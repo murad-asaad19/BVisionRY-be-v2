@@ -75,7 +75,7 @@ public class BoardRestoreRepository {
      * and the same {@code force}. Every place work can hang off a task is
      * counted: the LESSON submission table plus the three bare-uuid tags —
      * assessment ({@code submissions}, V164), exercise assignment and survey
-     * response (both V173).
+     * response (both V173) — and the session booking (V215/V216).
      */
     public List<DoomedTask> memberWorkAtRisk(UUID cohortId, List<ModuleUpsert> board) {
         return jdbc.query("""
@@ -92,7 +92,19 @@ public class BoardRestoreRepository {
                            WHERE ea.program_task_id = t.id
                           UNION
                           SELECT sr.respondent_user_id FROM survey_responses sr
-                           WHERE sr.program_task_id = t.id) x
+                           WHERE sr.program_task_id = t.id
+                          UNION
+                          -- Sessions spec v2: a DATED session is member work —
+                          -- their own 1:1 booking, or their attendance row on
+                          -- the cohort-wide one. UNSCHEDULED rows are
+                          -- materialised by the platform, not earned by a
+                          -- member, so they must never make a task undeletable.
+                          SELECT coalesce(cs.member_id, csa.member_id)
+                            FROM sessions cs
+                            LEFT JOIN session_attendance csa
+                                   ON csa.session_id = cs.id AND cs.member_id IS NULL
+                           WHERE cs.program_task_id = t.id
+                             AND cs.booking_status <> 'UNSCHEDULED') x
                 ) w
                 WHERE m.cohort_id = :cohortId
                   AND (t.id NOT IN (:keptTaskIds) OR t.id IN (:retypedIds))
@@ -169,26 +181,38 @@ public class BoardRestoreRepository {
     }
 
     /**
-     * The snapshot tasks whose stored {@code task_type} differs from the
-     * incoming one. A snapshot id with no stored row is a create, not a
-     * retype, and simply doesn't come back from the query.
+     * The snapshot tasks whose stored SHAPE differs from the incoming one. A
+     * snapshot id with no stored row is a create, not a retype, and simply
+     * doesn't come back from the query.
      */
     private List<UUID> retypedTaskIds(List<ModuleUpsert> board) {
         Map<UUID, String> incoming = new HashMap<>();
         for (ModuleUpsert m : board) {
             for (TaskUpsert t : m.tasks()) {
-                incoming.put(t.id(), t.taskType().name());
+                incoming.put(t.id(), taskShape(t.taskType().name(),
+                        t.sessionType() == null ? null : t.sessionType().name()));
             }
         }
         return jdbc.query("""
-                SELECT id, task_type FROM program_tasks WHERE id IN (:ids)
+                SELECT id, task_type, session_type FROM program_tasks WHERE id IN (:ids)
                 """,
                 new MapSqlParameterSource("ids", withSentinel(incoming.keySet())),
-                (rs, i) -> Map.entry(rs.getObject("id", UUID.class), rs.getString("task_type")))
+                (rs, i) -> Map.entry(rs.getObject("id", UUID.class),
+                        taskShape(rs.getString("task_type"), rs.getString("session_type"))))
                 .stream()
                 .filter(e -> !e.getValue().equals(incoming.get(e.getKey())))
                 .map(Map.Entry::getKey)
                 .toList();
+    }
+
+    /**
+     * What decides how a task's member work is judged: the type, plus a SESSION
+     * task's subtype — switching a 1:1 to a group session re-homes every
+     * booking exactly the way a retype re-homes a submission (sessions spec v2
+     * §3.1), so it takes the same 409.
+     */
+    private static String taskShape(String taskType, String sessionType) {
+        return taskType + "/" + sessionType;
     }
 
     /**
@@ -285,6 +309,10 @@ public class BoardRestoreRepository {
                         .addValue("refId", t.refId())
                         .addValue("milestoneRole",
                                 t.milestoneRole() == null ? null : t.milestoneRole().name())
+                        .addValue("sessionType",
+                                t.sessionType() == null ? null : t.sessionType().name())
+                        .addValue("durationMinutes", t.durationMinutes())
+                        .addValue("postSessionSurveyId", t.postSessionSurveyId())
                         .addValue("dueDate", t.dueDate())
                         .addValue("status", t.status().name())
                         .addValue("aiDraft", t.aiDraft())
@@ -293,15 +321,22 @@ public class BoardRestoreRepository {
         }
         batchUpdate("""
                 INSERT INTO program_tasks (id, module_id, name, task_type, ref_id,
-                                           milestone_role, due_date, status, ai_draft, position)
+                                           milestone_role, session_type, duration_minutes,
+                                           post_session_survey_id,
+                                           due_date, status, ai_draft, position)
                 VALUES (:id, :moduleId, :name, :taskType, :refId,
-                        :milestoneRole, :dueDate, :status, :aiDraft, :position)
+                        :milestoneRole, :sessionType, :durationMinutes,
+                        :postSessionSurveyId,
+                        :dueDate, :status, :aiDraft, :position)
                 ON CONFLICT (id) DO UPDATE SET
                     module_id      = EXCLUDED.module_id,
                     name           = EXCLUDED.name,
                     task_type      = EXCLUDED.task_type,
                     ref_id         = EXCLUDED.ref_id,
                     milestone_role = EXCLUDED.milestone_role,
+                    session_type           = EXCLUDED.session_type,
+                    duration_minutes       = EXCLUDED.duration_minutes,
+                    post_session_survey_id = EXCLUDED.post_session_survey_id,
                     due_date       = EXCLUDED.due_date,
                     status         = EXCLUDED.status,
                     ai_draft       = EXCLUDED.ai_draft,

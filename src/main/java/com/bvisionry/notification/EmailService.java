@@ -381,6 +381,183 @@ public class EmailService {
                 List.of(new MailAttachment(fileName, "application/pdf", pdf)));
     }
 
+    /* ------------------------------- coaching calendar (coaching-sessions spec 7) */
+
+    /**
+     * Confirm a booking to the FOUNDER, with the session as a real calendar
+     * event. {@code sessionDate} / {@code sessionTime} arrive pre-formatted in
+     * the COACH'S zone and {@code sessionTime} names that zone, because the
+     * coach's is the only zone the server knows — see
+     * {@code CoachingSessionEmailHandler}.
+     */
+    public void sendCoachingSessionBookedMember(String email, String memberName, String coachName,
+                                                 String sessionDate, String sessionTime,
+                                                 int durationMinutes, String taskName,
+                                                 String cohortName, String journeyUrl,
+                                                 String meetingUrl, byte[] ics) {
+        sendSessionToMember(EmailTemplateKey.COACHING_SESSION_BOOKED_MEMBER, email, memberName,
+                coachName, sessionDate, sessionTime, durationMinutes, taskName, cohortName,
+                journeyUrl, meetingUrl, ics);
+    }
+
+    /** The same booking told to the COACH, pointing at their Sessions list. */
+    public void sendCoachingSessionBookedCoach(String email, String coachName, String memberName,
+                                                String sessionDate, String sessionTime,
+                                                int durationMinutes, String taskName,
+                                                String cohortName, String sessionsUrl,
+                                                String meetingUrl, byte[] ics) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("coachName", coachName);
+        vars.put("memberName", memberName);
+        vars.put("sessionDate", sessionDate);
+        vars.put("sessionTime", sessionTime);
+        vars.put("durationMinutes", durationMinutes);
+        vars.put("taskName", taskName);
+        vars.put("cohortName", cohortName);
+        vars.put("sessionsUrl", sessionsUrl);
+        vars.put("meetingUrl", blankToNull(meetingUrl));
+
+        send(email, EmailTemplateKey.COACHING_SESSION_BOOKED_COACH, vars, null, calendar(ics));
+    }
+
+    /**
+     * Tell one founder that their whole cohort meets. Deliberately NOT the 1:1
+     * "your session is booked" mail: nobody booked this, and a founder reading
+     * "your session with Jordan" about a room of twelve turns up expecting a
+     * conversation.
+     */
+    public void sendGroupSessionScheduledMember(String email, String memberName, String coachName,
+                                                String sessionDate, String sessionTime,
+                                                int durationMinutes, String taskName,
+                                                String cohortName, String journeyUrl,
+                                                String meetingUrl, byte[] ics) {
+        sendSessionToMember(EmailTemplateKey.GROUP_SESSION_SCHEDULED_MEMBER, email, memberName,
+                coachName, sessionDate, sessionTime, durationMinutes, taskName, cohortName,
+                journeyUrl, meetingUrl, ics);
+    }
+
+    /**
+     * "A session is on your calendar", told to a FOUNDER. The 1:1 and the
+     * cohort-wide mail differ only in which key they render — same variables,
+     * same attachment — and the key is what the admin edits, so the copy can
+     * still diverge without the code doing.
+     */
+    private void sendSessionToMember(EmailTemplateKey key, String email, String memberName,
+                                     String coachName, String sessionDate, String sessionTime,
+                                     int durationMinutes, String taskName, String cohortName,
+                                     String journeyUrl, String meetingUrl, byte[] ics) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("memberName", memberName);
+        vars.put("coachName", coachName);
+        vars.put("sessionDate", sessionDate);
+        vars.put("sessionTime", sessionTime);
+        vars.put("durationMinutes", durationMinutes);
+        vars.put("taskName", taskName);
+        vars.put("cohortName", cohortName);
+        vars.put("journeyUrl", journeyUrl);
+        vars.put("meetingUrl", blankToNull(meetingUrl));
+
+        send(email, key, vars, null, calendar(ics));
+    }
+
+    /** The same group session told to the COACH, with the size of the room. */
+    public void sendGroupSessionScheduledCoach(String email, String coachName, int attendeeCount,
+                                               String sessionDate, String sessionTime,
+                                               int durationMinutes, String taskName,
+                                               String cohortName, String sessionsUrl,
+                                               String meetingUrl, byte[] ics) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("coachName", coachName);
+        vars.put("attendeeCount", attendeeCount);
+        vars.put("sessionDate", sessionDate);
+        vars.put("sessionTime", sessionTime);
+        vars.put("durationMinutes", durationMinutes);
+        vars.put("taskName", taskName);
+        vars.put("cohortName", cohortName);
+        vars.put("sessionsUrl", sessionsUrl);
+        vars.put("meetingUrl", blankToNull(meetingUrl));
+
+        send(email, EmailTemplateKey.GROUP_SESSION_SCHEDULED_COACH, vars, null, calendar(ics));
+    }
+
+    /**
+     * A session MOVED. One template for every recipient \u2014 the coach whose
+     * founder rebooked, or a whole cohort \u2014 because the only thing that differs
+     * is {@code movedBy} and where {@code url} points.
+     *
+     * <p>The .ics carries the NEW time under the SAME UID as the original, which
+     * is what makes a calendar client replace the old entry instead of adding a
+     * second one next to it.
+     */
+    public void sendSessionRescheduled(String email, String recipientName, String taskName,
+                                       String cohortName, String previousDate, String previousTime,
+                                       String sessionDate, String sessionTime, int durationMinutes,
+                                       String movedBy, String meetingUrl, String url, byte[] ics) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("recipientName", recipientName);
+        vars.put("taskName", taskName);
+        vars.put("cohortName", cohortName);
+        vars.put("previousDate", previousDate);
+        vars.put("previousTime", previousTime);
+        vars.put("sessionDate", sessionDate);
+        vars.put("sessionTime", sessionTime);
+        vars.put("durationMinutes", durationMinutes);
+        vars.put("movedBy", movedBy);
+        vars.put("meetingUrl", blankToNull(meetingUrl));
+        vars.put("url", url);
+
+        send(email, EmailTemplateKey.SESSION_RESCHEDULED, vars, null, calendar(ics));
+    }
+
+    /**
+     * Tell the OTHER party a session was cancelled. No .ics: a CANCEL method
+     * has to withdraw the exact event it names — right UID, right sequence —
+     * and a mismatch silently corrupts a calendar rather than failing. The row
+     * is not deleted (cancel reverts it to UNSCHEDULED), and the Google event
+     * is removed by the calendar slice, so nothing is left dangling either way.
+     */
+    public void sendCoachingSessionCancelled(String email, String recipientName,
+                                              String otherPartyName, String sessionDate,
+                                              String sessionTime, String taskName,
+                                              String rebookUrl) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("recipientName", recipientName);
+        vars.put("otherPartyName", otherPartyName);
+        vars.put("sessionDate", sessionDate);
+        vars.put("sessionTime", sessionTime);
+        vars.put("taskName", taskName);
+        vars.put("rebookUrl", rebookUrl);
+
+        send(email, EmailTemplateKey.COACHING_SESSION_CANCELLED, vars);
+    }
+
+    /** Ask the founder for post-session feedback once the coach marks them present. */
+    public void sendCoachingSessionFeedback(String email, String memberName, String coachName,
+                                             String taskName, String surveyUrl) {
+        Map<String, Object> vars = new HashMap<>();
+        vars.put("memberName", memberName);
+        vars.put("coachName", coachName);
+        vars.put("taskName", taskName);
+        vars.put("surveyUrl", surveyUrl);
+
+        send(email, EmailTemplateKey.COACHING_SESSION_FEEDBACK, vars);
+    }
+
+    /**
+     * Mustache treats an EMPTY STRING as truthy, so a blank meeting link would
+     * make the templates render a "Join" line pointing nowhere. Null is the only
+     * value their {@code {{#meetingUrl}}} section reads as absent.
+     */
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private static List<MailAttachment> calendar(byte[] ics) {
+        return ics == null || ics.length == 0
+                ? List.of()
+                : List.of(new MailAttachment("session.ics", "text/calendar", ics));
+    }
+
     /**
      * Send arbitrary pre-rendered content. Used by the admin "send test email"
      * flow so admins can preview their draft in their own inbox before saving.

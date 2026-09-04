@@ -51,12 +51,18 @@ public class SessionService {
         List<RosterMember> roster = reads.roster(cohortId, orgId).stream()
                 .map(r -> new RosterMember(r.id(), r.name(), r.email()))
                 .toList();
-        List<Session> all = sessions.findByCohortIdOrderBySessionDateDesc(cohortId);
+        // A 1:1 row is ABOUT one founder (sessions spec v2 §2). An org that
+        // shares the cohort but not that founder has no business seeing it —
+        // not even as an anonymous "0 of 1 attended" line. Cohort-wide rows
+        // (member_id null) and plain sessions are shared by construction.
+        List<Session> all = sessions.findByCohortOrderedByDate(cohortId).stream()
+                .filter(s -> s.getMemberId() == null || rosterIds.contains(s.getMemberId()))
+                .toList();
         Map<UUID, List<SessionAttendance>> marks = attendance
                 .findBySessionIdIn(all.stream().map(Session::getId).toList())
                 .stream().collect(Collectors.groupingBy(SessionAttendance::getSessionId));
-        Map<UUID, String> markerNames = markerNames(marks.values().stream()
-                .flatMap(List::stream).toList());
+        Map<UUID, String> markerNames = names(marks.values().stream()
+                .flatMap(List::stream).toList(), all);
         return new CohortSessionsResponse(roster, all.stream()
                 .map(s -> toDto(s, marks.getOrDefault(s.getId(), List.of()), markerNames, rosterIds))
                 .toList());
@@ -74,8 +80,21 @@ public class SessionService {
     public SessionDto update(UUID cohortId, UUID orgId, UUID sessionId, UpsertSessionRequest req) {
         requireAssignedCohort(cohortId, orgId);
         Session s = requireSession(cohortId, sessionId);
+        requireNotBooking(s);
         apply(s, cohortId, orgId, req);
         return withAttendance(s, rosterIds(cohortId, orgId));
+    }
+
+    /**
+     * A coaching booking is the member's and the coach's (spec §2.2): the
+     * Sessions tab reads it but never edits, deletes or marks it — roll call,
+     * like cancelling, happens in the coach's console.
+     */
+    private static void requireNotBooking(Session s) {
+        if (s.isBooking()) {
+            throw new IllegalOperationException(
+                    "This session was booked through the curriculum and is managed by the coach.");
+        }
     }
 
     /** Shared upsert body; expected attendees must be the ORG's own cohort members (§13.7). */
@@ -116,6 +135,7 @@ public class SessionService {
     public void delete(UUID cohortId, UUID orgId, UUID sessionId) {
         requireAssignedCohort(cohortId, orgId);
         Session s = requireSession(cohortId, sessionId);
+        requireNotBooking(s);
         // §13.7: a session on a shared cohort may carry another org's expected
         // attendees or attendance rows. Deleting it cascades their history away,
         // so refuse when any founder-data belongs outside the caller's roster —
@@ -142,6 +162,7 @@ public class SessionService {
                                     boolean present, UUID actorId) {
         requireAssignedCohort(cohortId, orgId);
         Session s = requireSession(cohortId, sessionId);
+        requireNotBooking(s);
         // Own members only — the org path must never be a door to another
         // org's founders (§13.7).
         boolean mine = reads.roster(cohortId, orgId).stream()
@@ -191,11 +212,14 @@ public class SessionService {
 
     private SessionDto withAttendance(Session s, Set<UUID> rosterIds) {
         List<SessionAttendance> marks = attendance.findBySessionIdIn(List.of(s.getId()));
-        return toDto(s, marks, markerNames(marks), rosterIds);
+        return toDto(s, marks, names(marks, List.of(s)), rosterIds);
     }
 
-    private Map<UUID, String> markerNames(List<SessionAttendance> marks) {
-        List<UUID> ids = marks.stream().map(SessionAttendance::getMarkedBy)
+    /** Display names for attendance markers AND booking coaches, one lookup. */
+    private Map<UUID, String> names(List<SessionAttendance> marks, List<Session> sessions) {
+        List<UUID> ids = java.util.stream.Stream.concat(
+                        marks.stream().map(SessionAttendance::getMarkedBy),
+                        sessions.stream().map(Session::getCoachId))
                 .filter(id -> id != null).distinct().toList();
         return reads.markerNames(ids).stream()
                 .collect(Collectors.toMap(EngagementReadRepository.MarkerName::markedBy,
@@ -223,7 +247,13 @@ public class SessionService {
                 expected.isEmpty() ? null : expected.size(),
                 expected,
                 List.copyOf(s.getPillarIds()),
-                att);
+                att,
+                s.getBookingStatus(),
+                s.getCoachId() == null ? null : markerNames.get(s.getCoachId()),
+                // The booked founder, but only if they are the caller-org's (§13.7).
+                s.getMemberId() != null && rosterIds.contains(s.getMemberId()) ? s.getMemberId() : null,
+                s.getMeetingUrl(),
+                s.getProgramTaskId());
     }
 
     private static String blankToNull(String value) {

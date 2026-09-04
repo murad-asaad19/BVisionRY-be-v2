@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-import com.bvisionry.engagement.domain.SessionType;
+import com.bvisionry.common.enums.SessionType;
 
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -29,6 +29,7 @@ public final class SessionDtos {
     public record UpsertSessionRequest(
             @NotNull SessionType type,
             @Size(max = 200) String title,
+            /** Plain sessions are always dated — only task-backed rows may be undated. */
             @NotNull Instant sessionDate,
             List<UUID> expectedMemberIds,
             /** Distance pillar ids this session grows (V207); null/empty = untagged. */
@@ -46,6 +47,7 @@ public final class SessionDtos {
             UUID id,
             SessionType type,
             String title,
+            /** Null on a task-backed row nobody has scheduled yet (v2 spec §2). */
             Instant sessionDate,
             Instant createdAt,
             Instant updatedAt,
@@ -55,7 +57,21 @@ public final class SessionDtos {
             List<UUID> expectedMemberIds,
             /** Distance pillar ids this session grows (V207). */
             List<UUID> pillarIds,
-            List<AttendanceMark> attendance) {
+            List<AttendanceMark> attendance,
+            /**
+             * Task-backed row (v2 spec §2): UNSCHEDULED | SCHEDULED | COMPLETED,
+             * or null for an admin-entered session. Such a row is read-only on
+             * the Sessions tab — the coach manages it (attendance aside).
+             */
+            String bookingStatus,
+            /** The session's coach; null for a plain or unscheduled session. */
+            String coachName,
+            /** The booked founder; null for a plain or cohort-wide session. */
+            UUID memberId,
+            /** The Meet link, once the coach's calendar created the event. */
+            String meetingUrl,
+            /** The SESSION task this row answers; null for a plain session. */
+            UUID programTaskId) {
     }
 
     /** An expected attendee — the cohort roster at read time. */

@@ -33,6 +33,9 @@ final class ProgramMapper {
                 t.getTaskType(),
                 t.getRefId(),
                 t.getMilestoneRole(),
+                t.getSessionType(),
+                t.getDurationMinutes(),
+                t.getPostSessionSurveyId(),
                 List.copyOf(t.getPillarIds()),
                 t.getFields().stream().map(ProgramMapper::toDto).toList());
     }

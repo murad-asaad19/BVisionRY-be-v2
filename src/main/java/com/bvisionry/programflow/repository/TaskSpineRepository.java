@@ -370,6 +370,46 @@ public class TaskSpineRepository {
                 rs.getObject("task_id", UUID.class), instant(rs, "completed_at"));
     }
 
+    public record SessionStateRow(UUID userId, UUID taskId, String status,
+                                 Instant startsAt, Instant completedAt,
+                                 boolean attended, boolean feedbackSubmitted) {}
+
+    /**
+     * Each member's session row for each SESSION task (sessions spec v2 §3):
+     * the {@code sessions} row tagged with the task that applies to them — their
+     * own 1:1 row ({@code member_id = user}), or the cohort-wide row
+     * ({@code member_id IS NULL}) which applies to EVERY member of the list.
+     * {@code attended} is a presence row for (session, user) — the thing that
+     * separates DONE from "Missed" once the session is held.
+     * {@code feedbackSubmitted} is the same (task, member) response key the
+     * SURVEY done-state uses, so the journey's "Give feedback" offer and the
+     * survey route's 409 gate agree.
+     */
+    public List<SessionStateRow> sessionStates(Collection<UUID> userIds,
+                                               Collection<UUID> taskIds) {
+        if (userIds.isEmpty() || taskIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.query("""
+                SELECT u.id AS user_id, s.program_task_id AS task_id, s.booking_status,
+                       s.session_date AS starts_at, s.completed_at,
+                       EXISTS (SELECT 1 FROM session_attendance sa
+                               WHERE sa.session_id = s.id AND sa.member_id = u.id) AS attended,
+                       EXISTS (SELECT 1 FROM survey_responses sr
+                               WHERE sr.program_task_id = s.program_task_id
+                                 AND sr.respondent_user_id = u.id) AS feedback_submitted
+                FROM sessions s
+                JOIN users u ON u.id IN (:userIds)
+                            AND (s.member_id IS NULL OR s.member_id = u.id)
+                WHERE s.program_task_id IN (:taskIds)
+                """,
+                new MapSqlParameterSource("userIds", userIds).addValue("taskIds", taskIds),
+                (rs, i) -> new SessionStateRow(rs.getObject("user_id", UUID.class),
+                        rs.getObject("task_id", UUID.class), rs.getString("booking_status"),
+                        instant(rs, "starts_at"), instant(rs, "completed_at"),
+                        rs.getBoolean("attended"), rs.getBoolean("feedback_submitted")));
+    }
+
     /* ---------------------------------------------------- direct assignments */
 
     /**
@@ -649,7 +689,9 @@ public class TaskSpineRepository {
     public boolean refExists(com.bvisionry.programflow.domain.ProgramTaskType type, UUID refId,
                              boolean live) {
         String sql = switch (type) {
-            case LESSON -> null;
+            // Neither carries a ref: the lesson's content is its fields, the
+            // session task's config is its own columns (sessions spec §3.1).
+            case LESSON, SESSION -> null;
             case COURSE -> live
                     ? "SELECT EXISTS (SELECT 1 FROM course c WHERE c.id = :id AND c.state = 'PUBLISHED')"
                     : "SELECT EXISTS (SELECT 1 FROM course c WHERE c.id = :id)";

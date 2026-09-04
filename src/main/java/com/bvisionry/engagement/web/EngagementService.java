@@ -17,7 +17,7 @@ import com.bvisionry.common.exception.ResourceNotFoundException;
 import com.bvisionry.common.orgmember.OrgMemberAccess;
 import com.bvisionry.common.scoringconfig.ParticipationFormula;
 import com.bvisionry.common.scoringconfig.ScoringBands;
-import com.bvisionry.engagement.domain.SessionType;
+import com.bvisionry.common.enums.SessionType;
 import com.bvisionry.engagement.dto.EngagementRecordResponse;
 import com.bvisionry.engagement.dto.EngagementRecordResponse.CohortEngagement;
 import com.bvisionry.engagement.dto.EngagementRecordResponse.CohortParticipationResponse;

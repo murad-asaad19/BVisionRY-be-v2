@@ -37,7 +37,8 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
  *
  * <ul>
  *   <li><b>Module unlocked</b> — a SCHEDULED module's {@code unlockAt} passed.</li>
- *   <li><b>Task due soon</b> — a LIVE task of any type enters its cohort's due-soon
+ *   <li><b>Task due soon</b> — a LIVE task the member can act on
+ *       ({@code ProgramTaskType.completableInApp}) enters its cohort's due-soon
  *       window and the learner's per-type done state says it is not done.</li>
  * </ul>
  *
@@ -98,6 +99,13 @@ public class ProgramNotificationJob {
         OffsetDateTime now = OffsetDateTime.now();
         for (ProgramTask task : tasks.findDueForReminder(
                 ProgramTaskStatus.LIVE, today, today.plusDays(MAX_DUE_SOON_DAYS))) {
+            if (!task.getTaskType().completableInApp()) {
+                // A SESSION is completed by attendance, never by the member —
+                // there is nothing to nag them about. Stamped, not deferred:
+                // that will never change, so it leaves the scan for good.
+                task.setDueReminderSentAt(now);
+                continue;
+            }
             ProgramModule module = task.getModule();
             if (!memberVisible(module.getCohortId())) {
                 continue; // hidden right now — defer, don't burn the one-shot stamp

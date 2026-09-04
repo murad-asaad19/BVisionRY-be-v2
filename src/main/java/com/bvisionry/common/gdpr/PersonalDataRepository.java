@@ -277,6 +277,30 @@ public class PersonalDataRepository {
         EXPORT_SECTIONS.put("coach_profile",
                 "SELECT * FROM coach_profiles WHERE coach_id = :userId");
 
+        // The coach's own calendar (V215/V216, sessions spec): weekly windows,
+        // blackouts (whose `reason` may say why they were away) and the
+        // connected calendar account. All three CASCADE with the users row, so
+        // erasure needs no statement. The connection is exported WITHOUT
+        // refresh_token_enc: a credential is not Art. 15 data about the subject,
+        // and handing it back in a download would leak calendar access.
+        EXPORT_SECTIONS.put("coach_availability_rules",
+                "SELECT * FROM coach_availability_rules WHERE coach_id = :userId");
+        EXPORT_SECTIONS.put("coach_availability_blocks",
+                "SELECT * FROM coach_availability_blocks WHERE coach_id = :userId");
+        EXPORT_SECTIONS.put("coach_calendar_connection", """
+                SELECT provider, account_email, calendar_id, connected_at, last_synced_at
+                  FROM coach_calendar_connections WHERE user_id = :userId
+                """);
+
+        // Task-backed sessions (V215/V216): the subject's own 1:1 rows — when
+        // they met their coach and whether it was held. member_id CASCADEs with
+        // the users row and coach_id is SET NULL like every other staff
+        // attribution, so erasure needs no statement. The cohort-wide rows a
+        // group session leaves (member_id NULL) are the COHORT's record, not
+        // the subject's — their presence at one is already in session_attendance.
+        EXPORT_SECTIONS.put("coaching_sessions",
+                "SELECT * FROM sessions WHERE member_id = :userId");
+
         // Distance comparisons (V161): scores computed ABOUT the subject and
         // nobody else — user_id CASCADEs with the users row (pillar rows cascade
         // off the comparison), so erasure needs no statement. Exported with the
@@ -452,11 +476,21 @@ public class PersonalDataRepository {
                    AND details_json->>'memberName' = (SELECT name FROM users WHERE id = :userId)
                 """, p);
 
+        // 7. Roll call on the subject's own session bookings. sessions.member_id
+        //    CASCADEs (V215), but session_attendance.session_id is RESTRICT
+        //    (V212), so the cascade aborts unless the roll call goes first.
+        //    Their own attendance elsewhere still CASCADEs on member_id.
+        int sessionAttendance = jdbc.update("""
+                DELETE FROM session_attendance
+                 WHERE session_id IN (SELECT id FROM sessions WHERE member_id = :userId)
+                """, p);
+
         log.info("GDPR erasure prep for user {}: surveyResponses={} aiCallLogs={} "
                         + "certificatesAnonymised={} reviewsAnonymised={} repliesDetached={} "
-                        + "auditAbout={} auditNaming={} auditSelfAuthored={}",
+                        + "auditAbout={} auditNaming={} auditSelfAuthored={} sessionAttendance={}",
                 userId, surveyResponses, aiCallLogs, certificates, reviews,
-                reparented, auditAboutSubject, auditNamingSubject, auditSelfAuthored);
+                reparented, auditAboutSubject, auditNamingSubject, auditSelfAuthored,
+                sessionAttendance);
     }
 
     /**

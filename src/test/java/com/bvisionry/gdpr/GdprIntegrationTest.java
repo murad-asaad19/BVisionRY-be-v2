@@ -80,6 +80,7 @@ class GdprIntegrationTest extends AbstractPostgresIntegrationTest {
     private UUID myExerciseSubmissionId;
     private UUID teammateExerciseSubmissionId;
     private UUID subjectReviewCommentId;
+    private UUID mySessionId;
 
     @BeforeEach
     void seed() {
@@ -135,6 +136,24 @@ class GdprIntegrationTest extends AbstractPostgresIntegrationTest {
         // was DECIDED about; this proves the export actually carries the row.
         jdbc.update("INSERT INTO coach_profiles (coach_id, booking_url) VALUES (?, ?)",
                 me.getId(), "https://cal.com/gdpr-me");
+
+        // Their own booking, held (V215/V216). sessions.member_id CASCADEs, but
+        // session_attendance.session_id is RESTRICT (V212), so without an
+        // explicit clear the whole account delete aborts on the roll call.
+        UUID cohortId = UUID.randomUUID();
+        jdbc.update("INSERT INTO cohorts (id, name, status) VALUES (?, 'Erasure Cohort', 'LAUNCHED')",
+                cohortId);
+        jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)",
+                cohortId, organization.getId());
+        mySessionId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO sessions (id, cohort_id, type, title, session_date, ends_at,
+                                      program_task_id, member_id, booking_status)
+                VALUES (?, ?, 'COACHING_1ON1', 'Coaching 1:1', now() - interval '1 day',
+                        now() - interval '23 hours', ?, ?, 'COMPLETED')
+                """, mySessionId, cohortId, UUID.randomUUID(), me.getId());
+        jdbc.update("INSERT INTO session_attendance (session_id, member_id) VALUES (?, ?)",
+                mySessionId, me.getId());
 
         seedExerciseThread();
         seedOtherOrg();
@@ -336,6 +355,11 @@ class GdprIntegrationTest extends AbstractPostgresIntegrationTest {
         // answers would outlive the account.
         assertThat(count("SELECT count(*) FROM ai_call_logs WHERE user_message = ?", "My private answer text"))
                 .isZero();
+        // Their booking and its roll call go with them — the RESTRICT FK on
+        // session_attendance would otherwise have aborted the whole delete.
+        assertThat(count("SELECT count(*) FROM sessions WHERE id = ?", mySessionId)).isZero();
+        assertThat(count("SELECT count(*) FROM session_attendance WHERE session_id = ?",
+                mySessionId)).isZero();
         // Anonymised, not deleted: the course's rating/reviews_count aggregate survives.
         assertThat(count("SELECT count(*) FROM review WHERE course_id = ? AND user_id IS NULL "
                 + "AND author_name = 'Deleted user'", myCourseId)).isOne();

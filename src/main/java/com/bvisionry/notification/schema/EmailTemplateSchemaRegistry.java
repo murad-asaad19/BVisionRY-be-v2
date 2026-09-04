@@ -37,6 +37,13 @@ public class EmailTemplateSchemaRegistry {
             case DEMO_REQUEST                   -> demoRequest();
             case SURVEY_GIFT_ASSESSMENT         -> surveyGiftAssessment();
             case LEAD_MAGNET                    -> leadMagnet();
+            case COACHING_SESSION_BOOKED_MEMBER -> coachingSessionBookedMember();
+            case COACHING_SESSION_BOOKED_COACH  -> coachingSessionBookedCoach();
+            case COACHING_SESSION_CANCELLED     -> coachingSessionCancelled();
+            case COACHING_SESSION_FEEDBACK      -> coachingSessionFeedback();
+            case GROUP_SESSION_SCHEDULED_MEMBER -> groupSessionScheduledMember();
+            case GROUP_SESSION_SCHEDULED_COACH  -> groupSessionScheduledCoach();
+            case SESSION_RESCHEDULED            -> sessionRescheduled();
         };
     }
 
@@ -862,6 +869,371 @@ public class EmailTemplateSchemaRegistry {
                         NO_VARS,
                         "Recipients of this notification can be customized in the platform admin settings.",
                         5, "Closing", false, null)
+        );
+    }
+
+    /* -------------------------------------------------- coaching calendar (spec §7) */
+
+    private List<EmailTemplateField> coachingSessionBookedMember() {
+        return List.of(
+                new EmailTemplateField(
+                        "subject", "Subject line",
+                        "The line the founder sees in their inbox.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("memberName", "coachName", "sessionDate", "taskName"),
+                        "Your session with {{coachName}} is booked",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "heading", "Heading",
+                        "The large title shown at the top of the email body.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "Your session is booked",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "greeting", "Greeting",
+                        "First line addressing the founder. The name becomes bold automatically.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("memberName"),
+                        "Hello {{memberName}},",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "mainMessage", "Main message",
+                        "The paragraph confirming the booking.",
+                        EmailTemplateField.Kind.RICH_TEXT, 600,
+                        List.of("coachName", "taskName", "cohortName", "meetingUrl"),
+                        "Your 1:1 with {{coachName}} is confirmed. A calendar invite is attached \u2014 add it now so it does not get lost.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "cardHeading", "Session card heading",
+                        "Headline of the highlighted card holding the session details.",
+                        EmailTemplateField.Kind.RICH_TEXT, 120,
+                        List.of("taskName"),
+                        "{{taskName}}",
+                        3, "Session Card", false, null),
+                new EmailTemplateField(
+                        "cardSubline", "Session card helper line",
+                        "Short note under the details, e.g. what to bring.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 160,
+                        NO_VARS,
+                        "Come with the one question you most want answered.",
+                        3, "Session Card", false, null),
+                new EmailTemplateField(
+                        "ctaLabel", "Button label",
+                        "Text on the main action button.",
+                        EmailTemplateField.Kind.CTA_LABEL, 40,
+                        NO_VARS,
+                        "View your session",
+                        4, "Call to Action", false, null)
+        );
+    }
+
+    private List<EmailTemplateField> coachingSessionBookedCoach() {
+        return List.of(
+                new EmailTemplateField(
+                        "subject", "Subject line",
+                        "The line the coach sees in their inbox.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("coachName", "memberName", "sessionDate", "taskName"),
+                        "New booking: {{memberName}} on {{sessionDate}}",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "heading", "Heading",
+                        "The large title shown at the top of the email body.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "You have a new booking",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "greeting", "Greeting",
+                        "First line addressing the coach. The name becomes bold automatically.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("coachName"),
+                        "Hello {{coachName}},",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "mainMessage", "Main message",
+                        "The paragraph telling the coach who booked and where it came from.",
+                        EmailTemplateField.Kind.RICH_TEXT, 600,
+                        List.of("memberName", "cohortName", "taskName", "meetingUrl"),
+                        "{{memberName}} booked one of your slots from {{cohortName}}. A calendar invite is attached.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "cardHeading", "Session card heading",
+                        "Headline of the highlighted card holding the session details.",
+                        EmailTemplateField.Kind.RICH_TEXT, 120,
+                        List.of("memberName"),
+                        "1:1 with {{memberName}}",
+                        3, "Session Card", false, null),
+                new EmailTemplateField(
+                        "cardSubline", "Session card helper line",
+                        "Short note under the details.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 160,
+                        NO_VARS,
+                        "Mark it held or as a no-show afterwards so their journey stays accurate.",
+                        3, "Session Card", false, null),
+                new EmailTemplateField(
+                        "ctaLabel", "Button label",
+                        "Text on the main action button.",
+                        EmailTemplateField.Kind.CTA_LABEL, 40,
+                        NO_VARS,
+                        "Open your sessions",
+                        4, "Call to Action", false, null)
+        );
+    }
+
+    private List<EmailTemplateField> groupSessionScheduledMember() {
+        return List.of(
+                new EmailTemplateField(
+                        "subject", "Subject line",
+                        "The line each founder in the cohort sees in their inbox.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("memberName", "coachName", "sessionDate", "taskName", "cohortName"),
+                        "{{taskName}} is scheduled for {{cohortName}}",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "heading", "Heading",
+                        "The large title shown at the top of the email body.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "Your cohort session is scheduled",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "greeting", "Greeting",
+                        "First line addressing the founder. The name becomes bold automatically.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("memberName"),
+                        "Hello {{memberName}},",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "mainMessage", "Main message",
+                        "The paragraph explaining that the WHOLE cohort meets \u2014 there is nothing to book.",
+                        EmailTemplateField.Kind.RICH_TEXT, 600,
+                        List.of("coachName", "taskName", "cohortName"),
+                        "{{coachName}} has scheduled {{taskName}} for the whole of {{cohortName}} \u2014 everyone meets together, so there is nothing for you to book. A calendar invite is attached.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "cardHeading", "Session card heading",
+                        "Headline of the highlighted card holding the session details.",
+                        EmailTemplateField.Kind.RICH_TEXT, 120,
+                        List.of("taskName", "cohortName"),
+                        "{{taskName}}",
+                        3, "Session Card", false, null),
+                new EmailTemplateField(
+                        "cardSubline", "Session card helper line",
+                        "Short note under the details, e.g. how to prepare.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 160,
+                        NO_VARS,
+                        "Bring what you are working on \u2014 the room learns fastest from real problems.",
+                        3, "Session Card", false, null),
+                new EmailTemplateField(
+                        "ctaLabel", "Button label",
+                        "Text on the main action button.",
+                        EmailTemplateField.Kind.CTA_LABEL, 40,
+                        NO_VARS,
+                        "View the session",
+                        4, "Call to Action", false, null)
+        );
+    }
+
+    private List<EmailTemplateField> groupSessionScheduledCoach() {
+        return List.of(
+                new EmailTemplateField(
+                        "subject", "Subject line",
+                        "The line the coach sees in their inbox.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("coachName", "sessionDate", "taskName", "cohortName"),
+                        "You're running {{taskName}} for {{cohortName}}",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "heading", "Heading",
+                        "The large title shown at the top of the email body.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "Your cohort session is scheduled",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "greeting", "Greeting",
+                        "First line addressing the coach. The name becomes bold automatically.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("coachName"),
+                        "Hello {{coachName}},",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "mainMessage", "Main message",
+                        "The paragraph telling the coach what they are running and for whom.",
+                        EmailTemplateField.Kind.RICH_TEXT, 600,
+                        List.of("taskName", "cohortName", "attendeeCount"),
+                        "{{taskName}} is on the calendar for {{cohortName}}. Every founder in the cohort has been invited; a calendar invite is attached for you too.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "cardHeading", "Session card heading",
+                        "Headline of the highlighted card holding the session details.",
+                        EmailTemplateField.Kind.RICH_TEXT, 120,
+                        List.of("taskName", "cohortName"),
+                        "{{taskName}} \u00b7 {{cohortName}}",
+                        3, "Session Card", false, null),
+                new EmailTemplateField(
+                        "cardSubline", "Session card helper line",
+                        "Short note under the details.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 160,
+                        NO_VARS,
+                        "Take the roll call afterwards so everyone's journey stays accurate.",
+                        3, "Session Card", false, null),
+                new EmailTemplateField(
+                        "ctaLabel", "Button label",
+                        "Text on the main action button.",
+                        EmailTemplateField.Kind.CTA_LABEL, 40,
+                        NO_VARS,
+                        "Open your sessions",
+                        4, "Call to Action", false, null)
+        );
+    }
+
+    /**
+     * ONE template for every recipient of a move \u2014 the coach whose founder
+     * rebooked, and a whole cohort whose session shifted. What differs between
+     * them is {@code movedBy} and where {@code url} points, both of which the
+     * handler supplies; the copy is the same sentence either way.
+     */
+    private List<EmailTemplateField> sessionRescheduled() {
+        return List.of(
+                new EmailTemplateField(
+                        "subject", "Subject line",
+                        "The line the recipient sees in their inbox.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("recipientName", "movedBy", "sessionDate", "taskName", "cohortName"),
+                        "Moved: {{taskName}} is now {{sessionDate}}",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "heading", "Heading",
+                        "The large title shown at the top of the email body.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "Your session has moved",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "greeting", "Greeting",
+                        "First line addressing the recipient. The name becomes bold automatically.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("recipientName"),
+                        "Hello {{recipientName}},",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "mainMessage", "Main message",
+                        "The paragraph saying who moved it. The session itself did not change \u2014 only when it is.",
+                        EmailTemplateField.Kind.RICH_TEXT, 600,
+                        List.of("movedBy", "taskName", "cohortName"),
+                        "{{movedBy}} moved {{taskName}} to a new time. Nothing else changes, and the calendar invite attached replaces the old one.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "cardHeading", "Session card heading",
+                        "Headline of the card holding the old and the new time.",
+                        EmailTemplateField.Kind.RICH_TEXT, 120,
+                        List.of("taskName", "cohortName"),
+                        "{{taskName}}",
+                        3, "Session Card", false, null),
+                new EmailTemplateField(
+                        "cardSubline", "Session card helper line",
+                        "Short note under the details.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 160,
+                        NO_VARS,
+                        "Your calendar will update itself once you accept the new invite.",
+                        3, "Session Card", false, null),
+                new EmailTemplateField(
+                        "ctaLabel", "Button label",
+                        "Text on the main action button.",
+                        EmailTemplateField.Kind.CTA_LABEL, 40,
+                        NO_VARS,
+                        "View the session",
+                        4, "Call to Action", false, null)
+        );
+    }
+
+    private List<EmailTemplateField> coachingSessionCancelled() {
+        return List.of(
+                new EmailTemplateField(
+                        "subject", "Subject line",
+                        "The line the recipient sees in their inbox.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("recipientName", "otherPartyName", "sessionDate", "taskName"),
+                        "Cancelled: your session on {{sessionDate}}",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "heading", "Heading",
+                        "The large title shown at the top of the email body.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "Your session was cancelled",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "greeting", "Greeting",
+                        "First line addressing the recipient. The name becomes bold automatically.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("recipientName"),
+                        "Hello {{recipientName}},",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "mainMessage", "Main message",
+                        "The paragraph explaining what was cancelled and by whom.",
+                        EmailTemplateField.Kind.RICH_TEXT, 600,
+                        List.of("otherPartyName", "taskName"),
+                        "{{otherPartyName}} cancelled the session below. Nothing else on the journey changes \u2014 you can book another slot whenever suits.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "cardHeading", "Session card heading",
+                        "Headline of the card holding the cancelled session's details.",
+                        EmailTemplateField.Kind.RICH_TEXT, 120,
+                        List.of("taskName"),
+                        "{{taskName}}",
+                        3, "Session Card", false, null),
+                new EmailTemplateField(
+                        "ctaLabel", "Button label",
+                        "Text on the main action button.",
+                        EmailTemplateField.Kind.CTA_LABEL, 40,
+                        NO_VARS,
+                        "Book another slot",
+                        4, "Call to Action", false, null)
+        );
+    }
+
+    private List<EmailTemplateField> coachingSessionFeedback() {
+        return List.of(
+                new EmailTemplateField(
+                        "subject", "Subject line",
+                        "The line the founder sees in their inbox.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("memberName", "coachName", "taskName"),
+                        "How was your session with {{coachName}}?",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "heading", "Heading",
+                        "The large title shown at the top of the email body.",
+                        EmailTemplateField.Kind.PLAIN_TEXT, 120,
+                        NO_VARS,
+                        "Tell us how it went",
+                        1, "Basics", false, null),
+                new EmailTemplateField(
+                        "greeting", "Greeting",
+                        "First line addressing the founder. The name becomes bold automatically.",
+                        EmailTemplateField.Kind.RICH_TEXT, 160,
+                        List.of("memberName"),
+                        "Hello {{memberName}},",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "mainMessage", "Main message",
+                        "The paragraph asking for feedback. Say plainly that it is short.",
+                        EmailTemplateField.Kind.RICH_TEXT, 600,
+                        List.of("coachName", "taskName"),
+                        "Thanks for meeting {{coachName}}. A couple of quick questions help us make the next session better \u2014 it takes about two minutes.",
+                        2, "Main Content", false, null),
+                new EmailTemplateField(
+                        "ctaLabel", "Button label",
+                        "Text on the main action button.",
+                        EmailTemplateField.Kind.CTA_LABEL, 40,
+                        NO_VARS,
+                        "Share your feedback",
+                        4, "Call to Action", false, null)
         );
     }
 }

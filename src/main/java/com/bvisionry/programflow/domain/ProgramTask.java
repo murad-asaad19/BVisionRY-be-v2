@@ -11,6 +11,7 @@ import java.util.UUID;
 import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.Generated;
 
+import com.bvisionry.common.enums.SessionType;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
 import jakarta.persistence.CascadeType;
@@ -73,6 +74,29 @@ public class ProgramTask {
     @Enumerated(EnumType.STRING)
     @Column(name = "milestone_role", length = 20)
     private MilestoneRole milestoneRole;
+
+    /**
+     * SESSION only (sessions spec v2 §2): which of the three session shapes
+     * this task holds. Mirrored onto {@code sessions.type} when the row is
+     * materialised, so participation scoring keys the same category as a
+     * hand-entered session. Required for SESSION, refused for every other type
+     * ({@code ck_program_tasks_session_shape}).
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "session_type", length = 20)
+    private SessionType sessionType;
+
+    /** SESSION only (spec §3.1): how long a scheduled slot lasts, 15–240. */
+    @Column(name = "duration_minutes")
+    private Integer durationMinutes;
+
+    /**
+     * SESSION only: the survey offered to the member once the session is
+     * held and they are marked present. A bare uuid into the survey slice, like
+     * {@code pipelines.post_completion_survey_id}. Null = no follow-up survey.
+     */
+    @Column(name = "post_session_survey_id")
+    private UUID postSessionSurveyId;
 
     @Column(name = "due_date")
     private LocalDate dueDate;

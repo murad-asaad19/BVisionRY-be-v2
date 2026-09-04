@@ -223,6 +223,7 @@ public class CohortService {
             events.publishEvent(new ProgramFlowEvents.CohortEnrolled(
                     c.getName(), List.copyOf(c.getMemberIds())));
         }
+        sessionsChanged(cohortId);
         return CohortDto.of(c);
     }
 
@@ -303,6 +304,7 @@ public class CohortService {
         audit.log(currentUser.require().userId(), req.orgId(), ACTION_ORG_ASSIGNED,
                 ENTITY_COHORT, c.getId(), Map.of("name", c.getName()));
         notifyEnrolled(c, enrolled);
+        sessionsChanged(cohortId);
         return CohortDto.of(c);
     }
 
@@ -328,6 +330,7 @@ public class CohortService {
         c.getMemberIds().removeAll(orgMemberIds(orgId));
         audit.log(currentUser.require().userId(), orgId, ACTION_ORG_UNASSIGNED,
                 ENTITY_COHORT, c.getId(), Map.of("name", c.getName()));
+        sessionsChanged(cohortId);
         return CohortDto.of(c);
     }
 
@@ -367,6 +370,7 @@ public class CohortService {
             }
             if (c.getMemberIds().add(userId)) {
                 notifyEnrolled(c, List.of(userId));
+                sessionsChanged(c.getId());
             }
         }
     }
@@ -391,6 +395,7 @@ public class CohortService {
         roster.addAll(req.memberIds());
         c.setMemberIds(roster);
         notifyEnrolled(c, added);
+        sessionsChanged(cohortId);
         return orgScoped(c, mine);
     }
 
@@ -420,6 +425,17 @@ public class CohortService {
         if (!added.isEmpty() && c.getStatus() == CohortStatus.LAUNCHED) {
             events.publishEvent(new ProgramFlowEvents.CohortEnrolled(c.getName(), added));
         }
+    }
+
+    /**
+     * The cohort's SESSION-task rows need re-materialising (sessions spec v2
+     * §4): launch or any roster change adds or removes the per-member 1:1 rows.
+     * Published in-transaction; the coaching slice's handler is AFTER_COMMIT, so
+     * it never sees a roster the transaction went on to roll back. Fires for
+     * DRAFT cohorts too — harmless, the rows only reach members once LAUNCHED.
+     */
+    private void sessionsChanged(UUID cohortId) {
+        events.publishEvent(new ProgramFlowEvents.CohortSessionsChanged(cohortId));
     }
 
     private Set<UUID> orgMemberIds(UUID orgId) {

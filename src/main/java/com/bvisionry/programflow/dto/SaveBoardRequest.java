@@ -5,6 +5,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
+import com.bvisionry.common.enums.SessionType;
 import com.bvisionry.programflow.domain.AudienceMode;
 import com.bvisionry.programflow.domain.MilestoneRole;
 import com.bvisionry.programflow.domain.ModuleLockMode;
@@ -66,6 +67,12 @@ public record SaveBoardRequest(
             @NotNull ProgramTaskType taskType,
             UUID refId,
             MilestoneRole milestoneRole,
+            /** SESSION only (spec §3.1): 1:1 / group coaching / workshop. */
+            SessionType sessionType,
+            /** SESSION only (spec §3.1): slot length, 15–240 minutes. */
+            Integer durationMinutes,
+            /** SESSION only: the optional post-session survey. */
+            UUID postSessionSurveyId,
             /**
              * The cohort's mapped DISTANCE pillar ids this task grows (spec §1).
              * Optional, and refused on an ASSESSMENT task — a pipeline
@@ -76,6 +83,14 @@ public record SaveBoardRequest(
 
         public TaskUpsert {
             pillarIds = pillarIds == null ? List.of() : pillarIds;
+        }
+
+        /** A task of any type but SESSION — no subtype, no length, no follow-up survey. */
+        public TaskUpsert(UUID id, String name, LocalDate dueDate, ProgramTaskStatus status,
+                boolean aiDraft, ProgramTaskType taskType, UUID refId, MilestoneRole milestoneRole,
+                List<UUID> pillarIds, List<FieldUpsert> fields) {
+            this(id, name, dueDate, status, aiDraft, taskType, refId, milestoneRole,
+                    null, null, null, pillarIds, fields);
         }
     }
 }

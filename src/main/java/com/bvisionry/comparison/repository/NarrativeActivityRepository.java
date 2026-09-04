@@ -136,6 +136,14 @@ public class NarrativeActivityRepository {
                             WHEN 'SURVEY' THEN (SELECT max(csr.submitted_at) FROM survey_responses csr
                                                 WHERE csr.program_task_id = t.id
                                                   AND csr.respondent_user_id = :userId)
+                            -- The row that applies to this member — their own
+                            -- 1:1 booking or the cohort-wide one — mirroring
+                            -- DONE_FOR_USER's SESSION arm.
+                            WHEN 'SESSION' THEN (SELECT max(cse.completed_at) FROM sessions cse
+                                                 WHERE cse.program_task_id = t.id
+                                                   AND cse.booking_status = 'COMPLETED'
+                                                   AND (cse.member_id = :userId
+                                                        OR cse.member_id IS NULL))
                         END) AS completed_at
                 FROM program_task_pillars ptp
                 JOIN program_tasks t ON t.id = ptp.task_id

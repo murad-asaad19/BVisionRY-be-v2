@@ -12,6 +12,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import com.bvisionry.common.enums.SessionType;
 import com.bvisionry.programflow.domain.AudienceMode;
 import com.bvisionry.programflow.domain.FieldType;
 import com.bvisionry.programflow.domain.ModuleLockMode;
@@ -270,6 +271,60 @@ class ProgramRulesTest {
                     MilestoneRole.DISTANCE, ProgramTaskStatus.LIVE, 0)).isEmpty();
             assertThat(ProgramRules.taskTypeFieldErrors(ProgramTaskType.SURVEY, ref,
                     MilestoneRole.CHECKIN, ProgramTaskStatus.DRAFT, 0)).containsKey("milestoneRole");
+        }
+
+        @Test
+        void sessionCarriesItsOwnConfig_subtypeAlways_durationToGoLive() {
+            var live = ProgramTaskStatus.LIVE;
+            var draft = ProgramTaskStatus.DRAFT;
+            var type = ProgramTaskType.SESSION;
+            var oneOnOne = SessionType.COACHING_1ON1;
+            assertThat(ProgramRules.taskTypeFieldErrors(type, null, null, live, 0, oneOnOne, 45, ref))
+                    .isEmpty();
+            assertThat(ProgramRules.taskTypeFieldErrors(type, null, null, draft, 0,
+                    SessionType.WORKSHOP, null, null)).isEmpty();
+            // The subtype decides who schedules the row — required even in DRAFT.
+            assertThat(ProgramRules.taskTypeFieldErrors(type, null, null, draft, 0, null, 45, null))
+                    .containsKey("sessionType");
+            assertThat(ProgramRules.taskTypeFieldErrors(type, null, null, live, 0, oneOnOne, null, null))
+                    .containsKey("durationMinutes");
+            assertThat(ProgramRules.taskTypeFieldErrors(type, null, null, draft, 0, oneOnOne, 5, null))
+                    .containsKey("durationMinutes");
+            assertThat(ProgramRules.taskTypeFieldErrors(type, ref, null, draft, 0, oneOnOne, 45, null))
+                    .containsKey("refId");
+            assertThat(ProgramRules.taskTypeFieldErrors(type, null, MilestoneRole.BASELINE, draft, 0,
+                    oneOnOne, 45, null)).containsKey("milestoneRole");
+            assertThat(ProgramRules.taskTypeFieldErrors(type, null, null, draft, 2, oneOnOne, 45, null))
+                    .containsKey("fields");
+            // …and no other type may carry the session config.
+            assertThat(ProgramRules.taskTypeFieldErrors(ProgramTaskType.SURVEY, ref, null, draft, 0,
+                    null, 45, null)).containsKey("durationMinutes");
+            assertThat(ProgramRules.taskTypeFieldErrors(ProgramTaskType.SURVEY, ref, null, draft, 0,
+                    oneOnOne, null, null)).containsKey("sessionType");
+        }
+    }
+
+    @Nested
+    class SessionState {
+
+        /** Sessions spec v2 §3: attendance, not the status alone, decides DONE. */
+        @Test
+        void mapsTheRowAndAttendanceToTheUnifiedVocabulary() {
+            assertThat(ProgramRules.sessionState(null, false)).isEqualTo(JourneyTaskState.NOT_STARTED);
+            assertThat(ProgramRules.sessionState("UNSCHEDULED", false))
+                    .isEqualTo(JourneyTaskState.NOT_STARTED);
+            assertThat(ProgramRules.sessionState("SCHEDULED", false))
+                    .isEqualTo(JourneyTaskState.IN_PROGRESS);
+            assertThat(ProgramRules.sessionState("COMPLETED", true)).isEqualTo(JourneyTaskState.DONE);
+            assertThat(ProgramRules.sessionState("COMPLETED", false))
+                    .isEqualTo(JourneyTaskState.NOT_SUBMITTED);
+        }
+
+        @Test
+        void neverGates_attendanceCompletesIt() {
+            var t = new com.bvisionry.programflow.domain.ProgramTask();
+            t.setTaskType(ProgramTaskType.SESSION);
+            assertThat(ProgramRules.gates(t, java.util.Set.of())).isFalse();
         }
     }
 

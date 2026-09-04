@@ -23,6 +23,7 @@ import com.bvisionry.common.exception.BadRequestException;
 import com.bvisionry.common.exception.IllegalOperationException;
 import com.bvisionry.organization.OrganizationRepository;
 import com.bvisionry.organization.entity.Organization;
+import com.bvisionry.common.enums.SessionType;
 import com.bvisionry.programflow.domain.AudienceMode;
 import com.bvisionry.programflow.domain.FieldType;
 import com.bvisionry.programflow.domain.MilestoneRole;
@@ -143,6 +144,68 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
         work.setTaskId(taskId);
         work.setUserId(member.getId());
         submissions.saveAndFlush(work);
+    }
+
+    /* --------------------------------------------------- session tasks (v2) */
+
+    /**
+     * Sessions spec v2 §3.1: a SESSION task carries its subtype and length on
+     * the row — the board save round-trips both, and retyping the card clears
+     * them rather than stranding a session kind on a lesson.
+     */
+    @Test
+    void save_roundTripsSessionConfig_andClearsItOnRetype() {
+        BoardResponse before = adminService.getBoard(cohortId);
+        ModuleDto existing = before.modules().get(0);
+        UUID sessionTaskId = UUID.randomUUID();
+
+        adminService.saveBoard(cohortId, new SaveBoardRequest(before.version(), true, List.of(
+                module(existing.id(), existing.name(), List.of(
+                        new TaskUpsert(sessionTaskId, "Group coaching", null,
+                                ProgramTaskStatus.LIVE, false, ProgramTaskType.SESSION, null, null,
+                                SessionType.COACHING_GROUP, 60, null, List.of(), List.of()))))));
+
+        TaskDto saved = taskOf(board(), sessionTaskId);
+        assertThat(saved.taskType()).isEqualTo(ProgramTaskType.SESSION);
+        assertThat(saved.sessionType()).isEqualTo(SessionType.COACHING_GROUP);
+        assertThat(saved.durationMinutes()).isEqualTo(60);
+
+        // Retyped to a LESSON, the session config goes with it.
+        BoardResponse now = board();
+        adminService.saveBoard(cohortId, new SaveBoardRequest(now.version(), true, List.of(
+                module(existing.id(), existing.name(), List.of(
+                        task(sessionTaskId, "Now a lesson", ProgramTaskStatus.DRAFT))))));
+        TaskDto retyped = taskOf(board(), sessionTaskId);
+        assertThat(retyped.taskType()).isEqualTo(ProgramTaskType.LESSON);
+        assertThat(retyped.sessionType()).isNull();
+        assertThat(retyped.durationMinutes()).isNull();
+
+        // …and a payload that still carries it on a non-session type is refused
+        // outright rather than silently stripped.
+        BoardResponse after = board();
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId,
+                new SaveBoardRequest(after.version(), true, List.of(
+                        module(existing.id(), existing.name(), List.of(
+                                new TaskUpsert(sessionTaskId, "Still a lesson", null,
+                                        ProgramTaskStatus.DRAFT, false, ProgramTaskType.LESSON,
+                                        null, null, SessionType.WORKSHOP, null, null,
+                                        List.of(), List.of())))))))
+                .hasMessageContaining("Only session tasks carry a session kind");
+    }
+
+    /** A SESSION task with no subtype is refused — it decides who schedules the row. */
+    @Test
+    void save_refusesASessionTaskWithoutItsSubtype() {
+        BoardResponse before = adminService.getBoard(cohortId);
+        ModuleDto existing = before.modules().get(0);
+
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId,
+                new SaveBoardRequest(before.version(), true, List.of(
+                        module(existing.id(), existing.name(), List.of(
+                                new TaskUpsert(UUID.randomUUID(), "Session", null,
+                                        ProgramTaskStatus.DRAFT, false, ProgramTaskType.SESSION,
+                                        null, null, null, 45, null, List.of(), List.of())))))))
+                .hasMessageContaining("Pick the kind of session this task holds");
     }
 
     /* ---------------------------------------------------------- the one write */
@@ -323,6 +386,93 @@ class ProgramBoardSaveIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(submissions.findByTaskIdIn(List.of(keptTaskId)))
                 .as("a forced retype keeps the rows; it is the MEANING that reverts")
                 .hasSize(1);
+    }
+
+    /**
+     * A booking is member work too (sessions spec v2 §2): dropping a SESSION
+     * task a founder has a DATED session against takes the 409 like any
+     * submission would. The UNSCHEDULED row the platform materialises is NOT
+     * work — counting it would make every session task undeletable the moment
+     * the cohort reached it.
+     */
+    @Test
+    void save_refusesToDropASessionTaskWithADatedSession_butNotAnUnscheduledOne() {
+        BoardResponse before = adminService.getBoard(cohortId);
+        ModuleDto existing = before.modules().get(0);
+        UUID bookedTaskId = UUID.randomUUID();
+        UUID untouchedTaskId = UUID.randomUUID();
+        adminService.saveBoard(cohortId, new SaveBoardRequest(before.version(), false, List.of(
+                module(existing.id(), existing.name(), List.of(
+                        sessionTask(bookedTaskId, "Booked 1:1"),
+                        sessionTask(untouchedTaskId, "Nobody booked this"))))));
+        insertSession(bookedTaskId, true);
+        insertSession(untouchedTaskId, false);
+
+        BoardResponse now = board();
+        List<ModuleUpsert> withoutSessions =
+                List.of(module(existing.id(), existing.name(), List.of()));
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId,
+                new SaveBoardRequest(now.version(), false, withoutSessions)))
+                .isInstanceOf(IllegalOperationException.class)
+                .hasMessageContaining("Booked 1:1")
+                .as("an UNSCHEDULED row is not work — it must not be named")
+                .hasMessageNotContaining("Nobody booked this");
+
+        adminService.saveBoard(cohortId,
+                new SaveBoardRequest(now.version(), true, withoutSessions));
+        assertThat(board().modules().get(0).tasks()).isEmpty();
+    }
+
+    /**
+     * Changing a SESSION task's SUBTYPE re-homes its rows the way a retype
+     * re-homes a submission — 1:1 bookings mean nothing on a cohort-wide
+     * workshop — so it takes the same 409 even though {@code task_type} is
+     * unchanged.
+     */
+    @Test
+    void save_refusesToRetypeASessionsSubtypeWithABooking_untilForced() {
+        BoardResponse before = adminService.getBoard(cohortId);
+        ModuleDto existing = before.modules().get(0);
+        UUID sessionTaskId = UUID.randomUUID();
+        adminService.saveBoard(cohortId, new SaveBoardRequest(before.version(), false, List.of(
+                module(existing.id(), existing.name(),
+                        List.of(sessionTask(sessionTaskId, "Booked 1:1"))))));
+        insertSession(sessionTaskId, true);
+
+        BoardResponse now = board();
+        List<ModuleUpsert> asWorkshop = List.of(module(existing.id(), existing.name(), List.of(
+                new TaskUpsert(sessionTaskId, "Booked 1:1", null, ProgramTaskStatus.LIVE, false,
+                        ProgramTaskType.SESSION, null, null, SessionType.WORKSHOP, 60, null,
+                        List.of(), List.of()))));
+        assertThatThrownBy(() -> adminService.saveBoard(cohortId,
+                new SaveBoardRequest(now.version(), false, asWorkshop)))
+                .isInstanceOf(IllegalOperationException.class)
+                .hasMessageContaining("Booked 1:1")
+                .hasMessageContaining("Save anyway");
+        assertThat(taskOf(board(), sessionTaskId).sessionType())
+                .as("the refusal changed nothing").isEqualTo(SessionType.COACHING_1ON1);
+
+        adminService.saveBoard(cohortId, new SaveBoardRequest(now.version(), true, asWorkshop));
+        assertThat(taskOf(board(), sessionTaskId).sessionType()).isEqualTo(SessionType.WORKSHOP);
+    }
+
+    private static TaskUpsert sessionTask(UUID id, String name) {
+        return new TaskUpsert(id, name, null, ProgramTaskStatus.LIVE, false,
+                ProgramTaskType.SESSION, null, null, SessionType.COACHING_1ON1, 60, null,
+                List.of(), List.of());
+    }
+
+    /** A session row against a task, as the coaching slice materialises (and dates) it. */
+    private void insertSession(UUID taskId, boolean dated) {
+        jdbc.update("""
+                INSERT INTO sessions (cohort_id, type, title, program_task_id, member_id,
+                                      session_date, ends_at, booking_status)
+                SELECT ?, 'COACHING_1ON1', 'Coaching 1:1', ?, ?,
+                       CASE WHEN x.dated THEN now() END,
+                       CASE WHEN x.dated THEN now() + interval '1 hour' END,
+                       CASE WHEN x.dated THEN 'SCHEDULED' ELSE 'UNSCHEDULED' END
+                  FROM (SELECT ?::boolean AS dated) x
+                """, cohortId, taskId, member.getId(), dated);
     }
 
     /* -------------------------------------------------------- spine validation */

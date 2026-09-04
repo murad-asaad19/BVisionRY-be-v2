@@ -7,6 +7,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
+import com.bvisionry.common.enums.SessionType;
 import com.bvisionry.programflow.domain.MilestoneRole;
 import com.bvisionry.programflow.domain.ProgramTaskType;
 import com.bvisionry.programflow.domain.SubmissionStatus;
@@ -83,7 +84,18 @@ public record JourneyResponse(
              * "no longer available" state, opening it is refused, and it gates
              * nothing — progress and any certificate are untouched.
              */
-            boolean unavailable) {
+            boolean unavailable,
+            /** SESSION only: 1:1 / group / workshop — drives the row's icon and verbs; null otherwise. */
+            SessionType sessionType,
+            /** SESSION only: the scheduled start while SCHEDULED; null otherwise. */
+            Instant scheduledAt,
+            /**
+             * SESSION only (spec §3): the session was held with this member
+             * present, the task names a follow-up survey, and they have not
+             * answered it yet — the row offers "Give feedback". False for every
+             * other type.
+             */
+            boolean feedbackPending) {
     }
 
     public enum LockState {

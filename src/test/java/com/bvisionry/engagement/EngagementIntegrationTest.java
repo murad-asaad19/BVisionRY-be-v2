@@ -36,6 +36,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
@@ -449,6 +451,42 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
         }
 
         /**
+         * A session is HELD when it has ENDED, not when it has started. A
+         * workshop running right now would otherwise land in the member's
+         * denominator as an absence for the length of the session — until the
+         * auto-complete job catches up.
+         */
+        @Test
+        void aSessionStillInProgressIsNotYetHeld() throws Exception {
+            TestAuthentication.authenticate(superAdmin);
+            UUID inProgress = UUID.randomUUID();
+            // Task-backed and SCHEDULED: the only shape V216 lets carry an
+            // ends_at, and the only one that can be mid-session at all.
+            jdbc.update("""
+                    INSERT INTO sessions (id, cohort_id, type, title, session_date, ends_at,
+                                          program_task_id, coach_id, booking_status, created_by)
+                    VALUES (?, ?, 'WORKSHOP', 'Running right now', now() - interval '10 minutes',
+                            now() + interval '50 minutes', ?, ?, 'SCHEDULED', ?)
+                    """, inProgress, cohort1, UUID.randomUUID(), admin.getId(), admin.getId());
+
+            mockMvc.perform(get(engagementUrl(founder)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.cohorts[0].participation.categories[1].key",
+                            is("workshops")))
+                    .andExpect(jsonPath("$.cohorts[0].participation.categories[1].total", is(0)))
+                    .andExpect(jsonPath("$.cohorts[0].sessions", hasSize(0)));
+
+            // Once it has ended it counts — as a miss, since nobody was marked.
+            jdbc.update("UPDATE sessions SET ends_at = now() - interval '1 minute' WHERE id = ?",
+                    inProgress);
+            mockMvc.perform(get(engagementUrl(founder)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.cohorts[0].participation.categories[1].total", is(1)))
+                    .andExpect(jsonPath("$.cohorts[0].participation.categories[1].done", is(0)))
+                    .andExpect(jsonPath("$.cohorts[0].sessions", hasSize(1)));
+        }
+
+        /**
          * V207: pillar tags round-trip on the upsert, and only the cohort's
          * fully-mapped distance pillars are taggable — the board task save's
          * rule, restated here.
@@ -478,6 +516,138 @@ class EngagementIntegrationTest extends AbstractPostgresIntegrationTest {
                                      "pillarIds":["%s"]}
                                     """.formatted(UUID.randomUUID())))
                     .andExpect(status().isBadRequest());
+        }
+
+        /**
+         * Sessions spec v2 §6.4: a task-backed row IS a session row, so the tab
+         * lists it (with its coach, status and Meet link) but never edits or
+         * deletes it — the coach manages it from their own console.
+         */
+        @Test
+        void aTaskBackedSessionIsListedButReadOnly() throws Exception {
+            TestAuthentication.authenticate(superAdmin);
+            UUID memberId = jdbc.queryForObject(
+                    "SELECT user_id FROM cohort_members WHERE cohort_id = ? LIMIT 1",
+                    UUID.class, cohort1);
+            UUID taskId = UUID.randomUUID();
+            UUID bookingId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO sessions (id, cohort_id, type, title, session_date, ends_at,
+                                          program_task_id, member_id, coach_id, booking_status,
+                                          meeting_url)
+                    VALUES (?, ?, 'COACHING_1ON1', 'Coaching 1:1', now() + interval '2 days',
+                            now() + interval '2 days 45 minutes', ?, ?, ?, 'SCHEDULED',
+                            'https://meet.google.com/abc-defg-hij')
+                    """, bookingId, cohort1, taskId, memberId, admin.getId());
+            jdbc.update("INSERT INTO session_expected_attendees (session_id, member_id) VALUES (?, ?)",
+                    bookingId, memberId);
+
+            mockMvc.perform(get(sessionsUrl(cohort1)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.sessions[?(@.id == '%s')].bookingStatus"
+                            .formatted(bookingId), contains("SCHEDULED")))
+                    .andExpect(jsonPath("$.sessions[?(@.id == '%s')].coachName"
+                            .formatted(bookingId), contains(admin.getName())))
+                    .andExpect(jsonPath("$.sessions[?(@.id == '%s')].memberId"
+                            .formatted(bookingId), contains(memberId.toString())))
+                    .andExpect(jsonPath("$.sessions[?(@.id == '%s')].programTaskId"
+                            .formatted(bookingId), contains(taskId.toString())))
+                    .andExpect(jsonPath("$.sessions[?(@.id == '%s')].meetingUrl"
+                            .formatted(bookingId), contains("https://meet.google.com/abc-defg-hij")));
+
+            mockMvc.perform(put(sessionsUrl(cohort1) + "/" + bookingId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"type":"COACHING_1ON1","sessionDate":"2026-08-01T15:00:00Z"}
+                                    """))
+                    .andExpect(status().isConflict());
+            mockMvc.perform(delete(sessionsUrl(cohort1) + "/" + bookingId))
+                    .andExpect(status().isConflict());
+            // Roll call on a booking stays the coach's too: it decides whether
+            // the task is done and whether the follow-up survey opens, so the
+            // org tab must not be a second door into it.
+            mockMvc.perform(put(sessionsUrl(cohort1) + "/" + bookingId + "/attendance/" + memberId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"present\":true}"))
+                    .andExpect(status().isConflict());
+            assertThat(jdbc.queryForObject(
+                    "SELECT count(*) FROM session_attendance WHERE session_id = ?",
+                    Integer.class, bookingId)).isZero();
+        }
+
+        /**
+         * Sessions spec v2 §2/§6.4: a task-backed row exists before anyone
+         * dates it. It lists with a null date, sorts BELOW the dated ones
+         * (a plain {@code ORDER BY session_date DESC} would put those NULLs
+         * on top), and stays read-only like every other task-backed row.
+         */
+        /**
+         * Sessions spec v2 §2: a 1:1 row is ABOUT one founder. On a cohort two
+         * orgs share, the org that does not have that founder must not see the
+         * row at all — not even as an anonymous "0 of 1 attended" line the UI
+         * could mistake for a cohort-wide session. Cohort-wide rows stay shared.
+         */
+        @Test
+        void anotherOrgsOneOnOneRowIsInvisibleHere() throws Exception {
+            UUID shared = insertCohort(orgA.getId(), "Shared Cohort", founder.getId());
+            User founderB = saveUser("founder.b2@test.invalid", UserRole.MEMBER, orgB);
+            jdbc.update("INSERT INTO cohort_orgs (cohort_id, org_id) VALUES (?, ?)",
+                    shared, orgB.getId());
+            jdbc.update("INSERT INTO cohort_members (cohort_id, user_id) VALUES (?, ?)",
+                    shared, founderB.getId());
+            UUID taskId = UUID.randomUUID();
+            UUID oneOnOneB = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO sessions (id, cohort_id, type, title, program_task_id, member_id,
+                                          booking_status)
+                    VALUES (?, ?, 'COACHING_1ON1', 'Coaching 1:1', ?, ?, 'UNSCHEDULED')
+                    """, oneOnOneB, shared, taskId, founderB.getId());
+            UUID groupRow = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO sessions (id, cohort_id, type, title, program_task_id,
+                                          booking_status)
+                    VALUES (?, ?, 'COACHING_GROUP', 'Group coaching', ?, 'UNSCHEDULED')
+                    """, groupRow, shared, UUID.randomUUID());
+
+            TestAuthentication.authenticate(admin);
+            mockMvc.perform(get(sessionsUrl(shared)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.sessions[?(@.id == '%s')]".formatted(oneOnOneB), empty()))
+                    .andExpect(jsonPath("$.sessions[?(@.id == '%s')]".formatted(groupRow), hasSize(1)));
+
+            TestAuthentication.authenticate(adminB);
+            mockMvc.perform(get(sessionsUrl(orgB.getId(), shared)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.sessions[?(@.id == '%s')].memberId".formatted(oneOnOneB),
+                            contains(founderB.getId().toString())));
+        }
+
+        @Test
+        void anUnscheduledSessionListsUndatedAndLast() throws Exception {
+            TestAuthentication.authenticate(superAdmin);
+            UUID unscheduledId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO sessions (id, cohort_id, type, title, program_task_id,
+                                          booking_status)
+                    VALUES (?, ?, 'COACHING_GROUP', 'Group coaching', ?, 'UNSCHEDULED')
+                    """, unscheduledId, cohort1, UUID.randomUUID());
+            UUID datedId = UUID.randomUUID();
+            jdbc.update("""
+                    INSERT INTO sessions (id, cohort_id, type, title, session_date)
+                    VALUES (?, ?, 'WORKSHOP', 'Dated workshop', now() - interval '1 day')
+                    """, datedId, cohort1);
+
+            mockMvc.perform(get(sessionsUrl(cohort1)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.sessions[?(@.id == '%s')].sessionDate"
+                            .formatted(unscheduledId), contains(nullValue())))
+                    .andExpect(jsonPath("$.sessions[?(@.id == '%s')].bookingStatus"
+                            .formatted(unscheduledId), contains("UNSCHEDULED")))
+                    // …and it is the LAST row, below every dated session.
+                    .andExpect(jsonPath("$.sessions[-1:].id", contains(unscheduledId.toString())));
+
+            mockMvc.perform(delete(sessionsUrl(cohort1) + "/" + unscheduledId))
+                    .andExpect(status().isConflict());
         }
 
         @Test

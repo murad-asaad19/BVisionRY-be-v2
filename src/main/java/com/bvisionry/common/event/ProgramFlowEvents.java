@@ -32,6 +32,14 @@ public final class ProgramFlowEvents {
     public record CohortEnrolled(String cohortName, List<UUID> userIds) {
     }
 
+    /**
+     * The cohort's roster or board changed in a way that can add or remove
+     * SESSION-task rows (sessions spec v2 §4): launch, any enrolment change,
+     * a board save. {@code coaching} re-materialises the cohort's session rows.
+     */
+    public record CohortSessionsChanged(UUID cohortId) {
+    }
+
     /** A module's audience now includes these enrolled learners (admin assignment). */
     public record ModuleAssigned(String moduleName, String cohortName, List<UUID> userIds) {
     }

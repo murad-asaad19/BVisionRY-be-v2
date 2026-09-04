@@ -1,4 +1,4 @@
-package com.bvisionry.engagement.domain;
+package com.bvisionry.common.enums;
 
 /**
  * The three session types (spec §4), each keyed to the participation-config

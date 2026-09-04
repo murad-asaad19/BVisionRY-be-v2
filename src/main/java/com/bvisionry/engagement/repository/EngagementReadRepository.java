@@ -192,7 +192,16 @@ public class EngagementReadRepository {
                         WHERE sea.session_id = s.id AND sea.member_id = :memberId))""";
 
     /**
-     * Held sessions (session_date in the past) per type in the cohort where
+     * The session has actually been HELD — it ENDED, not merely started. A
+     * SCHEDULED session still in progress otherwise counts as one the member
+     * missed until the auto-complete job runs. {@code ends_at} is null on rows
+     * that predate it (and on undated ones, where the start is null too and
+     * neither side is held).
+     */
+    private static final String SESSION_IS_HELD = "coalesce(s.ends_at, s.session_date) <= now()";
+
+    /**
+     * Held sessions (ended, not merely started) per type in the cohort where
      * this member was expected, with how many they attended. Future sessions
      * are excluded from the denominator by design.
      */
@@ -202,10 +211,10 @@ public class EngagementReadRepository {
                 FROM sessions s
                 LEFT JOIN session_attendance sa ON sa.session_id = s.id
                                                AND sa.member_id = :memberId
-                WHERE s.cohort_id = :cohortId AND s.session_date <= now()
+                WHERE s.cohort_id = :cohortId AND %s
                   AND %s
                 GROUP BY s.type
-                """.formatted(MEMBER_IS_EXPECTED),
+                """.formatted(SESSION_IS_HELD, MEMBER_IS_EXPECTED),
                 new MapSqlParameterSource("cohortId", cohortId).addValue("memberId", memberId),
                 (rs, i) -> new SessionTypeCounts(rs.getString("type"), rs.getInt("held"),
                         rs.getInt("attended")));
@@ -221,10 +230,10 @@ public class EngagementReadRepository {
                 FROM sessions s
                 LEFT JOIN session_attendance sa ON sa.session_id = s.id
                                                AND sa.member_id = :memberId
-                WHERE s.cohort_id = :cohortId AND s.session_date <= now()
+                WHERE s.cohort_id = :cohortId AND %s
                   AND %s
                 ORDER BY s.session_date DESC
-                """.formatted(MEMBER_IS_EXPECTED),
+                """.formatted(SESSION_IS_HELD, MEMBER_IS_EXPECTED),
                 new MapSqlParameterSource("cohortId", cohortId).addValue("memberId", memberId),
                 (rs, i) -> new HistoryRow(rs.getObject("id", UUID.class), rs.getString("type"),
                         rs.getString("title"), instant(rs, "session_date"),
@@ -260,6 +269,10 @@ public class EngagementReadRepository {
                 LEFT JOIN session_attendance sa ON sa.session_id = s.id
                                                AND sa.member_id = :memberId
                 WHERE c.status <> 'DRAFT'
+                  -- A task-backed row nobody has scheduled yet (v2 spec §2) is
+                  -- not a session on anyone's calendar: the journey row is where
+                  -- the member books or waits for it.
+                  AND s.session_date IS NOT NULL
                   AND %s
                 ORDER BY s.session_date DESC
                 """.formatted(MEMBER_IS_EXPECTED),

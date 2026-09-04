@@ -147,6 +147,16 @@ public final class TaskCompletion {
                     SELECT 1 FROM survey_responses dsr
                     WHERE dsr.program_task_id = t.id
                       AND dsr.respondent_user_id = %1$s)
+                -- Sessions spec v2 §3: the row that applies to this member —
+                -- their own 1:1 row or the cohort-wide one — was held AND they
+                -- have a presence row. Held-but-absent reads "Missed", not done.
+                WHEN 'SESSION' THEN EXISTS (
+                    SELECT 1 FROM sessions dcs
+                    JOIN session_attendance dsa ON dsa.session_id = dcs.id
+                                               AND dsa.member_id = %1$s
+                    WHERE dcs.program_task_id = t.id
+                      AND dcs.booking_status = 'COMPLETED'
+                      AND (dcs.member_id = %1$s OR dcs.member_id IS NULL))
             END)""";
 
     /**
@@ -160,19 +170,21 @@ public final class TaskCompletion {
      * of a fraction: apply this next to {@link #DONE_FOR_USER} wherever a
      * done/total pair is computed. A user with no organization is never gated,
      * matching {@code CourseVisibilityAccess.isVisibleToUser}. The Java rule's
-     * other arm — a task type not completable in-app — has no SQL twin because
-     * every current type is completable ({@code ProgramTaskType}).
+     * other arm — a task type not completable in-app — is SESSION
+     * ({@code ProgramTaskType.completableInApp}): attendance completes it, not
+     * the member, so it counts in neither side of any fraction (spec §1.6).
      *
      * <p>The inner course alias must be {@code c} (VISIBLE_TO_ORG's contract);
      * it deliberately shadows any composing query's own {@code c} inside the
      * EXISTS only.
      */
     public static final String COUNTS_FOR_USER = """
-            (t.task_type <> 'COURSE'
-             OR t.ref_id IS NULL
-             OR EXISTS (
-                SELECT 1 FROM users dgu, course c
-                WHERE dgu.id = %%1$s AND c.id = t.ref_id
-                  AND (dgu.organization_id IS NULL OR %s)))"""
+            (t.task_type <> 'SESSION'
+             AND (t.task_type <> 'COURSE'
+                  OR t.ref_id IS NULL
+                  OR EXISTS (
+                     SELECT 1 FROM users dgu, course c
+                     WHERE dgu.id = %%1$s AND c.id = t.ref_id
+                       AND (dgu.organization_id IS NULL OR %s))))"""
             .formatted(CourseVisibilityAccess.VISIBLE_TO_ORG.formatted("dgu.organization_id"));
 }

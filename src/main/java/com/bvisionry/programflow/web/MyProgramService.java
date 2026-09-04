@@ -205,7 +205,7 @@ public class MyProgramService {
                     ProgramRules.lessonState(sub == null ? null : sub.getStatus()),
                     null, null, null,
                     sub == null || sub.getSubmittedAt() == null ? null : sub.getSubmittedAt().toInstant(),
-                    null, false);
+                    null, false, null, null, false);
         }
         TypedState ts = ctx.typedStates().getOrDefault(t.getId(), TypedState.NOT_STARTED);
         return new JourneyTask(t.getId(), t.getName(), t.getDueDate(), 0, 0, null,
@@ -214,7 +214,16 @@ public class MyProgramService {
                 t.getTaskType() == ProgramTaskType.ASSESSMENT ? previousMilestoneScore : null,
                 ts.submittedAt(), ts.completedAt(),
                 t.getTaskType() == ProgramTaskType.COURSE && t.getRefId() != null
-                        && blockedCourses.contains(t.getRefId()));
+                        && blockedCourses.contains(t.getRefId()),
+                t.getSessionType(),
+                ts.scheduledAt(),
+                // Spec §3: feedback is offered once the session is held with
+                // this member present AND the task names a survey AND they have
+                // not answered it.
+                t.getTaskType() == ProgramTaskType.SESSION
+                        && t.getPostSessionSurveyId() != null
+                        && ts.state() == JourneyTaskState.DONE
+                        && !ts.feedbackSubmitted());
     }
 
     /**
@@ -528,7 +537,17 @@ public class MyProgramService {
      */
     record TypedState(JourneyTaskState state, Integer progressPct,
             java.math.BigDecimal score, java.time.Instant submittedAt,
-            java.time.Instant completedAt) {
+            java.time.Instant completedAt,
+            /** SESSION: the scheduled start while SCHEDULED. */
+            java.time.Instant scheduledAt,
+            /** SESSION: this member already answered the task's survey. */
+            boolean feedbackSubmitted) {
+
+        /** Every type but SESSION carries no session facts. */
+        TypedState(JourneyTaskState state, Integer progressPct, java.math.BigDecimal score,
+                java.time.Instant submittedAt, java.time.Instant completedAt) {
+            this(state, progressPct, score, submittedAt, completedAt, null, false);
+        }
 
         static final TypedState NOT_STARTED =
                 new TypedState(JourneyTaskState.NOT_STARTED, null, null, null, null);
@@ -606,7 +625,10 @@ public class MyProgramService {
             return byUser;
         }
         Map<ProgramTaskType, List<ProgramTask>> byType = typedTasks.stream()
-                .filter(t -> t.getRefId() != null)
+                // A ref-less typed task has nothing to read — except the session
+                // task, whose state is its `sessions` row, keyed by the task itself.
+                .filter(t -> t.getRefId() != null
+                        || t.getTaskType() == ProgramTaskType.SESSION)
                 .collect(Collectors.groupingBy(ProgramTask::getTaskType));
 
         // COURSE — enrollment per (user, course); several tasks may share a ref.
@@ -673,6 +695,20 @@ public class MyProgramService {
             for (var r : spine.surveyParticipation(userIds, taskIds(surveys))) {
                 put(byUser, r.userId(), r.taskId(), new TypedState(JourneyTaskState.DONE,
                         null, null, r.completedAt(), r.completedAt()));
+            }
+        }
+        // SESSION — the `sessions` row tagged with this task that applies to the
+        // member (their 1:1 row, or the cohort-wide row), spec v2 §3. Keyed by
+        // task id like every other per-member type; no row = NOT_STARTED.
+        List<ProgramTask> sessionTasks = byType.getOrDefault(ProgramTaskType.SESSION, List.of());
+        if (!sessionTasks.isEmpty()) {
+            for (var r : spine.sessionStates(userIds, taskIds(sessionTasks))) {
+                JourneyTaskState state = ProgramRules.sessionState(r.status(), r.attended());
+                put(byUser, r.userId(), r.taskId(), new TypedState(state, null, null,
+                        state == JourneyTaskState.DONE ? r.completedAt() : null,
+                        state == JourneyTaskState.DONE ? r.completedAt() : null,
+                        state == JourneyTaskState.IN_PROGRESS ? r.startsAt() : null,
+                        r.feedbackSubmitted()));
             }
         }
         return byUser;
@@ -931,6 +967,9 @@ public class MyProgramService {
         UUID target = switch (t.getTaskType()) {
             case LESSON -> t.getId();
             case SURVEY -> requireRef(t);
+            // The session screen keys on the task; the row is materialised by
+            // the coaching slice — nothing to ensure on open.
+            case SESSION -> t.getId();
             case COURSE -> {
                 // Spec §3 downgrade policy: no NEW content opens for a course the
                 // org can no longer see. The journey row already says so; this is

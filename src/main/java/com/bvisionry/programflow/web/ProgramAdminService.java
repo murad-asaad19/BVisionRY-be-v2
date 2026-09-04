@@ -200,6 +200,10 @@ public class ProgramAdminService {
         syncMilestonePair(cohortId);
 
         assignments.forEach(events::publishEvent);
+        // Sessions spec v2 §4: the board IS the session template — a save can
+        // add, retype or drop SESSION tasks, so the cohort's session rows are
+        // re-materialised. Published in-transaction; the handler is AFTER_COMMIT.
+        events.publishEvent(new ProgramFlowEvents.CohortSessionsChanged(cohortId));
         return getBoard(cohortId);
     }
 
@@ -231,7 +235,17 @@ public class ProgramAdminService {
                         m.tasks().stream()
                                 .map(t -> new TaskUpsert(t.id(), t.name(), t.dueDate(),
                                         t.status(), t.aiDraft(), t.taskType(), t.refId(),
-                                        t.milestoneRole(), t.pillarIds(),
+                                        t.milestoneRole(),
+                                        // Session config never survives onto another
+                                        // type — the drawer nulls it too, but the
+                                        // server owns the invariant.
+                                        t.taskType() == ProgramTaskType.SESSION
+                                                ? t.sessionType() : null,
+                                        t.taskType() == ProgramTaskType.SESSION
+                                                ? t.durationMinutes() : null,
+                                        t.taskType() == ProgramTaskType.SESSION
+                                                ? t.postSessionSurveyId() : null,
+                                        t.pillarIds(),
                                         normalizeFields(t.fields())))
                                 .toList()))
                 .toList();
@@ -292,7 +306,7 @@ public class ProgramAdminService {
         // expected literal would stop matching the builder's own seeded name.
         return trimmed.equalsIgnoreCase("Untitled task")
                 || trimmed.equalsIgnoreCase(
-                        "Untitled " + type.name().toLowerCase(java.util.Locale.ROOT) + " task");
+                        "Untitled " + type.name().toLowerCase(java.util.Locale.ROOT).replace('_', ' ') + " task");
     }
 
     /**
@@ -333,7 +347,8 @@ public class ProgramAdminService {
                             + "saving, or members will see it on their journey.");
                 }
                 Map<String, String> errors = taskSpineErrors(existing.get(t.id()), t.taskType(),
-                        t.refId(), t.milestoneRole(), t.status(), t.fields().size());
+                        t.refId(), t.milestoneRole(), t.status(), t.fields().size(),
+                        t.sessionType(), t.durationMinutes(), t.postSessionSurveyId());
                 // Spec §5: at most ONE BASELINE and ONE DISTANCE per cohort —
                 // the pair the distance comparison is computed on, so a second
                 // one would make "the" baseline ambiguous.
@@ -473,9 +488,17 @@ public class ProgramAdminService {
      */
     private Map<String, String> taskSpineErrors(ProgramTask existing, ProgramTaskType type,
             UUID refId, MilestoneRole role,
-            com.bvisionry.programflow.domain.ProgramTaskStatus status, int fieldCount) {
+            com.bvisionry.programflow.domain.ProgramTaskStatus status, int fieldCount,
+            com.bvisionry.common.enums.SessionType sessionType,
+            Integer durationMinutes, UUID postSessionSurveyId) {
         Map<String, String> errors = new LinkedHashMap<>(
-                ProgramRules.taskTypeFieldErrors(type, refId, role, status, fieldCount));
+                ProgramRules.taskTypeFieldErrors(type, refId, role, status, fieldCount,
+                        sessionType, durationMinutes, postSessionSurveyId));
+        // The post-session survey is a ref in all but name: it must exist too.
+        if (errors.isEmpty() && postSessionSurveyId != null
+                && !spine.refExists(ProgramTaskType.SURVEY, postSessionSurveyId, false)) {
+            errors.put("postSessionSurveyId", "The post-session survey was not found.");
+        }
         // The reference must actually exist in its owning slice (review #7a);
         // a LIVE course task also requires the course to be published.
         if (errors.isEmpty() && refId != null

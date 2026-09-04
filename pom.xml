@@ -6,7 +6,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.0.7</version>
+        <version>4.1.1</version>
         <relativePath/>
     </parent>
 
@@ -19,10 +19,10 @@
 
     <properties>
         <java.version>21</java.version>
-        <langchain4j.version>1.11.8</langchain4j.version>
-        <resilience4j.version>2.2.0</resilience4j.version>
+        <langchain4j.version>1.19.0</langchain4j.version>
+        <resilience4j.version>2.4.0</resilience4j.version>
         <!-- 7.x is the line that targets Spring Boot 4 / Spring 7 and requires JVM 17+. -->
-        <shedlock.version>7.7.0</shedlock.version>
+        <shedlock.version>7.9.0</shedlock.version>
         <!-- OpenSAML is declared `optional` by spring-security-saml2-service-provider,
              so the two artifacts we compile against must be requested explicitly. Pinned
              exactly (never a range) because they resolve from the Shibboleth repository
@@ -181,18 +181,18 @@
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-api</artifactId>
-            <version>0.12.6</version>
+            <version>0.13.0</version>
         </dependency>
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-impl</artifactId>
-            <version>0.12.6</version>
+            <version>0.13.0</version>
             <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-jackson</artifactId>
-            <version>0.12.6</version>
+            <version>0.13.0</version>
             <scope>runtime</scope>
         </dependency>
 
@@ -258,7 +258,7 @@
         <dependency>
             <groupId>org.apache.poi</groupId>
             <artifactId>poi-ooxml</artifactId>
-            <version>5.4.0</version>
+            <version>5.5.1</version>
             <exclusions>
                 <exclusion>
                     <groupId>org.apache.logging.log4j</groupId>
@@ -284,7 +284,7 @@
         <dependency>
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp-jvm</artifactId>
-            <version>5.1.0</version>
+            <version>5.5.0</version>
         </dependency>
 
         <!-- AI: LangChain4j — model-agnostic engine. Core carries AiServices +
@@ -337,7 +337,7 @@
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-            <version>3.0.3</version>
+            <version>3.1.0</version>
         </dependency>
 
         <!-- Utility -->
@@ -370,14 +370,14 @@
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.84</version>
+            <version>1.85.2</version>
         </dependency>
         <!-- Transitive of opensaml-security-api (pinned there at a vulnerable 1.77);
              declared explicitly to bring it in line with bcprov above. -->
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcpkix-jdk18on</artifactId>
-            <version>1.84</version>
+            <version>1.85</version>
         </dependency>
         <!-- web-push declares these runtime-scoped, but PushService's API
              surface leaks them (send returns org.apache.http.HttpResponse and
@@ -436,7 +436,7 @@
         <dependency>
             <groupId>com.tngtech.archunit</groupId>
             <artifactId>archunit-junit5</artifactId>
-            <version>1.4.2</version>
+            <version>1.5.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -478,7 +478,7 @@
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
-                <version>0.8.13</version>
+                <version>0.8.15</version>
                 <executions>
                     <execution>
                         <goals>
